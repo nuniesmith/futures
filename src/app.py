@@ -1,6 +1,11 @@
 import os
 import sqlite3
+import sys
 from datetime import date, datetime, timedelta
+
+# Ensure sibling modules (cache.py, etc.) are importable when run as
+# `streamlit run src/app.py` from the project root.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import optuna
 import pandas as pd
