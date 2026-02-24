@@ -16,6 +16,12 @@ import pandas as pd
 DB_PATH = os.getenv("DB_PATH", "futures_journal.db")
 
 # ---------------------------------------------------------------------------
+# Contract mode: "micro" (default) or "full"
+# Set via environment variable CONTRACT_MODE or toggle at runtime.
+# ---------------------------------------------------------------------------
+CONTRACT_MODE = os.getenv("CONTRACT_MODE", "micro").lower()
+
+# ---------------------------------------------------------------------------
 # Account profiles – 50k is 1/3 of 150k, 100k is 2/3
 # ---------------------------------------------------------------------------
 ACCOUNT_PROFILES = {
@@ -24,12 +30,13 @@ ACCOUNT_PROFILES = {
         "risk_pct": 0.01,
         "risk_dollars": 500,
         "max_contracts": 2,
+        "max_contracts_micro": 10,
         "soft_stop": -500,
         "hard_stop": -750,
         "eod_dd": 1_500,
         "label": "$50k TakeProfit Trader",
         "playbook_note": (
-            "TPT PLAYBOOK: Max 1-2 contracts on $50k (25% rule). "
+            "TPT PLAYBOOK: Max 1-2 full / 10 micro contracts on $50k (25% rule). "
             "Daily Loss Removed: $1,500."
         ),
     },
@@ -38,12 +45,13 @@ ACCOUNT_PROFILES = {
         "risk_pct": 0.01,
         "risk_dollars": 1_000,
         "max_contracts": 3,
+        "max_contracts_micro": 20,
         "soft_stop": -1_000,
         "hard_stop": -1_500,
         "eod_dd": 3_000,
         "label": "$100k TakeProfit Trader",
         "playbook_note": (
-            "TPT PLAYBOOK: Max 2-3 contracts on $100k (25% rule). "
+            "TPT PLAYBOOK: Max 2-3 full / 20 micro contracts on $100k (25% rule). "
             "Daily Loss Removed: $3,000."
         ),
     },
@@ -52,34 +60,87 @@ ACCOUNT_PROFILES = {
         "risk_pct": 0.01,
         "risk_dollars": 1_500,
         "max_contracts": 4,
+        "max_contracts_micro": 30,
         "soft_stop": -1_500,
         "hard_stop": -2_250,
         "eod_dd": 4_500,
         "label": "$150k TakeProfit Trader",
         "playbook_note": (
-            "TPT PLAYBOOK: Max 3-4 contracts on $150k (25% rule). "
+            "TPT PLAYBOOK: Max 3-4 full / 30 micro contracts on $150k (25% rule). "
             "Daily Loss Removed: $4,500."
         ),
     },
 }
 
 # ---------------------------------------------------------------------------
-# Contract specifications
+# Contract specifications — Full-size CME contracts
 # ---------------------------------------------------------------------------
-CONTRACT_SPECS = {
+FULL_CONTRACT_SPECS = {
     "Gold": {"ticker": "GC=F", "point": 100, "tick": 0.10, "margin": 11_000},
     "Silver": {"ticker": "SI=F", "point": 5_000, "tick": 0.005, "margin": 9_000},
-    "Copper": {"ticker": "HG=F", "point": 250, "tick": 0.0005, "margin": 6_000},
+    "Copper": {"ticker": "HG=F", "point": 25_000, "tick": 0.0005, "margin": 6_000},
     "Crude Oil": {"ticker": "CL=F", "point": 1_000, "tick": 0.01, "margin": 7_000},
     "S&P": {"ticker": "ES=F", "point": 50, "tick": 0.25, "margin": 12_000},
     "Nasdaq": {"ticker": "NQ=F", "point": 20, "tick": 0.25, "margin": 17_000},
 }
+
+# ---------------------------------------------------------------------------
+# Contract specifications — Micro CME contracts
+# Micro contracts are 1/10 of full size (except Silver which is 1/5).
+# These give more granularity for position sizing and scaling.
+# ---------------------------------------------------------------------------
+MICRO_CONTRACT_SPECS = {
+    "Gold": {"ticker": "MGC=F", "point": 10, "tick": 0.10, "margin": 1_100},
+    "Silver": {"ticker": "SIL=F", "point": 1_000, "tick": 0.005, "margin": 1_800},
+    "Copper": {"ticker": "MHG=F", "point": 2_500, "tick": 0.0005, "margin": 600},
+    "Crude Oil": {"ticker": "MCL=F", "point": 100, "tick": 0.01, "margin": 700},
+    "S&P": {"ticker": "MES=F", "point": 5, "tick": 0.25, "margin": 1_500},
+    "Nasdaq": {"ticker": "MNQ=F", "point": 2, "tick": 0.25, "margin": 2_100},
+}
+
+# ---------------------------------------------------------------------------
+# Active contract specs — selected by CONTRACT_MODE env var
+# ---------------------------------------------------------------------------
+CONTRACT_SPECS = (
+    MICRO_CONTRACT_SPECS if CONTRACT_MODE == "micro" else FULL_CONTRACT_SPECS
+)
 
 # Convenience: name → ticker
 ASSETS = {name: spec["ticker"] for name, spec in CONTRACT_SPECS.items()}
 
 # Reverse lookup: ticker → name
 TICKER_TO_NAME = {spec["ticker"]: name for name, spec in CONTRACT_SPECS.items()}
+
+
+def set_contract_mode(mode: str) -> dict:
+    """Switch between 'micro' and 'full' contract specs at runtime.
+
+    Updates the module-level CONTRACT_SPECS, ASSETS, and TICKER_TO_NAME dicts
+    in place so all importers see the change.
+
+    Returns the newly active CONTRACT_SPECS.
+    """
+    global CONTRACT_MODE
+    mode = mode.lower()
+    if mode not in ("micro", "full"):
+        raise ValueError(f"Invalid contract mode '{mode}'. Use 'micro' or 'full'.")
+
+    CONTRACT_MODE = mode
+    source = MICRO_CONTRACT_SPECS if mode == "micro" else FULL_CONTRACT_SPECS
+
+    CONTRACT_SPECS.clear()
+    CONTRACT_SPECS.update(source)
+
+    ASSETS.clear()
+    ASSETS.update({name: spec["ticker"] for name, spec in CONTRACT_SPECS.items()})
+
+    TICKER_TO_NAME.clear()
+    TICKER_TO_NAME.update(
+        {spec["ticker"]: name for name, spec in CONTRACT_SPECS.items()}
+    )
+
+    return CONTRACT_SPECS
+
 
 # ---------------------------------------------------------------------------
 # Trade statuses
@@ -396,7 +457,12 @@ def calc_max_contracts(
     risk_dollars: float,
     hard_max: int,
 ) -> int:
-    """Calculate max contracts respecting risk-per-trade and account cap."""
+    """Calculate max contracts respecting risk-per-trade and account cap.
+
+    Uses the currently active CONTRACT_SPECS (micro or full).
+    The hard_max should come from account profile's max_contracts_micro
+    when trading micros, or max_contracts when trading full-size.
+    """
     spec = CONTRACT_SPECS.get(asset)
     if spec is None:
         return 1
@@ -405,6 +471,16 @@ def calc_max_contracts(
         return 1
     raw = int(risk_dollars // risk_per_contract)
     return max(1, min(raw, hard_max))
+
+
+def get_max_contracts_for_profile(profile_key: str) -> int:
+    """Return the appropriate max contracts limit for the active contract mode."""
+    profile = ACCOUNT_PROFILES.get(profile_key)
+    if profile is None:
+        return 4
+    if CONTRACT_MODE == "micro":
+        return profile.get("max_contracts_micro", profile["max_contracts"])
+    return profile["max_contracts"]
 
 
 def calc_pnl(
