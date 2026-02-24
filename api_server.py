@@ -8,14 +8,16 @@ Listens on port 8000. NinjaTrader sends POST /log_trade with trade details,
 which are written to the same SQLite journal used by app.py.
 """
 
-from fastapi import FastAPI
-from pydantic import BaseModel
+import os
 import sqlite3
 from datetime import datetime
 
+from fastapi import FastAPI
+from pydantic import BaseModel
+
 app = FastAPI(title="Futures Dashboard Trade API")
 
-DB_PATH = "futures_journal.db"
+DB_PATH = os.getenv("DB_PATH", "futures_journal.db")
 
 
 def _init_db():
@@ -82,9 +84,7 @@ def log_trade(trade: Trade):
 @app.get("/trades")
 def get_trades(limit: int = 50):
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.execute(
-        "SELECT * FROM trades ORDER BY date DESC LIMIT ?", (limit,)
-    )
+    cursor = conn.execute("SELECT * FROM trades ORDER BY date DESC LIMIT ?", (limit,))
     rows = cursor.fetchall()
     columns = [desc[0] for desc in cursor.description]
     conn.close()

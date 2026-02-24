@@ -1,28 +1,30 @@
 import os
-import streamlit as st
+import sqlite3
+from datetime import date, datetime, timedelta
+
+import optuna
 import pandas as pd
 import plotly.graph_objects as go
+import requests
+import streamlit as st
 from backtesting import Backtest, Strategy
 from backtesting.lib import crossover
-import optuna
-import sqlite3
-from datetime import datetime, date, timedelta
-import requests
 
 from cache import (
-    get_data,
-    get_daily,
-    get_cached_indicator,
-    set_cached_indicator,
-    get_cached_optimization,
-    set_cached_optimization,
-    flush_all,
     REDIS_AVAILABLE,
+    flush_all,
+    get_cached_indicator,
+    get_cached_optimization,
+    get_daily,
+    get_data,
+    set_cached_indicator,
+    set_cached_optimization,
 )
 
 # ---------------------------------------------------------------------------
 # Technical indicator helpers
 # ---------------------------------------------------------------------------
+
 
 def ema(series, length):
     """Exponential Moving Average."""
@@ -58,16 +60,21 @@ def compute_pivots(daily_df):
     ph, pl, pc = float(prev["High"]), float(prev["Low"]), float(prev["Close"])
     pp = (ph + pl + pc) / 3
     return {
-        "Prior High": ph, "Prior Low": pl, "Prior Close": pc,
+        "Prior High": ph,
+        "Prior Low": pl,
+        "Prior Close": pc,
         "Pivot": pp,
-        "R1": 2 * pp - pl, "S1": 2 * pp - ph,
-        "R2": pp + (ph - pl), "S2": pp - (ph - pl),
+        "R1": 2 * pp - pl,
+        "S1": 2 * pp - ph,
+        "R2": pp + (ph - pl),
+        "S2": pp - (ph - pl),
     }
 
 
 # ---------------------------------------------------------------------------
 # Scanner row builder (cached per asset)
 # ---------------------------------------------------------------------------
+
 
 def build_scanner_row(name, ticker, interval, period):
     """Build one scanner row, using indicator cache when possible."""
@@ -84,7 +91,9 @@ def build_scanner_row(name, ticker, interval, period):
 
     vdf = compute_vwap(df)
     cum_vol_last = float(vdf["cum_vol"].iloc[-1])
-    vwap_val = float(vdf["cum_tpv"].iloc[-1]) / cum_vol_last if cum_vol_last != 0 else last
+    vwap_val = (
+        float(vdf["cum_tpv"].iloc[-1]) / cum_vol_last if cum_vol_last != 0 else last
+    )
 
     daily = get_daily(ticker)
     pivots = compute_pivots(daily)
@@ -113,6 +122,7 @@ def build_scanner_row(name, ticker, interval, period):
 # Auto-optimization runner
 # ---------------------------------------------------------------------------
 
+
 def run_optimization_for_asset(ticker, interval, period, account_size):
     """Run Optuna optimization for a single asset, cached for 1 hour."""
     cached = get_cached_optimization(ticker, interval, period)
@@ -130,22 +140,20 @@ def run_optimization_for_asset(ticker, interval, period, account_size):
         n2 = trial.suggest_int("n2", 15, 50)
 
         class OptStrat(Strategy):
-            def init(self_strat):
-                self_strat.ema1 = self_strat.I(
-                    ema, pd.Series(self_strat.data.Close), n1
-                )
-                self_strat.ema2 = self_strat.I(
-                    ema, pd.Series(self_strat.data.Close), n2
-                )
+            def init(self):
+                self.ema1 = self.I(ema, pd.Series(self.data.Close), n1)
+                self.ema2 = self.I(ema, pd.Series(self.data.Close), n2)
 
-            def next(self_strat):
-                if crossover(self_strat.ema1, self_strat.ema2):
-                    self_strat.buy()
-                elif crossover(self_strat.ema2, self_strat.ema1):
-                    self_strat.sell()
+            def next(self):
+                if crossover(list(self.ema1), list(self.ema2)):
+                    self.buy()
+                elif crossover(list(self.ema2), list(self.ema1)):
+                    self.sell()
 
-        bt = Backtest(df_opt, OptStrat, cash=account_size, commission=0.0002)
-        return bt.run()["Return [%]"]
+        bt = Backtest(
+            df_opt, OptStrat, cash=account_size, commission=0.0002, finalize_trades=True
+        )
+        return float(bt.run()["Return [%]"])
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction="maximize")
@@ -294,7 +302,7 @@ with tab1:
         df_scan = df_scan.sort_values("% Overnight", key=abs, ascending=False)
         st.dataframe(
             df_scan.style.background_gradient(subset=["% from VWAP"], cmap="RdYlGn"),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         st.subheader("Today's Top Focus")
@@ -317,8 +325,12 @@ with tab2:
             fig = go.Figure(
                 data=[
                     go.Candlestick(
-                        x=df.index, open=df["Open"], high=df["High"],
-                        low=df["Low"], close=df["Close"], name="Price",
+                        x=df.index,
+                        open=df["Open"],
+                        high=df["High"],
+                        low=df["Low"],
+                        close=df["Close"],
+                        name="Price",
                     )
                 ]
             )
@@ -326,19 +338,23 @@ with tab2:
             df["EMA9"] = ema(df["Close"], length=9)
             df["EMA21"] = ema(df["Close"], length=21)
             fig.add_trace(
-                go.Scatter(x=df.index, y=df["EMA9"], name="EMA9",
-                           line=dict(color="#ff9800"))
+                go.Scatter(
+                    x=df.index, y=df["EMA9"], name="EMA9", line=dict(color="#ff9800")
+                )
             )
             fig.add_trace(
-                go.Scatter(x=df.index, y=df["EMA21"], name="EMA21",
-                           line=dict(color="#2196f3"))
+                go.Scatter(
+                    x=df.index, y=df["EMA21"], name="EMA21", line=dict(color="#2196f3")
+                )
             )
 
             if show_vwap:
                 vdf = compute_vwap(df)
                 fig.add_trace(
                     go.Scatter(
-                        x=vdf.index, y=vdf["VWAP"], name="VWAP",
+                        x=vdf.index,
+                        y=vdf["VWAP"],
+                        name="VWAP",
                         line=dict(color="#9c27b0", width=2, dash="dash"),
                     )
                 )
@@ -348,14 +364,19 @@ with tab2:
                 pivots = compute_pivots(daily)
                 if pivots:
                     colors = {
-                        "Prior High": "red", "Prior Low": "green",
-                        "Prior Close": "white", "Pivot": "yellow",
-                        "R1": "orange", "S1": "lime",
-                        "R2": "darkorange", "S2": "lawngreen",
+                        "Prior High": "red",
+                        "Prior Low": "green",
+                        "Prior Close": "white",
+                        "Pivot": "yellow",
+                        "R1": "orange",
+                        "S1": "lime",
+                        "R2": "darkorange",
+                        "S2": "lawngreen",
                     }
                     for label, val in pivots.items():
                         fig.add_hline(
-                            y=val, line_dash="dot",
+                            y=val,
+                            line_dash="dot",
                             line_color=colors.get(label, "gray"),
                             annotation_text=label,
                             annotation_position="bottom right",
@@ -363,20 +384,22 @@ with tab2:
                         )
 
             fig.update_layout(
-                height=700, template="plotly_dark",
+                height=700,
+                template="plotly_dark",
                 xaxis_rangeslider_visible=False,
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     with col2:
         st.subheader("Correlation Matrix")
+        corr = None
         if len(data) >= 2:
             closes = pd.DataFrame({n: d["Close"] for n, d in data.items()})
-            returns = closes.pct_change().dropna()
+            returns = closes.pct_change(fill_method=None).dropna()
             corr = returns.corr().round(2)
             st.dataframe(
                 corr.style.background_gradient(cmap="RdYlGn"),
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.info("Select 2+ assets for correlations")
@@ -403,11 +426,11 @@ with tab3:
         st.metric("Current Price", f"{last_price:.2f}")
         col_a, col_b = st.columns(2)
         with col_a:
-            st.metric("VWAP", f"{current_vwap:.2f}",
-                       f"{last_price - current_vwap:+.2f}")
+            st.metric(
+                "VWAP", f"{current_vwap:.2f}", f"{last_price - current_vwap:+.2f}"
+            )
         with col_b:
-            st.metric("Daily Pivot", f"{pivot:.2f}",
-                       f"{last_price - pivot:+.2f}")
+            st.metric("Daily Pivot", f"{pivot:.2f}", f"{last_price - pivot:+.2f}")
 
         if last_price > max(current_vwap, pivot):
             st.subheader("Bias: BULLISH (above VWAP + Pivot)")
@@ -415,9 +438,7 @@ with tab3:
             st.subheader("Bias: BEARISH (below VWAP or Pivot)")
 
         # Show cached optimal params if available
-        opt_result = get_cached_optimization(
-            assets[asset_plan], interval, period
-        )
+        opt_result = get_cached_optimization(assets[asset_plan], interval, period)
         if opt_result:
             st.info(
                 f"Optimal EMA params: n1={opt_result['n1']}, "
@@ -435,9 +456,7 @@ with tab3:
         entry = st.number_input(
             "Limit Entry Price", value=float(last_price), step=spec["tick"]
         )
-        atr_val = float(
-            atr(dfp["High"], dfp["Low"], dfp["Close"], length=14).iloc[-1]
-        )
+        atr_val = float(atr(dfp["High"], dfp["Low"], dfp["Close"], length=14).iloc[-1])
         sl_mult = st.slider("SL ATR Multiplier", 0.5, 2.0, 1.0)
         sl_dist = atr_val * sl_mult
         sl = entry - sl_dist if direction == "Long" else entry + sl_dist
@@ -457,8 +476,7 @@ with tab3:
         st.error("TPT 25% RULE: Max 4 contracts on $150k (recommended 3)")
         st.metric("Recommended Contracts", max_contracts)
         st.write(
-            f"**SL:** {sl:.2f}  |  **TP:** {tp:.2f}  |  "
-            f"**Risk:** ${risk_dollars:,.0f}"
+            f"**SL:** {sl:.2f}  |  **TP:** {tp:.2f}  |  **Risk:** ${risk_dollars:,.0f}"
         )
 
         if max_contracts > 0:
@@ -472,11 +490,23 @@ with tab3:
                 * spec["point"]
                 * max_contracts
             )
-            log_trade((
-                datetime.now().strftime("%Y-%m-%d %H:%M"),
-                asset_plan, direction, entry, sl, tp, max_contracts,
-                None, None, pnl_est, tp_mult, "", strategy_type,
-            ))
+            log_trade(
+                (
+                    datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    asset_plan,
+                    direction,
+                    entry,
+                    sl,
+                    tp,
+                    max_contracts,
+                    None,
+                    None,
+                    pnl_est,
+                    tp_mult,
+                    "",
+                    strategy_type,
+                )
+            )
             st.success(
                 f"Logged: {direction} {asset_plan} @ {entry} | "
                 f"SL {sl:.2f} | TP {tp:.2f} | {max_contracts} contracts"
@@ -489,9 +519,7 @@ with tab4:
     today_str = date.today().strftime("%Y-%m-%d")
     dfj = get_journal()
     today_trades = (
-        dfj[dfj["date"].str.startswith(today_str)]
-        if not dfj.empty
-        else pd.DataFrame()
+        dfj[dfj["date"].str.startswith(today_str)] if not dfj.empty else pd.DataFrame()
     )
 
     realized_pnl = (
@@ -536,7 +564,7 @@ with tab4:
             "Avg RR",
             f"{dfj['rr'].mean():.2f}" if "rr" in dfj.columns else "N/A",
         )
-        st.dataframe(dfj, use_container_width=True)
+        st.dataframe(dfj, width="stretch")
     else:
         st.info("No trades yet - log from Planner tab")
 
@@ -548,8 +576,10 @@ with tab4:
             today_df = dfj[dfj["date"].str.startswith(today_str)]
             csv_today = today_df.to_csv(index=False).encode()
             st.download_button(
-                "Export TODAY as CSV", csv_today,
-                f"trades_{today_str}.csv", "text/csv",
+                "Export TODAY as CSV",
+                csv_today,
+                f"trades_{today_str}.csv",
+                "text/csv",
             )
     with col_exp2:
         if not dfj.empty:
@@ -559,15 +589,19 @@ with tab4:
             week_df = dfj[dfj["date"] >= week_start]
             csv_week = week_df.to_csv(index=False).encode()
             st.download_button(
-                "Export THIS WEEK as CSV", csv_week,
-                f"trades_week_{week_start}.csv", "text/csv",
+                "Export THIS WEEK as CSV",
+                csv_week,
+                f"trades_week_{week_start}.csv",
+                "text/csv",
             )
     with col_exp3:
         if not dfj.empty:
-            json_str = dfj.to_json(orient="records", date_format="iso")
+            json_str = dfj.to_json(orient="records", date_format="iso") or ""
             st.download_button(
-                "Export ALL as JSON", json_str,
-                "full_journal.json", "application/json",
+                "Export ALL as JSON",
+                json_str,
+                "full_journal.json",
+                "application/json",
             )
 
 # ===== TAB 5: Grok AI Analyst ==============================================
@@ -582,7 +616,8 @@ with tab5:
     else:
         api_key = st.text_input(
             "xAI Grok API Key (or set XAI_API_KEY env var)",
-            type="password", key="grok_key_input",
+            type="password",
+            key="grok_key_input",
         )
         if api_key:
             st.session_state.grok_key = api_key
@@ -614,7 +649,11 @@ with tab5:
             if "df_scan" in dir() and not df_scan.empty
             else "No scanner data"
         )
-        corr_text = corr.to_string() if "corr" in dir() else "No correlations"
+        corr_text = (
+            corr.to_string()  # type: ignore[possibly-undefined]
+            if "corr" in dir() and corr is not None
+            else "No correlations"
+        )
 
         prompt = f"""You are a strict TPT-funded futures trader managing a $150k account.
 Rules you MUST follow:
@@ -757,20 +796,26 @@ with tab6:
             self.ema2 = self.I(ema, pd.Series(self.data.Close), self.n2)
 
         def next(self):
-            if crossover(self.ema1, self.ema2):
+            if crossover(list(self.ema1), list(self.ema2)):
                 self.buy()
-            elif crossover(self.ema2, self.ema1):
+            elif crossover(list(self.ema2), list(self.ema1)):
                 self.sell()
 
     asset_bt = st.selectbox("Backtest Asset", selected_assets, key="bt")
     if asset_bt in data and not data[asset_bt].empty:
         df_bt = data[asset_bt].copy()
         bt = Backtest(
-            df_bt, EMACross, cash=account_size,
-            commission=0.0002, margin=1.0, exclusive_orders=True,
+            df_bt,
+            EMACross,
+            cash=account_size,
+            commission=0.0002,
+            margin=1.0,
+            exclusive_orders=True,
+            finalize_trades=True,
         )
         stats = bt.run()
-        st.write(stats)
+        stats_display = stats.apply(lambda x: str(x))
+        st.dataframe(stats_display.to_frame(name="Value"), width="stretch")
     else:
         st.info("Select an asset with data to backtest")
 
@@ -789,16 +834,17 @@ with tab7:
         ticker = assets[name]
         cached = get_cached_optimization(ticker, interval, period)
         if cached:
-            opt_rows.append({
-                "Asset": name,
-                "Fast EMA (n1)": cached["n1"],
-                "Slow EMA (n2)": cached["n2"],
-                "Return %": cached["return_pct"],
-                "Last Updated": cached["updated"],
-            })
+            opt_rows.append(
+                {
+                    "Asset": name,
+                    "Fast EMA (n1)": cached["n1"],
+                    "Slow EMA (n2)": cached["n2"],
+                    "Return %": cached["return_pct"],
+                    "Last Updated": cached["updated"],
+                }
+            )
     if opt_rows:
-        st.dataframe(pd.DataFrame(opt_rows), use_container_width=True,
-                      hide_index=True)
+        st.dataframe(pd.DataFrame(opt_rows), width="stretch", hide_index=True)
     else:
         st.info("No cached results yet. Run optimization below.")
 
@@ -807,8 +853,9 @@ with tab7:
     # Single asset optimization
     col_single, col_all = st.columns(2)
     with col_single:
-        opt_asset = st.selectbox("Optimize Single Asset", selected_assets,
-                                  key="opt_single")
+        opt_asset = st.selectbox(
+            "Optimize Single Asset", selected_assets, key="opt_single"
+        )
         if st.button("Optimize Selected Asset"):
             ticker = assets[opt_asset]
             with st.spinner(f"Optimizing {opt_asset}..."):
@@ -829,24 +876,27 @@ with tab7:
             results = []
             for i, name in enumerate(selected_assets):
                 ticker = assets[name]
-                with st.spinner(f"Optimizing {name} ({i+1}/{len(selected_assets)})..."):
+                with st.spinner(
+                    f"Optimizing {name} ({i + 1}/{len(selected_assets)})..."
+                ):
                     result = run_optimization_for_asset(
                         ticker, interval, period, account_size
                     )
                     if result:
-                        results.append({
-                            "Asset": name,
-                            "Fast EMA (n1)": result["n1"],
-                            "Slow EMA (n2)": result["n2"],
-                            "Return %": result["return_pct"],
-                            "Last Updated": result["updated"],
-                        })
+                        results.append(
+                            {
+                                "Asset": name,
+                                "Fast EMA (n1)": result["n1"],
+                                "Slow EMA (n2)": result["n2"],
+                                "Return %": result["return_pct"],
+                                "Last Updated": result["updated"],
+                            }
+                        )
                 progress.progress((i + 1) / len(selected_assets))
 
             if results:
                 st.subheader("Optimization Complete")
-                st.dataframe(pd.DataFrame(results),
-                              use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(results), width="stretch", hide_index=True)
 
 # ---------------------------------------------------------------------------
 # Footer
