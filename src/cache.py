@@ -118,12 +118,85 @@ def cache_set(key: str, data: bytes, ttl: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Yahoo Finance interval → max period limits
+# ---------------------------------------------------------------------------
+# Yahoo enforces these caps on intraday data. Requesting beyond them returns
+# an empty frame or a "possibly delisted" error.
+_YF_MAX_PERIOD: dict[str, list[str]] = {
+    # interval → ordered list of allowed periods (largest last)
+    "1m": ["1d", "5d"],
+    "2m": ["1d", "5d", "1mo"],
+    "5m": ["1d", "5d", "1mo"],
+    "15m": ["1d", "5d", "1mo"],
+    "30m": ["1d", "5d", "1mo"],
+    "60m": ["1d", "5d", "1mo", "3mo", "6mo"],
+    "1h": ["1d", "5d", "1mo", "3mo", "6mo"],
+    "90m": ["1d", "5d", "1mo", "3mo", "6mo"],
+    "1d": ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
+    "5d": ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
+    "1wk": ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
+    "1mo": ["3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
+    "3mo": ["1y", "2y", "5y", "10y", "max"],
+}
+
+# Numeric ordering so we can compare periods
+_PERIOD_RANK: dict[str, int] = {
+    "1d": 1,
+    "5d": 5,
+    "1mo": 30,
+    "3mo": 90,
+    "6mo": 180,
+    "1y": 365,
+    "2y": 730,
+    "5y": 1825,
+    "10y": 3650,
+    "max": 99999,
+}
+
+
+def _clamp_period(interval: str, period: str) -> str:
+    """Return the largest Yahoo-allowed period that is ≤ the requested one.
+
+    If the requested period exceeds the interval's max, it is clamped down
+    and a message is printed so the user knows.
+    """
+    allowed = _YF_MAX_PERIOD.get(interval)
+    if allowed is None:
+        # Unknown interval – pass through and let Yahoo decide
+        return period
+
+    req_rank = _PERIOD_RANK.get(period, 90)
+
+    # If the requested period is within the allowed list, use it directly
+    if period in allowed:
+        return period
+
+    # Otherwise find the largest allowed period that doesn't exceed the request
+    best = allowed[0]  # smallest fallback
+    for p in allowed:
+        if _PERIOD_RANK.get(p, 0) <= req_rank:
+            best = p
+
+    if best != period:
+        print(
+            f"[cache] Clamped period {period!r} → {best!r} for interval {interval!r} "
+            f"(Yahoo limit)"
+        )
+    return best
+
+
+# ---------------------------------------------------------------------------
 # Market data fetching with cache
 # ---------------------------------------------------------------------------
 
 
 def get_data(ticker: str, interval: str, period: str) -> pd.DataFrame:
-    """Fetch OHLCV data, cached in Redis for TTL_INTRADAY seconds."""
+    """Fetch OHLCV data, cached in Redis for TTL_INTRADAY seconds.
+
+    Automatically clamps the period to Yahoo Finance's maximum for the
+    requested interval to avoid empty responses.
+    """
+    period = _clamp_period(interval, period)
     key = _cache_key("ohlcv", ticker, interval, period)
     cached = cache_get(key)
     if cached is not None:

@@ -226,7 +226,7 @@ st.sidebar.title("Futures Dashboard")
 account_key = st.sidebar.radio(
     "Account Size",
     list(ACCOUNT_PROFILES.keys()),
-    index=2,
+    index=0,
     format_func=lambda k: ACCOUNT_PROFILES[k]["label"],
     horizontal=True,
 )
@@ -246,7 +246,15 @@ selected_assets = st.sidebar.multiselect(
 )
 
 interval = st.sidebar.selectbox("Chart Interval", ["1m", "5m"], index=1)
-period = st.sidebar.selectbox("Data Period", ["5d", "10d", "1mo", "3mo"], index=1)
+
+# Only show periods that Yahoo Finance supports for the selected interval
+_VALID_PERIODS = {
+    "1m": ["1d", "5d"],
+    "5m": ["1d", "5d", "1mo"],
+}
+_period_options = _VALID_PERIODS.get(interval, ["5d", "1mo", "3mo"])
+_period_default = min(1, len(_period_options) - 1)
+period = st.sidebar.selectbox("Data Period", _period_options, index=_period_default)
 
 # API key
 env_key = os.getenv("XAI_API_KEY", "")

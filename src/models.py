@@ -90,12 +90,48 @@ FULL_CONTRACT_SPECS = {
 # These give more granularity for position sizing and scaling.
 # ---------------------------------------------------------------------------
 MICRO_CONTRACT_SPECS = {
-    "Gold": {"ticker": "MGC=F", "point": 10, "tick": 0.10, "margin": 1_100},
-    "Silver": {"ticker": "SIL=F", "point": 1_000, "tick": 0.005, "margin": 1_800},
-    "Copper": {"ticker": "MHG=F", "point": 2_500, "tick": 0.0005, "margin": 600},
-    "Crude Oil": {"ticker": "MCL=F", "point": 100, "tick": 0.01, "margin": 700},
-    "S&P": {"ticker": "MES=F", "point": 5, "tick": 0.25, "margin": 1_500},
-    "Nasdaq": {"ticker": "MNQ=F", "point": 2, "tick": 0.25, "margin": 2_100},
+    "Gold": {
+        "ticker": "MGC=F",
+        "data_ticker": "GC=F",
+        "point": 10,
+        "tick": 0.10,
+        "margin": 1_100,
+    },
+    "Silver": {
+        "ticker": "SIL=F",
+        "data_ticker": "SI=F",
+        "point": 1_000,
+        "tick": 0.005,
+        "margin": 1_800,
+    },
+    "Copper": {
+        "ticker": "MHG=F",
+        "data_ticker": "HG=F",
+        "point": 2_500,
+        "tick": 0.0005,
+        "margin": 600,
+    },
+    "Crude Oil": {
+        "ticker": "MCL=F",
+        "data_ticker": "CL=F",
+        "point": 100,
+        "tick": 0.01,
+        "margin": 700,
+    },
+    "S&P": {
+        "ticker": "MES=F",
+        "data_ticker": "ES=F",
+        "point": 5,
+        "tick": 0.25,
+        "margin": 1_500,
+    },
+    "Nasdaq": {
+        "ticker": "MNQ=F",
+        "data_ticker": "NQ=F",
+        "point": 2,
+        "tick": 0.25,
+        "margin": 2_100,
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -105,11 +141,19 @@ CONTRACT_SPECS = (
     MICRO_CONTRACT_SPECS if CONTRACT_MODE == "micro" else FULL_CONTRACT_SPECS
 )
 
-# Convenience: name → ticker
-ASSETS = {name: spec["ticker"] for name, spec in CONTRACT_SPECS.items()}
+# Convenience: name → data ticker (for Yahoo Finance fetching).
+# Micro contracts track the same underlying price as full-size, so we always
+# fetch from the full-size ticker which Yahoo reliably supports.
+ASSETS = {
+    name: spec.get("data_ticker", spec["ticker"])
+    for name, spec in CONTRACT_SPECS.items()
+}
 
-# Reverse lookup: ticker → name
-TICKER_TO_NAME = {spec["ticker"]: name for name, spec in CONTRACT_SPECS.items()}
+# Reverse lookup: data ticker → name
+TICKER_TO_NAME = {
+    spec.get("data_ticker", spec["ticker"]): name
+    for name, spec in CONTRACT_SPECS.items()
+}
 
 
 def set_contract_mode(mode: str) -> dict:
@@ -132,11 +176,19 @@ def set_contract_mode(mode: str) -> dict:
     CONTRACT_SPECS.update(source)
 
     ASSETS.clear()
-    ASSETS.update({name: spec["ticker"] for name, spec in CONTRACT_SPECS.items()})
+    ASSETS.update(
+        {
+            name: spec.get("data_ticker", spec["ticker"])
+            for name, spec in CONTRACT_SPECS.items()
+        }
+    )
 
     TICKER_TO_NAME.clear()
     TICKER_TO_NAME.update(
-        {spec["ticker"]: name for name, spec in CONTRACT_SPECS.items()}
+        {
+            spec.get("data_ticker", spec["ticker"]): name
+            for name, spec in CONTRACT_SPECS.items()
+        }
     )
 
     return CONTRACT_SPECS
