@@ -16,9 +16,7 @@ COPY --from=deps /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.
 COPY --from=deps /usr/local/bin /usr/local/bin
 
 # Copy application code
-COPY app.py .
-COPY cache.py .
-COPY api_server.py .
+COPY src/ ./src/
 
 # Create data directory for SQLite journal
 RUN mkdir -p /app/data
@@ -32,4 +30,4 @@ ENV DB_PATH=/app/data/futures_journal.db
 EXPOSE 8501
 EXPOSE 8000
 
-CMD ["streamlit", "run", "app.py"]
+CMD ["streamlit", "run", "src/app.py"]

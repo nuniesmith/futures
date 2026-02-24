@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from datetime import datetime
+from io import StringIO
 
 import pandas as pd
 import yfinance as yf
@@ -18,9 +19,25 @@ def _flatten_columns(df: "pd.DataFrame | None") -> pd.DataFrame:
     """Flatten MultiIndex columns returned by newer yfinance versions."""
     if df is None or df.empty:
         return pd.DataFrame()
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.droplevel(1)
-    return df
+    # At this point df is guaranteed to be a non-empty DataFrame
+    result: pd.DataFrame = df.copy()
+    if isinstance(result.columns, pd.MultiIndex):
+        # Flatten to single level: take first level names only
+        result.columns = pd.Index(
+            [col[0] if isinstance(col, tuple) else col for col in result.columns]
+        )
+    # Remove duplicate columns (keep first occurrence)
+    mask = ~pd.Index(result.columns).duplicated(keep="first")
+    result = result.loc[:, mask]
+    # Reset column names to plain strings to avoid any leftover index weirdness
+    result.columns = pd.Index([str(c) for c in result.columns])
+    # Drop rows with NaN in OHLCV columns (yfinance sometimes returns partial rows)
+    ohlcv = [
+        c for c in ("Open", "High", "Low", "Close", "Volume") if c in result.columns
+    ]
+    if ohlcv:
+        result = result.dropna(subset=ohlcv)
+    return result
 
 
 try:
@@ -50,11 +67,15 @@ def _cache_key(*parts: str) -> str:
 
 
 def _df_to_bytes(df: pd.DataFrame) -> bytes:
+    # Safety net: deduplicate columns before serialising to JSON
+    if df.columns.duplicated().any():
+        mask = ~pd.Index(df.columns).duplicated(keep="first")
+        df = df.loc[:, mask]
     return (df.to_json(date_format="iso") or "").encode()
 
 
 def _bytes_to_df(raw: bytes) -> pd.DataFrame:
-    df = pd.read_json(raw.decode())
+    df = pd.read_json(StringIO(raw.decode()))
     # Restore DatetimeIndex if the index looks like timestamps
     if not df.empty and df.index.dtype == "int64":
         pass  # leave numeric index as-is
@@ -174,6 +195,15 @@ def set_cached_optimization(
 ) -> None:
     key = _cache_key("opt", ticker, interval, period)
     cache_set(key, json.dumps(result).encode(), TTL_OPTIMIZATION)
+
+
+def clear_cached_optimization(ticker: str, interval: str, period: str) -> None:
+    """Remove cached optimization result so the next run re-optimizes."""
+    key = _cache_key("opt", ticker, interval, period)
+    if REDIS_AVAILABLE and _r is not None:
+        _r.delete(key)
+    elif key in _mem_cache:
+        del _mem_cache[key]
 
 
 def flush_all() -> None:
