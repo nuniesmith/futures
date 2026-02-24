@@ -1,5 +1,5 @@
+import os
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from backtesting import Backtest, Strategy
@@ -9,9 +9,19 @@ import sqlite3
 from datetime import datetime, date, timedelta
 import requests
 
+from cache import (
+    get_data,
+    get_daily,
+    get_cached_indicator,
+    set_cached_indicator,
+    get_cached_optimization,
+    set_cached_optimization,
+    flush_all,
+    REDIS_AVAILABLE,
+)
 
 # ---------------------------------------------------------------------------
-# Technical indicator helpers (replaces pandas_ta dependency)
+# Technical indicator helpers
 # ---------------------------------------------------------------------------
 
 def ema(series, length):
@@ -27,10 +37,141 @@ def atr(high, low, close, length=14):
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.ewm(span=length, adjust=False).mean()
 
+
+def compute_vwap(df):
+    """Compute daily-resetting VWAP for a DataFrame with OHLCV."""
+    out = df.copy()
+    out["date"] = out.index.date
+    out["typical"] = (out["High"] + out["Low"] + out["Close"]) / 3
+    out["tpv"] = out["typical"] * out["Volume"]
+    out["cum_tpv"] = out.groupby("date")["tpv"].cumsum()
+    out["cum_vol"] = out.groupby("date")["Volume"].cumsum()
+    out["VWAP"] = out["cum_tpv"] / out["cum_vol"]
+    return out
+
+
+def compute_pivots(daily_df):
+    """Compute prior-day pivot levels from daily bars."""
+    if len(daily_df) < 2:
+        return None
+    prev = daily_df.iloc[-2]
+    ph, pl, pc = float(prev["High"]), float(prev["Low"]), float(prev["Close"])
+    pp = (ph + pl + pc) / 3
+    return {
+        "Prior High": ph, "Prior Low": pl, "Prior Close": pc,
+        "Pivot": pp,
+        "R1": 2 * pp - pl, "S1": 2 * pp - ph,
+        "R2": pp + (ph - pl), "S2": pp - (ph - pl),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Scanner row builder (cached per asset)
+# ---------------------------------------------------------------------------
+
+def build_scanner_row(name, ticker, interval, period):
+    """Build one scanner row, using indicator cache when possible."""
+    cached = get_cached_indicator("scanner", ticker, interval, period)
+    if cached is not None:
+        return cached
+
+    df = get_data(ticker, interval, period)
+    if df.empty:
+        return None
+    last = float(df["Close"].iloc[-1])
+    prev = float(df["Close"].iloc[-2]) if len(df) > 1 else last
+    pct_chg = (last - prev) / prev * 100
+
+    vdf = compute_vwap(df)
+    cum_vol_last = float(vdf["cum_vol"].iloc[-1])
+    vwap_val = float(vdf["cum_tpv"].iloc[-1]) / cum_vol_last if cum_vol_last != 0 else last
+
+    daily = get_daily(ticker)
+    pivots = compute_pivots(daily)
+    pivot = pivots["Pivot"] if pivots else last
+    dist_pivot = last - pivot
+
+    atr_val = float(atr(df["High"], df["Low"], df["Close"], length=14).iloc[-1])
+    vol = int(df["Volume"].iloc[-1])
+
+    row = {
+        "Asset": name,
+        "% Overnight": round(pct_chg, 2),
+        "Last": round(last, 2),
+        "VWAP": round(vwap_val, 2),
+        "% from VWAP": round((last - vwap_val) / vwap_val * 100, 2),
+        "Pivot": round(pivot, 2),
+        "Dist to Pivot": round(dist_pivot, 2),
+        "ATR": round(atr_val, 2),
+        "Volume": vol,
+    }
+    set_cached_indicator("scanner", ticker, interval, period, row)
+    return row
+
+
+# ---------------------------------------------------------------------------
+# Auto-optimization runner
+# ---------------------------------------------------------------------------
+
+def run_optimization_for_asset(ticker, interval, period, account_size):
+    """Run Optuna optimization for a single asset, cached for 1 hour."""
+    cached = get_cached_optimization(ticker, interval, period)
+    if cached is not None:
+        return cached
+
+    df = get_data(ticker, interval, period)
+    if df.empty:
+        return None
+
+    df_opt = df.copy()
+
+    def objective(trial):
+        n1 = trial.suggest_int("n1", 5, 20)
+        n2 = trial.suggest_int("n2", 15, 50)
+
+        class OptStrat(Strategy):
+            def init(self_strat):
+                self_strat.ema1 = self_strat.I(
+                    ema, pd.Series(self_strat.data.Close), n1
+                )
+                self_strat.ema2 = self_strat.I(
+                    ema, pd.Series(self_strat.data.Close), n2
+                )
+
+            def next(self_strat):
+                if crossover(self_strat.ema1, self_strat.ema2):
+                    self_strat.buy()
+                elif crossover(self_strat.ema2, self_strat.ema1):
+                    self_strat.sell()
+
+        bt = Backtest(df_opt, OptStrat, cash=account_size, commission=0.0002)
+        return bt.run()["Return [%]"]
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=30, show_progress_bar=False)
+
+    result = {
+        "ticker": ticker,
+        "n1": study.best_params["n1"],
+        "n2": study.best_params["n2"],
+        "return_pct": round(study.best_value, 2),
+        "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    set_cached_optimization(ticker, interval, period, result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Page config
+# ---------------------------------------------------------------------------
+
 st.set_page_config(page_title="Futures Morning Dashboard", layout="wide")
 st.title("Futures Intraday Dashboard - $150k TakeProfit Trader")
 
-# === TPT PLAYBOOK WARNING ===
+cache_badge = "Redis" if REDIS_AVAILABLE else "In-Memory"
+st.caption(f"Cache: {cache_badge}")
+
 st.warning(
     "TPT PLAYBOOK RULE: Use MAX 3-4 contracts on $150k (25% rule). "
     "Oversizing is the #1 reason traders fail. "
@@ -62,14 +203,8 @@ interval = st.sidebar.selectbox("Chart Interval", ["1m", "5m"], index=1)
 period = st.sidebar.selectbox("Data Period", ["5d", "10d"], index=0)
 
 # ---------------------------------------------------------------------------
-# Data fetching (cached 60s)
+# Load data via Redis cache
 # ---------------------------------------------------------------------------
-
-@st.cache_data(ttl=60)
-def get_data(ticker, interval, period):
-    return yf.download(ticker, interval=interval, period=period, prepost=True, auto_adjust=True)
-
-
 data = {}
 for name, ticker in assets.items():
     if name in selected_assets:
@@ -78,26 +213,16 @@ for name, ticker in assets.items():
 # ---------------------------------------------------------------------------
 # SQLite journal
 # ---------------------------------------------------------------------------
-DB_PATH = "futures_journal.db"
+DB_PATH = os.getenv("DB_PATH", "futures_journal.db")
 
 
 def _init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         """CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY,
-            date TEXT,
-            asset TEXT,
-            direction TEXT,
-            entry REAL,
-            sl REAL,
-            tp REAL,
-            contracts INTEGER,
-            exit_price REAL,
-            pnl REAL,
-            rr REAL,
-            notes TEXT,
-            strategy TEXT
+            id INTEGER PRIMARY KEY, date TEXT, asset TEXT, direction TEXT,
+            entry REAL, sl REAL, tp REAL, contracts INTEGER,
+            exit_price REAL, pnl REAL, rr REAL, notes TEXT, strategy TEXT
         )"""
     )
     conn.commit()
@@ -146,61 +271,23 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
         "Journal",
         "Grok AI Analyst",
         "Backtester",
-        "Optimizer",
+        "Auto-Optimizer",
     ]
 )
 
-# ===== TAB 1: Morning Scanner (with VWAP & Pivot) =========================
+# ===== TAB 1: Morning Scanner ==============================================
 with tab1:
     st.header("3-5 AM Daily Scanner")
     if st.button("Refresh All Data (3-5 AM EST)"):
-        st.cache_data.clear()
+        flush_all()
+        st.rerun()
 
     rows = []
-    for name, df in data.items():
-        if df.empty:
-            continue
-        last = float(df["Close"].iloc[-1])
-        prev = float(df["Close"].iloc[-2]) if len(df) > 1 else last
-        pct_chg = (last - prev) / prev * 100
-
-        # VWAP (last value for today)
-        dfv = df.copy()
-        dfv["date"] = dfv.index.date
-        dfv["typical"] = (dfv["High"] + dfv["Low"] + dfv["Close"]) / 3
-        dfv["tpv"] = dfv["typical"] * dfv["Volume"]
-        dfv["cum_tpv"] = dfv.groupby("date")["tpv"].cumsum()
-        dfv["cum_vol"] = dfv.groupby("date")["Volume"].cumsum()
-        cum_vol_last = float(dfv["cum_vol"].iloc[-1])
-        vwap = float(dfv["cum_tpv"].iloc[-1]) / cum_vol_last if cum_vol_last != 0 else last
-
-        # Prior-day pivot
-        daily = yf.download(assets[name], interval="1d", period="10d", auto_adjust=True)
-        if len(daily) >= 2:
-            prev_day = daily.iloc[-2]
-            ph, pl, pc = float(prev_day["High"]), float(prev_day["Low"]), float(prev_day["Close"])
-            pivot = (ph + pl + pc) / 3
-            dist_pivot = last - pivot
-        else:
-            pivot = last
-            dist_pivot = 0.0
-
-        atr_val = float(atr(df["High"], df["Low"], df["Close"], length=14).iloc[-1])
-        vol = int(df["Volume"].iloc[-1])
-
-        rows.append(
-            {
-                "Asset": name,
-                "% Overnight": round(pct_chg, 2),
-                "Last": round(last, 2),
-                "VWAP": round(vwap, 2),
-                "% from VWAP": round((last - vwap) / vwap * 100, 2),
-                "Pivot": round(pivot, 2),
-                "Dist to Pivot": round(dist_pivot, 2),
-                "ATR": round(atr_val, 2),
-                "Volume": vol,
-            }
-        )
+    for name in selected_assets:
+        ticker = assets[name]
+        row = build_scanner_row(name, ticker, interval, period)
+        if row:
+            rows.append(row)
 
     df_scan = pd.DataFrame(rows)
     if not df_scan.empty:
@@ -215,7 +302,7 @@ with tab1:
     else:
         st.info("No data loaded yet. Select assets and refresh.")
 
-# ===== TAB 2: Charts with VWAP + Pivots ===================================
+# ===== TAB 2: Charts with VWAP + Pivots ====================================
 with tab2:
     st.header("Live Charts + Correlations")
     show_vwap = st.checkbox("Show Daily VWAP (resets at midnight)", value=True)
@@ -230,93 +317,71 @@ with tab2:
             fig = go.Figure(
                 data=[
                     go.Candlestick(
-                        x=df.index,
-                        open=df["Open"],
-                        high=df["High"],
-                        low=df["Low"],
-                        close=df["Close"],
-                        name="Price",
+                        x=df.index, open=df["Open"], high=df["High"],
+                        low=df["Low"], close=df["Close"], name="Price",
                     )
                 ]
             )
 
-            # EMAs
             df["EMA9"] = ema(df["Close"], length=9)
             df["EMA21"] = ema(df["Close"], length=21)
             fig.add_trace(
-                go.Scatter(x=df.index, y=df["EMA9"], name="EMA9", line=dict(color="#ff9800"))
+                go.Scatter(x=df.index, y=df["EMA9"], name="EMA9",
+                           line=dict(color="#ff9800"))
             )
             fig.add_trace(
-                go.Scatter(x=df.index, y=df["EMA21"], name="EMA21", line=dict(color="#2196f3"))
+                go.Scatter(x=df.index, y=df["EMA21"], name="EMA21",
+                           line=dict(color="#2196f3"))
             )
 
-            # VWAP
             if show_vwap:
-                df["date"] = df.index.date
-                df["typical"] = (df["High"] + df["Low"] + df["Close"]) / 3
-                df["tpv"] = df["typical"] * df["Volume"]
-                df["cum_tpv"] = df.groupby("date")["tpv"].cumsum()
-                df["cum_vol"] = df.groupby("date")["Volume"].cumsum()
-                df["VWAP"] = df["cum_tpv"] / df["cum_vol"]
+                vdf = compute_vwap(df)
                 fig.add_trace(
                     go.Scatter(
-                        x=df.index,
-                        y=df["VWAP"],
-                        name="VWAP",
+                        x=vdf.index, y=vdf["VWAP"], name="VWAP",
                         line=dict(color="#9c27b0", width=2, dash="dash"),
                     )
                 )
 
-            # Pivots (from previous complete day)
             if show_pivots:
-                daily = yf.download(assets[asset], interval="1d", period="10d", auto_adjust=True)
-                if len(daily) >= 2:
-                    prev = daily.iloc[-2]
-                    ph, pl, pc = float(prev["High"]), float(prev["Low"]), float(prev["Close"])
-                    pp = (ph + pl + pc) / 3
-                    r1 = 2 * pp - pl
-                    s1 = 2 * pp - ph
-                    r2 = pp + (ph - pl)
-                    s2 = pp - (ph - pl)
-
-                    levels = [
-                        (ph, "Prior High", "red"),
-                        (pl, "Prior Low", "green"),
-                        (pc, "Prior Close", "white"),
-                        (pp, "Pivot", "yellow"),
-                        (r1, "R1", "orange"),
-                        (s1, "S1", "lime"),
-                        (r2, "R2", "darkorange"),
-                        (s2, "S2", "lawngreen"),
-                    ]
-                    for y, txt, color in levels:
+                daily = get_daily(assets[asset])
+                pivots = compute_pivots(daily)
+                if pivots:
+                    colors = {
+                        "Prior High": "red", "Prior Low": "green",
+                        "Prior Close": "white", "Pivot": "yellow",
+                        "R1": "orange", "S1": "lime",
+                        "R2": "darkorange", "S2": "lawngreen",
+                    }
+                    for label, val in pivots.items():
                         fig.add_hline(
-                            y=y,
-                            line_dash="dot",
-                            line_color=color,
-                            annotation_text=txt,
+                            y=val, line_dash="dot",
+                            line_color=colors.get(label, "gray"),
+                            annotation_text=label,
                             annotation_position="bottom right",
                             line_width=1.5,
                         )
 
             fig.update_layout(
-                height=700, template="plotly_dark", xaxis_rangeslider_visible=False
+                height=700, template="plotly_dark",
+                xaxis_rangeslider_visible=False,
             )
             st.plotly_chart(fig, use_container_width=True)
 
     with col2:
         st.subheader("Correlation Matrix")
         if len(data) >= 2:
-            closes = pd.DataFrame({name: d["Close"] for name, d in data.items()})
+            closes = pd.DataFrame({n: d["Close"] for n, d in data.items()})
             returns = closes.pct_change().dropna()
             corr = returns.corr().round(2)
             st.dataframe(
-                corr.style.background_gradient(cmap="RdYlGn"), use_container_width=True
+                corr.style.background_gradient(cmap="RdYlGn"),
+                use_container_width=True,
             )
         else:
             st.info("Select 2+ assets for correlations")
 
-# ===== TAB 3: Trade Planner (25% rule enforced) ===========================
+# ===== TAB 3: Trade Planner ================================================
 with tab3:
     st.header("Trade Planner - 1% Risk + Levels")
     asset_plan = st.selectbox("Asset", selected_assets, key="plan")
@@ -325,35 +390,41 @@ with tab3:
         dfp = data[asset_plan]
         last_price = float(dfp["Close"].iloc[-1])
 
-        # Current VWAP
-        dfv = dfp.copy()
-        dfv["date"] = dfv.index.date
-        dfv["typical"] = (dfv["High"] + dfv["Low"] + dfv["Close"]) / 3
-        dfv["tpv"] = dfv["typical"] * dfv["Volume"]
-        dfv["cum_tpv"] = dfv.groupby("date")["tpv"].cumsum()
-        dfv["cum_vol"] = dfv.groupby("date")["Volume"].cumsum()
-        cum_vol = float(dfv["cum_vol"].iloc[-1])
-        current_vwap = float(dfv["cum_tpv"].iloc[-1]) / cum_vol if cum_vol != 0 else last_price
+        vdf = compute_vwap(dfp)
+        cum_vol = float(vdf["cum_vol"].iloc[-1])
+        current_vwap = (
+            float(vdf["cum_tpv"].iloc[-1]) / cum_vol if cum_vol != 0 else last_price
+        )
 
-        # Pivot
-        daily = yf.download(assets[asset_plan], interval="1d", period="10d", auto_adjust=True)
-        if len(daily) >= 2:
-            prev = daily.iloc[-2]
-            pivot = (float(prev["High"]) + float(prev["Low"]) + float(prev["Close"])) / 3
-        else:
-            pivot = last_price
+        daily = get_daily(assets[asset_plan])
+        pivots = compute_pivots(daily)
+        pivot = pivots["Pivot"] if pivots else last_price
 
         st.metric("Current Price", f"{last_price:.2f}")
         col_a, col_b = st.columns(2)
         with col_a:
-            st.metric("VWAP", f"{current_vwap:.2f}", f"{last_price - current_vwap:+.2f}")
+            st.metric("VWAP", f"{current_vwap:.2f}",
+                       f"{last_price - current_vwap:+.2f}")
         with col_b:
-            st.metric("Daily Pivot", f"{pivot:.2f}", f"{last_price - pivot:+.2f}")
+            st.metric("Daily Pivot", f"{pivot:.2f}",
+                       f"{last_price - pivot:+.2f}")
 
         if last_price > max(current_vwap, pivot):
             st.subheader("Bias: BULLISH (above VWAP + Pivot)")
         else:
             st.subheader("Bias: BEARISH (below VWAP or Pivot)")
+
+        # Show cached optimal params if available
+        opt_result = get_cached_optimization(
+            assets[asset_plan], interval, period
+        )
+        if opt_result:
+            st.info(
+                f"Optimal EMA params: n1={opt_result['n1']}, "
+                f"n2={opt_result['n2']} "
+                f"(return {opt_result['return_pct']}%, "
+                f"updated {opt_result['updated']})"
+            )
 
         strategy_type = st.selectbox(
             "Strategy", ["VWAP Pullback", "Prior Day Pivot Break", "EMA Crossover"]
@@ -364,7 +435,9 @@ with tab3:
         entry = st.number_input(
             "Limit Entry Price", value=float(last_price), step=spec["tick"]
         )
-        atr_val = float(atr(dfp["High"], dfp["Low"], dfp["Close"], length=14).iloc[-1])
+        atr_val = float(
+            atr(dfp["High"], dfp["Low"], dfp["Close"], length=14).iloc[-1]
+        )
         sl_mult = st.slider("SL ATR Multiplier", 0.5, 2.0, 1.0)
         sl_dist = atr_val * sl_mult
         sl = entry - sl_dist if direction == "Long" else entry + sl_dist
@@ -384,7 +457,8 @@ with tab3:
         st.error("TPT 25% RULE: Max 4 contracts on $150k (recommended 3)")
         st.metric("Recommended Contracts", max_contracts)
         st.write(
-            f"**SL:** {sl:.2f}  |  **TP:** {tp:.2f}  |  **Risk:** ${risk_dollars:,.0f}"
+            f"**SL:** {sl:.2f}  |  **TP:** {tp:.2f}  |  "
+            f"**Risk:** ${risk_dollars:,.0f}"
         )
 
         if max_contracts > 0:
@@ -398,36 +472,26 @@ with tab3:
                 * spec["point"]
                 * max_contracts
             )
-            log_trade(
-                (
-                    datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    asset_plan,
-                    direction,
-                    entry,
-                    sl,
-                    tp,
-                    max_contracts,
-                    None,
-                    None,
-                    pnl_est,
-                    tp_mult,
-                    "",
-                    strategy_type,
-                )
-            )
+            log_trade((
+                datetime.now().strftime("%Y-%m-%d %H:%M"),
+                asset_plan, direction, entry, sl, tp, max_contracts,
+                None, None, pnl_est, tp_mult, "", strategy_type,
+            ))
             st.success(
                 f"Logged: {direction} {asset_plan} @ {entry} | "
                 f"SL {sl:.2f} | TP {tp:.2f} | {max_contracts} contracts"
             )
 
-# ===== TAB 4: Journal + Daily P&L Tracker ==================================
+# ===== TAB 4: Journal + Daily P&L ==========================================
 with tab4:
     st.header("Trade Journal + Daily P&L Tracker")
 
     today_str = date.today().strftime("%Y-%m-%d")
     dfj = get_journal()
     today_trades = (
-        dfj[dfj["date"].str.startswith(today_str)] if not dfj.empty else pd.DataFrame()
+        dfj[dfj["date"].str.startswith(today_str)]
+        if not dfj.empty
+        else pd.DataFrame()
     )
 
     realized_pnl = (
@@ -450,7 +514,6 @@ with tab4:
     )
     col3.metric("Trades Today", len(today_trades))
 
-    # ENFORCE DAILY RULES
     if total_today <= -2250:
         st.error("HARD STOP: -$2,250 MAX LOSS HIT - NO MORE TRADES TODAY")
     elif total_today <= -1500:
@@ -460,7 +523,6 @@ with tab4:
 
     st.divider()
 
-    # All-time stats
     if not dfj.empty:
         st.subheader("All-Time Stats")
         col_a, col_b, col_c, col_d = st.columns(4)
@@ -478,7 +540,6 @@ with tab4:
     else:
         st.info("No trades yet - log from Planner tab")
 
-    # Export buttons
     st.divider()
     st.subheader("Export")
     col_exp1, col_exp2, col_exp3 = st.columns(3)
@@ -487,7 +548,8 @@ with tab4:
             today_df = dfj[dfj["date"].str.startswith(today_str)]
             csv_today = today_df.to_csv(index=False).encode()
             st.download_button(
-                "Export TODAY as CSV", csv_today, f"trades_{today_str}.csv", "text/csv"
+                "Export TODAY as CSV", csv_today,
+                f"trades_{today_str}.csv", "text/csv",
             )
     with col_exp2:
         if not dfj.empty:
@@ -497,39 +559,64 @@ with tab4:
             week_df = dfj[dfj["date"] >= week_start]
             csv_week = week_df.to_csv(index=False).encode()
             st.download_button(
-                "Export THIS WEEK as CSV",
-                csv_week,
-                f"trades_week_{week_start}.csv",
-                "text/csv",
+                "Export THIS WEEK as CSV", csv_week,
+                f"trades_week_{week_start}.csv", "text/csv",
             )
     with col_exp3:
         if not dfj.empty:
             json_str = dfj.to_json(orient="records", date_format="iso")
             st.download_button(
-                "Export ALL as JSON", json_str, "full_journal.json", "application/json"
+                "Export ALL as JSON", json_str,
+                "full_journal.json", "application/json",
             )
 
-# ===== TAB 5: Grok AI Analyst (Pre & Post Market) =========================
+# ===== TAB 5: Grok AI Analyst ==============================================
 with tab5:
     st.header("Grok AI Analyst - Pre & Post Market")
-    api_key = st.text_input(
-        "xAI Grok API Key (console.x.ai)", type="password", key="grok_key_input"
-    )
-    if api_key:
-        st.session_state.grok_key = api_key
+
+    # Read API key from environment first, allow override in UI
+    env_key = os.getenv("XAI_API_KEY", "")
+    if env_key:
+        st.session_state.grok_key = env_key
+        st.success("API key loaded from environment")
+    else:
+        api_key = st.text_input(
+            "xAI Grok API Key (or set XAI_API_KEY env var)",
+            type="password", key="grok_key_input",
+        )
+        if api_key:
+            st.session_state.grok_key = api_key
+
+    def _call_grok(prompt, max_tokens=1500, temperature=0.3):
+        key = st.session_state.get("grok_key")
+        if not key:
+            st.error("Enter your Grok API key above or set XAI_API_KEY")
+            return None
+        resp = requests.post(
+            "https://api.x.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": "grok-4-1-fast-reasoning",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
 
     # --- Pre-Market ---
     st.subheader("1. Pre-Market Morning Analysis (3-5 AM)")
     if st.button("Run Pre-Market Analysis (Full Game Plan)", type="primary"):
-        if not st.session_state.get("grok_key"):
-            st.error("Enter your Grok API key above")
-        else:
-            scan_text = (
-                df_scan.to_string(index=False) if "df_scan" in dir() and not df_scan.empty else "No scanner data"
-            )
-            corr_text = corr.to_string() if "corr" in dir() else "No correlations"
+        scan_text = (
+            df_scan.to_string(index=False)
+            if "df_scan" in dir() and not df_scan.empty
+            else "No scanner data"
+        )
+        corr_text = corr.to_string() if "corr" in dir() else "No correlations"
 
-            prompt = f"""You are a strict TPT-funded futures trader managing a $150k account.
+        prompt = f"""You are a strict TPT-funded futures trader managing a $150k account.
 Rules you MUST follow:
 - Max 3-4 contracts per trade (25% rule)
 - Risk exactly 1% ($1,500) per trade
@@ -555,53 +642,38 @@ Give me a complete morning game plan:
 
 Be concise, bullet-point only, actionable. No fluff."""
 
-            with st.spinner("Asking Grok for morning game plan..."):
-                try:
-                    resp = requests.post(
-                        "https://api.x.ai/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {st.session_state.grok_key}"
-                        },
-                        json={
-                            "model": "grok-4-1-fast-reasoning",
-                            "messages": [{"role": "user", "content": prompt}],
-                            "temperature": 0.3,
-                            "max_tokens": 1500,
-                        },
-                        timeout=30,
-                    )
-                    analysis = resp.json()["choices"][0]["message"]["content"]
-                    st.markdown(analysis)
-                except Exception as e:
-                    st.error(f"API error: {e}")
+        with st.spinner("Asking Grok for morning game plan..."):
+            try:
+                result = _call_grok(prompt)
+                if result:
+                    st.markdown(result)
+            except Exception as e:
+                st.error(f"API error: {e}")
 
     st.divider()
 
     # --- Post-Market ---
     st.subheader("2. Post-Market Daily Review (After Noon)")
     if st.button("Run Post-Market Daily Review (Today)"):
-        if not st.session_state.get("grok_key"):
-            st.error("Enter your Grok API key")
-        else:
-            today_str_pm = date.today().strftime("%Y-%m-%d")
-            journal_df = get_journal()
-            today_trades_pm = (
-                journal_df[journal_df["date"].str.startswith(today_str_pm)]
-                if not journal_df.empty
-                else pd.DataFrame()
-            )
-            trades_text = (
-                today_trades_pm.to_string(index=False)
-                if not today_trades_pm.empty
-                else "No trades logged today"
-            )
-            total_pnl_pm = (
-                float(today_trades_pm["pnl"].sum())
-                if not today_trades_pm.empty and "pnl" in today_trades_pm.columns
-                else 0.0
-            )
+        today_str_pm = date.today().strftime("%Y-%m-%d")
+        journal_df = get_journal()
+        today_trades_pm = (
+            journal_df[journal_df["date"].str.startswith(today_str_pm)]
+            if not journal_df.empty
+            else pd.DataFrame()
+        )
+        trades_text = (
+            today_trades_pm.to_string(index=False)
+            if not today_trades_pm.empty
+            else "No trades logged today"
+        )
+        total_pnl_pm = (
+            float(today_trades_pm["pnl"].sum())
+            if not today_trades_pm.empty and "pnl" in today_trades_pm.columns
+            else 0.0
+        )
 
-            prompt = f"""You are reviewing my trading day for a $150k TPT account.
+        prompt = f"""You are reviewing my trading day for a $150k TPT account.
 Rules: 1% risk ($1,500), max 3-4 contracts, early-morning only, close by noon, daily limits -$1,500 soft / -$2,250 hard.
 
 Date: {today_str_pm}
@@ -618,25 +690,13 @@ Provide a professional daily review:
 
 Bullet points only, honest, constructive, focused on consistency."""
 
-            with st.spinner("Analyzing today's trades..."):
-                try:
-                    resp = requests.post(
-                        "https://api.x.ai/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {st.session_state.grok_key}"
-                        },
-                        json={
-                            "model": "grok-4-1-fast-reasoning",
-                            "messages": [{"role": "user", "content": prompt}],
-                            "temperature": 0.4,
-                            "max_tokens": 1200,
-                        },
-                        timeout=30,
-                    )
-                    review = resp.json()["choices"][0]["message"]["content"]
-                    st.markdown(review)
-                except Exception as e:
-                    st.error(f"API error: {e}")
+        with st.spinner("Analyzing today's trades..."):
+            try:
+                result = _call_grok(prompt, max_tokens=1200, temperature=0.4)
+                if result:
+                    st.markdown(result)
+            except Exception as e:
+                st.error(f"API error: {e}")
 
     st.divider()
 
@@ -646,28 +706,25 @@ Bullet points only, honest, constructive, focused on consistency."""
         "Select date to review", value=date.today(), max_value=date.today()
     )
     if st.button(f"Review {review_date}"):
-        if not st.session_state.get("grok_key"):
-            st.error("Enter your Grok API key")
-        else:
-            d_str = review_date.strftime("%Y-%m-%d")
-            journal_df = get_journal()
-            day_trades = (
-                journal_df[journal_df["date"].str.startswith(d_str)]
-                if not journal_df.empty
-                else pd.DataFrame()
-            )
-            trades_text = (
-                day_trades.to_string(index=False)
-                if not day_trades.empty
-                else "No trades on this day"
-            )
-            pnl = (
-                float(day_trades["pnl"].sum())
-                if not day_trades.empty and "pnl" in day_trades.columns
-                else 0.0
-            )
+        d_str = review_date.strftime("%Y-%m-%d")
+        journal_df = get_journal()
+        day_trades = (
+            journal_df[journal_df["date"].str.startswith(d_str)]
+            if not journal_df.empty
+            else pd.DataFrame()
+        )
+        trades_text = (
+            day_trades.to_string(index=False)
+            if not day_trades.empty
+            else "No trades on this day"
+        )
+        pnl = (
+            float(day_trades["pnl"].sum())
+            if not day_trades.empty and "pnl" in day_trades.columns
+            else 0.0
+        )
 
-            prompt = f"""Review my trading on {d_str} for $150k TPT account.
+        prompt = f"""Review my trading on {d_str} for $150k TPT account.
 P&L: ${pnl:,.0f}
 Trades:
 {trades_text}
@@ -679,24 +736,13 @@ Give detailed day-by-day review:
 4. Key lessons
 5. TPT compliance check"""
 
-            with st.spinner("Generating review..."):
-                try:
-                    resp = requests.post(
-                        "https://api.x.ai/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {st.session_state.grok_key}"
-                        },
-                        json={
-                            "model": "grok-4-1-fast-reasoning",
-                            "messages": [{"role": "user", "content": prompt}],
-                            "temperature": 0.4,
-                        },
-                        timeout=30,
-                    )
-                    review = resp.json()["choices"][0]["message"]["content"]
-                    st.markdown(review)
-                except Exception as e:
-                    st.error(f"API error: {e}")
+        with st.spinner("Generating review..."):
+            try:
+                result = _call_grok(prompt, temperature=0.4)
+                if result:
+                    st.markdown(result)
+            except Exception as e:
+                st.error(f"API error: {e}")
 
 # ===== TAB 6: Backtester ===================================================
 with tab6:
@@ -720,58 +766,87 @@ with tab6:
     if asset_bt in data and not data[asset_bt].empty:
         df_bt = data[asset_bt].copy()
         bt = Backtest(
-            df_bt,
-            EMACross,
-            cash=account_size,
-            commission=0.0002,
-            margin=1.0,
-            exclusive_orders=True,
+            df_bt, EMACross, cash=account_size,
+            commission=0.0002, margin=1.0, exclusive_orders=True,
         )
         stats = bt.run()
         st.write(stats)
     else:
         st.info("Select an asset with data to backtest")
 
-# ===== TAB 7: Optimizer ====================================================
+# ===== TAB 7: Auto-Optimizer ===============================================
 with tab7:
-    st.header("Optuna Hyper-parameter Optimizer")
-    st.write("Optimizes EMA periods for the selected backtest asset")
+    st.header("Auto-Optimizer (All Assets)")
+    st.write(
+        "Runs Optuna 30-trial optimization for every selected asset. "
+        "Results are cached for 1 hour in Redis so subsequent loads are instant."
+    )
 
-    if st.button("Run 30-trial Optimization"):
-        if asset_bt not in data or data[asset_bt].empty:
-            st.error("No data for selected asset")
-        else:
-            df_opt = data[asset_bt].copy()
+    # Show existing cached results
+    st.subheader("Current Optimal Parameters")
+    opt_rows = []
+    for name in selected_assets:
+        ticker = assets[name]
+        cached = get_cached_optimization(ticker, interval, period)
+        if cached:
+            opt_rows.append({
+                "Asset": name,
+                "Fast EMA (n1)": cached["n1"],
+                "Slow EMA (n2)": cached["n2"],
+                "Return %": cached["return_pct"],
+                "Last Updated": cached["updated"],
+            })
+    if opt_rows:
+        st.dataframe(pd.DataFrame(opt_rows), use_container_width=True,
+                      hide_index=True)
+    else:
+        st.info("No cached results yet. Run optimization below.")
 
-            def objective(trial):
-                n1 = trial.suggest_int("n1", 5, 20)
-                n2 = trial.suggest_int("n2", 15, 50)
+    st.divider()
 
-                class OptStrat(Strategy):
-                    def init(self_strat):
-                        self_strat.ema1 = self_strat.I(
-                            ema, pd.Series(self_strat.data.Close), n1
-                        )
-                        self_strat.ema2 = self_strat.I(
-                            ema, pd.Series(self_strat.data.Close), n2
-                        )
-
-                    def next(self_strat):
-                        if crossover(self_strat.ema1, self_strat.ema2):
-                            self_strat.buy()
-                        elif crossover(self_strat.ema2, self_strat.ema1):
-                            self_strat.sell()
-
-                b = Backtest(df_opt, OptStrat, cash=account_size, commission=0.0002)
-                return b.run()["Return [%]"]
-
-            with st.spinner("Running optimization..."):
-                study = optuna.create_study(direction="maximize")
-                study.optimize(objective, n_trials=30, show_progress_bar=False)
-                st.success(
-                    f"Best: n1={study.best_params['n1']}, n2={study.best_params['n2']} "
-                    f"-> Return {study.best_value:.1f}%"
+    # Single asset optimization
+    col_single, col_all = st.columns(2)
+    with col_single:
+        opt_asset = st.selectbox("Optimize Single Asset", selected_assets,
+                                  key="opt_single")
+        if st.button("Optimize Selected Asset"):
+            ticker = assets[opt_asset]
+            with st.spinner(f"Optimizing {opt_asset}..."):
+                result = run_optimization_for_asset(
+                    ticker, interval, period, account_size
                 )
+                if result:
+                    st.success(
+                        f"{opt_asset}: Best n1={result['n1']}, "
+                        f"n2={result['n2']} -> {result['return_pct']}%"
+                    )
+
+    # Full loop: optimize ALL selected assets
+    with col_all:
+        st.write("**Optimize All Assets**")
+        if st.button("Run Full Optimization Loop", type="primary"):
+            progress = st.progress(0)
+            results = []
+            for i, name in enumerate(selected_assets):
+                ticker = assets[name]
+                with st.spinner(f"Optimizing {name} ({i+1}/{len(selected_assets)})..."):
+                    result = run_optimization_for_asset(
+                        ticker, interval, period, account_size
+                    )
+                    if result:
+                        results.append({
+                            "Asset": name,
+                            "Fast EMA (n1)": result["n1"],
+                            "Slow EMA (n2)": result["n2"],
+                            "Return %": result["return_pct"],
+                            "Last Updated": result["updated"],
+                        })
+                progress.progress((i + 1) / len(selected_assets))
+
+            if results:
+                st.subheader("Optimization Complete")
+                st.dataframe(pd.DataFrame(results),
+                              use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------
 # Footer
