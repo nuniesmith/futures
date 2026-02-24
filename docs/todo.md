@@ -1128,3 +1128,175 @@ Would you like me to:
 - Make the NT indicator also send open positions / unrealized P&L?
 
 Just say the word and we’ll have full two-way sync in <10 minutes. This is exactly how pro funded traders run their business. You’re set! 🚀
+
+**✅ Done — Your Dashboard Now Has Professional Pre-Market, Post-Market & Day-by-Day Grok Analysis**
+
+I’ve added **three powerful LLM tools** using your existing Grok-4.1 API:
+
+1. **Pre-Market Morning Analysis** (3–5 AM EST) → game plan before you touch NinjaTrader  
+2. **Post-Market Daily Review** (after noon, all positions closed) → instant feedback on what happened today  
+3. **Day-by-Day Historical Review** → pick any past date and get a full breakdown
+
+Everything respects your **$150k TPT rules** (1% risk, max 3–4 contracts / 25% rule, early-morning only, EOD close, daily P&L limits).
+
+### Replace Your Current Grok Tab (tab5) With This Code
+
+```python
+# === REPLACE YOUR ENTIRE TAB 5 (Grok AI Analyst) WITH THIS ===
+
+with tab5:
+    st.header("🤖 Grok AI Analyst – Pre & Post Market")
+    api_key = st.text_input("xAI Grok API Key (console.x.ai)", type="password", key="grok_key_input")
+    if api_key:
+        st.session_state.grok_key = api_key
+
+    st.subheader("1. Pre-Market Morning Analysis (3–5 AM)")
+    if st.button("🚀 Run Pre-Market Analysis (Full Game Plan)", type="primary"):
+        if not st.session_state.get("grok_key"):
+            st.error("Enter your Grok API key above")
+        else:
+            # Build rich context from current dashboard
+            scan_text = df_scan.to_string(index=False) if 'df_scan' in locals() else "No scanner data"
+            corr_text = corr.to_string() if 'corr' in locals() else "No correlations"
+            
+            prompt = f"""You are a strict TPT-funded futures trader managing a $150k account.
+Rules you MUST follow:
+- Max 3–4 contracts per trade (25% rule)
+- Risk exactly 1% ($1,500) per trade
+- Only early-morning trades (3 AM – noon EST), close everything by noon
+- Daily P&L limits: soft stop -$1,500, hard stop -$2,250
+- Focus on correlations (Gold/Silver/Copper/Oil/ES/NQ)
+
+Current time: 3–5 AM EST
+Scanner data:
+{scan_text}
+
+Correlation matrix (5-min returns):
+{corr_text}
+
+Today's key levels (VWAP + pivots) are already plotted in charts.
+
+Give me a complete morning game plan:
+1. Overall market bias & 1–5 best assets to focus on
+2. 1–5 specific trade ideas (asset, direction, limit entry zone, SL, TP, contracts, RR, rationale)
+3. Key correlations to watch
+4. Any news/events to be aware of
+5. Risk reminders for today
+
+Be concise, bullet-point only, actionable. No fluff."""
+
+            with st.spinner("Asking Grok for morning game plan..."):
+                try:
+                    resp = requests.post(
+                        "https://api.x.ai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {st.session_state.grok_key}"},
+                        json={"model": "grok-4-1-fast-reasoning", "messages": [{"role": "user", "content": prompt}], "temperature": 0.3, "max_tokens": 1500}
+                    )
+                    analysis = resp.json()["choices"][0]["message"]["content"]
+                    st.markdown(analysis)
+                except Exception as e:
+                    st.error(f"API error: {e}")
+
+    st.divider()
+
+    st.subheader("2. Post-Market Daily Review (After Noon)")
+    if st.button("📊 Run Post-Market Daily Review (Today)"):
+        if not st.session_state.get("grok_key"):
+            st.error("Enter your Grok API key")
+        else:
+            today = date.today().strftime("%Y-%m-%d")
+            today_trades = get_journal()[get_journal()['date'].str.startswith(today)] if not get_journal().empty else pd.DataFrame()
+            
+            trades_text = today_trades.to_string(index=False) if not today_trades.empty else "No trades logged today"
+            total_pnl = today_trades['pnl'].sum() if not today_trades.empty and 'pnl' in today_trades.columns else 0.0
+            
+            prompt = f"""You are reviewing my trading day for a $150k TPT account.
+Rules: 1% risk ($1,500), max 3–4 contracts, early-morning only, close by noon, daily limits -$1,500 soft / -$2,250 hard.
+
+Date: {today}
+Total P&L today: ${total_pnl:,.0f}
+Trades taken:
+{trades_text}
+
+Provide a professional daily review:
+1. Performance summary (win rate, avg RR, total risk taken)
+2. What worked well (specific examples)
+3. What went wrong / rule breaks
+4. Key lessons & 1–2 specific improvements for tomorrow
+5. Did I respect TPT rules and my personal P&L limits?
+
+Bullet points only, honest, constructive, focused on consistency."""
+
+            with st.spinner("Analyzing today's trades..."):
+                try:
+                    resp = requests.post(
+                        "https://api.x.ai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {st.session_state.grok_key}"},
+                        json={"model": "grok-4-1-fast-reasoning", "messages": [{"role": "user", "content": prompt}], "temperature": 0.4, "max_tokens": 1200}
+                    )
+                    review = resp.json()["choices"][0]["message"]["content"]
+                    st.markdown(review)
+                except Exception as e:
+                    st.error(f"API error: {e}")
+
+    st.divider()
+
+    st.subheader("3. Review Any Specific Past Day")
+    review_date = st.date_input("Select date to review", value=date.today(), max_value=date.today())
+    if st.button(f"📅 Review {review_date}"):
+        if not st.session_state.get("grok_key"):
+            st.error("Enter your Grok API key")
+        else:
+            d_str = review_date.strftime("%Y-%m-%d")
+            day_trades = get_journal()[get_journal()['date'].str.startswith(d_str)] if not get_journal().empty else pd.DataFrame()
+            trades_text = day_trades.to_string(index=False) if not day_trades.empty else "No trades on this day"
+            pnl = day_trades['pnl'].sum() if not day_trades.empty and 'pnl' in day_trades.columns else 0.0
+            
+            prompt = f"""Review my trading on {d_str} for $150k TPT account.
+P&L: ${pnl:,.0f}
+Trades:
+{trades_text}
+
+Give detailed day-by-day review following the same structure as post-market review above."""
+
+            with st.spinner("Generating review..."):
+                try:
+                    resp = requests.post(
+                        "https://api.x.ai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {st.session_state.grok_key}"},
+                        json={"model": "grok-4-1-fast-reasoning", "messages": [{"role": "user", "content": prompt}], "temperature": 0.4}
+                    )
+                    review = resp.json()["choices"][0]["message"]["content"]
+                    st.markdown(review)
+                except Exception as e:
+                    st.error(f"API error: {e}")
+```
+
+### Your New Daily Routine (Print This)
+
+**3:00–3:30 AM**  
+→ Refresh dashboard → Run **Pre-Market Analysis** → Write 1–5 trades in planner
+
+**During trading (until noon)**  
+→ Execute in NinjaTrader → trades auto-log via indicator
+
+**After 12:00 PM (all closed)**  
+→ Run **Post-Market Daily Review** → read Grok feedback → journal notes
+
+**Weekly / Anytime**  
+→ Use “Review Any Specific Past Day” for deeper dives
+
+### Optional Next Steps (tell me if you want these added)
+
+- Weekly Summary button (Sunday review)
+- Auto-save Grok reviews into journal table
+- Telegram/email summary of reviews
+- Voice read-aloud for morning analysis
+
+Just say the word and I’ll send the next update.
+
+You now have a **professional-grade trading journal with AI coach** built in. This is exactly what separates consistent funded traders from everyone else.
+
+You’re 100% ready — go crush tomorrow morning! 🚀
+
+Let me know when you’ve pasted the code and tested the first Pre-Market run — I’ll help tweak prompts if needed.
