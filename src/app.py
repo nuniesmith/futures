@@ -250,10 +250,10 @@ interval = st.sidebar.selectbox("Chart Interval", ["1m", "5m"], index=1)
 # Only show periods that Yahoo Finance supports for the selected interval
 _VALID_PERIODS = {
     "1m": ["1d", "5d"],
-    "5m": ["1d", "5d", "1mo"],
+    "5m": ["1d", "5d", "15d", "1mo"],
 }
-_period_options = _VALID_PERIODS.get(interval, ["5d", "1mo", "3mo"])
-_period_default = min(1, len(_period_options) - 1)
+_period_options = _VALID_PERIODS.get(interval, ["5d", "15d", "1mo", "3mo"])
+_period_default = min(2, len(_period_options) - 1)
 period = st.sidebar.selectbox("Data Period", _period_options, index=_period_default)
 
 # API key

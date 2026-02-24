@@ -125,13 +125,13 @@ def cache_set(key: str, data: bytes, ttl: int) -> None:
 _YF_MAX_PERIOD: dict[str, list[str]] = {
     # interval → ordered list of allowed periods (largest last)
     "1m": ["1d", "5d"],
-    "2m": ["1d", "5d", "1mo"],
-    "5m": ["1d", "5d", "1mo"],
-    "15m": ["1d", "5d", "1mo"],
-    "30m": ["1d", "5d", "1mo"],
-    "60m": ["1d", "5d", "1mo", "3mo", "6mo"],
-    "1h": ["1d", "5d", "1mo", "3mo", "6mo"],
-    "90m": ["1d", "5d", "1mo", "3mo", "6mo"],
+    "2m": ["1d", "5d", "15d", "1mo"],
+    "5m": ["1d", "5d", "15d", "1mo"],
+    "15m": ["1d", "5d", "15d", "1mo"],
+    "30m": ["1d", "5d", "15d", "1mo"],
+    "60m": ["1d", "5d", "15d", "1mo", "3mo", "6mo"],
+    "1h": ["1d", "5d", "15d", "1mo", "3mo", "6mo"],
+    "90m": ["1d", "5d", "15d", "1mo", "3mo", "6mo"],
     "1d": ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
     "5d": ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
     "1wk": ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
@@ -143,6 +143,7 @@ _YF_MAX_PERIOD: dict[str, list[str]] = {
 _PERIOD_RANK: dict[str, int] = {
     "1d": 1,
     "5d": 5,
+    "15d": 15,
     "1mo": 30,
     "3mo": 90,
     "6mo": 180,
