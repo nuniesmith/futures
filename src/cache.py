@@ -27,7 +27,7 @@ try:
     import redis  # type: ignore[import-unresolved]
 
     _redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    _r: "redis.Redis[bytes] | None" = redis.from_url(_redis_url, decode_responses=False)
+    _r: "redis.Redis | None" = redis.from_url(_redis_url, decode_responses=False)
     _r.ping()  # type: ignore[union-attr]
     REDIS_AVAILABLE = True
 except Exception:
@@ -73,11 +73,14 @@ def _bytes_to_df(raw: bytes) -> pd.DataFrame:
 
 def cache_get(key: str) -> bytes | None:
     if REDIS_AVAILABLE and _r is not None:
-        return _r.get(key)
+        result = _r.get(key)
+        if isinstance(result, bytes):
+            return result
+        return None
     entry = _mem_cache.get(key)
     if entry is None:
         return None
-    if datetime.utcnow().timestamp() > entry["expires"]:
+    if datetime.now().timestamp() > entry["expires"]:
         del _mem_cache[key]
         return None
     return entry["data"]
