@@ -1,10 +1,9 @@
 .git
 .claude
+.venv
 __pycache__
 *.pyc
-*.db
 .env
 docs/
-src/
 *.md
 LICENSE
