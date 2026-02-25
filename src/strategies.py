@@ -11,6 +11,9 @@ Provides seven strategy classes with trend filters and ATR-based risk management
 
 All strategies are compatible with the `backtesting.py` library and expose
 class-level parameters that Optuna can tune.
+
+The VolumeProfileStrategy is imported from volume_profile.py and registered
+here for unified optimizer access.
 """
 
 import math
@@ -738,6 +741,20 @@ class PlainEMACross(Strategy):
 # Strategy registry — used by the optimizer / engine
 # ---------------------------------------------------------------------------
 
+# Import VolumeProfileStrategy from its dedicated module
+_VP_AVAILABLE = False
+_VolumeProfileStrategy = None
+_suggest_volume_profile_params = None
+try:
+    from volume_profile import VolumeProfileStrategy as _VPS
+    from volume_profile import suggest_volume_profile_params as _svpp
+
+    _VolumeProfileStrategy = _VPS
+    _suggest_volume_profile_params = _svpp
+    _VP_AVAILABLE = True
+except ImportError:
+    pass
+
 STRATEGY_CLASSES = {
     "TrendEMA": TrendEMACross,
     "RSI": RSIReversal,
@@ -748,6 +765,9 @@ STRATEGY_CLASSES = {
     "PlainEMA": PlainEMACross,
 }
 
+if _VP_AVAILABLE and _VolumeProfileStrategy is not None:
+    STRATEGY_CLASSES["VolumeProfile"] = _VolumeProfileStrategy
+
 # Human-readable labels
 STRATEGY_LABELS = {
     "TrendEMA": "Trend-Filtered EMA Cross",
@@ -756,6 +776,7 @@ STRATEGY_LABELS = {
     "VWAP": "VWAP Reversion",
     "ORB": "Opening Range Breakout",
     "MACD": "MACD Momentum",
+    "VolumeProfile": "Volume Profile (POC/VA)",
     "PlainEMA": "Plain EMA Cross (legacy)",
 }
 
@@ -767,7 +788,13 @@ def suggest_params(trial, strategy_key: str) -> dict:
     """
     params: dict = {}
 
-    if strategy_key == "TrendEMA":
+    if strategy_key == "VolumeProfile":
+        if _VP_AVAILABLE and _suggest_volume_profile_params is not None:
+            return _suggest_volume_profile_params(trial)
+        # Fallback if volume_profile module not available
+        return {"trade_size": trial.suggest_float("trade_size", 0.05, 0.30, step=0.05)}
+
+    elif strategy_key == "TrendEMA":
         params["n1"] = trial.suggest_int("n1", 5, 20)
         params["n2"] = trial.suggest_int("n2", max(params["n1"] + 5, 15), 55)
         params["trend_period"] = trial.suggest_int("trend_period", 40, 120)
