@@ -1,4 +1,49 @@
+# =============================================================================
+# Futures Trading Co-Pilot — Docker Compose (4-Service Architecture)
+# =============================================================================
+#
+# Services:
+#   postgres       — durable storage (journal, historical opts, alerts)
+#   redis          — hot cache (latest FKS metrics, live positions, 1m bars)
+#   data-service   — FastAPI + background engine (all heavy computation)
+#   streamlit-app  — pure UI client (fast reloads, reads from data-service + Redis)
+#
+# Usage:
+#   docker compose up -d --build
+#   docker compose logs -f data-service
+#   docker compose ps
+#
+# =============================================================================
+
 services:
+    # -------------------------------------------------------------------------
+    # PostgreSQL — durable storage
+    # -------------------------------------------------------------------------
+    postgres:
+        image: postgres:16-alpine
+        restart: unless-stopped
+        ports:
+            - "5432:5432"
+        environment:
+            POSTGRES_USER: ${POSTGRES_USER:-futures_user}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-futures_dev_pass}
+            POSTGRES_DB: ${POSTGRES_DB:-futures_db}
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "pg_isready -U ${POSTGRES_USER:-futures_user} -d ${POSTGRES_DB:-futures_db}",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 10s
+
+    # -------------------------------------------------------------------------
+    # Redis — hot cache for real-time data
+    # -------------------------------------------------------------------------
     redis:
         image: redis:7-alpine
         restart: unless-stopped
@@ -6,30 +51,96 @@ services:
             - "6379:6379"
         volumes:
             - redis_data:/data
+        command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
         healthcheck:
             test: ["CMD", "redis-cli", "ping"]
             interval: 10s
             timeout: 3s
             retries: 3
 
-    app:
+    # -------------------------------------------------------------------------
+    # Data Service — FastAPI + DashboardEngine + background workers
+    # All heavy computation runs here (Massive WS, optimization, backtesting,
+    # wave analysis, volatility, signal quality, regime, CVD, ICT)
+    # -------------------------------------------------------------------------
+    data-service:
         build:
             context: .
-            dockerfile: docker/Dockerfile
+            dockerfile: docker/data/Dockerfile
         restart: unless-stopped
         ports:
-            - "8501:8501"
             - "8000:8000"
         env_file:
             - .env
         environment:
             - REDIS_URL=redis://redis:6379/0
+            - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD:-futures_dev_pass}@postgres:5432/${POSTGRES_DB:-futures_db}
+            - DB_PATH=/app/data/futures_journal.db
+            - DATA_SERVICE_HOST=0.0.0.0
+            - DATA_SERVICE_PORT=8000
+            - PYTHONPATH=/app/src/services/data/core:/app/src:/app/src/services/data:/app
+            - PYTHONUNBUFFERED=1
         volumes:
             - app_data:/app/data
         depends_on:
             redis:
                 condition: service_healthy
+            postgres:
+                condition: service_healthy
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "python",
+                    "-c",
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+                ]
+            interval: 15s
+            timeout: 5s
+            start_period: 30s
+            retries: 3
+
+    # -------------------------------------------------------------------------
+    # Streamlit App — pure UI client (fast reloads)
+    # Calls data-service API + reads Redis directly for ultra-low latency
+    # -------------------------------------------------------------------------
+    streamlit-app:
+        build:
+            context: .
+            dockerfile: docker/web/Dockerfile
+        restart: unless-stopped
+        ports:
+            - "8501:8501"
+        env_file:
+            - .env
+        environment:
+            - REDIS_URL=redis://redis:6379/0
+            - DATA_SERVICE_URL=http://data-service:8000
+            - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD:-futures_dev_pass}@postgres:5432/${POSTGRES_DB:-futures_db}
+            - DB_PATH=/app/data/futures_journal.db
+            - PYTHONPATH=/app/src:/app
+            - PYTHONUNBUFFERED=1
+        volumes:
+            - app_data:/app/data
+        depends_on:
+            redis:
+                condition: service_healthy
+            data-service:
+                condition: service_healthy
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "python",
+                    "-c",
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')",
+                ]
+            interval: 15s
+            timeout: 5s
+            start_period: 15s
+            retries: 3
 
 volumes:
+    postgres_data:
     redis_data:
     app_data:

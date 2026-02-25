@@ -1,19 +1,28 @@
 """
-Futures Trading Co-Pilot
-========================
-Focused single-page dashboard for live trading with NinjaTrader.
-No clutter, no unnecessary settings — just what matters.
+Futures Trading Co-Pilot — Streamlit UI (Thin Client)
+=====================================================
+Pure presentation layer. ALL heavy computation runs in the data-service.
+This page reads from the data-service API + Redis cache — loads instantly.
 
-Key features:
-  - ONE setting: account size (controls all risk parameters)
-  - Pre-market: scanner, scores, ICT levels, CVD, Grok morning briefing
-  - Live trading: "Positions Open" toggle → Grok 15-min updates
-  - End of day: simple journal (gross PnL + net PnL → commissions auto-calculated)
-  - Auto-refresh every 5 minutes
-  - Micro contracts focus (10-20 units)
+Ported from the original monolithic src/app.py with every section preserved:
+  - FKS Insights Dashboard (Wave + Volatility + Signal Quality)
+  - Market Scanner with 60s auto-refresh
+  - Live Minute View with 30s auto-refresh and 1m candlestick charts
+  - Key ICT Levels, CVD, and Confluence panels
+  - Optimized Strategies & Backtests from the engine
+  - Grok AI Morning Briefing + 15-min Live Updates
+  - Interactive Charts with VWAP, EMA, Pivots
+  - End-of-Day Journal (entry form, history, stats, cumulative P&L chart)
+  - Engine Status footer with live feed info
+  - Session timing (pre-market / market hours / wind down / closed)
+  - NinjaTrader Live Positions panel
+  - 5-minute full-page auto-refresh
 
-All heavy computation runs in the background engine.
-This page only reads cached results — loads instantly.
+Key difference from old app.py:
+  - No direct engine/DashboardEngine import
+  - No heavy computation (optuna, backtesting, hmmlearn, sklearn)
+  - Data fetched via httpx from data-service API or direct Redis reads
+  - Grok helper, scorer, and chart helpers still imported from src/ (lightweight)
 """
 
 import json
@@ -26,20 +35,22 @@ from zoneinfo import ZoneInfo
 
 _EST = ZoneInfo("America/New_York")
 
-# Ensure sibling modules are importable when run as `streamlit run src/app.py`
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# ---------------------------------------------------------------------------
+# Ensure sibling src/ modules are importable
+# ---------------------------------------------------------------------------
+_src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
+import httpx  # noqa: E402
 import pandas as pd  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
-import requests  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from api_server import get_live_positions  # noqa: E402
 from cache import (  # noqa: E402
     REDIS_AVAILABLE,
     _cache_key,
     cache_get,
-    flush_all,
     get_cached_indicator,
     get_cached_optimization,
     get_daily,
@@ -50,17 +61,13 @@ from cache import (  # noqa: E402
 from confluence import check_confluence, get_recommended_timeframes  # noqa: E402
 from costs import estimate_trade_costs, get_cost_model  # noqa: E402
 from cvd import compute_cvd, cvd_summary, detect_cvd_divergences  # noqa: E402
-from engine import DashboardEngine, get_engine  # noqa: E402
 from grok_helper import (  # noqa: E402
     GrokSession,
     _escape_dollars,
     format_market_context,
     run_morning_briefing,
 )
-from ict import (  # noqa: E402
-    ict_summary,
-    levels_to_dataframe,
-)
+from ict import ict_summary, levels_to_dataframe  # noqa: E402
 from massive_client import is_massive_available  # noqa: E402
 from models import (  # noqa: E402
     ACCOUNT_PROFILES,
@@ -78,19 +85,115 @@ from scorer import (  # noqa: E402
     score_instruments,
 )
 from scorer import results_to_dataframe as scorer_to_dataframe  # noqa: E402
+from signal_quality import compute_signal_quality  # noqa: E402
 from volatility import kmeans_volatility_clusters, volatility_summary_text  # noqa: E402
 from wave_analysis import calculate_wave_analysis, wave_summary_text  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Initialise database
+# Configuration
+# ---------------------------------------------------------------------------
+DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://localhost:8000")
+API_TIMEOUT = 10.0
+
+# ---------------------------------------------------------------------------
+# Initialise database (for local reads — journal, etc.)
 # ---------------------------------------------------------------------------
 init_db()
 
+
 # ---------------------------------------------------------------------------
-# Technical indicator helpers (kept minimal)
+# Data Service API Client
 # ---------------------------------------------------------------------------
+class DataServiceClient:
+    """Thin HTTP client for the data-service API."""
+
+    def __init__(self, base_url: str = DATA_SERVICE_URL, timeout: float = API_TIMEOUT):
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+
+    def _get(self, path: str, params: dict | None = None) -> dict | list | None:
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                resp = client.get(f"{self.base_url}{path}", params=params)
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.ConnectError:
+            return None
+        except httpx.TimeoutException:
+            return None
+        except Exception:
+            return None
+
+    def _post(self, path: str, json_data: dict | None = None) -> dict | None:
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                resp = client.post(f"{self.base_url}{path}", json=json_data)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception:
+            return None
+
+    def get_health(self) -> dict | None:
+        return self._get("/health")
+
+    def get_status(self) -> dict | None:
+        return self._get("/analysis/status")
+
+    def get_latest_all(self, interval: str = "5m", period: str = "5d") -> dict | None:
+        return self._get(
+            "/analysis/latest", params={"interval": interval, "period": period}
+        )
+
+    def get_latest_ticker(
+        self, ticker: str, interval: str = "5m", period: str = "5d"
+    ) -> dict | None:
+        return self._get(
+            f"/analysis/latest/{ticker}",
+            params={"interval": interval, "period": period},
+        )
+
+    def get_backtest_results(self) -> dict | None:
+        return self._get("/analysis/backtest_results")
+
+    def get_strategy_history(self) -> dict | None:
+        return self._get("/analysis/strategy_history")
+
+    def get_live_feed_status(self) -> dict | None:
+        return self._get("/analysis/live_feed")
+
+    def get_positions(self) -> dict | None:
+        return self._get("/positions/")
+
+    def force_refresh(self) -> dict | None:
+        return self._post("/actions/force_refresh")
+
+    def optimize_now(self) -> dict | None:
+        return self._post("/actions/optimize_now")
+
+    def update_settings(self, **kwargs) -> dict | None:
+        return self._post("/actions/update_settings", json_data=kwargs)
+
+    def start_live_feed(self) -> dict | None:
+        return self._post("/actions/live_feed/start")
+
+    def stop_live_feed(self) -> dict | None:
+        return self._post("/actions/live_feed/stop")
+
+    def get_metrics(self) -> dict | None:
+        return self._get("/metrics")
 
 
+@st.cache_resource
+def get_api_client() -> DataServiceClient:
+    return DataServiceClient()
+
+
+api = get_api_client()
+
+
+# ---------------------------------------------------------------------------
+# Technical indicator helpers (lightweight, for chart overlays only)
+# ---------------------------------------------------------------------------
 def ema(series, length):
     """Exponential Moving Average."""
     return series.ewm(span=length, adjust=False).mean()
@@ -137,18 +240,13 @@ def compute_pivots(daily_df):
 
 
 def _compute_1m_momentum(df_1m):
-    """Compute 1-minute momentum metrics from the last N bars.
-
-    Returns a dict with micro-trend direction, momentum slope,
-    last-5-bar range, and 1m volume surge indicator.
-    """
+    """Compute 1-minute momentum metrics from the last N bars."""
     if df_1m is None or df_1m.empty or len(df_1m) < 10:
         return {"1m Trend": "—", "1m Mom": 0.0, "1m Range": 0.0, "1m VolSurge": False}
 
     tail = df_1m.tail(10)
     closes = tail["Close"]
 
-    # Micro-trend: EMA5 vs EMA10 on 1m
     ema5 = closes.ewm(span=5, adjust=False).mean().iloc[-1]
     ema10 = closes.ewm(span=10, adjust=False).mean().iloc[-1]
     if ema5 > ema10 * 1.0001:
@@ -158,17 +256,14 @@ def _compute_1m_momentum(df_1m):
     else:
         trend = "⚪ Flat"
 
-    # Momentum: slope of last 5 closes (normalised by ATR)
     last5 = closes.tail(5)
     if len(last5) >= 2:
         slope = (float(last5.iloc[-1]) - float(last5.iloc[0])) / max(len(last5) - 1, 1)
     else:
         slope = 0.0
 
-    # Range of last 5 bars
     bar_range = float(tail.tail(5)["High"].max() - tail.tail(5)["Low"].min())
 
-    # Volume surge: last bar volume > 2× average of prior 9
     vol = tail["Volume"]
     if len(vol) >= 2:
         avg_vol = float(vol.iloc[:-1].mean()) if len(vol) > 1 else 1
@@ -224,7 +319,6 @@ def build_scanner_row(name, ticker, interval, period):
     raw_vol = df["Volume"].iloc[-1]
     vol = int(raw_vol) if not pd.isna(raw_vol) else 0
 
-    # 1m momentum overlay
     df_1m = get_data(ticker, "1m", "1d")
     mom = _compute_1m_momentum(df_1m)
 
@@ -266,6 +360,7 @@ PERIOD = "5d"
 INTERVAL_1M = "1m"
 PERIOD_1M = "1d"
 ALL_ASSETS = list(ASSETS.keys())
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SIDEBAR — Minimal: Account Size + API Key only
@@ -320,17 +415,26 @@ with st.sidebar:
     else:
         st.info(f"🟡 **{data_source}** — Set `MASSIVE_API_KEY` for real-time data")
 
+    # Data service connection status
+    st.divider()
+    st.markdown("**🔌 Data Service**")
+    health = api.get_health()
+    if health:
+        svc_status = health.get("status", "unknown")
+        svc_emoji = "🟢" if svc_status == "ok" else "🟡"
+        st.success(f"{svc_emoji} Connected — {DATA_SERVICE_URL}")
+    else:
+        st.error("🔴 Offline — running in standalone mode")
+
     st.divider()
     cache_badge = "Redis" if REDIS_AVAILABLE else "In-Memory"
     st.caption(f"Cache: {cache_badge} · Data: {data_source} · {INTERVAL}/{PERIOD}")
     st.caption("Engine auto-optimizes strategies, intervals, and params in background.")
 
-# ═══════════════════════════════════════════════════════════════════════════
-# START ENGINE + LOAD DATA
-# ═══════════════════════════════════════════════════════════════════════════
-engine: DashboardEngine = get_engine(account_size, INTERVAL, PERIOD)
 
-# Load market data for all assets — 5m (big picture) + 1m (live action)
+# ═══════════════════════════════════════════════════════════════════════════
+# LOAD DATA (from cache / yfinance — lightweight reads only)
+# ═══════════════════════════════════════════════════════════════════════════
 data = {}
 data_1m = {}
 for name in ALL_ASSETS:
@@ -377,9 +481,9 @@ with top_center:
     else:
         st.error(f"🔴 Session CLOSED — {now_est.strftime('%H:%M')} EST")
 
-    # Live feed status badge
-    feed_status = engine.get_live_feed_status()
-    feed_src = feed_status.get("data_source", "yfinance")
+    # Live feed status badge — try data service first, fall back to direct
+    feed_status = api.get_live_feed_status() or {}
+    feed_src = feed_status.get("data_source", data_source)
     if feed_status.get("connected"):
         bars_n = feed_status.get("bars", 0)
         trades_n = feed_status.get("trades", 0)
@@ -404,27 +508,62 @@ with top_right:
             help="Toggle ON when you have positions in NinjaTrader. Enables Grok 15-min updates.",
         )
 
-# Handle toggle state changes
+# Handle toggle state changes — notify data service to upgrade/downgrade feed
 if positions_open and not grok_session.is_active:
     grok_session.activate()
-    # Upgrade live feed to per-second aggregates for tighter updates
-    engine.upgrade_live_feed()
+    api._post("/actions/live_feed/upgrade")
 elif not positions_open and grok_session.is_active:
     grok_session.deactivate()
-    # Downgrade back to per-minute aggregates to save bandwidth
-    engine.downgrade_live_feed()
+    api._post("/actions/live_feed/downgrade")
+
 
 # ═══════════════════════════════════════════════════════════════════════════
-# LIVE POSITIONS PANEL (from NinjaTrader bridge)
+# LIVE POSITIONS PANEL (from NinjaTrader bridge via data-service)
 # ═══════════════════════════════════════════════════════════════════════════
-live_pos = get_live_positions()
-if live_pos["has_positions"]:
+live_pos = api.get_positions()
+if live_pos is None:
+    # Fall back to direct cache read
+    _pos_raw = cache_get(_cache_key("live_positions", "current"))
+    if _pos_raw:
+        try:
+            _pos_data = json.loads(_pos_raw)
+            _positions = _pos_data.get("positions", [])
+            live_pos = {
+                "account": _pos_data.get("account", ""),
+                "positions": _positions,
+                "timestamp": _pos_data.get("timestamp", ""),
+                "received_at": _pos_data.get("received_at", ""),
+                "has_positions": len(_positions) > 0,
+                "total_unrealized_pnl": round(
+                    sum(p.get("unrealizedPnL", 0) for p in _positions), 2
+                ),
+            }
+        except Exception:
+            live_pos = {
+                "has_positions": False,
+                "positions": [],
+                "total_unrealized_pnl": 0.0,
+                "account": "",
+                "received_at": "",
+                "timestamp": "",
+            }
+    else:
+        live_pos = {
+            "has_positions": False,
+            "positions": [],
+            "total_unrealized_pnl": 0.0,
+            "account": "",
+            "received_at": "",
+            "timestamp": "",
+        }
+
+if live_pos.get("has_positions"):
     st.divider()
     pos_header, pos_pnl = st.columns([3, 1])
     with pos_header:
         st.markdown("### 📊 Live Positions — NinjaTrader")
     with pos_pnl:
-        total_pnl = live_pos["total_unrealized_pnl"]
+        total_pnl = live_pos.get("total_unrealized_pnl", 0)
         pnl_color = "🟢" if total_pnl >= 0 else "🔴"
         st.metric(
             "Unrealized P&L",
@@ -432,7 +571,7 @@ if live_pos["has_positions"]:
         )
 
     pos_rows = []
-    for p in live_pos["positions"]:
+    for p in live_pos.get("positions", []):
         upnl = p.get("unrealizedPnL", 0)
         pos_rows.append(
             {
@@ -492,7 +631,6 @@ for name in ALL_ASSETS:
         htf_iv, setup_iv, entry_iv = get_recommended_timeframes(name)
         ticker = ASSETS[name]
 
-        # Fetch each timeframe; fall back gracefully
         _tf_period_map = {
             "1m": "1d",
             "5m": "5d",
@@ -505,7 +643,6 @@ for name in ALL_ASSETS:
         setup_df = get_data(ticker, setup_iv, _tf_period_map.get(setup_iv, "5d"))
         htf_df = get_data(ticker, htf_iv, _tf_period_map.get(htf_iv, "5d"))
 
-        # Fall back to whatever we have if a TF failed
         fallback = data.get(name, pd.DataFrame())
         if entry_df.empty:
             entry_df = data_1m.get(name, fallback)
@@ -570,8 +707,6 @@ for name in ALL_ASSETS:
         fks_sq_results[name] = json.loads(sq_raw)
     elif name in data and not data[name].empty:
         try:
-            from signal_quality import compute_signal_quality
-
             fks_sq_results[name] = compute_signal_quality(
                 data[name],
                 wave_result=fks_wave_results.get(name),
@@ -732,7 +867,6 @@ st.subheader("⚡ Live Minute View")
 @st.fragment(run_every=timedelta(seconds=30))
 def _live_minute_view():
     """Auto-refreshing 1m chart + momentum panel for the top-scored assets."""
-    # Pick focus assets: up to 3 based on pre-market score or just first 3
     if scorer_results:
         scorer_obj = PreMarketScorer()
         focus = scorer_obj.get_focus_assets(scorer_results, max_focus=3)
@@ -755,16 +889,14 @@ def _live_minute_view():
             continue
 
         mom = _compute_1m_momentum(df_1m_live)
-        tail = df_1m_live.tail(60)  # last 60 minutes
+        tail = df_1m_live.tail(60)
         last_price = float(tail["Close"].iloc[-1])
 
         with cols[idx]:
-            # Header with trend + price
             trend_icon = mom["1m Trend"]
             surge_icon = " ⚡" if mom["1m VolSurge"] else ""
             st.markdown(f"**{name}** {trend_icon}{surge_icon}  **{last_price:,.2f}**")
 
-            # Mini 1m candlestick chart
             fig_1m = go.Figure(
                 data=[
                     go.Candlestick(
@@ -779,7 +911,6 @@ def _live_minute_view():
                     )
                 ]
             )
-            # Add VWAP on 1m
             vdf_1m = compute_vwap(tail)
             fig_1m.add_trace(
                 go.Scatter(
@@ -804,7 +935,6 @@ def _live_minute_view():
                 key=f"1m_chart_{name}_{time.time():.0f}",
             )
 
-            # Momentum metrics row
             m1, m2, m3 = st.columns(3)
             with m1:
                 st.caption(f"Mom: **{mom['1m Mom']:+.3f}**")
@@ -842,7 +972,6 @@ with levels_col:
             stats = summary.get("stats", {})
             nearest = summary.get("nearest_levels", {})
 
-            # Compact display
             above = nearest.get("above", {})
             below = nearest.get("below", {})
             above_str = (
@@ -908,7 +1037,7 @@ with conf_col:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SECTION 3 — OPTIMIZED STRATEGIES (from engine)
+# SECTION 3 — OPTIMIZED STRATEGIES (from engine via data-service or cache)
 # ═══════════════════════════════════════════════════════════════════════════
 st.divider()
 
@@ -942,7 +1071,8 @@ with st.expander("🔬 Engine — Optimized Strategies & Backtests", expanded=Fa
 
     with bt_col:
         st.markdown("**Latest Backtests**")
-        bt_results = engine.get_backtest_results()
+        bt_data = api.get_backtest_results()
+        bt_results = bt_data.get("results", []) if bt_data else []
         if bt_results:
             bt_df = pd.DataFrame(bt_results)
             display_cols = [
@@ -952,6 +1082,8 @@ with st.expander("🔬 Engine — Optimized Strategies & Backtests", expanded=Fa
             ]
             if display_cols:
                 st.dataframe(bt_df[display_cols], width="stretch", hide_index=True)
+            else:
+                st.dataframe(bt_df, width="stretch", hide_index=True)
         else:
             st.caption("Backtests running in background...")
 
@@ -963,9 +1095,36 @@ st.divider()
 
 grok_col_main, grok_col_live = st.columns([3, 2])
 
-# Build market context for Grok (used by both briefing and live updates)
+# Build market context for Grok — format_market_context expects an engine-like
+# object. We create a minimal shim that provides what it needs from the API.
+
+
+class _EngineShim:
+    """Minimal shim so format_market_context() works without a real engine."""
+
+    def __init__(self):
+        self._status = api.get_status() or {}
+
+    def get_status(self):
+        return self._status
+
+    def get_backtest_results(self):
+        bt = api.get_backtest_results()
+        return bt.get("results", []) if bt else []
+
+    def get_strategy_history(self):
+        sh = api.get_strategy_history()
+        return sh if sh else {}
+
+    def get_live_feed_status(self):
+        fs = api.get_live_feed_status()
+        return fs if fs else {"status": "unknown", "data_source": data_source}
+
+
+_engine_shim = _EngineShim()
+
 market_context = format_market_context(
-    engine=engine,
+    engine=_engine_shim,
     scanner_df=df_scan,
     account_size=account_size,
     risk_dollars=risk_dollars,
@@ -1000,7 +1159,6 @@ with grok_col_main:
                         "Failed to get response from Grok. Check API key and try again."
                     )
 
-    # Display morning briefing
     if "morning_briefing" in st.session_state:
         with st.container(border=True):
             st.markdown(_escape_dollars(st.session_state["morning_briefing"]))
@@ -1009,7 +1167,6 @@ with grok_col_live:
     st.subheader("📡 Grok Live Updates")
 
     if positions_open:
-        # Show session info
         grok_summary = grok_session.get_session_summary()
         info_c1, info_c2, info_c3 = st.columns(3)
         with info_c1:
@@ -1020,24 +1177,21 @@ with grok_col_live:
         with info_c3:
             st.metric("Est. Cost", f"${grok_summary['estimated_cost']:.4f}")
 
-        # Check if we need a new update
         api_key = st.session_state.get("grok_key", "")
         if api_key and grok_session.needs_update():
             with st.spinner("Running 15-min Grok analysis..."):
                 update_result = grok_session.run_update(market_context, api_key)
 
-        # Force first update button
         if grok_summary["total_updates"] == 0:
             if st.button("▶ Run First Update Now", key="force_first_update"):
                 if api_key:
-                    grok_session.last_update_time = 0  # force
+                    grok_session.last_update_time = 0
                     with st.spinner("Running first Grok update..."):
                         grok_session.run_update(market_context, api_key)
                     st.rerun()
                 else:
                     st.error("Enter Grok API key first.")
 
-        # Display latest update
         latest = grok_session.get_latest_update()
         if latest:
             with st.container(border=True):
@@ -1048,7 +1202,6 @@ with grok_col_live:
                 "⏳ First update coming soon... (every 15 min while positions are open)"
             )
 
-        # Show update history in expander
         if len(grok_session.updates) > 1:
             with st.expander(
                 f"📋 Update History ({len(grok_session.updates)} updates)"
@@ -1086,7 +1239,6 @@ with st.expander("📈 Charts", expanded=True):
             help="1m for live action, 5m/15m for bigger picture",
         )
     with chart_right:
-        # Select data based on chosen timeframe
         _chart_tf_period = {"1m": "1d", "5m": "5d", "15m": "15d"}
         chart_ticker = ASSETS[chart_asset]
         if chart_tf == "1m" and chart_asset in data_1m:
@@ -1290,7 +1442,6 @@ with journal_tab_history:
         available = [c for c in display_cols if c in journal_df.columns]
         display_df = journal_df[available].copy()
 
-        # Rename columns for cleaner display
         rename_map = {
             "trade_date": "Date",
             "gross_pnl": "Gross P&L",
@@ -1401,7 +1552,7 @@ with journal_tab_stats:
 st.divider()
 
 with st.expander("⚙️ Engine Status", expanded=False):
-    status = engine.get_status()
+    status = api.get_status() or {}
     eng_c1, eng_c2, eng_c3, eng_c4 = st.columns(4)
     with eng_c1:
         eng_status = status.get("engine", "unknown")
@@ -1420,7 +1571,7 @@ with st.expander("⚙️ Engine Status", expanded=False):
     live_feed_info = status.get("live_feed", {})
     feed_c1, feed_c2, feed_c3, feed_c4 = st.columns(4)
     with feed_c1:
-        ds = live_feed_info.get("data_source", "yfinance")
+        ds = live_feed_info.get("data_source", data_source)
         ds_emoji = "🟢" if ds == "Massive" else "🟡"
         st.metric("Data Source", f"{ds_emoji} {ds}")
     with feed_c2:
@@ -1446,8 +1597,15 @@ with st.expander("⚙️ Engine Status", expanded=False):
         st.warning(f"Live feed error: {feed_err}")
 
     if st.button("🔄 Force Data Refresh", key="force_refresh"):
-        flush_all()
-        engine.force_refresh()
+        result = api.force_refresh()
+        if result:
+            st.success("Refresh triggered via data service!")
+        else:
+            # Fall back to direct cache flush
+            from cache import flush_all
+
+            flush_all()
+            st.info("Cache flushed locally (data service unavailable)")
         st.rerun()
 
     st.caption(
@@ -1470,7 +1628,7 @@ with st.expander("⚙️ Engine Status", expanded=False):
 # ═══════════════════════════════════════════════════════════════════════════
 # AUTO-REFRESH (5 minutes)
 # ═══════════════════════════════════════════════════════════════════════════
-# We use st.fragment for individual component refresh (scanner: 60s)
+# We use st.fragment for individual component refresh (scanner: 60s, minute view: 30s)
 # The full page auto-reruns every 5 minutes to pick up new engine results
 # and trigger Grok updates when positions are open.
 
