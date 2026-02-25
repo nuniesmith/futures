@@ -111,7 +111,7 @@ from scorer import (  # noqa: E402
 from scorer import (  # noqa: E402
     results_to_dataframe as scorer_to_dataframe,
 )
-from src.strategies import (  # noqa: E402
+from strategies import (  # noqa: E402
     STRATEGY_CLASSES,
     STRATEGY_LABELS,
     make_strategy,
