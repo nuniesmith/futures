@@ -78,7 +78,7 @@ services:
             - DB_PATH=/app/data/futures_journal.db
             - DATA_SERVICE_HOST=0.0.0.0
             - DATA_SERVICE_PORT=8000
-            - PYTHONPATH=/app/src/services/data/core:/app/src:/app/src/services/data:/app
+            - PYTHONPATH=/app/src:/app/src/services/data:/app
             - PYTHONUNBUFFERED=1
         volumes:
             - app_data:/app/data

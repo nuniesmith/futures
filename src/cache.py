@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 
 import pandas as pd
@@ -110,7 +110,7 @@ def cache_get(key: str) -> bytes | None:
     entry = _mem_cache.get(key)
     if entry is None:
         return None
-    if datetime.now().timestamp() > entry["expires"]:
+    if datetime.now(tz=timezone.utc).timestamp() > entry["expires"]:
         del _mem_cache[key]
         return None
     return entry["data"]
@@ -122,7 +122,7 @@ def cache_set(key: str, data: bytes, ttl: int) -> None:
     else:
         _mem_cache[key] = {
             "data": data,
-            "expires": datetime.utcnow().timestamp() + ttl,
+            "expires": datetime.now(tz=timezone.utc).timestamp() + ttl,
         }
 
 

@@ -669,16 +669,19 @@ def get_dispatcher() -> AlertDispatcher:
     """Return (or create) the singleton AlertDispatcher.
 
     Reads configuration from environment variables on first call.
+    Set DISABLE_REDIS=1 to skip Redis connection (useful for tests).
     """
     global _dispatcher
     if _dispatcher is None:
         config = _get_config()
+        disable_redis = os.getenv("DISABLE_REDIS", "").lower() in ("1", "true", "yes")
         _dispatcher = AlertDispatcher(
             slack_webhook=config["slack_webhook"],
             discord_webhook=config["discord_webhook"],
             telegram_token=config["telegram_token"],
             telegram_chat_id=config["telegram_chat_id"],
             cooldown_sec=config["cooldown_sec"],
+            _disable_redis=disable_redis,
         )
         if _dispatcher.has_channels:
             logger.info(

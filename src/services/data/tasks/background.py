@@ -46,7 +46,7 @@ class BackgroundManager:
     def engine(self):
         """Lazy-load the engine to avoid import-time side effects."""
         if self._engine is None:
-            from core.engine import DashboardEngine
+            from engine import DashboardEngine
 
             self._engine = DashboardEngine(
                 account_size=self.account_size,
@@ -73,7 +73,7 @@ class BackgroundManager:
         )
 
         # Initialize the database
-        from core.models import init_db
+        from models import init_db
 
         init_db()
         logger.info("Database initialized")

@@ -11,9 +11,10 @@ from datetime import datetime
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
-from core.cache import REDIS_AVAILABLE, _cache_key, cache_get, cache_set
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+
+from cache import REDIS_AVAILABLE, _cache_key, cache_get, cache_set
 
 _EST = ZoneInfo("America/New_York")
 logger = logging.getLogger("api.positions")
@@ -144,12 +145,12 @@ def clear_positions():
     remains in cache.
     """
     if REDIS_AVAILABLE:
-        from core.cache import _r
+        from cache import _r
 
         if _r is not None:
             _r.delete(_POSITIONS_CACHE_KEY)
     else:
-        from core.cache import _mem_cache
+        from cache import _mem_cache
 
         _mem_cache.pop(_POSITIONS_CACHE_KEY, None)
 

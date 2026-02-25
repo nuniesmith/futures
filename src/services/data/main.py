@@ -11,10 +11,10 @@ The Streamlit app becomes a pure thin client that reads from this
 service's API + Redis cache for ultra-low latency.
 
 Usage (from project root):
-    PYTHONPATH=src/services/data/core:src uvicorn src.services.data.main:app --host 0.0.0.0 --port 8000
+    PYTHONPATH=src:src/services/data uvicorn src.services.data.main:app --host 0.0.0.0 --port 8000
 
 Docker:
-    ENV PYTHONPATH="/app/src/services/data/core:/app/src"
+    ENV PYTHONPATH="/app/src:/app/src/services/data:/app"
     CMD ["uvicorn", "src.services.data.main:app", ...]
 """
 
@@ -24,14 +24,14 @@ import sys
 from contextlib import asynccontextmanager
 
 # ---------------------------------------------------------------------------
-# Ensure core modules are importable via bare imports (e.g. `from cache import ...`)
-# AND that the src/ root is importable for shared modules like grok_helper, scorer, etc.
+# Ensure bare imports resolve: `from cache import ...`, `from engine import ...`
+# _src_dir  → /app/src (single source of truth for all business logic modules)
+# _this_dir → /app/src/services/data (so `from api.X import ...` works)
 # ---------------------------------------------------------------------------
 _this_dir = os.path.dirname(os.path.abspath(__file__))
-_core_dir = os.path.join(_this_dir, "core")
 _src_dir = os.path.abspath(os.path.join(_this_dir, "..", "..", ".."))
 
-for _p in (_core_dir, _src_dir, _this_dir):
+for _p in (_src_dir, _this_dir):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -49,17 +49,11 @@ logging.basicConfig(
 logger = logging.getLogger("data_service")
 
 # ---------------------------------------------------------------------------
-# Import core modules (these use bare imports like `from cache import ...`
-# which resolve because core/ is on sys.path)
+# Import routers — these live under src/services/data/api/
+# Bare imports like `from cache import ...` resolve via PYTHONPATH (/app/src).
 # ---------------------------------------------------------------------------
 from api.actions import router as actions_router  # noqa: E402
 from api.actions import set_engine as actions_set_engine  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# Import routers — these live under src/services/data/api/
-# They use `from core.X import ...` style, which works because _this_dir
-# is on sys.path and core/ is a proper package.
-# ---------------------------------------------------------------------------
 from api.analysis import router as analysis_router  # noqa: E402
 from api.analysis import set_engine as analysis_set_engine  # noqa: E402
 from api.health import router as health_router  # noqa: E402

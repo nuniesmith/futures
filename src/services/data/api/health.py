@@ -22,7 +22,7 @@ router = APIRouter(tags=["health"])
 def _check_redis() -> dict:
     """Check Redis connectivity."""
     try:
-        from core.cache import REDIS_AVAILABLE, _r
+        from cache import REDIS_AVAILABLE, _r
 
         if REDIS_AVAILABLE and _r is not None:
             _r.ping()
@@ -119,7 +119,7 @@ def metrics():
                 pass
 
             try:
-                from core.models import ASSETS
+                from models import ASSETS
 
                 result["tracked_assets_count"] = len(ASSETS)
             except Exception:
@@ -129,7 +129,7 @@ def metrics():
 
     # Redis key count (if available)
     try:
-        from core.cache import REDIS_AVAILABLE, _r
+        from cache import REDIS_AVAILABLE, _r
 
         if REDIS_AVAILABLE and _r is not None:
             futures_keys = list(_r.scan_iter("futures:*", count=1000))

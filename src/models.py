@@ -1,27 +1,48 @@
 """
 Account configurations, contract specifications, asset mappings,
-and SQLite trade helpers with OPEN/CLOSED status tracking.
+and database helpers with OPEN/CLOSED status tracking.
+
+Supports dual-database backends:
+  - PostgreSQL via DATABASE_URL (production / Docker)
+  - SQLite via DB_PATH (local dev / tests)
+
+The active backend is chosen automatically at module load time:
+  - If DATABASE_URL is set and starts with "postgresql", use Postgres.
+  - Otherwise, fall back to SQLite at DB_PATH.
+
+All CRUD functions use the same interface regardless of backend.
 """
 
+import logging
 import os
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
-from zoneinfo import ZoneInfo
-
-_EST = ZoneInfo("America/New_York")
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+_EST = ZoneInfo("America/New_York")
+
+logger = logging.getLogger("models")
+
 # ---------------------------------------------------------------------------
-# Database path
+# Database configuration
 # ---------------------------------------------------------------------------
 DB_PATH = os.getenv("DB_PATH", "futures_journal.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+# Detect which backend to use
+_USE_POSTGRES = DATABASE_URL.startswith("postgresql")
+
+# SQLAlchemy engine (lazy-initialised for Postgres)
+_sa_engine = None
 
 # ---------------------------------------------------------------------------
 # Daily journal schema — simple end-of-day P&L entries
 # ---------------------------------------------------------------------------
-_SCHEMA_DAILY_JOURNAL = """
+_SCHEMA_DAILY_JOURNAL_SQLITE = """
 CREATE TABLE IF NOT EXISTS daily_journal (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_date      TEXT    NOT NULL UNIQUE,
@@ -29,6 +50,21 @@ CREATE TABLE IF NOT EXISTS daily_journal (
     gross_pnl       REAL    NOT NULL DEFAULT 0.0,
     net_pnl         REAL    NOT NULL DEFAULT 0.0,
     commissions     REAL    NOT NULL DEFAULT 0.0,
+    num_contracts   INTEGER DEFAULT 0,
+    instruments     TEXT    DEFAULT '',
+    notes           TEXT    DEFAULT '',
+    created_at      TEXT    NOT NULL
+);
+"""
+
+_SCHEMA_DAILY_JOURNAL_PG = """
+CREATE TABLE IF NOT EXISTS daily_journal (
+    id              SERIAL PRIMARY KEY,
+    trade_date      TEXT    NOT NULL UNIQUE,
+    account_size    INTEGER NOT NULL,
+    gross_pnl       DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    net_pnl         DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    commissions     DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     num_contracts   INTEGER DEFAULT 0,
     instruments     TEXT    DEFAULT '',
     notes           TEXT    DEFAULT '',
@@ -222,11 +258,210 @@ STATUS_OPEN = "OPEN"
 STATUS_CLOSED = "CLOSED"
 STATUS_CANCELLED = "CANCELLED"
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Database abstraction layer
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Two backends, same interface:
+#   - SQLite: uses sqlite3 directly (zero dependencies beyond stdlib)
+#   - Postgres: uses psycopg via SQLAlchemy's raw connection interface
+#
+# The key difference is parameter placeholders: SQLite uses `?` while
+# Postgres uses `%s`.  We normalise by writing SQL with `?` and
+# converting at execution time when using Postgres.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _get_sa_engine():
+    """Lazily create the SQLAlchemy engine for Postgres."""
+    global _sa_engine
+    if _sa_engine is None:
+        try:
+            from sqlalchemy import create_engine
+
+            _sa_engine = create_engine(
+                DATABASE_URL,
+                pool_size=5,
+                max_overflow=10,
+                pool_pre_ping=True,
+                pool_recycle=3600,
+            )
+            logger.info("Postgres engine created: %s", DATABASE_URL.split("@")[-1])
+        except Exception as exc:
+            logger.error("Failed to create Postgres engine: %s", exc)
+            raise
+    return _sa_engine
+
+
+def _convert_placeholders(sql: str) -> str:
+    """Convert SQLite-style `?` placeholders to Postgres-style `%s`."""
+    return sql.replace("?", "%s")
+
+
+class _RowProxy:
+    """Lightweight dict-like wrapper around a Postgres row tuple.
+
+    Provides item access by column name (row["col"]) and dict()
+    conversion, matching sqlite3.Row behaviour.
+    """
+
+    __slots__ = ("_data",)
+
+    def __init__(self, columns: list[str], values: tuple):
+        self._data = dict(zip(columns, values))
+
+    def __getitem__(self, key: str):
+        return self._data[key]
+
+    def __contains__(self, key: str):
+        return key in self._data
+
+    def get(self, key: str, default=None):
+        return self._data.get(key, default)
+
+    def keys(self):
+        return self._data.keys()
+
+    def values(self):
+        return self._data.values()
+
+    def items(self):
+        return self._data.items()
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __repr__(self):
+        return repr(self._data)
+
+
+class _PgCursorWrapper:
+    """Wraps a psycopg/DBAPI cursor to auto-convert `?` → `%s`
+    and return _RowProxy objects for dict-like access."""
+
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def execute(self, sql: str, params=None):
+        converted = _convert_placeholders(sql)
+        if params:
+            self._cursor.execute(converted, params)
+        else:
+            self._cursor.execute(converted)
+        return self
+
+    def executescript(self, sql: str):
+        """Execute a multi-statement script.  Postgres doesn't have
+        executescript, so we just execute it as a single string."""
+        # Replace SQLite-specific syntax if present
+        pg_sql = sql.replace("AUTOINCREMENT", "")
+        # SERIAL PRIMARY KEY already handles auto-increment in Postgres
+        self._cursor.execute(pg_sql)
+        return self
+
+    def fetchone(self):
+        row = self._cursor.fetchone()
+        if row is None:
+            return None
+        if self._cursor.description:
+            columns = [desc[0] for desc in self._cursor.description]
+            return _RowProxy(columns, row)
+        return row
+
+    def fetchall(self):
+        rows = self._cursor.fetchall()
+        if not rows or not self._cursor.description:
+            return rows
+        columns = [desc[0] for desc in self._cursor.description]
+        return [_RowProxy(columns, r) for r in rows]
+
+    @property
+    def lastrowid(self):
+        # psycopg3 doesn't always set lastrowid; we handle this
+        # in the CRUD functions with RETURNING clauses
+        return getattr(self._cursor, "lastrowid", None)
+
+    @property
+    def description(self):
+        return self._cursor.description
+
+
+class _PgConnectionWrapper:
+    """Wraps a SQLAlchemy raw connection to match sqlite3.Connection API.
+
+    Provides execute(), executescript(), commit(), close(), and
+    row_factory-like behaviour via _RowProxy.
+    """
+
+    def __init__(self, raw_conn):
+        self._conn = raw_conn
+        self._cursor = raw_conn.cursor()
+
+    def execute(self, sql: str, params=None):
+        wrapper = _PgCursorWrapper(self._cursor)
+        wrapper.execute(sql, params)
+        return wrapper
+
+    def executescript(self, sql: str):
+        wrapper = _PgCursorWrapper(self._cursor)
+        wrapper.executescript(sql)
+        return wrapper
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        try:
+            self._cursor.close()
+        except Exception:
+            pass
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+
+
+def _get_sqlite_conn() -> sqlite3.Connection:
+    """Create a SQLite connection with WAL mode and row factory."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def _get_conn():
+    """Get a database connection (Postgres or SQLite).
+
+    Returns an object with execute(), executescript(), commit(), close()
+    methods.  Rows are accessible by column name via dict-style access.
+    """
+    if _USE_POSTGRES:
+        try:
+            engine = _get_sa_engine()
+            raw = engine.raw_connection()
+            return _PgConnectionWrapper(raw)
+        except Exception as exc:
+            logger.warning(
+                "Postgres connection failed, falling back to SQLite: %s", exc
+            )
+            return _get_sqlite_conn()
+    return _get_sqlite_conn()
+
+
+def _is_using_postgres() -> bool:
+    """Return True if Postgres is the active backend."""
+    return _USE_POSTGRES
+
+
 # ---------------------------------------------------------------------------
-# SQLite helpers
+# Trades schema
 # ---------------------------------------------------------------------------
 
-_SCHEMA_V2 = """
+_SCHEMA_V2_SQLITE = """
 CREATE TABLE IF NOT EXISTS trades_v2 (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at      TEXT    NOT NULL,
@@ -242,6 +477,27 @@ CREATE TABLE IF NOT EXISTS trades_v2 (
     close_time      TEXT,
     pnl             REAL,
     rr              REAL,
+    notes           TEXT    DEFAULT '',
+    strategy        TEXT    DEFAULT ''
+);
+"""
+
+_SCHEMA_V2_PG = """
+CREATE TABLE IF NOT EXISTS trades_v2 (
+    id              SERIAL PRIMARY KEY,
+    created_at      TEXT    NOT NULL,
+    account_size    INTEGER NOT NULL,
+    asset           TEXT    NOT NULL,
+    direction       TEXT    NOT NULL,
+    entry           DOUBLE PRECISION NOT NULL,
+    sl              DOUBLE PRECISION,
+    tp              DOUBLE PRECISION,
+    contracts       INTEGER NOT NULL DEFAULT 1,
+    status          TEXT    NOT NULL DEFAULT 'OPEN',
+    close_price     DOUBLE PRECISION,
+    close_time      TEXT,
+    pnl             DOUBLE PRECISION,
+    rr              DOUBLE PRECISION,
     notes           TEXT    DEFAULT '',
     strategy        TEXT    DEFAULT ''
 );
@@ -272,32 +528,48 @@ FROM trades;
 """
 
 
-def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+# ---------------------------------------------------------------------------
+# Database initialisation
+# ---------------------------------------------------------------------------
 
 
 def init_db() -> None:
-    """Initialise the trades_v2 and daily_journal tables, migrating from v1 if needed."""
+    """Initialise the trades_v2 and daily_journal tables.
+
+    For SQLite: migrates from v1 schema if needed.
+    For Postgres: creates tables idempotently (CREATE TABLE IF NOT EXISTS).
+    """
     conn = _get_conn()
 
+    if _USE_POSTGRES:
+        try:
+            conn.executescript(_SCHEMA_V2_PG)
+            conn.executescript(_SCHEMA_DAILY_JOURNAL_PG)
+            conn.commit()
+            logger.info("Postgres tables initialised (trades_v2, daily_journal)")
+        except Exception as exc:
+            logger.error("Postgres init_db failed: %s", exc)
+            conn.rollback()
+        finally:
+            conn.close()
+        return
+
+    # --- SQLite path ---
     # Check if new table already exists
     cur = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='trades_v2'"
     )
     if cur.fetchone() is not None:
         # trades_v2 exists — just ensure daily_journal also exists
-        conn.executescript(_SCHEMA_DAILY_JOURNAL)
+        conn.executescript(_SCHEMA_DAILY_JOURNAL_SQLITE)
         conn.close()
         return
 
     # Create v2 schema
-    conn.executescript(_SCHEMA_V2)
+    conn.executescript(_SCHEMA_V2_SQLITE)
 
     # Create daily journal schema
-    conn.executescript(_SCHEMA_DAILY_JOURNAL)
+    conn.executescript(_SCHEMA_DAILY_JOURNAL_SQLITE)
 
     # Migrate from v1 if it exists
     cur = conn.execute(
@@ -312,6 +584,49 @@ def init_db() -> None:
             conn.rollback()
 
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Helper: convert row to dict (works for both sqlite3.Row and _RowProxy)
+# ---------------------------------------------------------------------------
+
+
+def _row_to_dict(row) -> dict:
+    """Convert a database row to a plain dict."""
+    if row is None:
+        return {}
+    if isinstance(row, dict):
+        return row
+    if hasattr(row, "keys"):
+        return {k: row[k] for k in row.keys()}
+    return dict(row)
+
+
+# ---------------------------------------------------------------------------
+# Helper: insert with RETURNING for Postgres, lastrowid for SQLite
+# ---------------------------------------------------------------------------
+
+
+def _insert_returning_id(
+    conn, sql: str, params: tuple, table: str = "trades_v2"
+) -> int:
+    """Execute an INSERT and return the new row's id.
+
+    For Postgres, appends RETURNING id to the SQL.
+    For SQLite, uses cursor.lastrowid.
+    """
+    if _USE_POSTGRES:
+        pg_sql = _convert_placeholders(sql) + " RETURNING id"
+        cur = conn._cursor if hasattr(conn, "_cursor") else conn.execute(pg_sql, params)
+        if hasattr(conn, "_cursor"):
+            conn._cursor.execute(pg_sql, params)
+            row = conn._cursor.fetchone()
+        else:
+            row = cur.fetchone()
+        return row[0] if row else 0
+    else:
+        cur = conn.execute(sql, params)
+        return cur.lastrowid  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -332,29 +647,30 @@ def create_trade(
 ) -> int:
     """Insert a new OPEN trade. Returns the new trade id."""
     conn = _get_conn()
-    cur = conn.execute(
-        """INSERT INTO trades_v2
+    now = datetime.now(tz=_EST).strftime("%Y-%m-%d %H:%M:%S")
+
+    sql = """INSERT INTO trades_v2
            (created_at, account_size, asset, direction, entry, sl, tp,
             contracts, status, strategy, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            datetime.now(tz=_EST).strftime("%Y-%m-%d %H:%M:%S"),
-            account_size,
-            asset,
-            direction,
-            entry,
-            sl,
-            tp,
-            contracts,
-            STATUS_OPEN,
-            strategy,
-            notes,
-        ),
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+    params = (
+        now,
+        account_size,
+        asset,
+        direction,
+        entry,
+        sl,
+        tp,
+        contracts,
+        STATUS_OPEN,
+        strategy,
+        notes,
     )
-    trade_id = cur.lastrowid
+
+    trade_id = _insert_returning_id(conn, sql, params, "trades_v2")
     conn.commit()
     conn.close()
-    return trade_id  # type: ignore[return-value]
+    return trade_id
 
 
 def close_trade(trade_id: int, close_price: float) -> dict:
@@ -404,7 +720,7 @@ def close_trade(trade_id: int, close_price: float) -> dict:
     )
     conn.commit()
 
-    result = dict(row)
+    result = _row_to_dict(row)
     result.update(
         status=STATUS_CLOSED,
         close_price=close_price,
@@ -427,57 +743,76 @@ def cancel_trade(trade_id: int) -> None:
     conn.close()
 
 
-def get_open_trades(account_size: Optional[int] = None) -> pd.DataFrame:
+def _query_to_list(conn, sql: str, params: tuple = ()) -> list[dict]:
+    """Execute a SELECT and return a list of dicts.
+
+    Works with both SQLite and Postgres backends.  For SQLite, we use
+    pd.read_sql for convenience.  For Postgres, we fetch rows directly
+    and convert to dicts, avoiding pd.read_sql connection issues.
+    """
+    if _USE_POSTGRES:
+        cur = conn.execute(sql, params)
+        rows = cur.fetchall()
+        return [_row_to_dict(r) for r in rows]
+    else:
+        df = pd.read_sql(sql, conn, params=params)
+        return df.to_dict(orient="records")
+
+
+def get_open_trades(account_size: Optional[int] = None) -> list[dict]:
     """Return all OPEN trades, optionally filtered by account size."""
     conn = _get_conn()
     if account_size:
-        df = pd.read_sql(
-            "SELECT * FROM trades_v2 WHERE status = ? AND account_size = ? ORDER BY created_at DESC",
+        results = _query_to_list(
             conn,
-            params=(STATUS_OPEN, account_size),
+            "SELECT * FROM trades_v2 WHERE status = ? AND account_size = ? ORDER BY created_at DESC",
+            (STATUS_OPEN, account_size),
         )
     else:
-        df = pd.read_sql(
-            "SELECT * FROM trades_v2 WHERE status = ? ORDER BY created_at DESC",
+        results = _query_to_list(
             conn,
-            params=(STATUS_OPEN,),
+            "SELECT * FROM trades_v2 WHERE status = ? ORDER BY created_at DESC",
+            (STATUS_OPEN,),
         )
     conn.close()
-    return df
+    return results
 
 
-def get_closed_trades(account_size: Optional[int] = None) -> pd.DataFrame:
+def get_closed_trades(account_size: Optional[int] = None) -> list[dict]:
     """Return all CLOSED trades for the journal."""
     conn = _get_conn()
     if account_size:
-        df = pd.read_sql(
-            "SELECT * FROM trades_v2 WHERE status = ? AND account_size = ? ORDER BY close_time DESC",
+        results = _query_to_list(
             conn,
-            params=(STATUS_CLOSED, account_size),
+            "SELECT * FROM trades_v2 WHERE status = ? AND account_size = ? ORDER BY close_time DESC",
+            (STATUS_CLOSED, account_size),
         )
     else:
-        df = pd.read_sql(
-            "SELECT * FROM trades_v2 WHERE status = ? ORDER BY close_time DESC",
+        results = _query_to_list(
             conn,
-            params=(STATUS_CLOSED,),
+            "SELECT * FROM trades_v2 WHERE status = ? ORDER BY close_time DESC",
+            (STATUS_CLOSED,),
         )
     conn.close()
-    return df
+    return results
 
 
-def get_all_trades(account_size: Optional[int] = None) -> pd.DataFrame:
+def get_all_trades(account_size: Optional[int] = None) -> list[dict]:
     """Return all trades regardless of status."""
     conn = _get_conn()
     if account_size:
-        df = pd.read_sql(
-            "SELECT * FROM trades_v2 WHERE account_size = ? ORDER BY created_at DESC",
+        results = _query_to_list(
             conn,
-            params=(account_size,),
+            "SELECT * FROM trades_v2 WHERE account_size = ? ORDER BY created_at DESC",
+            (account_size,),
         )
     else:
-        df = pd.read_sql("SELECT * FROM trades_v2 ORDER BY created_at DESC", conn)
+        results = _query_to_list(
+            conn,
+            "SELECT * FROM trades_v2 ORDER BY created_at DESC",
+        )
     conn.close()
-    return df
+    return results
 
 
 def get_today_pnl(account_size: Optional[int] = None) -> float:
@@ -495,32 +830,38 @@ def get_today_pnl(account_size: Optional[int] = None) -> float:
             (STATUS_CLOSED, f"{today}%"),
         ).fetchone()
     conn.close()
+    # For Postgres _RowProxy, access by index via values; for SQLite Row, use index
+    if row is None:
+        return 0.0
+    if hasattr(row, "values"):
+        vals = list(row.values())
+        return float(vals[0]) if vals else 0.0
     return float(row[0]) if row else 0.0
 
 
-def get_today_trades(account_size: Optional[int] = None) -> pd.DataFrame:
+def get_today_trades(account_size: Optional[int] = None) -> list[dict]:
     """Return all trades created or closed today."""
     today = datetime.now(tz=_EST).strftime("%Y-%m-%d")
     conn = _get_conn()
     if account_size:
-        df = pd.read_sql(
+        results = _query_to_list(
+            conn,
             """SELECT * FROM trades_v2
                WHERE (created_at LIKE ? OR close_time LIKE ?)
                  AND account_size = ?
                ORDER BY created_at DESC""",
-            conn,
-            params=(f"{today}%", f"{today}%", account_size),
+            (f"{today}%", f"{today}%", account_size),
         )
     else:
-        df = pd.read_sql(
+        results = _query_to_list(
+            conn,
             """SELECT * FROM trades_v2
                WHERE created_at LIKE ? OR close_time LIKE ?
                ORDER BY created_at DESC""",
-            conn,
-            params=(f"{today}%", f"{today}%"),
+            (f"{today}%", f"{today}%"),
         )
     conn.close()
-    return df
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -627,24 +968,22 @@ def save_daily_journal(
         )
         row_id = existing["id"]
     else:
-        cur = conn.execute(
-            """INSERT INTO daily_journal
+        insert_sql = """INSERT INTO daily_journal
                (trade_date, account_size, gross_pnl, net_pnl, commissions,
                 num_contracts, instruments, notes, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                trade_date,
-                account_size,
-                round(gross_pnl, 2),
-                round(net_pnl, 2),
-                commissions,
-                num_contracts,
-                instruments,
-                notes,
-                now,
-            ),
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+        insert_params = (
+            trade_date,
+            account_size,
+            round(gross_pnl, 2),
+            round(net_pnl, 2),
+            commissions,
+            num_contracts,
+            instruments,
+            notes,
+            now,
         )
-        row_id = cur.lastrowid
+        row_id = _insert_returning_id(conn, insert_sql, insert_params, "daily_journal")
 
     conn.commit()
     conn.close()
@@ -655,24 +994,45 @@ def get_daily_journal(
     limit: int = 30,
     account_size: Optional[int] = None,
 ) -> pd.DataFrame:
-    """Return recent daily journal entries."""
+    """Return recent daily journal entries as a DataFrame."""
     conn = _get_conn()
-    if account_size:
-        df = pd.read_sql(
-            """SELECT * FROM daily_journal
-               WHERE account_size = ?
-               ORDER BY trade_date DESC LIMIT ?""",
-            conn,
-            params=(account_size, limit),
-        )
+
+    if _USE_POSTGRES:
+        # For Postgres, query and convert to DataFrame manually
+        if account_size:
+            rows = _query_to_list(
+                conn,
+                """SELECT * FROM daily_journal
+                   WHERE account_size = ?
+                   ORDER BY trade_date DESC LIMIT ?""",
+                (account_size, limit),
+            )
+        else:
+            rows = _query_to_list(
+                conn,
+                "SELECT * FROM daily_journal ORDER BY trade_date DESC LIMIT ?",
+                (limit,),
+            )
+        conn.close()
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
     else:
-        df = pd.read_sql(
-            "SELECT * FROM daily_journal ORDER BY trade_date DESC LIMIT ?",
-            conn,
-            params=(limit,),
-        )
-    conn.close()
-    return df
+        # SQLite: use pd.read_sql directly
+        if account_size:
+            df = pd.read_sql(
+                """SELECT * FROM daily_journal
+                   WHERE account_size = ?
+                   ORDER BY trade_date DESC LIMIT ?""",
+                conn,
+                params=(account_size, limit),
+            )
+        else:
+            df = pd.read_sql(
+                "SELECT * FROM daily_journal ORDER BY trade_date DESC LIMIT ?",
+                conn,
+                params=(limit,),
+            )
+        conn.close()
+        return df
 
 
 def get_journal_stats(account_size: Optional[int] = None) -> dict:
@@ -742,3 +1102,96 @@ def get_journal_stats(account_size: Optional[int] = None) -> dict:
         "worst_day": round(worst_day, 2),
         "current_streak": streak,
     }
+
+
+# ---------------------------------------------------------------------------
+# SQLite → Postgres one-time migration helper
+# ---------------------------------------------------------------------------
+
+
+def migrate_sqlite_to_postgres(
+    sqlite_path: Optional[str] = None,
+    pg_url: Optional[str] = None,
+) -> dict:
+    """One-time migration: copy all data from SQLite to Postgres.
+
+    Call this manually when transitioning from SQLite to Postgres:
+        from models import migrate_sqlite_to_postgres
+        migrate_sqlite_to_postgres("data/futures_journal.db")
+
+    Returns a dict with counts of migrated records.
+    """
+    import sqlite3 as _sqlite3
+
+    src_path = sqlite_path or DB_PATH
+    target_url = pg_url or DATABASE_URL
+
+    if not target_url.startswith("postgresql"):
+        raise ValueError("DATABASE_URL must point to a Postgres database")
+
+    # Read from SQLite
+    src_conn = _sqlite3.connect(src_path)
+    src_conn.row_factory = _sqlite3.Row
+
+    result = {"trades": 0, "journal": 0, "errors": []}
+
+    # Check source tables
+    tables = [
+        r[0]
+        for r in src_conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    ]
+
+    from sqlalchemy import create_engine, text
+
+    pg_engine = create_engine(target_url)
+
+    with pg_engine.connect() as pg_conn:
+        # Migrate trades_v2
+        if "trades_v2" in tables:
+            rows = src_conn.execute("SELECT * FROM trades_v2").fetchall()
+            for row in rows:
+                d = dict(row)
+                trade_id = d.pop("id", None)
+                try:
+                    cols = ", ".join(d.keys())
+                    placeholders = ", ".join(f":{k}" for k in d.keys())
+                    pg_conn.execute(
+                        text(f"INSERT INTO trades_v2 ({cols}) VALUES ({placeholders})"),
+                        d,
+                    )
+                    result["trades"] += 1
+                except Exception as exc:
+                    result["errors"].append(f"Trade: {exc}")
+
+        # Migrate daily_journal
+        if "daily_journal" in tables:
+            rows = src_conn.execute("SELECT * FROM daily_journal").fetchall()
+            for row in rows:
+                d = dict(row)
+                d.pop("id", None)
+                try:
+                    cols = ", ".join(d.keys())
+                    placeholders = ", ".join(f":{k}" for k in d.keys())
+                    pg_conn.execute(
+                        text(
+                            f"INSERT INTO daily_journal ({cols}) VALUES ({placeholders}) "
+                            f"ON CONFLICT (trade_date) DO NOTHING"
+                        ),
+                        d,
+                    )
+                    result["journal"] += 1
+                except Exception as exc:
+                    result["errors"].append(f"Journal: {exc}")
+
+        pg_conn.commit()
+
+    src_conn.close()
+    logger.info(
+        "Migration complete: %d trades, %d journal entries, %d errors",
+        result["trades"],
+        result["journal"],
+        len(result["errors"]),
+    )
+    return result

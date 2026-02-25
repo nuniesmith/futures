@@ -1,6 +1,21 @@
 """
 FastAPI server for receiving trade data from NinjaTrader and external tools.
 
+.. deprecated::
+    This module is **DEPRECATED** and kept only for backwards compatibility
+    with existing tests (``tests/test_positions.py``).  All functionality has
+    been migrated to the new 4-service architecture under
+    ``src/services/data/api/`` (trades, positions, journal, actions, health).
+
+    New code should use the data-service endpoints instead:
+        - Trades:     src/services/data/api/trades.py
+        - Positions:  src/services/data/api/positions.py
+        - Journal:    src/services/data/api/journal.py
+        - Actions:    src/services/data/api/actions.py
+        - Health:     src/services/data/api/health.py
+
+    This file will be removed once tests are migrated to the new service.
+
 Run alongside the Streamlit dashboard:
     python api_server.py
 
@@ -249,16 +264,13 @@ def api_list_trades(
 ):
     """List trades with optional filters."""
     if status and status.upper() == STATUS_OPEN:
-        df = get_open_trades(account_size)
+        trades = get_open_trades(account_size)
     elif status and status.upper() == STATUS_CLOSED:
-        df = get_closed_trades(account_size)
+        trades = get_closed_trades(account_size)
     else:
-        df = get_all_trades(account_size)
+        trades = get_all_trades(account_size)
 
-    df = df.head(limit)
-    # Replace NaN with None for JSON serialization
-    df = df.where(df.notna(), None)
-    return df.to_dict(orient="records")
+    return trades[:limit]
 
 
 @app.get("/trades/open", response_model=list[TradeResponse])
@@ -266,9 +278,7 @@ def api_open_trades(
     account_size: Optional[int] = Query(None, description="Filter by account size"),
 ):
     """List all open trades."""
-    df = get_open_trades(account_size)
-    df = df.where(df.notna(), None)
-    return df.to_dict(orient="records")
+    return get_open_trades(account_size)
 
 
 @app.get("/trades/{trade_id}", response_model=TradeResponse)

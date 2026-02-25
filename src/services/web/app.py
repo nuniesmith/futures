@@ -59,15 +59,14 @@ from cache import (  # noqa: E402
     set_cached_indicator,
 )
 from confluence import check_confluence, get_recommended_timeframes  # noqa: E402
-from costs import estimate_trade_costs, get_cost_model  # noqa: E402
-from cvd import compute_cvd, cvd_summary, detect_cvd_divergences  # noqa: E402
+from cvd import compute_cvd, cvd_summary  # noqa: E402
 from grok_helper import (  # noqa: E402
     GrokSession,
     _escape_dollars,
     format_market_context,
     run_morning_briefing,
 )
-from ict import ict_summary, levels_to_dataframe  # noqa: E402
+from ict import ict_summary  # noqa: E402
 from massive_client import is_massive_available  # noqa: E402
 from models import (  # noqa: E402
     ACCOUNT_PROFILES,
@@ -80,14 +79,10 @@ from models import (  # noqa: E402
     save_daily_journal,
 )
 from scorer import (  # noqa: E402
-    EVENT_CATALOG,
     PreMarketScorer,
     score_instruments,
 )
 from scorer import results_to_dataframe as scorer_to_dataframe  # noqa: E402
-from signal_quality import compute_signal_quality  # noqa: E402
-from volatility import kmeans_volatility_clusters, volatility_summary_text  # noqa: E402
-from wave_analysis import calculate_wave_analysis, wave_summary_text  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -674,46 +669,47 @@ for name in ALL_ASSETS:
         except Exception:
             pass
 
-# FKS Wave, Volatility & Signal Quality — read from engine cache, compute on-demand if missing
+# FKS Wave, Volatility & Signal Quality — read from data-service API or Redis cache.
+# Heavy computation (K-Means, wave analysis, signal quality) runs ONLY in the
+# data-service.  The UI never computes these locally to keep page loads fast.
 fks_wave_results = {}
 fks_vol_results = {}
 fks_sq_results = {}
+
+# Try bulk fetch from data-service API first (single HTTP call for all assets)
+_all_analysis = api.get_latest_all(interval=INTERVAL, period=PERIOD)
+if _all_analysis:
+    for name in ALL_ASSETS:
+        analysis = _all_analysis.get(name, {})
+        if analysis.get("wave"):
+            fks_wave_results[name] = analysis["wave"]
+        if analysis.get("volatility"):
+            fks_vol_results[name] = analysis["volatility"]
+        # Prefer 1m signal quality (fresher) over 5m
+        if analysis.get("signal_quality_1m"):
+            fks_sq_results[name] = analysis["signal_quality_1m"]
+        elif analysis.get("signal_quality"):
+            fks_sq_results[name] = analysis["signal_quality"]
+
+# Fall back to direct Redis cache reads for any assets still missing
 for name in ALL_ASSETS:
+    if name in fks_wave_results and name in fks_vol_results and name in fks_sq_results:
+        continue
     ticker = ASSETS[name]
-    # Try engine cache first
-    wave_raw = cache_get(_cache_key("fks_wave", ticker, INTERVAL, PERIOD))
-    vol_raw = cache_get(_cache_key("fks_vol", ticker, INTERVAL, PERIOD))
-    # Prefer fresher 1m WS signal quality over the 5m engine cycle cache
-    sq_raw = cache_get(_cache_key("fks_sq_1m", ticker)) or cache_get(
-        _cache_key("fks_sq", ticker, INTERVAL, PERIOD)
-    )
-    if wave_raw:
-        fks_wave_results[name] = json.loads(wave_raw)
-    elif name in data and not data[name].empty:
-        try:
-            fks_wave_results[name] = calculate_wave_analysis(
-                data[name], asset_name=name
-            )
-        except Exception:
-            pass
-    if vol_raw:
-        fks_vol_results[name] = json.loads(vol_raw)
-    elif name in data and not data[name].empty:
-        try:
-            fks_vol_results[name] = kmeans_volatility_clusters(data[name])
-        except Exception:
-            pass
-    if sq_raw:
-        fks_sq_results[name] = json.loads(sq_raw)
-    elif name in data and not data[name].empty:
-        try:
-            fks_sq_results[name] = compute_signal_quality(
-                data[name],
-                wave_result=fks_wave_results.get(name),
-                vol_result=fks_vol_results.get(name),
-            )
-        except Exception:
-            pass
+    if name not in fks_wave_results:
+        wave_raw = cache_get(_cache_key("fks_wave", ticker, INTERVAL, PERIOD))
+        if wave_raw:
+            fks_wave_results[name] = json.loads(wave_raw)
+    if name not in fks_vol_results:
+        vol_raw = cache_get(_cache_key("fks_vol", ticker, INTERVAL, PERIOD))
+        if vol_raw:
+            fks_vol_results[name] = json.loads(vol_raw)
+    if name not in fks_sq_results:
+        sq_raw = cache_get(_cache_key("fks_sq_1m", ticker)) or cache_get(
+            _cache_key("fks_sq", ticker, INTERVAL, PERIOD)
+        )
+        if sq_raw:
+            fks_sq_results[name] = json.loads(sq_raw)
 
 # Pre-market scorer results
 scorer_results = []

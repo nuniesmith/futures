@@ -14,7 +14,9 @@ import json
 import logging
 from typing import Optional
 
-from core.cache import (
+from fastapi import APIRouter, HTTPException, Query
+
+from cache import (
     _cache_key,
     cache_get,
     flush_all,
@@ -22,8 +24,7 @@ from core.cache import (
     get_cached_optimization,
     get_data_source,
 )
-from core.models import ACCOUNT_PROFILES, ASSETS, CONTRACT_SPECS, TICKER_TO_NAME
-from fastapi import APIRouter, HTTPException, Query
+from models import ACCOUNT_PROFILES, ASSETS, CONTRACT_SPECS, TICKER_TO_NAME
 
 logger = logging.getLogger("api.analysis")
 

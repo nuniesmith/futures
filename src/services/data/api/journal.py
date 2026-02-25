@@ -11,14 +11,15 @@ from datetime import date, datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from core.models import (
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from models import (
     ACCOUNT_PROFILES,
     get_daily_journal,
     get_journal_stats,
     save_daily_journal,
 )
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
 
 _EST = ZoneInfo("America/New_York")
 
@@ -59,21 +60,23 @@ class JournalEntryResponse(BaseModel):
 
 
 class JournalStatsResponse(BaseModel):
-    """Aggregated journal statistics."""
+    """Aggregated journal statistics.
+
+    Field names match the dict returned by models.get_journal_stats().
+    """
 
     total_days: int = 0
-    winning_days: int = 0
-    losing_days: int = 0
+    win_days: int = 0
+    loss_days: int = 0
+    break_even_days: int = 0
     win_rate: float = 0.0
-    total_net_pnl: float = 0.0
-    total_gross_pnl: float = 0.0
+    total_net: float = 0.0
+    total_gross: float = 0.0
     total_commissions: float = 0.0
-    avg_daily_pnl: float = 0.0
+    avg_daily_net: float = 0.0
     best_day: float = 0.0
     worst_day: float = 0.0
     current_streak: int = 0
-    max_win_streak: int = 0
-    max_loss_streak: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +97,6 @@ def save_journal_entry(entry: JournalEntryRequest):
             account_size=entry.account_size,
             gross_pnl=entry.gross_pnl,
             net_pnl=entry.net_pnl,
-            commissions=entry.commissions,
             num_contracts=entry.num_contracts,
             instruments=entry.instruments,
             notes=entry.notes,
@@ -121,7 +123,13 @@ def get_journal_entries(
     Returns a list of journal entry dicts, most recent first.
     """
     try:
-        entries = get_daily_journal(limit=limit)
+        df = get_daily_journal(limit=limit)
+
+        # Convert DataFrame to list of dicts for JSON serialization
+        if hasattr(df, "to_dict"):
+            entries = df.to_dict(orient="records") if not df.empty else []
+        else:
+            entries = list(df) if df else []
 
         # Optional filter by account size
         if account_size is not None:
@@ -167,7 +175,14 @@ def get_today_entry():
     """
     today_str = date.today().strftime("%Y-%m-%d")
     try:
-        entries = get_daily_journal(limit=1)
+        df = get_daily_journal(limit=1)
+
+        # Convert DataFrame to list of dicts for iteration
+        if hasattr(df, "to_dict"):
+            entries = df.to_dict(orient="records") if not df.empty else []
+        else:
+            entries = list(df) if df else []
+
         for entry in entries:
             if entry.get("trade_date") == today_str:
                 return {

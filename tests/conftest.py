@@ -9,6 +9,12 @@ without hitting the network.
 import os
 import sys
 
+# ---------------------------------------------------------------------------
+# Disable Redis connections during tests so alert/cache tests don't hang
+# waiting for a Redis server that isn't running locally.
+# ---------------------------------------------------------------------------
+os.environ.setdefault("DISABLE_REDIS", "1")
+
 import numpy as np
 import pandas as pd
 import pytest

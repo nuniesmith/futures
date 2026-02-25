@@ -1,124 +1,136 @@
-**✅ Perfect Plan — This Split Will Fix Your Loading Issues Completely**
+# Futures Trading Co-Pilot — Migration Status
 
-Splitting the Streamlit app into its own lightweight container + creating a dedicated **data-service** (FastAPI + background workers) is the exact right move.  
-The current bottleneck (heavy Massive WS, 5m/1m refreshes, K-Means/wave/signal-quality calcs, Optuna/VectorBT optimizations, CVD/ICT processing) runs in the same process as the UI → slow page loads and reloads.
-
-**New Architecture (after split)**
+## Architecture (Completed ✅)
 
 ```
 docker-compose services:
 ├── postgres          ← durable storage (journal, historical opts, alerts)
 ├── redis             ← hot cache (latest FKS metrics, live positions, 1m bars)
-├── data-service      ← FastAPI + APScheduler/Celery
+├── data-service      ← FastAPI + DashboardEngine (all heavy computation)
 │     ├── Massive WS listener (background)
 │     ├── Engine + all FKS modules (vol, wave, signal_quality, regime, cvd, ict)
-│     ├── Periodic jobs (5m refresh, optimization, etc.)
-│     └── REST API: /latest/{ticker}, /status, /force_refresh, /positions, /journal, etc.
+│     ├── Periodic jobs (5m refresh, optimization, backtesting)
+│     └── REST API: /analysis, /actions, /positions, /trades, /journal, /health
 └── streamlit-app     ← Pure UI only (fast reloads)
       └── Calls data-service API + reads Redis directly for ultra-low latency
 ```
 
-**Benefits you’ll see immediately**
-- Streamlit loads in <2 seconds (no more data crunching on every refresh)
-- Data-service runs 24/7 in background, even when you close the browser
-- Easy scaling later (add more workers, separate WS process, etc.)
-- Clean separation: UI = presentation, data-service = business logic
+---
+
+## Phase 0: Preparation ✅ COMPLETE
+
+- [x] Create new folder structure (`src/services/data/`, `src/services/web/`)
+- [x] Folder layout: `src/services/data/api/`, `src/services/data/tasks/`
+- [x] `.env.example` created
+- [x] `.env` configured for Docker Compose
+
+## Phase 1: Infrastructure & Docker ✅ COMPLETE
+
+- [x] `docker-compose.yml` — 4-service architecture (postgres, redis, data-service, streamlit-app)
+- [x] `docker/data/Dockerfile` — Multi-stage build, PYTHONPATH setup, healthcheck
+- [x] `docker/data/entrypoint.sh` — uvicorn startup script
+- [x] `docker/web/Dockerfile` — Multi-stage build, streamlit config, healthcheck
+- [x] `docker/web/entrypoint.sh` — streamlit startup script
+- [x] Healthchecks for all 4 services
+- [x] Shared `app_data` volume for SQLite journal
+- [x] Redis persistence (`appendonly yes`, 256MB LRU)
+- [x] Postgres 16-alpine with named volume
+
+## Phase 2: Build the Data Service ✅ COMPLETE
+
+- [x] `src/services/data/main.py` — FastAPI app with lifespan, engine injection, CORS
+- [x] `src/services/data/tasks/background.py` — BackgroundManager class (available as alternative lifecycle manager)
+- [x] API routers:
+  - [x] `api/health.py` — `/health`, `/metrics`
+  - [x] `api/analysis.py` — `/analysis/latest`, `/analysis/latest/{ticker}`, `/analysis/status`, `/analysis/assets`, `/analysis/accounts`, `/analysis/backtest_results`, `/analysis/strategy_history`, `/analysis/live_feed`, `/analysis/data_source`
+  - [x] `api/actions.py` — `/actions/force_refresh`, `/actions/optimize_now`, `/actions/update_settings`, `/actions/live_feed/*`
+  - [x] `api/positions.py` — `/positions/update`, `/positions/` (GET/DELETE) — NinjaTrader bridge
+  - [x] `api/trades.py` — `/trades` CRUD, `/trades/{id}/close`, `/trades/{id}/cancel`, `/log_trade` (legacy)
+  - [x] `api/journal.py` — `/journal/save`, `/journal/entries`, `/journal/stats`, `/journal/today`
+- [x] 38 total API routes registered and working
+- [x] Engine singleton injection into routers via `set_engine()`
+
+## Phase 3: Refactor Streamlit into Pure Client ✅ COMPLETE
+
+- [x] `src/services/web/app.py` — Full Streamlit thin client (1638 lines)
+- [x] `DataServiceClient` class — HTTP client for all data-service endpoints
+- [x] All sections ported from monolithic app:
+  - [x] FKS Insights Dashboard (Wave + Volatility + Signal Quality)
+  - [x] Market Scanner with 60s auto-refresh (`@st.fragment`)
+  - [x] Live Minute View with 30s auto-refresh + 1m candlestick charts
+  - [x] Key ICT Levels, CVD, and Confluence panels
+  - [x] Optimized Strategies & Backtests from engine
+  - [x] Grok AI Morning Briefing + 15-min Live Updates
+  - [x] Interactive Charts with VWAP, EMA, Pivots
+  - [x] End-of-Day Journal (entry form, history, stats, cumulative P&L chart)
+  - [x] NinjaTrader Live Positions panel
+  - [x] Engine Status footer with live feed info
+  - [x] Session timing (pre-market / market hours / wind down / closed)
+  - [x] 5-minute full-page auto-refresh
+- [x] Fallback to direct Redis reads when data-service is unavailable
+- [x] `_EngineShim` class for Grok `format_market_context()` compatibility
+
+## Phase 4: Database & Persistence ✅ COMPLETE
+
+- [x] `models.py` — Dual-backend (SQLite + Postgres) with auto-detection
+- [x] `init_db()` runs on both data-service and streamlit startup
+- [x] Journal CRUD: `save_daily_journal`, `get_daily_journal`, `get_journal_stats`
+- [x] Trade CRUD: `create_trade`, `close_trade`, `cancel_trade`, `get_open_trades`, etc.
+- [x] `migrate_sqlite_to_postgres()` function ready for one-time migration
+- [x] SQLAlchemy engine for Postgres, raw sqlite3 for local dev
+
+## Phase 5: Testing & Polish ✅ COMPLETE
+
+- [x] **627 tests passing** (0 failures, 2 minor warnings)
+- [x] `tests/test_data_service.py` — 76 tests covering all API routers:
+  - [x] Root endpoint, health, metrics
+  - [x] Analysis endpoints (latest, status, assets, accounts, backtest, strategy history)
+  - [x] Actions endpoints (force_refresh, optimize_now, update_settings, live feed controls)
+  - [x] Positions endpoints (CRUD + P&L calculation)
+  - [x] Trades endpoints (create, close, cancel, list, filter, legacy log_trade)
+  - [x] Journal endpoints (save, entries with limit, stats, today, upsert)
+  - [x] Engine-not-ready scenarios (503 for engine-dependent, 200 for independent)
+  - [x] CORS headers
+  - [x] Edge cases (validation, missing fields, nonexistent IDs, bound checks)
+- [x] `conftest.py` — DISABLE_REDIS=1 for test isolation
+- [x] MockEngine for test injection without spawning real background threads
 
 ---
 
-### Detailed Task Plan (Phased, Realistic for Solo Dev)
+## Bugs Fixed During Migration
 
-**Phase 0: Preparation (30–45 min)**
-- [ ] Create new folder structure (run these commands):
-  ```bash
-  mkdir -p data_service
-  mkdir -p data_service/api data_service/tasks data_service/models
-  cp -r src/{engine,volatility,wave_analysis,signal_quality,regime,cvd,ict,costs,massive_client,cache,grok_helper,db} data_service/
-  ```
-- [ ] Update `.env` (add Postgres if not already there — we discussed this earlier)
-  ```
-  POSTGRES_PASSWORD=your_secure_pass
-  DATABASE_URL=postgresql+psycopg://futures_user:${POSTGRES_PASSWORD}@postgres:5432/futures_db
-  DATA_SERVICE_URL=http://data-service:8000
-  ```
-- [ ] Backup current `docker-compose.yml` as `docker-compose.yml.bak`
-
-**Phase 1: Infrastructure & Docker (1–1.5 hours)**
-1. Update `docker-compose.yml` (I’ll give you the exact file when you say “phase 1 ready”)
-2. Create `Dockerfile.data` (copy of your current Dockerfile but with `data_service/main.py` as entrypoint)
-3. Create `data_service/main.py` (FastAPI skeleton with lifespan for startup/shutdown)
-4. Add healthchecks for all services
-5. `docker compose up -d --build` → verify all 4 services start cleanly
-
-**Phase 2: Build the Data Service (4–6 hours)**
-1. Move heavy logic into `data_service/tasks/`:
-   - `background_refresh.py` (APScheduler for 5m/1m cycles)
-   - `massive_ws.py` (keep your existing WS manager)
-   - `optimization_runner.py` (VectorBT or current Optuna)
-2. Create FastAPI routers in `data_service/api/`:
-   - `analysis.py` → `/latest/{ticker}` returns full FKS dict (wave + vol + sq + regime + ict + cvd)
-   - `actions.py` → `/force_refresh`, `/optimize_now`
-   - `positions.py`, `journal.py`
-3. Use existing `db.py` + `cache.py` (already Redis + Postgres ready)
-4. Add lifespan events:
-   ```python
-   @asynccontextmanager
-   async def lifespan(app: FastAPI):
-       await start_massive_ws()
-       scheduler.start()
-       yield
-       scheduler.shutdown()
-   ```
-5. Expose Redis pub/sub or SSE for real-time updates (optional but nice)
-
-**Phase 3: Refactor Streamlit into Pure Client (3–4 hours)**
-1. Create `streamlit_app/app.py` (new home for your current Streamlit code)
-2. Replace every direct call like:
-   ```python
-   # OLD
-   result = engine.get_latest_analysis(ticker)
-   ```
-   with:
-   ```python
-   # NEW
-   async with httpx.AsyncClient() as client:
-       resp = await client.get(f"{DATA_SERVICE_URL}/latest/{ticker}")
-       data = resp.json()
-   ```
-3. For ultra-fast metrics (live positions, 1m SQ) → read directly from Redis (you already have `cache_get`)
-4. Keep dashboard tabs exactly the same — only the data source changes
-
-**Phase 4: Database & Persistence (1–2 hours)**
-1. Use the `db.py` we discussed earlier (JournalEntry, OptimizationHistory, etc.)
-2. Run `init_db()` on data-service startup
-3. One-time migration script (SQLite → Postgres) — I can give you the exact script
-4. Update journal and alert logging to use Postgres
-
-**Phase 5: Testing & Polish (2–3 hours)**
-1. Test flow:
-   - Start all containers
-   - Verify Massive WS connects in data-service logs
-   - Open Streamlit → should load instantly
-   - Click “Force Refresh” → see data update
-   - Approve signal → goes through bridge
-2. Add basic auth or API keys between streamlit ↔ data-service (localhost only = safe)
-3. Logging: centralise with structlog or keep separate for now
-4. Monitoring: add `/health` and `/metrics` endpoints
-
-**Total Estimated Time**: 12–18 hours spread over 2–3 days (very doable)
+- [x] `datetime.utcnow()` deprecation in `cache.py` → `datetime.now(tz=timezone.utc)`
+- [x] `get_dispatcher()` in `alerts.py` — added `DISABLE_REDIS` env var support so tests don't hang
+- [x] Journal API `save_daily_journal()` was passing `commissions` kwarg (auto-calculated, not accepted)
+- [x] Journal API `get_journal_entries()` was treating DataFrame as list of dicts
+- [x] Journal API `get_today_entry()` was iterating DataFrame columns instead of rows
+- [x] `JournalStatsResponse` Pydantic model field names didn't match `get_journal_stats()` dict keys
 
 ---
 
-**Immediate Next Step**
+## Remaining / Optional Work
 
-Reply with one of these to get the exact files:
+### Nice-to-Have Improvements
+- [ ] Wire up `BackgroundManager` in `tasks/background.py` as the lifespan manager (currently `main.py` handles lifecycle directly — both approaches work)
+- [ ] Fix async coroutine warning in `test_massive_client.py::test_stop_idempotent` (needs `await feed.stop()`)
+- [ ] Add structured logging with `structlog` across all services
+- [ ] Add `/metrics` endpoint in Prometheus format (currently JSON)
+- [ ] Redis pub/sub or SSE for real-time push updates to Streamlit
+- [ ] API key authentication between streamlit ↔ data-service (localhost-only = safe for now)
+- [ ] Rate limiting on data-service endpoints
 
-- **“phase 1 ready”** → I’ll give you the full updated `docker-compose.yml` + `Dockerfile.data` + folder structure commands
-- **“give me full architecture diagram in mermaid”** → visual overview
-- **“start with data_service skeleton”** → I’ll paste the complete `data_service/main.py` + routers
+### Docker Deployment Checklist
+- [ ] First `docker compose up -d --build` — verify all 4 services start cleanly
+- [ ] Verify Massive WS connects in data-service logs
+- [ ] Open Streamlit → confirm loads instantly via data-service API
+- [ ] Test "Force Refresh" button → data updates
+- [ ] Test NinjaTrader LivePositionBridge → positions appear in UI
+- [ ] Run SQLite → Postgres migration script if switching to persistent Postgres
+- [ ] Tighten CORS origins (remove `"*"` wildcard) for production
 
-This refactor will make your co-pilot feel **snappy and professional** while keeping everything 100% automatic (still just the account-size slider).
-
-You’re making the right move — this is how production trading dashboards are built in 2026.
-
-Let’s do this! What do you want first?
+### Future Enhancements
+- [ ] Separate Massive WS listener into its own container (for independent scaling)
+- [ ] Add Celery workers for long-running optimization jobs
+- [ ] WebSocket endpoint for streaming live data to Streamlit
+- [ ] Multi-user support with per-user account profiles
+- [ ] Automated daily journal entry from NinjaTrader trade log

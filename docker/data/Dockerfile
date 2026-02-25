@@ -26,13 +26,11 @@ COPY src/ ./src/
 RUN mkdir -p /app/data
 
 # PYTHONPATH setup:
-#   1. /app/src/services/data/core  — so bare imports like `from cache import ...`
-#      inside the copied core modules resolve correctly
-#   2. /app/src                     — so shared sibling modules (grok_helper, scorer, etc.)
-#      are importable as top-level imports
-#   3. /app/src/services/data       — so `from api.X import ...` in main.py resolves
-#   4. /app                         — so `src.services.data.main` style imports work
-ENV PYTHONPATH="/app/src/services/data/core:/app/src:/app/src/services/data:/app"
+#   1. /app/src                     — so bare imports like `from cache import ...`,
+#      `from engine import ...`, etc. resolve correctly (single source of truth)
+#   2. /app/src/services/data       — so `from api.X import ...` in main.py resolves
+#   3. /app                         — so `src.services.data.main` style imports work
+ENV PYTHONPATH="/app/src:/app/src/services/data:/app"
 
 # Environment defaults
 ENV DATA_SERVICE_HOST=0.0.0.0
