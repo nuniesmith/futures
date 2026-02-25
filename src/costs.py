@@ -430,7 +430,7 @@ def should_use_full_contracts(
             f"Switch to {full_contracts} full + {remainder} micro: "
             f"save ${savings:.2f}/trade"
             if savings > 0
-            else f"Micro contracts are more cost-effective at this size"
+            else "Micro contracts are more cost-effective at this size"
         ),
         "micro_cost": micro_costs["total_cost"],
         "full_cost": mixed_cost,

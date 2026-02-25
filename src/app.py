@@ -18,13 +18,13 @@ _EST = ZoneInfo("America/New_York")
 # Ensure sibling modules are importable when run as `streamlit run src/app.py`
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import pandas as pd
-import plotly.graph_objects as go
-import requests
-import streamlit as st
-from backtesting import Backtest
+import pandas as pd  # noqa: E402
+import plotly.graph_objects as go  # noqa: E402
+import requests  # noqa: E402
+import streamlit as st  # noqa: E402
+from backtesting import Backtest  # noqa: E402
 
-from cache import (
+from cache import (  # noqa: E402
     REDIS_AVAILABLE,
     clear_cached_optimization,
     flush_all,
@@ -34,14 +34,13 @@ from cache import (
     get_data,
     set_cached_indicator,
 )
-from costs import (
+from costs import (  # noqa: E402
     estimate_trade_costs,
-    format_cost_summary,
     get_cost_model,
     should_use_full_contracts,
     slippage_commission_rate,
 )
-from engine import (
+from engine import (  # noqa: E402
     OPTIMIZER_STRATEGIES,
     TRAIN_RATIO,
     TRIALS_PER_STRATEGY,
@@ -50,7 +49,7 @@ from engine import (
     get_engine,
     run_optimization,
 )
-from models import (
+from models import (  # noqa: E402
     ACCOUNT_PROFILES,
     ASSETS,
     CONTRACT_SPECS,
@@ -67,35 +66,30 @@ from models import (
     get_today_trades,
     init_db,
 )
-from monte_carlo import (
+from monte_carlo import (  # noqa: E402
     compute_confidence_cones,
     cone_curves_to_dataframe,
     drawdown_distribution_to_dataframe,
-    estimate_pbo,
     mc_results_to_dataframe,
     run_monte_carlo,
 )
-from scorer import (
+from scorer import (  # noqa: E402
     EVENT_CATALOG,
     PreMarketScorer,
     score_instruments,
 )
-from scorer import (
+from scorer import (  # noqa: E402
     results_to_dataframe as scorer_to_dataframe,
 )
-from scorer import (
-    results_to_summary as scorer_to_summary,
-)
-from strategies import (
+from strategies import (  # noqa: E402
     STRATEGY_CLASSES,
     STRATEGY_LABELS,
     make_strategy,
 )
-from volume_profile import (
+from volume_profile import (  # noqa: E402
     compute_session_profiles,
     compute_volume_profile,
     find_naked_pocs,
-    format_profile_summary,
     profile_to_dataframe,
 )
 
@@ -1340,9 +1334,9 @@ with tab_charts:
                     vp_hist_fig = go.Figure()
                     colors = [
                         "#FFD700"
-                        if row["IsPOC"]
+                        if bool(row["IsPOC"])
                         else "#00D4AA"
-                        if row["InValueArea"]
+                        if bool(row["InValueArea"])
                         else "#555555"
                         for _, row in vp_display.iterrows()
                     ]
@@ -2339,8 +2333,14 @@ with tab_backtest:
 
             # Fallback: estimate from aggregate stats if trade-level data unavailable
             if not trade_pnls_list:
-                avg_win = float(stats.get("Avg. Trade [%]", 0)) * account_size / 100
-                wr = float(stats["Win Rate [%]"]) / 100 if n_trades_bt > 0 else 0.5
+                avg_win = (
+                    float(stats.get("Avg. Trade [%]", 0) or 0) * account_size / 100
+                )
+                wr = (
+                    float(stats.get("Win Rate [%]", 0) or 0) / 100
+                    if n_trades_bt > 0
+                    else 0.5
+                )
                 # Synthesize approximate trades
                 import random
 

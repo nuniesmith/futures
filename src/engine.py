@@ -28,11 +28,11 @@ from zoneinfo import ZoneInfo
 
 _EST = ZoneInfo("America/New_York")
 
-import optuna
-import pandas as pd
-from backtesting import Backtest
+import optuna  # noqa: E402
+import pandas as pd  # noqa: E402
+from backtesting import Backtest  # noqa: E402
 
-from cache import (
+from cache import (  # noqa: E402
     _cache_key,
     cache_get,
     cache_set,
@@ -41,10 +41,10 @@ from cache import (
     get_data,
     set_cached_optimization,
 )
-from costs import slippage_commission_rate
-from models import ASSETS, CONTRACT_MODE
-from regime import detect_regime_hmm, fit_detector
-from strategies import (
+from costs import slippage_commission_rate  # noqa: E402
+from models import ASSETS, CONTRACT_MODE  # noqa: E402
+from regime import detect_regime_hmm, fit_detector  # noqa: E402
+from strategies import (  # noqa: E402
     STRATEGY_CLASSES,
     STRATEGY_LABELS,
     _safe_float,

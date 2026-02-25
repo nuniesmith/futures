@@ -636,7 +636,7 @@ def drawdown_distribution_to_dataframe(
     """
     dd = mc_result["max_drawdown_pcts"]
     if len(dd) == 0:
-        return pd.DataFrame(columns=["Drawdown %", "Count"])
+        return pd.DataFrame(columns=pd.Index(["Drawdown %", "Count"]))
 
     counts, bin_edges = np.histogram(dd, bins=n_bins)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0

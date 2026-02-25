@@ -78,9 +78,9 @@ def compute_volume_profile(
     if df.empty or len(df) < 2:
         return _empty_profile()
 
-    high = df["High"].astype(float).values
-    low = df["Low"].astype(float).values
-    volume = df["Volume"].astype(float).values
+    high = np.asarray(df["High"].astype(float).values, dtype=np.float64)
+    low = np.asarray(df["Low"].astype(float).values, dtype=np.float64)
+    volume = np.asarray(df["Volume"].astype(float).values, dtype=np.float64)
 
     price_min = float(np.nanmin(low))
     price_max = float(np.nanmax(high))
@@ -94,7 +94,7 @@ def compute_volume_profile(
     price_max += padding
 
     bin_edges = np.linspace(price_min, price_max, n_bins + 1)
-    bin_width = bin_edges[1] - bin_edges[0]
+    _bin_width = bin_edges[1] - bin_edges[0]  # noqa: F841 — used for reference
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
     bin_volumes = np.zeros(n_bins, dtype=np.float64)
 
@@ -401,10 +401,10 @@ def _rolling_poc(high, low, close, volume, lookback: int = 100, n_bins: int = 30
     Returns a pandas Series with the POC price at each bar, calculated
     over the trailing `lookback` bars.
     """
-    h = pd.Series(high).values
-    lo_arr = pd.Series(low).values
-    c = pd.Series(close).values
-    v = pd.Series(volume).values
+    h = np.asarray(pd.Series(high).values, dtype=np.float64)
+    lo_arr = np.asarray(pd.Series(low).values, dtype=np.float64)
+    c = np.asarray(pd.Series(close).values, dtype=np.float64)
+    v = np.asarray(pd.Series(volume).values, dtype=np.float64)
     n = len(h)
     poc_series = np.full(n, np.nan)
 
@@ -458,10 +458,10 @@ def _rolling_vah_val(
 
     Returns two pandas Series: (vah_series, val_series).
     """
-    h = pd.Series(high).values
-    lo_arr = pd.Series(low).values
-    c = pd.Series(close).values
-    v = pd.Series(volume).values
+    h = np.asarray(pd.Series(high).values, dtype=np.float64)
+    lo_arr = np.asarray(pd.Series(low).values, dtype=np.float64)
+    c = np.asarray(pd.Series(close).values, dtype=np.float64)
+    v = np.asarray(pd.Series(volume).values, dtype=np.float64)
     n = len(h)
     vah_series = np.full(n, np.nan)
     val_series = np.full(n, np.nan)
@@ -713,7 +713,9 @@ def profile_to_dataframe(profile: dict[str, Any]) -> pd.DataFrame:
     Returns a DataFrame with columns: Price, Volume, IsPOC, InValueArea.
     """
     if not profile or len(profile.get("bin_centers", [])) == 0:
-        return pd.DataFrame(columns=["Price", "Volume", "IsPOC", "InValueArea"])
+        return pd.DataFrame(
+            columns=pd.Index(["Price", "Volume", "IsPOC", "InValueArea"])
+        )
 
     centers = profile["bin_centers"]
     volumes = profile["bin_volumes"]
