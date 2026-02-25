@@ -8,7 +8,8 @@ still works without Docker / Redis running.
 import hashlib
 import json
 import os
-from datetime import datetime
+import re
+from datetime import date, datetime, timedelta
 from io import StringIO
 
 import pandas as pd
@@ -124,15 +125,30 @@ def cache_set(key: str, data: bytes, ttl: int) -> None:
 # an empty frame or a "possibly delisted" error.
 _YF_MAX_PERIOD: dict[str, list[str]] = {
     # interval → ordered list of allowed periods (largest last)
+    # Custom day periods (e.g. 10d, 15d) are handled via start/end dates
+    # in get_data(), so they are safe to list here.
     "1m": ["1d", "5d"],
-    "2m": ["1d", "5d", "15d", "1mo"],
-    "5m": ["1d", "5d", "15d", "1mo"],
-    "15m": ["1d", "5d", "15d", "1mo"],
-    "30m": ["1d", "5d", "15d", "1mo"],
-    "60m": ["1d", "5d", "15d", "1mo", "3mo", "6mo"],
-    "1h": ["1d", "5d", "15d", "1mo", "3mo", "6mo"],
-    "90m": ["1d", "5d", "15d", "1mo", "3mo", "6mo"],
-    "1d": ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
+    "2m": ["1d", "5d", "10d", "15d", "1mo"],
+    "5m": ["1d", "5d", "10d", "15d", "1mo"],
+    "15m": ["1d", "5d", "10d", "15d", "1mo"],
+    "30m": ["1d", "5d", "10d", "15d", "1mo"],
+    "60m": ["1d", "5d", "10d", "15d", "1mo", "3mo", "6mo"],
+    "1h": ["1d", "5d", "10d", "15d", "1mo", "3mo", "6mo"],
+    "90m": ["1d", "5d", "10d", "15d", "1mo", "3mo", "6mo"],
+    "1d": [
+        "1d",
+        "5d",
+        "10d",
+        "15d",
+        "1mo",
+        "3mo",
+        "6mo",
+        "1y",
+        "2y",
+        "5y",
+        "10y",
+        "max",
+    ],
     "5d": ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
     "1wk": ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
     "1mo": ["3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
@@ -143,6 +159,7 @@ _YF_MAX_PERIOD: dict[str, list[str]] = {
 _PERIOD_RANK: dict[str, int] = {
     "1d": 1,
     "5d": 5,
+    "10d": 10,
     "15d": 15,
     "1mo": 30,
     "3mo": 90,
@@ -153,6 +170,32 @@ _PERIOD_RANK: dict[str, int] = {
     "10y": 3650,
     "max": 99999,
 }
+
+# Standard Yahoo Finance periods that can be passed directly as `period=`.
+# Anything NOT in this set (e.g. 10d, 15d) will be converted to explicit
+# start/end dates, which Yahoo handles reliably for any day count.
+_YF_NATIVE_PERIODS = {
+    "1d",
+    "5d",
+    "1mo",
+    "3mo",
+    "6mo",
+    "1y",
+    "2y",
+    "5y",
+    "10y",
+    "ytd",
+    "max",
+}
+
+
+def _period_to_days(period: str) -> int | None:
+    """Parse a period string like '10d' into an integer number of days.
+
+    Returns None if the period is not a simple '<N>d' format.
+    """
+    m = re.match(r"^(\d+)d$", period)
+    return int(m.group(1)) if m else None
 
 
 def _clamp_period(interval: str, period: str) -> str:
@@ -191,11 +234,43 @@ def _clamp_period(interval: str, period: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _yf_download(ticker: str, interval: str, period: str, **kwargs) -> pd.DataFrame:
+    """Wrapper around yf.download that converts non-standard periods
+    (like 10d, 15d) to explicit start/end dates.
+
+    Yahoo Finance natively supports only a fixed set of period strings
+    (1d, 5d, 1mo, 3mo, …). Custom day-based periods like '10d' or '15d'
+    are unreliable when passed as `period=`. Instead, we compute the
+    calendar start date and use `start=` / `end=` which Yahoo handles
+    consistently for any timeframe.
+    """
+    days = _period_to_days(period)
+    if days is not None and period not in _YF_NATIVE_PERIODS:
+        # Convert to start/end dates for reliable fetching
+        end_dt = date.today() + timedelta(days=1)  # include today
+        start_dt = end_dt - timedelta(days=days)
+        print(f"[cache] Converting period {period!r} → start={start_dt}, end={end_dt}")
+        return _flatten_columns(
+            yf.download(
+                ticker,
+                interval=interval,
+                start=str(start_dt),
+                end=str(end_dt),
+                **kwargs,
+            )
+        )
+    else:
+        return _flatten_columns(
+            yf.download(ticker, interval=interval, period=period, **kwargs)
+        )
+
+
 def get_data(ticker: str, interval: str, period: str) -> pd.DataFrame:
     """Fetch OHLCV data, cached in Redis for TTL_INTRADAY seconds.
 
     Automatically clamps the period to Yahoo Finance's maximum for the
-    requested interval to avoid empty responses.
+    requested interval to avoid empty responses. Non-standard periods
+    (e.g. 10d, 15d) are converted to start/end dates for reliability.
     """
     period = _clamp_period(interval, period)
     key = _cache_key("ohlcv", ticker, interval, period)
@@ -203,11 +278,7 @@ def get_data(ticker: str, interval: str, period: str) -> pd.DataFrame:
     if cached is not None:
         return _bytes_to_df(cached)
 
-    df = _flatten_columns(
-        yf.download(
-            ticker, interval=interval, period=period, prepost=True, auto_adjust=True
-        )
-    )
+    df = _yf_download(ticker, interval, period, prepost=True, auto_adjust=True)
     if not df.empty:
         cache_set(key, _df_to_bytes(df), TTL_INTRADAY)
     return df
@@ -220,9 +291,7 @@ def get_daily(ticker: str, period: str = "10d") -> pd.DataFrame:
     if cached is not None:
         return _bytes_to_df(cached)
 
-    df = _flatten_columns(
-        yf.download(ticker, interval="1d", period=period, auto_adjust=True)
-    )
+    df = _yf_download(ticker, "1d", period, auto_adjust=True)
     if not df.empty:
         cache_set(key, _df_to_bytes(df), TTL_DAILY)
     return df
