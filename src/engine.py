@@ -41,9 +41,11 @@ from cache import (
     get_data,
     set_cached_optimization,
 )
-from models import ASSETS
+from costs import slippage_commission_rate
+from models import ASSETS, CONTRACT_MODE
 from regime import detect_regime_hmm, fit_detector
 from strategies import (
+    STRATEGY_CLASSES,
     STRATEGY_LABELS,
     _safe_float,
     make_strategy,
@@ -59,7 +61,15 @@ if not logger.handlers:
     logger.addHandler(_h)
 
 # Strategy keys the optimizer will explore (all active strategies)
-OPTIMIZER_STRATEGIES = ["TrendEMA", "RSI", "Breakout", "VWAP", "ORB", "MACD"]
+OPTIMIZER_STRATEGIES = [
+    "TrendEMA",
+    "RSI",
+    "Breakout",
+    "VWAP",
+    "ORB",
+    "MACD",
+    "VolumeProfile",
+]
 
 # Number of Optuna trials per strategy during optimization
 TRIALS_PER_STRATEGY = 30
@@ -152,7 +162,10 @@ def detect_regime(df: pd.DataFrame, ticker: str | None = None) -> dict:
     if ticker:
         try:
             hmm_result = detect_regime_hmm(ticker, df)
-            if hmm_result.get("regime") != "choppy" or hmm_result.get("confidence", 0) > 0:
+            if (
+                hmm_result.get("regime") != "choppy"
+                or hmm_result.get("confidence", 0) > 0
+            ):
                 hmm_result["method"] = "hmm"
                 return hmm_result
         except Exception as exc:
@@ -199,6 +212,12 @@ def run_optimization(
     if df.empty:
         return None
 
+    # Compute realistic commission rate for this instrument
+    from models import TICKER_TO_NAME
+
+    asset_name = TICKER_TO_NAME.get(ticker, "S&P")
+    comm_rate = slippage_commission_rate(asset_name, CONTRACT_MODE)
+
     # Apply session filter for more realistic optimisation
     df_session = filter_session_hours(df)
 
@@ -224,7 +243,10 @@ def run_optimization(
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    for strat_key in OPTIMIZER_STRATEGIES:
+    # Filter to only strategies that are actually registered/available
+    active_strategies = [s for s in OPTIMIZER_STRATEGIES if s in STRATEGY_CLASSES]
+
+    for strat_key in active_strategies:
 
         def _make_objective(sk, data):
             """Closure so each strategy key and dataset is captured properly."""
@@ -237,7 +259,7 @@ def run_optimization(
                         data,
                         strat_cls,
                         cash=account_size,
-                        commission=0.0002,
+                        commission=comm_rate,
                         exclusive_orders=True,
                         finalize_trades=True,
                     )
@@ -267,7 +289,7 @@ def run_optimization(
                     df_test,
                     winning_cls,
                     cash=account_size,
-                    commission=0.0002,
+                    commission=comm_rate,
                     exclusive_orders=True,
                     finalize_trades=True,
                 )
@@ -294,7 +316,7 @@ def run_optimization(
                     df_session,
                     winning_cls,
                     cash=account_size,
-                    commission=0.0002,
+                    commission=comm_rate,
                     exclusive_orders=True,
                     finalize_trades=True,
                 )
@@ -433,12 +455,18 @@ def run_backtest(
         strat_cls = make_strategy(used_strategy, fallback_params)
         params_label = "Optimized" if opt else "Default"
 
+    # Compute realistic commission rate for this instrument
+    from models import CONTRACT_MODE, TICKER_TO_NAME
+
+    bt_asset_name = TICKER_TO_NAME.get(ticker, name)
+    bt_comm_rate = slippage_commission_rate(bt_asset_name, CONTRACT_MODE)
+
     try:
         bt = Backtest(
             df_bt,
             strat_cls,
             cash=account_size,
-            commission=0.0002,
+            commission=bt_comm_rate,
             exclusive_orders=True,
             finalize_trades=True,
         )
