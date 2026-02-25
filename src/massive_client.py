@@ -799,6 +799,375 @@ class MassiveDataProvider:
                 self._contract_cache.clear()
         logger.info("Contract cache cleared: %s", product_code or "all")
 
+    # ----- Contract Overview -----
+
+    def get_contract(self, ticker: str) -> dict | None:
+        """Retrieve detailed specifications for a single futures contract by ticker.
+
+        Maps to: GET /futures/vX/contracts/{ticker}
+
+        Returns a dict with contract details like tick size, trading dates,
+        order quantity, etc., or None on failure.
+        """
+        if not self.is_available or self._client is None:
+            return None
+
+        try:
+            client = self._client
+            contracts = list(
+                client.list_futures_contracts(
+                    ticker=ticker,
+                    limit=1,
+                )
+            )
+
+            if not contracts:
+                return None
+
+            c = contracts[0]
+            return {
+                "ticker": getattr(c, "ticker", None),
+                "name": getattr(c, "name", None),
+                "product_code": getattr(c, "product_code", None),
+                "active": getattr(c, "active", None),
+                "type": getattr(c, "type", None),
+                "first_trade_date": str(getattr(c, "first_trade_date", "") or ""),
+                "last_trade_date": str(getattr(c, "last_trade_date", "") or ""),
+                "settlement_date": str(getattr(c, "settlement_date", "") or ""),
+                "days_to_maturity": getattr(c, "days_to_maturity", None),
+                "trading_venue": getattr(c, "trading_venue", None),
+                "tick_size": getattr(c, "tick_size", None),
+                "tick_value": getattr(c, "tick_value", None),
+                "unit_of_measure": getattr(c, "unit_of_measure", None),
+                "unit_of_measure_qty": getattr(c, "unit_of_measure_qty", None),
+                "order_quantity_min": getattr(c, "order_quantity_min", None),
+                "order_quantity_max": getattr(c, "order_quantity_max", None),
+                "order_quantity_increment": getattr(
+                    c, "order_quantity_increment", None
+                ),
+            }
+
+        except Exception as exc:
+            logger.error("Failed to get contract for %s: %s", ticker, exc)
+            return None
+
+    # ----- Products -----
+
+    def get_products(
+        self,
+        name: str | None = None,
+        product_code: str | None = None,
+        trading_venue: str | None = None,
+        sector: str | None = None,
+        sub_sector: str | None = None,
+        asset_class: str | None = None,
+        asset_sub_class: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Filter through all available futures product specifications.
+
+        Maps to: GET /futures/vX/products
+
+        Returns a list of dicts with product details including asset class,
+        venue, settlement method, etc.
+        """
+        if not self.is_available or self._client is None:
+            return []
+
+        try:
+            client = self._client
+            kwargs: dict = {"limit": limit, "sort": "name"}
+            if name:
+                kwargs["name"] = name
+            if product_code:
+                kwargs["product_code"] = product_code
+            if trading_venue:
+                kwargs["trading_venue"] = trading_venue
+            if sector:
+                kwargs["sector"] = sector
+            if sub_sector:
+                kwargs["sub_sector"] = sub_sector
+            if asset_class:
+                kwargs["asset_class"] = asset_class
+            if asset_sub_class:
+                kwargs["asset_sub_class"] = asset_sub_class
+
+            products = list(client.list_futures_products(**kwargs))
+
+            result = []
+            for p in products:
+                result.append(
+                    {
+                        "product_code": getattr(p, "product_code", None),
+                        "name": getattr(p, "name", None),
+                        "asset_class": getattr(p, "asset_class", None),
+                        "asset_sub_class": getattr(p, "asset_sub_class", None),
+                        "sector": getattr(p, "sector", None),
+                        "sub_sector": getattr(p, "sub_sector", None),
+                        "trading_venue": getattr(p, "trading_venue", None),
+                        "type": getattr(p, "type", None),
+                        "settlement_method": getattr(p, "settlement_method", None),
+                        "currency": getattr(p, "currency", None),
+                        "unit_of_measure": getattr(p, "unit_of_measure", None),
+                        "tick_size": getattr(p, "tick_size", None),
+                        "tick_value": getattr(p, "tick_value", None),
+                    }
+                )
+            return result
+
+        except Exception as exc:
+            logger.error("Failed to list products: %s", exc)
+            return []
+
+    def get_product(self, product_code: str) -> dict | None:
+        """Retrieve detailed information about a specific futures product.
+
+        Maps to: GET /futures/vX/products/{product_code}
+
+        Returns a dict with asset class, venue, name, settlement details, etc.,
+        or None on failure.
+        """
+        if not self.is_available or self._client is None:
+            return None
+
+        try:
+            results = self.get_products(product_code=product_code, limit=1)
+            return results[0] if results else None
+        except Exception as exc:
+            logger.error("Failed to get product %s: %s", product_code, exc)
+            return None
+
+    # ----- Schedules -----
+
+    def get_schedules(
+        self,
+        product_code: str | None = None,
+        trading_date: str | None = None,
+        trading_venue: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Filter through trading schedules for futures contracts.
+
+        Maps to: GET /futures/vX/schedules  (all)
+                 GET /futures/vX/products/{product_code}/schedules  (by product)
+
+        Args:
+            product_code: Filter by product (e.g. "ES", "GC"). Optional.
+            trading_date: Session end date in YYYY-MM-DD format. Defaults to today.
+            trading_venue: Filter by exchange (e.g. "CME", "NYMEX"). Optional.
+            limit: Maximum number of results.
+
+        Returns a list of schedule dicts.
+        """
+        if not self.is_available or self._client is None:
+            return []
+
+        if trading_date is None:
+            trading_date = datetime.now(tz=_EST).strftime("%Y-%m-%d")
+
+        try:
+            client = self._client
+            kwargs: dict = {
+                "session_end_date": trading_date,
+                "limit": limit,
+            }
+            if product_code:
+                kwargs["product_code"] = product_code
+            if trading_venue:
+                kwargs["trading_venue"] = trading_venue
+
+            schedules = list(client.list_futures_schedules(**kwargs))
+
+            result = []
+            for s in schedules:
+                entry: dict = {
+                    "product_code": getattr(s, "product_code", None),
+                    "trading_venue": getattr(s, "trading_venue", None),
+                    "session_end_date": str(getattr(s, "session_end_date", "") or ""),
+                }
+                # Session windows (pre-open, open, close, etc.)
+                sessions = getattr(s, "sessions", None)
+                if sessions:
+                    entry["sessions"] = []
+                    if isinstance(sessions, (list, tuple)):
+                        for sess in sessions:
+                            sess_dict: dict = {}
+                            for attr in (
+                                "type",
+                                "start",
+                                "end",
+                                "status",
+                                "name",
+                            ):
+                                val = getattr(sess, attr, None)
+                                if val is not None:
+                                    sess_dict[attr] = str(val)
+                            entry["sessions"].append(sess_dict)
+                    else:
+                        entry["sessions"] = str(sessions)
+                else:
+                    entry["sessions"] = []
+
+                result.append(entry)
+            return result
+
+        except Exception as exc:
+            logger.error("Failed to list schedules: %s", exc)
+            return []
+
+    # ----- Quotes (top-of-book bid/ask) -----
+
+    def get_quotes(
+        self,
+        yahoo_ticker: str,
+        minutes_back: int = 5,
+        limit: int = 5000,
+    ) -> pd.DataFrame:
+        """Get top-of-book bid and ask prices for a futures contract.
+
+        Maps to: GET /futures/vX/quotes/{ticker}
+
+        Returns DataFrame with columns: bid, bid_size, ask, ask_size, timestamp
+        """
+        if not self.is_available or self._client is None:
+            return pd.DataFrame()
+
+        massive_ticker = self.resolve_from_yahoo(yahoo_ticker)
+        if not massive_ticker:
+            return pd.DataFrame()
+
+        now = datetime.now(tz=_EST)
+        start = now - timedelta(minutes=minutes_back)
+        start_str = start.strftime("%Y-%m-%dT%H:%M:%S-05:00")
+
+        try:
+            client = self._client
+            quotes = list(
+                client.list_futures_quotes(
+                    ticker=massive_ticker,
+                    timestamp_gte=start_str,
+                    limit=limit,
+                    sort="asc",
+                )
+            )
+
+            if not quotes:
+                return pd.DataFrame()
+
+            rows = []
+            for q in quotes:
+                rows.append(
+                    {
+                        "bid": getattr(q, "bid", None),
+                        "bid_size": getattr(q, "bid_size", None),
+                        "ask": getattr(q, "ask", None),
+                        "ask_size": getattr(q, "ask_size", None),
+                        "timestamp": getattr(q, "timestamp", None),
+                    }
+                )
+
+            df = pd.DataFrame(rows)
+            df = df.dropna(subset=["bid", "ask"])
+
+            # Parse timestamps into DatetimeIndex
+            if not df.empty and "timestamp" in df.columns:
+                df = _parse_timestamp_index(df)
+
+            if not df.empty:
+                logger.info(
+                    "Fetched %d quotes for %s (%s) via Massive",
+                    len(df),
+                    yahoo_ticker,
+                    massive_ticker,
+                )
+
+            return df
+
+        except Exception as exc:
+            logger.error("Failed to fetch quotes for %s: %s", yahoo_ticker, exc)
+            return pd.DataFrame()
+
+    # ----- Market Status -----
+
+    def get_market_statuses(
+        self,
+        product_code: str | None = None,
+    ) -> list[dict]:
+        """Retrieve the current market status for futures products/exchanges.
+
+        Maps to: GET /futures/vX/market_status
+
+        Args:
+            product_code: Optional filter by product (e.g. "ES"). If None,
+                          returns status for all products.
+
+        Returns a list of dicts with market status information.
+        """
+        if not self.is_available or self._client is None:
+            return []
+
+        try:
+            client = self._client
+            kwargs: dict = {"limit": 100}
+            if product_code:
+                kwargs["product_code"] = product_code
+
+            statuses = list(client.list_futures_market_statuses(**kwargs))
+
+            result = []
+            for ms in statuses:
+                result.append(
+                    {
+                        "product_code": getattr(ms, "product_code", None),
+                        "market": getattr(ms, "market", None),
+                        "status": getattr(ms, "status", None),
+                        "trading_venue": getattr(ms, "trading_venue", None),
+                        "session_start": str(getattr(ms, "session_start", "") or ""),
+                        "session_end": str(getattr(ms, "session_end", "") or ""),
+                        "early_hours": getattr(ms, "early_hours", None),
+                    }
+                )
+            return result
+
+        except Exception as exc:
+            logger.error("Failed to get market statuses: %s", exc)
+            return []
+
+    # ----- Exchanges -----
+
+    def get_exchanges(self) -> list[dict]:
+        """Retrieve a list of supported futures exchanges.
+
+        Maps to: GET /futures/vX/exchanges
+
+        Returns a list of dicts with exchange codes, names, and details.
+        """
+        if not self.is_available or self._client is None:
+            return []
+
+        try:
+            client = self._client
+            exchanges = list(client.list_futures_exchanges(limit=100))
+
+            result = []
+            for ex in exchanges:
+                result.append(
+                    {
+                        "code": getattr(ex, "code", None),
+                        "name": getattr(ex, "name", None),
+                        "mic": getattr(ex, "mic", None),
+                        "operating_mic": getattr(ex, "operating_mic", None),
+                        "asset_class": getattr(ex, "asset_class", None),
+                        "country": getattr(ex, "country", None),
+                        "url": getattr(ex, "url", None),
+                    }
+                )
+            return result
+
+        except Exception as exc:
+            logger.error("Failed to list exchanges: %s", exc)
+            return []
+
 
 # ---------------------------------------------------------------------------
 # Timestamp parsing helper

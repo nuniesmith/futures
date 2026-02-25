@@ -53,9 +53,6 @@ from cache import (  # noqa: E402
     cache_get,
     get_cached_indicator,
     get_cached_optimization,
-    get_daily,
-    get_data,
-    get_data_source,
     set_cached_indicator,
 )
 from confluence import check_confluence, get_recommended_timeframes  # noqa: E402
@@ -67,7 +64,6 @@ from grok_helper import (  # noqa: E402
     run_morning_briefing,
 )
 from ict import ict_summary  # noqa: E402
-from massive_client import is_massive_available  # noqa: E402
 from models import (  # noqa: E402
     ACCOUNT_PROFILES,
     ASSETS,
@@ -100,7 +96,11 @@ init_db()
 # Data Service API Client
 # ---------------------------------------------------------------------------
 class DataServiceClient:
-    """Thin HTTP client for the data-service API."""
+    """Thin HTTP client for the data-service API.
+
+    ALL data flows through these methods — the Streamlit app never
+    initialises its own Massive client or calls yfinance directly.
+    """
 
     def __init__(self, base_url: str = DATA_SERVICE_URL, timeout: float = API_TIMEOUT):
         self.base_url = base_url.rstrip("/")
@@ -127,6 +127,38 @@ class DataServiceClient:
                 return resp.json()
         except Exception:
             return None
+
+    # --- Helpers: JSON → DataFrame reconstruction ---
+
+    @staticmethod
+    def _json_to_df(payload: dict | None) -> pd.DataFrame:
+        """Reconstruct a DataFrame from the 'split' orientation dict
+        returned by the data-service OHLCV/daily endpoints.
+        """
+        if payload is None:
+            return pd.DataFrame()
+        try:
+            df = pd.DataFrame(
+                data=payload["data"],
+                columns=payload["columns"],
+                index=payload.get("index"),
+            )
+            # Restore DatetimeIndex if the index looks like timestamps
+            if not df.empty and df.index.dtype == "object":
+                try:
+                    df.index = pd.to_datetime(df.index)
+                except Exception:
+                    pass
+            elif not df.empty and df.index.dtype == "int64":
+                try:
+                    df.index = pd.to_datetime(df.index, unit="ms")
+                except Exception:
+                    pass
+            return df
+        except Exception:
+            return pd.DataFrame()
+
+    # ── Analysis endpoints ──
 
     def get_health(self) -> dict | None:
         return self._get("/health")
@@ -156,6 +188,8 @@ class DataServiceClient:
     def get_live_feed_status(self) -> dict | None:
         return self._get("/analysis/live_feed")
 
+    # ── Positions / Actions ──
+
     def get_positions(self) -> dict | None:
         return self._get("/positions/")
 
@@ -176,6 +210,224 @@ class DataServiceClient:
 
     def get_metrics(self) -> dict | None:
         return self._get("/metrics")
+
+    # ── Market Data: Aggregate Bars (OHLC) ──
+
+    def get_ohlcv(
+        self, ticker: str, interval: str = "5m", period: str = "5d"
+    ) -> pd.DataFrame:
+        """Fetch OHLCV bars via the data-service proxy.
+
+        Maps to Massive: GET /futures/vX/aggs/{ticker}
+        Falls back to empty DataFrame on failure.
+        """
+        resp = self._get(
+            "/data/ohlcv",
+            params={"ticker": ticker, "interval": interval, "period": period},
+        )
+        if resp is None:
+            return pd.DataFrame()
+        return self._json_to_df(resp.get("data"))
+
+    def get_ohlcv_bulk(
+        self, tickers: list[str], interval: str = "5m", period: str = "5d"
+    ) -> dict[str, pd.DataFrame]:
+        """Fetch OHLCV bars for multiple tickers in one call."""
+        resp = self._post(
+            "/data/ohlcv/bulk",
+            json_data={"tickers": tickers, "interval": interval, "period": period},
+        )
+        if resp is None:
+            return {}
+        result: dict[str, pd.DataFrame] = {}
+        for ticker, item in resp.get("results", {}).items():
+            result[ticker] = self._json_to_df(item.get("data"))
+        return result
+
+    # ── Market Data: Daily Bars ──
+
+    def get_daily(self, ticker: str, period: str = "10d") -> pd.DataFrame:
+        """Fetch daily OHLCV bars via the data-service proxy.
+
+        Used for pivots, daily % change, and pre-market scoring.
+        """
+        resp = self._get("/data/daily", params={"ticker": ticker, "period": period})
+        if resp is None:
+            return pd.DataFrame()
+        return self._json_to_df(resp.get("data"))
+
+    def get_daily_bulk(
+        self, tickers: list[str], period: str = "10d"
+    ) -> dict[str, pd.DataFrame]:
+        """Fetch daily bars for multiple tickers in one call."""
+        resp = self._post(
+            "/data/daily/bulk",
+            json_data={"tickers": tickers, "period": period},
+        )
+        if resp is None:
+            return {}
+        result: dict[str, pd.DataFrame] = {}
+        for ticker, item in resp.get("results", {}).items():
+            result[ticker] = self._json_to_df(item.get("data"))
+        return result
+
+    # ── Market Data: Contracts ──
+
+    def resolve_contract(self, ticker: str) -> dict | None:
+        """Resolve Yahoo ticker → front-month Massive contract ticker.
+
+        Maps to Massive: GET /futures/vX/contracts
+        """
+        return self._get("/data/contracts/resolve", params={"ticker": ticker})
+
+    def get_contract(self, ticker: str) -> dict | None:
+        """Get detailed contract specs by Massive ticker.
+
+        Maps to Massive: GET /futures/vX/contracts/{ticker}
+        """
+        return self._get(f"/data/contracts/{ticker}")
+
+    def list_contracts(
+        self,
+        product_code: str,
+        active: bool | None = None,
+        limit: int = 10,
+    ) -> dict | None:
+        """List/filter all futures contracts for a product.
+
+        Maps to Massive: GET /futures/vX/contracts
+        """
+        params: dict = {"product_code": product_code, "limit": limit}
+        if active is not None:
+            params["active"] = active
+        return self._get("/data/contracts", params=params)
+
+    # ── Market Data: Products ──
+
+    def list_products(self, **kwargs) -> dict | None:
+        """Filter through all available futures products.
+
+        Maps to Massive: GET /futures/vX/products
+        Accepts: name, product_code, trading_venue, sector, sub_sector,
+                 asset_class, asset_sub_class, limit
+        """
+        params = {k: v for k, v in kwargs.items() if v is not None}
+        return self._get("/data/products", params=params)
+
+    def get_product(self, product_code: str) -> dict | None:
+        """Get detailed info for a specific futures product.
+
+        Maps to Massive: GET /futures/vX/products/{product_code}
+        """
+        return self._get(f"/data/products/{product_code}")
+
+    # ── Market Data: Schedules ──
+
+    def list_schedules(
+        self,
+        product_code: str | None = None,
+        trading_date: str | None = None,
+        trading_venue: str | None = None,
+        limit: int = 100,
+    ) -> dict | None:
+        """Get trading schedules for futures contracts.
+
+        Maps to Massive: GET /futures/vX/schedules
+                         GET /futures/vX/products/{product_code}/schedules
+        """
+        params: dict = {"limit": limit}
+        if product_code:
+            params["product_code"] = product_code
+        if trading_date:
+            params["trading_date"] = trading_date
+        if trading_venue:
+            params["trading_venue"] = trading_venue
+        return self._get("/data/schedules", params=params)
+
+    # ── Market Data: Snapshots ──
+
+    def get_snapshot(
+        self,
+        ticker: str | None = None,
+        product_code: str | None = None,
+    ) -> dict | None:
+        """Get a real-time snapshot for a futures contract.
+
+        Maps to Massive: GET /futures/vX/snapshot
+        """
+        params: dict = {}
+        if ticker:
+            params["ticker"] = ticker
+        if product_code:
+            params["product_code"] = product_code
+        return self._get("/data/snapshot", params=params)
+
+    def get_snapshots_bulk(self, tickers: list[str]) -> dict | None:
+        """Get snapshots for multiple tickers in one call.
+
+        Maps to Massive: GET /futures/vX/snapshot (batched)
+        """
+        return self._post("/data/snapshot/bulk", json_data={"tickers": tickers})
+
+    # ── Market Data: Trades & Quotes ──
+
+    def get_trades(
+        self, ticker: str, minutes_back: int = 5, limit: int = 5000
+    ) -> pd.DataFrame:
+        """Get recent trade records for a futures contract.
+
+        Maps to Massive: GET /futures/vX/trades/{ticker}
+        """
+        resp = self._get(
+            "/data/trades",
+            params={"ticker": ticker, "minutes_back": minutes_back, "limit": limit},
+        )
+        if resp is None:
+            return pd.DataFrame()
+        return self._json_to_df(resp.get("data"))
+
+    def get_quotes(
+        self, ticker: str, minutes_back: int = 5, limit: int = 5000
+    ) -> pd.DataFrame:
+        """Get top-of-book bid/ask for a futures contract.
+
+        Maps to Massive: GET /futures/vX/quotes/{ticker}
+        """
+        resp = self._get(
+            "/data/quotes",
+            params={"ticker": ticker, "minutes_back": minutes_back, "limit": limit},
+        )
+        if resp is None:
+            return pd.DataFrame()
+        return self._json_to_df(resp.get("data"))
+
+    # ── Market Operations ──
+
+    def get_market_status(self, product_code: str | None = None) -> dict | None:
+        """Get current market status for futures products/exchanges.
+
+        Maps to Massive: GET /futures/vX/market_status
+        """
+        params: dict = {}
+        if product_code:
+            params["product_code"] = product_code
+        return self._get("/data/market_status", params=params)
+
+    def list_exchanges(self) -> dict | None:
+        """List supported futures exchanges.
+
+        Maps to Massive: GET /futures/vX/exchanges
+        """
+        return self._get("/data/exchanges")
+
+    # ── Data Source ──
+
+    def get_data_source(self) -> dict | None:
+        """Get the active data source and Massive availability.
+
+        Returns: {"data_source": "Massive"|"yfinance", "massive_available": bool}
+        """
+        return self._get("/data/source")
 
 
 @st.cache_resource
@@ -281,12 +533,12 @@ def build_scanner_row(name, ticker, interval, period):
     if cached is not None:
         return cached
 
-    df = get_data(ticker, interval, period)
+    df = api.get_ohlcv(ticker, interval, period)
     if df.empty:
         return None
     last = float(df["Close"].iloc[-1])
 
-    daily = get_daily(ticker)
+    daily = api.get_daily(ticker)
     pivots = compute_pivots(daily)
     if daily is not None and len(daily) >= 2:
         prior_close = float(daily["Close"].iloc[-2])
@@ -314,7 +566,7 @@ def build_scanner_row(name, ticker, interval, period):
     raw_vol = df["Volume"].iloc[-1]
     vol = int(raw_vol) if not pd.isna(raw_vol) else 0
 
-    df_1m = get_data(ticker, "1m", "1d")
+    df_1m = api.get_ohlcv(ticker, "1m", "1d")
     mom = _compute_1m_momentum(df_1m)
 
     row = {
@@ -403,8 +655,9 @@ with st.sidebar:
     # Data source status
     st.divider()
     st.markdown("**📡 Data Source**")
-    data_source = get_data_source()
-    massive_available = is_massive_available()
+    _ds_info = api.get_data_source() or {}
+    data_source = _ds_info.get("data_source", "yfinance")
+    massive_available = _ds_info.get("massive_available", False)
     if massive_available:
         st.success(f"🟢 **{data_source}** — Real-time futures data")
     else:
@@ -428,18 +681,21 @@ with st.sidebar:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# LOAD DATA (from cache / yfinance — lightweight reads only)
+# LOAD DATA (via data-service proxy — no direct Massive/yfinance calls)
 # ═══════════════════════════════════════════════════════════════════════════
 data = {}
 data_1m = {}
+_all_tickers = [ASSETS[n] for n in ALL_ASSETS]
+_bulk_5m = api.get_ohlcv_bulk(_all_tickers, INTERVAL, PERIOD)
+_bulk_1m = api.get_ohlcv_bulk(_all_tickers, INTERVAL_1M, PERIOD_1M)
 for name in ALL_ASSETS:
     ticker = ASSETS[name]
-    df = get_data(ticker, INTERVAL, PERIOD)
+    df = _bulk_5m.get(ticker, pd.DataFrame())
     if not df.empty:
         data[name] = df
-    df_1m = get_data(ticker, INTERVAL_1M, PERIOD_1M)
-    if not df_1m.empty:
-        data_1m[name] = df_1m
+    df_1m_item = _bulk_1m.get(ticker, pd.DataFrame())
+    if not df_1m_item.empty:
+        data_1m[name] = df_1m_item
 
 # Session time info
 now_est = datetime.now(tz=_EST)
@@ -634,9 +890,9 @@ for name in ALL_ASSETS:
             "1h": "1mo",
             "60m": "1mo",
         }
-        entry_df = get_data(ticker, entry_iv, _tf_period_map.get(entry_iv, "5d"))
-        setup_df = get_data(ticker, setup_iv, _tf_period_map.get(setup_iv, "5d"))
-        htf_df = get_data(ticker, htf_iv, _tf_period_map.get(htf_iv, "5d"))
+        entry_df = api.get_ohlcv(ticker, entry_iv, _tf_period_map.get(entry_iv, "5d"))
+        setup_df = api.get_ohlcv(ticker, setup_iv, _tf_period_map.get(setup_iv, "5d"))
+        htf_df = api.get_ohlcv(ticker, htf_iv, _tf_period_map.get(htf_iv, "5d"))
 
         fallback = data.get(name, pd.DataFrame())
         if entry_df.empty:
@@ -715,9 +971,10 @@ for name in ALL_ASSETS:
 scorer_results = []
 if data:
     daily_data_dict = {}
+    _bulk_daily = api.get_daily_bulk(_all_tickers)
     for name in ALL_ASSETS:
         ticker = ASSETS[name]
-        daily_df = get_daily(ticker)
+        daily_df = _bulk_daily.get(ticker, pd.DataFrame())
         if daily_df is not None and not daily_df.empty:
             daily_data_dict[name] = daily_df
     try:
@@ -878,7 +1135,7 @@ def _live_minute_view():
         ticker = ASSETS.get(name)
         if not ticker:
             continue
-        df_1m_live = get_data(ticker, "1m", "1d")
+        df_1m_live = api.get_ohlcv(ticker, "1m", "1d")
         if df_1m_live is None or df_1m_live.empty:
             with cols[idx]:
                 st.caption(f"**{name}** — no 1m data")
@@ -1242,7 +1499,7 @@ with st.expander("📈 Charts", expanded=True):
         elif chart_tf == "5m" and chart_asset in data:
             df_chart = data[chart_asset].copy()
         else:
-            df_chart = get_data(
+            df_chart = api.get_ohlcv(
                 chart_ticker, chart_tf, _chart_tf_period.get(chart_tf, "5d")
             )
             if df_chart is not None:
@@ -1301,7 +1558,7 @@ with st.expander("📈 Charts", expanded=True):
             )
 
             # Add pivot levels
-            daily = get_daily(chart_ticker)
+            daily = api.get_daily(chart_ticker)
             pivots = compute_pivots(daily)
             if pivots:
                 colors = {
@@ -1597,11 +1854,7 @@ with st.expander("⚙️ Engine Status", expanded=False):
         if result:
             st.success("Refresh triggered via data service!")
         else:
-            # Fall back to direct cache flush
-            from cache import flush_all
-
-            flush_all()
-            st.info("Cache flushed locally (data service unavailable)")
+            st.warning("Data service unavailable — refresh not sent")
         st.rerun()
 
     st.caption(

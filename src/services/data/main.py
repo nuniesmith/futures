@@ -18,10 +18,13 @@ Docker:
     CMD ["uvicorn", "src.services.data.main:app", ...]
 """
 
+import json
 import logging
+import math
 import os
 import sys
 from contextlib import asynccontextmanager
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Ensure bare imports resolve: `from cache import ...`, `from engine import ...`
@@ -37,6 +40,48 @@ for _p in (_src_dir, _this_dir):
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Custom JSON encoder that replaces inf / NaN with null instead of crashing.
+# Backtesting and optimization routines can produce inf Sharpe ratios or
+# NaN win-rates, which the stdlib json encoder rejects.
+# ---------------------------------------------------------------------------
+class _SafeFloatEncoder(json.JSONEncoder):
+    """JSON encoder that converts inf/-inf/NaN to None."""
+
+    def default(self, o: Any) -> Any:
+        return super().default(o)
+
+    def encode(self, o: Any) -> str:
+        return super().encode(_sanitize(o))
+
+
+def _sanitize(obj: Any) -> Any:
+    """Recursively replace non-finite floats with None."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize(v) for v in obj]
+    return obj
+
+
+class SafeJSONResponse(JSONResponse):
+    """JSONResponse subclass that handles inf/NaN floats gracefully."""
+
+    def render(self, content: Any) -> bytes:
+        return json.dumps(
+            content,
+            cls=_SafeFloatEncoder,
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -58,6 +103,7 @@ from api.analysis import router as analysis_router  # noqa: E402
 from api.analysis import set_engine as analysis_set_engine  # noqa: E402
 from api.health import router as health_router  # noqa: E402
 from api.journal import router as journal_router  # noqa: E402
+from api.market_data import router as market_data_router  # noqa: E402
 from api.positions import router as positions_router  # noqa: E402
 from api.trades import router as trades_router  # noqa: E402
 
@@ -168,6 +214,7 @@ app = FastAPI(
     ),
     version="1.0.0",
     lifespan=lifespan,
+    default_response_class=SafeJSONResponse,
 )
 
 # CORS — allow Streamlit (typically on port 8501) and local dev
@@ -202,6 +249,9 @@ app.include_router(trades_router, prefix="", tags=["Trades"])
 # Journal: /journal/save, /journal/entries, /journal/stats, /journal/today
 app.include_router(journal_router, prefix="/journal", tags=["Journal"])
 
+# Market Data: /data/ohlcv, /data/daily, /data/source  (OHLCV proxy for thin client)
+app.include_router(market_data_router, prefix="/data", tags=["Market Data"])
+
 # Health: /health, /metrics  (no prefix — top-level)
 app.include_router(health_router, tags=["Health"])
 
@@ -225,6 +275,9 @@ def root():
             "positions": "/positions/",
             "trades": "/trades",
             "journal": "/journal/entries",
+            "market_data": "/data/ohlcv",
+            "daily_data": "/data/daily",
+            "data_source": "/data/source",
             "health": "/health",
             "metrics": "/metrics",
         },

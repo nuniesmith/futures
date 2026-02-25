@@ -41,6 +41,8 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from src.services.data.main import SafeJSONResponse  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -159,7 +161,7 @@ def _build_test_app(mock_engine):
     analysis_set_engine(mock_engine)
     actions_set_engine(mock_engine)
 
-    app = FastAPI(title="Test Data Service")
+    app = FastAPI(title="Test Data Service", default_response_class=SafeJSONResponse)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

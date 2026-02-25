@@ -10,7 +10,7 @@
 #
 # Usage:
 #   docker compose up -d --build
-#   docker compose logs -f data-service
+#   docker compose logs -f data
 #   docker compose ps
 #
 # =============================================================================
@@ -63,7 +63,7 @@ services:
     # All heavy computation runs here (Massive WS, optimization, backtesting,
     # wave analysis, volatility, signal quality, regime, CVD, ICT)
     # -------------------------------------------------------------------------
-    data-service:
+    data:
         build:
             context: .
             dockerfile: docker/data/Dockerfile
@@ -104,7 +104,7 @@ services:
     # Streamlit App — pure UI client (fast reloads)
     # Calls data-service API + reads Redis directly for ultra-low latency
     # -------------------------------------------------------------------------
-    streamlit-app:
+    app:
         build:
             context: .
             dockerfile: docker/web/Dockerfile
@@ -115,7 +115,7 @@ services:
             - .env
         environment:
             - REDIS_URL=redis://redis:6379/0
-            - DATA_SERVICE_URL=http://data-service:8000
+            - DATA_SERVICE_URL=http://data:8000
             - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD:-futures_dev_pass}@postgres:5432/${POSTGRES_DB:-futures_db}
             - DB_PATH=/app/data/futures_journal.db
             - PYTHONPATH=/app/src:/app
@@ -125,7 +125,7 @@ services:
         depends_on:
             redis:
                 condition: service_healthy
-            data-service:
+            data:
                 condition: service_healthy
         healthcheck:
             test:
