@@ -133,8 +133,17 @@ def build_scanner_row(name, ticker, interval, period):
     if df.empty:
         return None
     last = float(df["Close"].iloc[-1])
-    prev = float(df["Close"].iloc[-2]) if len(df) > 1 else last
-    pct_chg = (last - prev) / prev * 100
+
+    # Use prior daily close for true overnight % change (not previous 5-min bar)
+    daily = get_daily(ticker)
+    pivots = compute_pivots(daily)
+    if daily is not None and len(daily) >= 2:
+        prior_close = float(daily["Close"].iloc[-2])
+    elif len(df) > 1:
+        prior_close = float(df["Close"].iloc[0])  # fallback: first bar of period
+    else:
+        prior_close = last
+    pct_chg = (last - prior_close) / prior_close * 100 if prior_close != 0 else 0.0
 
     vdf = compute_vwap(df)
     cum_vol_last = float(vdf["cum_vol"].iloc[-1])
@@ -142,9 +151,11 @@ def build_scanner_row(name, ticker, interval, period):
         float(vdf["cum_tpv"].iloc[-1]) / cum_vol_last if cum_vol_last != 0 else last
     )
 
-    daily = get_daily(ticker)
-    pivots = compute_pivots(daily)
     pivot = pivots["Pivot"] if pivots else last
+    r1 = pivots["R1"] if pivots else last
+    s1 = pivots["S1"] if pivots else last
+    r2 = pivots["R2"] if pivots else last
+    s2 = pivots["S2"] if pivots else last
     dist_pivot = last - pivot
 
     atr_series = atr(df["High"], df["Low"], df["Close"], length=14)
@@ -159,6 +170,10 @@ def build_scanner_row(name, ticker, interval, period):
         "VWAP": round(vwap_val, 2),
         "% from VWAP": round((last - vwap_val) / vwap_val * 100, 2),
         "Pivot": round(pivot, 2),
+        "S2": round(s2, 2),
+        "S1": round(s1, 2),
+        "R1": round(r1, 2),
+        "R2": round(r2, 2),
         "Dist to Pivot": round(dist_pivot, 2),
         "ATR": round(atr_val, 2),
         "Volume": vol,
@@ -218,6 +233,80 @@ def _parse_trade_ideas(text: str) -> list[dict]:
             except json.JSONDecodeError:
                 continue
     return []
+
+
+def _validate_trade_ideas(
+    ideas: list[dict], scanner_df: pd.DataFrame, max_atr_mult: float = 5.0
+) -> tuple[list[dict], list[str]]:
+    """Sanity-check Grok trade ideas against actual scanner prices.
+
+    Compares each idea's entry_low, entry_high, sl, and tp against the
+    scanner's "Last" price for that asset.  Any price more than
+    max_atr_mult × ATR away from Last is flagged as a hallucination and
+    the idea is discarded.
+
+    Returns:
+        (valid_ideas, warnings)  — cleaned list and human-readable warnings.
+    """
+    if scanner_df.empty or not ideas:
+        return ideas, []
+
+    # Build lookup: asset name → {last, atr}
+    price_lookup: dict[str, dict[str, float]] = {}
+    for _, row in scanner_df.iterrows():
+        asset = str(row.get("Asset") or "")
+        _last_raw = row.get("Last")
+        last = float(_last_raw) if _last_raw is not None else 0.0
+        _atr_raw = row.get("ATR")
+        atr_val = float(_atr_raw) if _atr_raw is not None else 0.0
+        if asset and last > 0:
+            price_lookup[asset] = {
+                "last": last,
+                "atr": atr_val if atr_val > 0 else last * 0.01,
+            }
+
+    valid: list[dict] = []
+    warnings: list[str] = []
+
+    for idea in ideas:
+        asset_name = idea.get("asset", "")
+        ref = price_lookup.get(asset_name)
+        if ref is None:
+            # Unknown asset — keep but warn
+            warnings.append(f"⚠️ {asset_name}: not in scanner, cannot validate prices.")
+            valid.append(idea)
+            continue
+
+        last = ref["last"]
+        atr_val = ref["atr"]
+        threshold = max_atr_mult * atr_val
+
+        # Check all price fields
+        bad_fields: list[str] = []
+        for field in ("entry_low", "entry_high", "sl", "tp"):
+            val = idea.get(field)
+            if val is not None:
+                try:
+                    price = float(val)
+                except (TypeError, ValueError):
+                    bad_fields.append(f"{field}=INVALID")
+                    continue
+                distance = abs(price - last)
+                if distance > threshold:
+                    bad_fields.append(
+                        f"{field}={price:.2f} (off by {distance:.2f}, "
+                        f"Last={last:.2f}, max allowed ±{threshold:.2f})"
+                    )
+
+        if bad_fields:
+            detail = "; ".join(bad_fields)
+            warnings.append(
+                f"🚫 {asset_name} DISCARDED — hallucinated prices: {detail}"
+            )
+        else:
+            valid.append(idea)
+
+    return valid, warnings
 
 
 # Page config
@@ -391,6 +480,25 @@ with tab_brief:
             df_scan.to_string(index=False) if not df_scan.empty else "No scanner data"
         )
 
+        # Build contract specs text so the LLM knows tick sizes and price scales
+        specs_parts = []
+        for asset_name, spec in CONTRACT_SPECS.items():
+            data_ticker = spec.get("data_ticker", spec["ticker"])
+            # Include the current price from scanner for explicit anchoring
+            scan_price = "N/A"
+            if not df_scan.empty:
+                match = df_scan.loc[df_scan["Asset"] == asset_name, "Last"]
+                if not match.empty:
+                    scan_price = str(match.iloc[0])
+            specs_parts.append(
+                f"  {asset_name} ({data_ticker}): "
+                f"current_price={scan_price}, "
+                f"tick_size={spec['tick']}, "
+                f"point_value=USD {spec['point']}/point, "
+                f"margin=USD {spec['margin']:,}"
+            )
+        specs_text = "\n".join(specs_parts)
+
         # Correlation matrix
         corr_text = "Not enough data"
         if len(data) >= 2:
@@ -440,11 +548,23 @@ Rules you MUST follow:
 FORMATTING RULE: NEVER use bare $ signs for dollar amounts — always write "USD" instead.
 Do not use LaTeX or math notation. Use plain text only.
 
+CRITICAL — CONTRACT SPECIFICATIONS (use these for correct price scales):
+{specs_text}
+
+PRICE ANCHORING RULES — READ CAREFULLY:
+- The "Last" column in scanner data is the CURRENT PRICE for each asset. ALL entry zones, SL, and TP MUST be based on this price.
+- Gold (GC=F) trades around USD 2,500-3,500 per oz. Silver (SI=F) around USD 28-40 per oz. Copper (HG=F) around USD 4-6 per lb.
+- Crude Oil (CL=F) trades around USD 55-85 per barrel. S&P (ES=F) around USD 5,000-6,500. Nasdaq (NQ=F) around USD 18,000-22,000.
+- Entry zones must be within 1-2x ATR of the "Last" price. SL within 1-2x ATR. TP within 2-4x ATR.
+- Use the "Pivot", "S1", "S2", "R1", "R2" columns as key support/resistance levels for entry/SL/TP zones.
+- NEVER confuse "Dist to Pivot", "ATR", or "% from VWAP" with the actual price. These are supplementary metrics only.
+- Contracts formula: contracts = floor(USD {risk_dollars:,} / (SL_distance × point_value)). Clamp to max {max_contracts}.
+
 Current time: {datetime.now().strftime("%Y-%m-%d %H:%M")} EST
 Account: USD {account_size:,}
 Session status: {"ACTIVE — primary entry window" if 3 <= current_hour < 10 else "WIND DOWN — manage only" if 10 <= current_hour < 12 else "CLOSED — no trading"}
 
-Scanner data:
+Scanner data (columns: Asset, % Overnight, Last=CURRENT PRICE, VWAP, % from VWAP, Pivot, S2, S1, R1, R2, Dist to Pivot, ATR, Volume):
 {scan_text}
 
 Correlation matrix (5-min returns):
@@ -459,6 +579,9 @@ Backtest results (last {period}, session-hours only):
 Give me a complete morning game plan:
 1. Overall market bias & rank 1-5 best assets to focus on today
 2. For each focus asset: direction, entry zone, SL, TP, contracts, RR, rationale
+   - The entry zone MUST be near the "Last" price from the scanner (within 1-2x ATR)
+   - Use Pivot/S1/S2/R1/R2 levels for support and resistance zones
+   - Calculate contracts using: floor(USD {risk_dollars:,} / (SL_distance × point_value))
    - Pay attention to which strategies the optimizer chose and their confidence levels
    - Prioritise assets where the optimizer has "high" confidence
 3. Key correlations to watch and how to use them
@@ -466,7 +589,7 @@ Give me a complete morning game plan:
 5. Risk reminders (including session time rules)
 
 After your analysis, provide your trade ideas as a JSON code block using this EXACT format
-(entry_low/entry_high define the limit order zone):
+(entry_low/entry_high define the limit order zone — must be near the current "Last" price):
 ```json
 [
   {{
@@ -487,7 +610,13 @@ After your analysis, provide your trade ideas as a JSON code block using this EX
                 result = _call_grok(prompt, max_tokens=3000)
                 if result:
                     st.session_state["morning_analysis"] = result
-                    st.session_state["morning_trade_ideas"] = _parse_trade_ideas(result)
+                    raw_ideas = _parse_trade_ideas(result)
+                    validated, val_warnings = _validate_trade_ideas(raw_ideas, df_scan)
+                    st.session_state["morning_trade_ideas"] = validated
+                    if val_warnings:
+                        st.session_state["trade_idea_warnings"] = val_warnings
+                    else:
+                        st.session_state.pop("trade_idea_warnings", None)
             except Exception as e:
                 st.error(f"API error: {e}")
 
@@ -498,6 +627,17 @@ After your analysis, provide your trade ideas as a JSON code block using this EX
         narrative = re.sub(r"```json\s*\[.*?\]\s*```", "", analysis, flags=re.DOTALL)
         narrative = re.sub(r"```\s*\[.*?\]\s*```", "", narrative, flags=re.DOTALL)
         st.markdown(_escape_dollars(narrative.strip()))
+
+        # Show validation warnings if any trade ideas were discarded
+        if "trade_idea_warnings" in st.session_state:
+            with st.expander("⚠️ Price Validation Warnings", expanded=True):
+                for w in st.session_state["trade_idea_warnings"]:
+                    st.warning(w)
+                st.caption(
+                    "Trade ideas with prices far from the actual 'Last' price "
+                    "(> 5× ATR) were automatically discarded to prevent "
+                    "hallucinated entries."
+                )
 
     st.divider()
 
