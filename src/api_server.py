@@ -19,6 +19,9 @@ import os
 import sqlite3
 import sys
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_EST = ZoneInfo("America/New_York")
 from typing import Optional
 
 # Ensure sibling modules are importable
@@ -226,7 +229,7 @@ def api_today_pnl(
 ):
     """Get today's realised P&L."""
     pnl = get_today_pnl(account_size)
-    return {"date": datetime.now().strftime("%Y-%m-%d"), "pnl": pnl}
+    return {"date": datetime.now(tz=_EST).strftime("%Y-%m-%d"), "pnl": pnl}
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +264,7 @@ def log_trade(trade: LegacyTradeRequest):
         (
             STATUS_CLOSED,
             trade.exit_price,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            datetime.now(tz=_EST).strftime("%Y-%m-%d %H:%M:%S"),
             trade.pnl,
             trade_id,
         ),
@@ -300,7 +303,7 @@ def health():
     return {
         "status": "ok",
         "db_path": DB_PATH,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(tz=_EST).isoformat(),
     }
 
 

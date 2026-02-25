@@ -11,6 +11,9 @@ import os
 import re
 import sys
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+_EST = ZoneInfo("America/New_York")
 
 # Ensure sibling modules are importable when run as `streamlit run src/app.py`
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -386,7 +389,7 @@ for name in selected_assets:
 # ---------------------------------------------------------------------------
 # Session time guard — no trading outside the window
 # ---------------------------------------------------------------------------
-now_est = datetime.now()  # assumes server runs in EST
+now_est = datetime.now(tz=_EST)
 current_hour = now_est.hour
 session_active = 3 <= current_hour < 12
 session_warning = 10 <= current_hour < 12  # wind-down period
@@ -560,7 +563,7 @@ PRICE ANCHORING RULES — READ CAREFULLY:
 - NEVER confuse "Dist to Pivot", "ATR", or "% from VWAP" with the actual price. These are supplementary metrics only.
 - Contracts formula: contracts = floor(USD {risk_dollars:,} / (SL_distance × point_value)). Clamp to max {max_contracts}.
 
-Current time: {datetime.now().strftime("%Y-%m-%d %H:%M")} EST
+Current time: {datetime.now(tz=_EST).strftime("%Y-%m-%d %H:%M")} EST
 Account: USD {account_size:,}
 Session status: {"ACTIVE — primary entry window" if 3 <= current_hour < 10 else "WIND DOWN — manage only" if 10 <= current_hour < 12 else "CLOSED — no trading"}
 
@@ -1131,7 +1134,7 @@ with tab_journal:
         dfj = get_today_trades(account_size)
     elif journal_scope == "This Week":
         week_start = (
-            datetime.now() - timedelta(days=datetime.now().weekday())
+            datetime.now(tz=_EST) - timedelta(days=datetime.now(tz=_EST).weekday())
         ).strftime("%Y-%m-%d")
         all_trades = get_all_trades(account_size)
         dfj = (

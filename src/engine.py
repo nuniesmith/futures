@@ -24,6 +24,9 @@ import logging
 import threading
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_EST = ZoneInfo("America/New_York")
 
 import optuna
 import pandas as pd
@@ -83,16 +86,26 @@ def filter_session_hours(
     """Filter DataFrame to only include bars within the trading session.
 
     Default window: 3 AM – 12 PM EST, matching the morning trading playbook.
+    Converts the index to US/Eastern before filtering so that the hour check
+    is correct regardless of the server's system clock timezone.
     Returns the full DataFrame if the index is not datetime-based.
     """
     if df.empty:
         return df
     try:
-        hours = df.index.to_series().dt.hour
+        idx = df.index.to_series()
+        # Convert to US/Eastern so hour filtering matches EST session window
+        if hasattr(idx.dt, "tz") and idx.dt.tz is not None:
+            # Index is already tz-aware → convert to Eastern
+            est_idx = idx.dt.tz_convert(_EST)
+        else:
+            # Index is tz-naive → assume UTC (yfinance default) and localize
+            est_idx = idx.dt.tz_localize("UTC").dt.tz_convert(_EST)
+        hours = est_idx.dt.hour
         mask = (hours >= start_hour) & (hours < end_hour)
         filtered = df.loc[mask]
         return filtered if len(filtered) >= 20 else df
-    except AttributeError:
+    except (AttributeError, TypeError):
         return df
 
 
@@ -299,7 +312,7 @@ def run_optimization(
                 "walk_forward": use_walk_forward,
                 "confidence": confidence,
                 "regime": regime,
-                "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "updated": datetime.now(tz=_EST).strftime("%Y-%m-%d %H:%M"),
                 # Legacy fields for backward compatibility with app.py
                 "n1": bp.get("n1", bp.get("macd_fast", 9)),
                 "n2": bp.get("n2", bp.get("macd_slow", 21)),
@@ -424,7 +437,7 @@ def run_backtest(
         "Confidence": opt.get("confidence", "—") if opt else "—",
         "Regime": opt.get("regime", "—") if opt else "—",
         "Walk-Forward": opt.get("walk_forward", False) if opt else False,
-        "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "updated": datetime.now(tz=_EST).strftime("%Y-%m-%d %H:%M"),
     }
 
     # Add strategy-specific params for transparency
@@ -592,7 +605,9 @@ class DashboardEngine:
                 errors.append(msg)
                 logger.warning("Data refresh failed for %s: %s", name, exc)
         with self._lock:
-            self.status["data_refresh"]["last"] = datetime.now().strftime("%H:%M:%S")
+            self.status["data_refresh"]["last"] = datetime.now(tz=_EST).strftime(
+                "%H:%M:%S"
+            )
             self.status["data_refresh"]["status"] = "idle"
             self.status["data_refresh"]["error"] = "; ".join(errors) if errors else None
         if not errors:
@@ -639,7 +654,9 @@ class DashboardEngine:
                 errors.append(msg)
                 logger.warning("Optimization failed for %s: %s", name, exc)
         with self._lock:
-            self.status["optimization"]["last"] = datetime.now().strftime("%H:%M:%S")
+            self.status["optimization"]["last"] = datetime.now(tz=_EST).strftime(
+                "%H:%M:%S"
+            )
             self.status["optimization"]["status"] = "idle"
             self.status["optimization"]["progress"] = ""
             self.status["optimization"]["error"] = "; ".join(errors) if errors else None
@@ -670,7 +687,7 @@ class DashboardEngine:
                 logger.warning("Backtest failed for %s: %s", name, exc)
         with self._lock:
             self.backtest_results = results
-            self.status["backtest"]["last"] = datetime.now().strftime("%H:%M:%S")
+            self.status["backtest"]["last"] = datetime.now(tz=_EST).strftime("%H:%M:%S")
             self.status["backtest"]["status"] = "idle"
             self.status["backtest"]["progress"] = ""
             self.status["backtest"]["error"] = "; ".join(errors) if errors else None

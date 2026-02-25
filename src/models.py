@@ -6,6 +6,9 @@ and SQLite trade helpers with OPEN/CLOSED status tracking.
 import os
 import sqlite3
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_EST = ZoneInfo("America/New_York")
 from typing import Optional
 
 import pandas as pd
@@ -312,7 +315,7 @@ def create_trade(
             contracts, status, strategy, notes)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            datetime.now(tz=_EST).strftime("%Y-%m-%d %H:%M:%S"),
             account_size,
             asset,
             direction,
@@ -368,7 +371,7 @@ def close_trade(trade_id: int, close_price: float) -> dict:
             else 0.0
         )
 
-    close_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    close_time = datetime.now(tz=_EST).strftime("%Y-%m-%d %H:%M:%S")
 
     conn.execute(
         """UPDATE trades_v2
@@ -456,7 +459,7 @@ def get_all_trades(account_size: Optional[int] = None) -> pd.DataFrame:
 
 def get_today_pnl(account_size: Optional[int] = None) -> float:
     """Sum of realised P&L for trades closed today."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(tz=_EST).strftime("%Y-%m-%d")
     conn = _get_conn()
     if account_size:
         row = conn.execute(
@@ -474,7 +477,7 @@ def get_today_pnl(account_size: Optional[int] = None) -> float:
 
 def get_today_trades(account_size: Optional[int] = None) -> pd.DataFrame:
     """Return all trades created or closed today."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(tz=_EST).strftime("%Y-%m-%d")
     conn = _get_conn()
     if account_size:
         df = pd.read_sql(
