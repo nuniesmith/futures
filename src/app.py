@@ -520,10 +520,13 @@ with tab_brief:
                 confidence = opt.get("confidence", "?")
                 regime = opt.get("regime", "?")
                 wf = "yes" if opt.get("walk_forward") else "no"
+                regime_method = opt.get("regime_method", "atr")
+                pos_mult = opt.get("position_multiplier", 1.0)
                 opt_text_parts.append(
                     f"  {name}: strategy={strat_label}, return={opt['return_pct']}%, "
                     f"sharpe={opt.get('sharpe', '?')}, win_rate={opt.get('win_rate', '?')}%, "
-                    f"confidence={confidence}, regime={regime}, walk_forward={wf}"
+                    f"confidence={confidence}, regime={regime} ({regime_method}), "
+                    f"pos_multiplier={pos_mult:.2f}x, walk_forward={wf}"
                 )
         opt_text = "\n".join(opt_text_parts) if opt_text_parts else "Not yet run"
 
@@ -1468,9 +1471,10 @@ with tab_backtest:
             opt_detail_parts.append(f"n1={opt_params.get('n1', '?')}")
             opt_detail_parts.append(f"n2={opt_params.get('n2', '?')}")
             opt_detail_parts.append(f"size={opt_params.get('size', '?')}")
+        opt_pos_mult = opt_params.get("position_multiplier", 1.0)
         st.success(
             f"**Best strategy: {opt_strat}** — Sharpe={opt_sharpe}, Return={opt_ret}%, "
-            f"Confidence={opt_confidence}, Regime={opt_regime} · "
+            f"Confidence={opt_confidence}, Regime={opt_regime} (sizing: {opt_pos_mult:.2f}x) · "
             + " · ".join(opt_detail_parts)
         )
         use_opt = st.checkbox(
@@ -2032,6 +2036,7 @@ with tab_backtest:
                     "Strategy": strat_label,
                     "Confidence": cached.get("confidence", "—"),
                     "Regime": cached.get("regime", "—"),
+                    "Pos. Mult.": f"{cached.get('position_multiplier', 1.0):.2f}x",
                     "Sharpe": cached.get("sharpe", "?"),
                     "Sortino": cached.get("sortino", "?"),
                     "Win Rate": cached.get("win_rate", "?"),
@@ -2155,6 +2160,50 @@ with tab_engine:
         st.dataframe(pd.DataFrame(history_rows), width="stretch", hide_index=True)
     else:
         st.info("Strategy history will populate after multiple optimization cycles.")
+
+    # HMM Regime Analysis
+    st.divider()
+    st.subheader("HMM Regime Analysis")
+    st.caption(
+        "3-state Hidden Markov Model classifies each instrument into trending, "
+        "volatile, or choppy regimes using log returns, normalized ATR, and volume ratio. "
+        "Position sizing is scaled by the regime multiplier."
+    )
+    regime_rows = []
+    for name in ASSETS:
+        ticker = ASSETS[name]
+        cached = get_cached_optimization(ticker, interval, period)
+        if cached and cached.get("regime_probabilities"):
+            probs = cached["regime_probabilities"]
+            regime_rows.append(
+                {
+                    "Asset": name,
+                    "Regime": cached.get("regime", "—"),
+                    "Trending %": f"{probs.get('trending', 0) * 100:.1f}",
+                    "Volatile %": f"{probs.get('volatile', 0) * 100:.1f}",
+                    "Choppy %": f"{probs.get('choppy', 0) * 100:.1f}",
+                    "Confidence": f"{cached.get('regime_confidence', 0) * 100:.0f}%",
+                    "Pos. Multiplier": f"{cached.get('position_multiplier', 1.0):.2f}x",
+                    "Method": cached.get("regime_method", "—"),
+                }
+            )
+        elif cached:
+            regime_rows.append(
+                {
+                    "Asset": name,
+                    "Regime": cached.get("regime", "—"),
+                    "Trending %": "—",
+                    "Volatile %": "—",
+                    "Choppy %": "—",
+                    "Confidence": "—",
+                    "Pos. Multiplier": "1.00x",
+                    "Method": cached.get("regime_method", "atr_fallback"),
+                }
+            )
+    if regime_rows:
+        st.dataframe(pd.DataFrame(regime_rows), width="stretch", hide_index=True)
+    else:
+        st.info("Regime data will populate after the first optimization cycle.")
 
     # Settings
     st.divider()

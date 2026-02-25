@@ -42,6 +42,7 @@ from cache import (
     set_cached_optimization,
 )
 from models import ASSETS
+from regime import detect_regime_hmm, fit_detector
 from strategies import (
     STRATEGY_LABELS,
     _safe_float,
@@ -110,15 +111,15 @@ def filter_session_hours(
 
 
 # ---------------------------------------------------------------------------
-# Volatility regime detection
+# Volatility regime detection (HMM-based with ATR fallback)
 # ---------------------------------------------------------------------------
 
 
-def detect_regime(df: pd.DataFrame) -> str:
-    """Classify current volatility regime using short-vs-long ATR ratio.
+def _detect_regime_atr(df: pd.DataFrame) -> str:
+    """Fallback: classify volatility regime using short-vs-long ATR ratio.
 
     Returns "low_vol", "normal", or "high_vol".
-    Useful for adjusting strategy expectations and risk parameters.
+    Used when HMM fitting fails (insufficient data, missing dependencies).
     """
     if df.empty or len(df) < 50:
         return "normal"
@@ -137,6 +138,38 @@ def detect_regime(df: pd.DataFrame) -> str:
     elif ratio > 1.5:
         return "high_vol"
     return "normal"
+
+
+def detect_regime(df: pd.DataFrame, ticker: str | None = None) -> dict:
+    """Detect market regime using HMM, falling back to ATR heuristic.
+
+    Returns a dict with at minimum:
+      - regime: str label
+      - probabilities: dict (empty if ATR fallback)
+      - position_multiplier: float
+      - method: "hmm" or "atr_fallback"
+    """
+    if ticker:
+        try:
+            hmm_result = detect_regime_hmm(ticker, df)
+            if hmm_result.get("regime") != "choppy" or hmm_result.get("confidence", 0) > 0:
+                hmm_result["method"] = "hmm"
+                return hmm_result
+        except Exception as exc:
+            logger.debug("HMM regime detection failed for %s: %s", ticker, exc)
+
+    # Fallback to simple ATR-based detection
+    atr_regime = _detect_regime_atr(df)
+    multiplier_map = {"low_vol": 0.5, "normal": 1.0, "high_vol": 0.5}
+    return {
+        "regime": atr_regime,
+        "probabilities": {},
+        "confidence": 0.0,
+        "confident": False,
+        "position_multiplier": multiplier_map.get(atr_regime, 1.0),
+        "persistence": 0,
+        "method": "atr_fallback",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +201,13 @@ def run_optimization(
 
     # Apply session filter for more realistic optimisation
     df_session = filter_session_hours(df)
-    regime = detect_regime(df_session)
+
+    # Fit HMM on the full dataset (more bars = better model)
+    fit_detector(ticker, df)
+
+    # Detect regime on the session-filtered data
+    regime_info = detect_regime(df_session, ticker=ticker)
+    regime = regime_info["regime"]
 
     # Walk-forward split
     use_walk_forward = len(df_session) >= (MIN_TRAIN_BARS + MIN_TEST_BARS)
@@ -312,6 +351,10 @@ def run_optimization(
                 "walk_forward": use_walk_forward,
                 "confidence": confidence,
                 "regime": regime,
+                "regime_probabilities": regime_info.get("probabilities", {}),
+                "regime_confidence": regime_info.get("confidence", 0.0),
+                "regime_method": regime_info.get("method", "unknown"),
+                "position_multiplier": regime_info.get("position_multiplier", 1.0),
                 "updated": datetime.now(tz=_EST).strftime("%Y-%m-%d %H:%M"),
                 # Legacy fields for backward compatibility with app.py
                 "n1": bp.get("n1", bp.get("macd_fast", 9)),
@@ -621,6 +664,16 @@ class DashboardEngine:
             self.status["optimization"]["error"] = None
         errors: list[str] = []
         total = len(ASSETS)
+
+        # Refit HMM detectors per instrument at the start of each optimization cycle
+        for name, ticker in ASSETS.items():
+            try:
+                df = get_data(ticker, self.interval, self.period)
+                if not df.empty:
+                    fit_detector(ticker, df)
+            except Exception as exc:
+                logger.debug("HMM refit failed for %s: %s", name, exc)
+
         for i, (name, ticker) in enumerate(ASSETS.items()):
             with self._lock:
                 self.status["optimization"]["progress"] = f"{name} ({i + 1}/{total})"
