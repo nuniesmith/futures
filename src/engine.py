@@ -88,7 +88,7 @@ def filter_session_hours(
     if df.empty:
         return df
     try:
-        hours = df.index.hour
+        hours = df.index.to_series().dt.hour
         mask = (hours >= start_hour) & (hours < end_hour)
         filtered = df.loc[mask]
         return filtered if len(filtered) >= 20 else df

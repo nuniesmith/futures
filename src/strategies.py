@@ -415,9 +415,9 @@ class VWAPReversion(Strategy):
         tpv = typical * volume
 
         try:
-            dates = idx.date
-            cum_tpv = tpv.groupby(dates).cumsum()
-            cum_vol = volume.groupby(dates).cumsum()
+            dates = idx.to_series().dt.date
+            cum_tpv = tpv.groupby(dates.values).cumsum()
+            cum_vol = volume.groupby(dates.values).cumsum()
         except AttributeError:
             # Non-datetime index — running cumulative VWAP
             cum_tpv = tpv.cumsum()
@@ -531,7 +531,7 @@ class ORBStrategy(Strategy):
         orb_l = np.full(len(idx), np.nan)
 
         try:
-            dates = idx.date
+            dates = idx.to_series().dt.date.values
             unique_dates = sorted(set(dates))
             for date_val in unique_dates:
                 day_positions = np.where(dates == date_val)[0]
@@ -676,9 +676,7 @@ class MACDMomentum(Strategy):
 
         # --- Exit: opposite MACD crossover ---
         if self.position:
-            if self.position.is_long and crossover(
-                list(self.signal), list(self.macd)
-            ):
+            if self.position.is_long and crossover(list(self.signal), list(self.macd)):
                 self.position.close()
             elif self.position.is_short and crossover(
                 list(self.macd), list(self.signal)
