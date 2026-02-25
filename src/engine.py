@@ -29,6 +29,8 @@ from zoneinfo import ZoneInfo
 
 _EST = ZoneInfo("America/New_York")
 
+from wave import calculate_wave_analysis, wave_summary_text  # noqa: E402
+
 import optuna  # noqa: E402
 import pandas as pd  # noqa: E402
 from backtesting import Backtest  # noqa: E402
@@ -53,6 +55,7 @@ from massive_client import (  # noqa: E402
 )
 from models import ASSETS, CONTRACT_MODE  # noqa: E402
 from regime import detect_regime_hmm, fit_detector  # noqa: E402
+from signal_quality import compute_signal_quality  # noqa: E402
 from strategies import (  # noqa: E402
     STRATEGY_CLASSES,
     STRATEGY_LABELS,
@@ -61,6 +64,7 @@ from strategies import (  # noqa: E402
     score_backtest,
     suggest_params,
 )
+from volatility import kmeans_volatility_clusters, volatility_summary_text  # noqa: E402
 
 logger = logging.getLogger("engine")
 logger.setLevel(logging.INFO)
@@ -163,14 +167,33 @@ def _detect_regime_atr(df: pd.DataFrame) -> str:
 
 
 def detect_regime(df: pd.DataFrame, ticker: str | None = None) -> dict:
-    """Detect market regime using HMM, falling back to ATR heuristic.
+    """Detect market regime using HMM + K-Means volatility clustering.
 
-    Returns a dict with at minimum:
-      - regime: str label
-      - probabilities: dict (empty if ATR fallback)
-      - position_multiplier: float
-      - method: "hmm" or "atr_fallback"
+    Combines HMM state (trending/volatile/choppy) with K-Means volatility
+    cluster (LOW/MEDIUM/HIGH) to produce nuanced combined regime labels
+    like "HMM_TRENDING_LOW_VOL" or "HMM_CHOPPY_HIGH_VOL".
+
+    The final position multiplier is HMM multiplier × vol cluster multiplier,
+    giving smarter risk scaling that respects both market state and volatility.
+
+    Returns a dict with:
+      - regime: str (HMM label or ATR fallback)
+      - combined_regime: str (e.g. "HMM_TRENDING_LOW_VOL")
+      - vol_cluster: str ("LOW", "MEDIUM", "HIGH")
+      - vol_percentile: float
+      - vol_multiplier: float
+      - adaptive_atr: float
+      - probabilities: dict
+      - position_multiplier: float (HMM × vol multiplier)
+      - method: "hmm+kmeans", "hmm", or "atr_fallback+kmeans"
     """
+    # --- K-Means volatility clustering (always computed) ---
+    vol_info = kmeans_volatility_clusters(df)
+    vol_cluster = vol_info.get("cluster", "MEDIUM")
+    vol_mult = vol_info.get("position_multiplier", 1.0)
+
+    # --- HMM regime detection ---
+    hmm_result = None
     if ticker:
         try:
             hmm_result = detect_regime_hmm(ticker, df)
@@ -179,21 +202,51 @@ def detect_regime(df: pd.DataFrame, ticker: str | None = None) -> dict:
                 or hmm_result.get("confidence", 0) > 0
             ):
                 hmm_result["method"] = "hmm"
-                return hmm_result
+            else:
+                hmm_result = None
         except Exception as exc:
             logger.debug("HMM regime detection failed for %s: %s", ticker, exc)
 
-    # Fallback to simple ATR-based detection
+    if hmm_result is not None:
+        # Combine HMM state with K-Means vol cluster
+        hmm_state = hmm_result.get("regime", "choppy").upper()
+        combined_regime = f"HMM_{hmm_state}_{vol_cluster}_VOL"
+        hmm_mult = hmm_result.get("position_multiplier", 1.0)
+        final_multiplier = round(hmm_mult * vol_mult, 4)
+
+        hmm_result["combined_regime"] = combined_regime
+        hmm_result["vol_cluster"] = vol_cluster
+        hmm_result["vol_percentile"] = vol_info.get("percentile", 0.5)
+        hmm_result["vol_multiplier"] = vol_mult
+        hmm_result["adaptive_atr"] = vol_info.get("adaptive_atr", 0.0)
+        hmm_result["sl_multiplier"] = vol_info.get("sl_multiplier", 1.0)
+        hmm_result["vol_strategy_hint"] = vol_info.get("strategy_hint", "NORMAL STOPS")
+        hmm_result["position_multiplier"] = final_multiplier
+        hmm_result["method"] = "hmm+kmeans"
+        return hmm_result
+
+    # Fallback to simple ATR-based detection + K-Means
     atr_regime = _detect_regime_atr(df)
     multiplier_map = {"low_vol": 0.5, "normal": 1.0, "high_vol": 0.5}
+    atr_mult = multiplier_map.get(atr_regime, 1.0)
+    combined_regime = f"ATR_{atr_regime.upper()}_{vol_cluster}_VOL"
+    final_multiplier = round(atr_mult * vol_mult, 4)
+
     return {
         "regime": atr_regime,
+        "combined_regime": combined_regime,
+        "vol_cluster": vol_cluster,
+        "vol_percentile": vol_info.get("percentile", 0.5),
+        "vol_multiplier": vol_mult,
+        "adaptive_atr": vol_info.get("adaptive_atr", 0.0),
+        "sl_multiplier": vol_info.get("sl_multiplier", 1.0),
+        "vol_strategy_hint": vol_info.get("strategy_hint", "NORMAL STOPS"),
         "probabilities": {},
         "confidence": 0.0,
         "confident": False,
-        "position_multiplier": multiplier_map.get(atr_regime, 1.0),
+        "position_multiplier": final_multiplier,
         "persistence": 0,
-        "method": "atr_fallback",
+        "method": "atr_fallback+kmeans",
     }
 
 
@@ -551,6 +604,11 @@ class DashboardEngine:
     OPTIMIZATION_INTERVAL = 3600  # re-optimise hourly
     BACKTEST_INTERVAL = 600  # re-backtest every 10 min
 
+    # Minimum 1m bars needed before signal quality can be computed
+    MIN_BARS_FOR_SQ = 25
+    # Maximum 1m bars to keep in the rolling buffer per ticker
+    MAX_BAR_BUFFER = 300
+
     def __init__(
         self,
         account_size: int = 150_000,
@@ -607,6 +665,11 @@ class DashboardEngine:
         self._live_feed: MassiveFeedManager | None = None
         self._live_feed_enabled: bool = False
 
+        # Rolling 1m bar buffer for WS-triggered signal quality computation.
+        # Keyed by Yahoo ticker → list of bar dicts (OHLCV).
+        # Filled by the _on_bar callback; trimmed to MAX_BAR_BUFFER.
+        self._bar_buffer: dict[str, list[dict]] = {}
+
     # -- lifecycle -----------------------------------------------------------
 
     def start(self) -> None:
@@ -641,11 +704,66 @@ class DashboardEngine:
 
     # -- live feed management ------------------------------------------------
 
+    def _compute_sq_from_buffer(self, yahoo_ticker: str) -> None:
+        """Compute signal quality from the rolling 1m bar buffer and cache it.
+
+        Called by the ``_on_bar`` callback after every confirmed 1m bar.
+        Builds a lightweight DataFrame from the buffer, reuses any cached
+        wave/vol analysis from the 5m engine cycle, and writes the result
+        under a ``fks_sq_1m`` cache key with a short TTL.
+        """
+        buf = self._bar_buffer.get(yahoo_ticker)
+        if not buf or len(buf) < self.MIN_BARS_FOR_SQ:
+            return
+
+        try:
+            df_1m = pd.DataFrame(buf)
+            # Ensure standard column names
+            for col in ("Open", "High", "Low", "Close", "Volume"):
+                if col not in df_1m.columns:
+                    return
+
+            # Reuse cached wave & vol from the 5m optimisation cycle (if available)
+            wave_raw = cache_get(
+                _cache_key("fks_wave", yahoo_ticker, self.interval, self.period)
+            )
+            vol_raw = cache_get(
+                _cache_key("fks_vol", yahoo_ticker, self.interval, self.period)
+            )
+            wave_result = json.loads(wave_raw) if wave_raw else None
+            vol_result = json.loads(vol_raw) if vol_raw else None
+
+            sq_result = compute_signal_quality(
+                df_1m,
+                wave_result=wave_result,
+                vol_result=vol_result,
+            )
+
+            # Cache under a 1m-specific key with a short TTL (90s)
+            cache_set(
+                _cache_key("fks_sq_1m", yahoo_ticker),
+                json.dumps(sq_result).encode(),
+                90,
+            )
+
+            logger.debug(
+                "1m signal quality %s: %s%% (%s)",
+                yahoo_ticker,
+                sq_result.get("quality_pct", "?"),
+                sq_result.get("market_context", "?"),
+            )
+        except Exception as exc:
+            logger.debug("1m signal quality failed for %s: %s", yahoo_ticker, exc)
+
     def start_live_feed(self) -> bool:
         """Start the Massive WebSocket live feed for all tracked assets.
 
         Streams real-time minute bars and trades into the cache so the
-        dashboard stays current without polling.  Returns True on success.
+        dashboard stays current without polling.  Uses broad wildcard
+        subscriptions (``AM.*``, ``T.*``) for robustness — no per-ticker
+        contract resolution needed for the WebSocket channel.
+
+        Returns True on success.
         """
         if self._live_feed is not None and self._live_feed.is_running:
             logger.info("Live feed already running")
@@ -665,9 +783,10 @@ class DashboardEngine:
                 provider=get_massive_provider(),
                 subscribe_trades=True,
                 subscribe_quotes=False,
+                use_broad_subscriptions=True,
             )
 
-            # Register a callback to log new bars
+            # Register a callback that logs, buffers, and computes 1m signal quality
             def _on_bar(yahoo_ticker: str, bar: dict) -> None:
                 logger.debug(
                     "Live bar: %s  O=%.2f H=%.2f L=%.2f C=%.2f V=%s",
@@ -678,6 +797,26 @@ class DashboardEngine:
                     bar.get("close", 0),
                     bar.get("volume", 0),
                 )
+
+                # --- Append to rolling 1m bar buffer ---
+                row = {
+                    "Open": bar.get("open"),
+                    "High": bar.get("high"),
+                    "Low": bar.get("low"),
+                    "Close": bar.get("close"),
+                    "Volume": bar.get("volume", 0) or 0,
+                }
+                if yahoo_ticker not in self._bar_buffer:
+                    self._bar_buffer[yahoo_ticker] = []
+                self._bar_buffer[yahoo_ticker].append(row)
+                # Trim to keep memory bounded
+                if len(self._bar_buffer[yahoo_ticker]) > self.MAX_BAR_BUFFER:
+                    self._bar_buffer[yahoo_ticker] = self._bar_buffer[yahoo_ticker][
+                        -self.MAX_BAR_BUFFER :
+                    ]
+
+                # --- Compute signal quality on this 1m bar ---
+                self._compute_sq_from_buffer(yahoo_ticker)
 
             self._live_feed.on_bar(_on_bar)
             started = self._live_feed.start()
@@ -1056,6 +1195,56 @@ class DashboardEngine:
             except Exception as exc:
                 logger.debug("HMM refit failed for %s: %s", name, exc)
 
+        # --- FKS Wave & Volatility Analysis (cached per asset) ---
+        for name, ticker in ASSETS.items():
+            try:
+                df = get_data(ticker, self.interval, self.period)
+                if df.empty:
+                    continue
+                df_session = filter_session_hours(df)
+                if df_session.empty:
+                    df_session = df
+
+                # Wave analysis
+                wave_result = calculate_wave_analysis(df_session, asset_name=name)
+                cache_set(
+                    _cache_key("fks_wave", ticker, self.interval, self.period),
+                    json.dumps(wave_result).encode(),
+                    3600,
+                )
+
+                # K-Means volatility clustering
+                vol_result = kmeans_volatility_clusters(df_session)
+                cache_set(
+                    _cache_key("fks_vol", ticker, self.interval, self.period),
+                    json.dumps(vol_result).encode(),
+                    3600,
+                )
+
+                # Signal quality score (port of Pine's signal_quality_score)
+                sq_result = compute_signal_quality(
+                    df_session,
+                    wave_result=wave_result,
+                    vol_result=vol_result,
+                )
+                cache_set(
+                    _cache_key("fks_sq", ticker, self.interval, self.period),
+                    json.dumps(sq_result).encode(),
+                    3600,
+                )
+
+                logger.info(
+                    "FKS analysis %s: wave=%s (ratio=%s), vol=%s (%s%%), quality=%s%%",
+                    name,
+                    wave_result.get("bias", "?"),
+                    wave_result.get("wave_ratio_text", "?"),
+                    vol_result.get("cluster", "?"),
+                    round(vol_result.get("percentile", 0) * 100),
+                    sq_result.get("quality_pct", "?"),
+                )
+            except Exception as exc:
+                logger.debug("FKS analysis failed for %s: %s", name, exc)
+
         for i, (name, ticker) in enumerate(ASSETS.items()):
             with self._lock:
                 self.status["optimization"]["progress"] = f"{name} ({i + 1}/{total})"
@@ -1067,15 +1256,58 @@ class DashboardEngine:
                     strat_label = result.get("strategy_label", "?")
                     confidence = result.get("confidence", "?")
                     regime = result.get("regime", "?")
+                    # Enrich optimization result with FKS data
+                    fks_wave_raw = cache_get(
+                        _cache_key("fks_wave", ticker, self.interval, self.period)
+                    )
+                    fks_vol_raw = cache_get(
+                        _cache_key("fks_vol", ticker, self.interval, self.period)
+                    )
+                    if fks_wave_raw:
+                        fks_wave = json.loads(fks_wave_raw)
+                        result["wave_bias"] = fks_wave.get("bias", "NEUTRAL")
+                        result["wave_ratio"] = fks_wave.get("wave_ratio", 1.0)
+                        result["wave_dominance"] = fks_wave.get("dominance", 0.0)
+                        result["trend_speed"] = fks_wave.get("trend_speed", 0.0)
+                        result["market_phase"] = fks_wave.get("market_phase", "?")
+                    if fks_vol_raw:
+                        fks_vol = json.loads(fks_vol_raw)
+                        result["vol_cluster"] = fks_vol.get("cluster", "MEDIUM")
+                        result["vol_percentile"] = fks_vol.get("percentile", 0.5)
+                        # Apply vol cluster multiplier to position sizing
+                        vol_mult = fks_vol.get("position_multiplier", 1.0)
+                        result["position_multiplier"] = round(
+                            result.get("position_multiplier", 1.0) * vol_mult, 4
+                        )
+                    # Signal quality enrichment
+                    fks_sq_raw = cache_get(
+                        _cache_key("fks_sq", ticker, self.interval, self.period)
+                    )
+                    if fks_sq_raw:
+                        fks_sq = json.loads(fks_sq_raw)
+                        result["signal_quality"] = fks_sq.get("score", 0.0)
+                        result["signal_quality_pct"] = fks_sq.get("quality_pct", 0.0)
+                        result["high_quality_signal"] = fks_sq.get(
+                            "high_quality", False
+                        )
+                        result["signal_market_context"] = fks_sq.get(
+                            "market_context", "?"
+                        )
+                    # Re-cache with enriched data
+                    set_cached_optimization(ticker, self.interval, self.period, result)
+
                     logger.info(
                         "Optimized %s → %s (sharpe=%.2f, return=%.2f%%, "
-                        "confidence=%s, regime=%s)",
+                        "confidence=%s, regime=%s, wave=%s, vol=%s, quality=%s%%)",
                         name,
                         strat_label,
                         result.get("sharpe", 0),
                         result.get("return_pct", 0),
                         confidence,
                         regime,
+                        result.get("wave_bias", "?"),
+                        result.get("vol_cluster", "?"),
+                        result.get("signal_quality_pct", "?"),
                     )
                     # --- Engine-triggered regime-change alerts ---
                     with self._lock:

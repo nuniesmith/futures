@@ -29,6 +29,8 @@ _EST = ZoneInfo("America/New_York")
 # Ensure sibling modules are importable when run as `streamlit run src/app.py`
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from wave import calculate_wave_analysis, wave_summary_text  # noqa: E402
+
 import pandas as pd  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 import requests  # noqa: E402
@@ -37,6 +39,8 @@ import streamlit as st  # noqa: E402
 from api_server import get_live_positions  # noqa: E402
 from cache import (  # noqa: E402
     REDIS_AVAILABLE,
+    _cache_key,
+    cache_get,
     flush_all,
     get_cached_indicator,
     get_cached_optimization,
@@ -76,6 +80,7 @@ from scorer import (  # noqa: E402
     score_instruments,
 )
 from scorer import results_to_dataframe as scorer_to_dataframe  # noqa: E402
+from volatility import kmeans_volatility_clusters, volatility_summary_text  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Initialise database
@@ -442,7 +447,7 @@ if live_pos["has_positions"]:
         )
     if pos_rows:
         df_pos = pd.DataFrame(pos_rows)
-        st.dataframe(df_pos, use_container_width=True, hide_index=True)
+        st.dataframe(df_pos, width="stretch", hide_index=True)
 
     received = live_pos.get("received_at", "")
     acct_name = live_pos.get("account", "")
@@ -533,6 +538,49 @@ for name in ALL_ASSETS:
         except Exception:
             pass
 
+# FKS Wave, Volatility & Signal Quality — read from engine cache, compute on-demand if missing
+fks_wave_results = {}
+fks_vol_results = {}
+fks_sq_results = {}
+for name in ALL_ASSETS:
+    ticker = ASSETS[name]
+    # Try engine cache first
+    wave_raw = cache_get(_cache_key("fks_wave", ticker, INTERVAL, PERIOD))
+    vol_raw = cache_get(_cache_key("fks_vol", ticker, INTERVAL, PERIOD))
+    # Prefer fresher 1m WS signal quality over the 5m engine cycle cache
+    sq_raw = cache_get(_cache_key("fks_sq_1m", ticker)) or cache_get(
+        _cache_key("fks_sq", ticker, INTERVAL, PERIOD)
+    )
+    if wave_raw:
+        fks_wave_results[name] = json.loads(wave_raw)
+    elif name in data and not data[name].empty:
+        try:
+            fks_wave_results[name] = calculate_wave_analysis(
+                data[name], asset_name=name
+            )
+        except Exception:
+            pass
+    if vol_raw:
+        fks_vol_results[name] = json.loads(vol_raw)
+    elif name in data and not data[name].empty:
+        try:
+            fks_vol_results[name] = kmeans_volatility_clusters(data[name])
+        except Exception:
+            pass
+    if sq_raw:
+        fks_sq_results[name] = json.loads(sq_raw)
+    elif name in data and not data[name].empty:
+        try:
+            from signal_quality import compute_signal_quality
+
+            fks_sq_results[name] = compute_signal_quality(
+                data[name],
+                wave_result=fks_wave_results.get(name),
+                vol_result=fks_vol_results.get(name),
+            )
+        except Exception:
+            pass
+
 # Pre-market scorer results
 scorer_results = []
 if data:
@@ -549,6 +597,78 @@ if data:
         )
     except Exception:
         scorer_results = []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION 0 — FKS INSIGHTS DASHBOARD (Wave + Volatility + Quality)
+# ═══════════════════════════════════════════════════════════════════════════
+if fks_wave_results or fks_vol_results or fks_sq_results:
+    with st.expander("🔬 FKS Insights Dashboard", expanded=True):
+        fks_cols = st.columns(len(ALL_ASSETS))
+        for idx, name in enumerate(ALL_ASSETS):
+            wave = fks_wave_results.get(name, {})
+            vol = fks_vol_results.get(name, {})
+            sq = fks_sq_results.get(name, {})
+            with fks_cols[idx]:
+                # Asset header with trend direction
+                direction = wave.get("trend_direction", "—")
+                st.markdown(f"**{name}** {direction}")
+
+                # --- WAVE SECTION ---
+                bias = wave.get("bias", "NEUTRAL")
+                bias_emoji = (
+                    "🟢" if bias == "BULLISH" else "🔴" if bias == "BEARISH" else "⚪"
+                )
+                w_ratio = wave.get("wave_ratio_text", "—")
+                c_ratio = wave.get("current_ratio_text", "—")
+                dominance = wave.get("dominance_text", "—")
+                strength = wave.get("trend_strength", "—")
+                phase = wave.get("market_phase", "—")
+                momentum = wave.get("momentum_state", "—")
+
+                st.caption("**WAVE**")
+                st.markdown(
+                    f"{bias_emoji} **{bias}** · Ratio: **{w_ratio}** · "
+                    f"Current: **{c_ratio}**"
+                )
+                st.caption(
+                    f"Dominance: {dominance} · Strength: {strength} · {momentum}"
+                )
+
+                # --- VOLATILITY SECTION ---
+                cluster = vol.get("cluster", "—")
+                cluster_emoji = (
+                    "⚡" if cluster == "HIGH" else "🧘" if cluster == "LOW" else "〰️"
+                )
+                pct = vol.get("percentile", 0)
+                hint = vol.get("strategy_hint", "—")
+                pos_mult = vol.get("position_multiplier", 1.0)
+
+                st.caption("**VOLATILITY**")
+                st.markdown(
+                    f"{cluster_emoji} **{cluster}** · "
+                    f"Percentile: **{pct:.0%}** · Size: **{pos_mult}x**"
+                )
+                st.caption(f"Phase: {phase} · {hint}")
+
+                # --- SIGNAL QUALITY SECTION ---
+                sq_score = sq.get("quality_pct", 0)
+                sq_hq = sq.get("high_quality", False)
+                sq_emoji = "✅" if sq_hq else "⚠️" if sq_score > 30 else "❌"
+                sq_ctx = sq.get("market_context", "—")
+                sq_dir = sq.get("trend_direction", "—")
+                sq_rsi = sq.get("rsi", "—")
+
+                st.caption("**SIGNAL QUALITY**")
+                st.markdown(
+                    f"{sq_emoji} **{sq_score}%** · "
+                    f"Context: **{sq_ctx}** · Dir: **{sq_dir}**"
+                )
+                st.caption(
+                    f"RSI: {sq_rsi} · Velocity: {sq.get('normalized_velocity', '—')}"
+                )
+
+    st.divider()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -574,7 +694,7 @@ with scan_col:
             df_live = df_live.sort_values("% Chg", key=abs, ascending=False)
             st.dataframe(
                 df_live.style.background_gradient(subset=["% VWAP"], cmap="RdYlGn"),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
             st.caption(
@@ -591,7 +711,7 @@ with score_col:
         scorer_df = scorer_to_dataframe(scorer_results)
         st.dataframe(
             scorer_df.style.background_gradient(subset=["Score"], cmap="RdYlGn"),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         scorer_obj = PreMarketScorer()
@@ -681,7 +801,7 @@ def _live_minute_view():
             )
             st.plotly_chart(
                 fig_1m,
-                use_container_width=True,
+                width="stretch",
                 key=f"1m_chart_{name}_{time.time():.0f}",
             )
 
@@ -815,9 +935,7 @@ with st.expander("🔬 Engine — Optimized Strategies & Backtests", expanded=Fa
                     }
                 )
         if opt_rows:
-            st.dataframe(
-                pd.DataFrame(opt_rows), use_container_width=True, hide_index=True
-            )
+            st.dataframe(pd.DataFrame(opt_rows), width="stretch", hide_index=True)
         else:
             st.caption(
                 "Engine is running initial optimization... check back in a few minutes."
@@ -834,9 +952,7 @@ with st.expander("🔬 Engine — Optimized Strategies & Backtests", expanded=Fa
                 if c in bt_df.columns
             ]
             if display_cols:
-                st.dataframe(
-                    bt_df[display_cols], use_container_width=True, hide_index=True
-                )
+                st.dataframe(bt_df[display_cols], width="stretch", hide_index=True)
         else:
             st.caption("Backtests running in background...")
 
@@ -862,6 +978,9 @@ market_context = format_market_context(
     cvd_summaries=cvd_summaries,
     scorer_results=scorer_results,
     live_positions=live_pos,
+    fks_wave_results=fks_wave_results,
+    fks_vol_results=fks_vol_results,
+    fks_signal_quality=fks_sq_results,
 )
 
 with grok_col_main:
@@ -1066,7 +1185,7 @@ with st.expander("📈 Charts", expanded=True):
                 margin=dict(l=0, r=0, t=30, b=0),
                 title=f"{chart_asset} — {chart_tf}",
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("No data available for this asset/timeframe.")
 
@@ -1187,7 +1306,7 @@ with journal_tab_history:
         }
         display_df.columns = [col_rename.get(c, c) for c in display_df.columns]
 
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_df, width="stretch", hide_index=True)
 
         # Cumulative P&L chart
         if len(journal_df) > 1:
@@ -1213,7 +1332,7 @@ with journal_tab_history:
                 yaxis_title="Cumulative Net P&L ($)",
                 margin=dict(l=0, r=0, t=30, b=0),
             )
-            st.plotly_chart(pnl_fig, use_container_width=True)
+            st.plotly_chart(pnl_fig, width="stretch")
     else:
         st.info("No journal entries yet. Start recording your daily results!")
 

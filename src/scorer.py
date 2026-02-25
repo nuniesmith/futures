@@ -30,7 +30,7 @@ Usage:
 import logging
 import math
 from datetime import time
-from typing import Any, Optional
+from typing import Any, Optional, TypedDict
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -59,8 +59,14 @@ assert abs(sum(WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
 # Economic event catalog — maps events to affected instruments
 # ---------------------------------------------------------------------------
 
+
 # Impact levels: 0 = none, 33 = low, 66 = medium, 100 = high
-EVENT_CATALOG = {
+class _EventEntry(TypedDict):
+    impact: int
+    instruments: list[str]
+
+
+EVENT_CATALOG: dict[str, _EventEntry] = {
     # Event name → { "impact": int, "instruments": [affected assets] }
     "FOMC": {"impact": 100, "instruments": ["S&P", "Nasdaq", "Gold"]},
     "Fed Minutes": {"impact": 66, "instruments": ["S&P", "Nasdaq", "Gold"]},
@@ -312,12 +318,14 @@ def calc_catalyst_score(
     max_impact = 0
 
     for event_name in active_events:
-        catalog_entry = EVENT_CATALOG.get(event_name)
-        if catalog_entry is None:
+        if event_name not in EVENT_CATALOG:
             continue
-        if asset_name in catalog_entry["instruments"]:
+        entry = EVENT_CATALOG[event_name]
+        entry_instruments: list[str] = entry.get("instruments", [])  # type: ignore[assignment]
+        entry_impact: int = entry.get("impact", 0)  # type: ignore[assignment]
+        if asset_name in entry_instruments:
             matching.append(event_name)
-            max_impact = max(max_impact, catalog_entry["impact"])
+            max_impact = max(max_impact, entry_impact)
 
     # Boost slightly if multiple events affect this instrument
     score = float(max_impact)

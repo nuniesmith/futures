@@ -1,11 +1,19 @@
 #region Using declarations
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
-using Newtonsoft.Json;  // Add reference if needed (see setup)
+
+// === REQUIRED FOR DROPDOWN ===
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using NinjaTrader.Gui.Tools;          // AccountNameConverter
+// ============================
+
 using NinjaTrader.Cbi;
+using NinjaTrader.Data;               // PerformanceUnit
 using NinjaTrader.NinjaScript;
 using NinjaTrader.NinjaScript.Indicators;
 #endregion
@@ -16,15 +24,25 @@ namespace NinjaTrader.NinjaScript.Indicators
     {
         private Account myAccount;
         private HttpClient httpClient;
-        private const string API_URL = "http://localhost:8000/update_positions";  // Change if remote
+        private const string API_URL = "http://localhost:8000/update_positions";
+
+        // ============== ACCOUNT DROPDOWN ==============
+        [NinjaScriptProperty]
+        [TypeConverter(typeof(AccountNameConverter))]
+        [Display(Name = "Account to Monitor",
+                 Description = "Select Sim or Live account",
+                 Order = 1,
+                 GroupName = "Parameters")]
+        public string AccountName { get; set; } = "Sim101";
+        // ==============================================
 
         protected override void OnStateChange()
         {
             if (State == State.SetDefaults)
             {
-                Description = "Sends live account positions to web dashboard";
+                Description = "Sends live positions to web dashboard with account selector";
                 Name = "LivePositionBridge";
-                Calculate = Calculate.OnEachTick;  // Fast reaction
+                Calculate = Calculate.OnEachTick;
                 IsOverlay = false;
                 DisplayInDataBox = false;
             }
@@ -32,9 +50,18 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
 
-                // Get default account (Sim101 or your live account name)
+                // Show all accounts for easy debugging
+                Print("[LivePositionBridge] Available accounts on this platform:");
                 lock (Account.All)
-                    myAccount = Account.All.FirstOrDefault(a => a.Name.Contains("Sim") || a.Name.Contains("Live"));
+                {
+                    foreach (Account acc in Account.All)
+                        Print($"   → {acc.Name}");
+                }
+
+                lock (Account.All)
+                    myAccount = Account.All.FirstOrDefault(a => a.Name == AccountName);
+
+                Print($"[LivePositionBridge] Monitoring selected account: {myAccount?.Name ?? "NONE FOUND - check dropdown"}");
 
                 if (myAccount != null)
                     myAccount.PositionUpdate += OnPositionUpdate;
@@ -51,38 +78,46 @@ namespace NinjaTrader.NinjaScript.Indicators
         {
             if (myAccount == null) return;
 
-            var positions = new List<object>();
+            var sb = new StringBuilder();
+            sb.Append("{");
+            sb.Append($"\"account\":\"{myAccount.Name}\",");
+            sb.Append("\"positions\":[");
+
+            bool first = true;
             foreach (Position pos in myAccount.Positions)
             {
                 if (pos.Quantity == 0) continue;
 
-                positions.Add(new
-                {
-                    symbol = pos.Instrument.FullName,     // e.g. "MESZ5"
-                    side = pos.MarketPosition.ToString(), // Long / Short
-                    quantity = pos.Quantity,
-                    avgPrice = pos.AveragePrice,
-                    unrealizedPnL = pos.UnrealizedPnL,
-                    lastUpdate = DateTime.UtcNow
-                });
+                double unrealizedPnL = pos.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]);
+
+                if (!first) sb.Append(",");
+                sb.Append("{");
+                sb.Append($"\"symbol\":\"{pos.Instrument.FullName}\",");
+                sb.Append($"\"side\":\"{pos.MarketPosition}\",");
+                sb.Append($"\"quantity\":{pos.Quantity},");
+                sb.Append($"\"avgPrice\":{pos.AveragePrice},");
+                sb.Append($"\"unrealizedPnL\":{unrealizedPnL},");
+                sb.Append($"\"lastUpdate\":\"{DateTime.UtcNow:yyyy-MM-ddTHH:mm:ssZ}\"");
+                sb.Append("}");
+                first = false;
             }
 
-            var payload = new { account = myAccount.Name, positions = positions, timestamp = DateTime.UtcNow };
+            sb.Append("],");
+            sb.Append($"\"timestamp\":\"{DateTime.UtcNow:yyyy-MM-ddTHH:mm:ssZ}\"");
+            sb.Append("}");
 
             try
             {
-                var json = JsonConvert.SerializeObject(payload);
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                var content = new StringContent(sb.ToString(), Encoding.UTF8, "application/json");
                 await httpClient.PostAsync(API_URL, content);
-                // Optional: Print to NT output window for debugging
-                Print($"Positions sent: {positions.Count} open");
+                Print($"✅ LivePositionBridge sent {myAccount.Positions.Count(p => p.Quantity != 0)} position(s) from {myAccount.Name}");
             }
             catch (Exception ex)
             {
-                Print($"Position bridge error: {ex.Message}");
+                Print($"❌ LivePositionBridge error: {ex.Message}");
             }
         }
 
-        protected override void OnBarUpdate() { }  // Not needed
+        protected override void OnBarUpdate() { }
     }
 }

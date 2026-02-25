@@ -77,18 +77,19 @@ MASSIVE_PRODUCT_TO_YAHOO: dict[str, str] = {
 
 # Interval mapping: our internal intervals → Massive resolution strings
 # The Massive futures aggs endpoint uses a 'resolution' query param
-# Common values: "second", "minute", "hour", "day", "week", "month"
+# Format: "<count><unit>" e.g. "1min", "1hr", "1day", "1sec"
+# For intervals >1m we fetch 1min bars and resample client-side.
 INTERVAL_TO_RESOLUTION: dict[str, str] = {
-    "1s": "second",
-    "1m": "minute",
-    "5m": "minute",
-    "15m": "minute",
-    "30m": "minute",
-    "1h": "hour",
-    "60m": "hour",
-    "1d": "day",
-    "1wk": "week",
-    "1mo": "month",
+    "1s": "1sec",
+    "1m": "1min",
+    "5m": "1min",
+    "15m": "1min",
+    "30m": "1min",
+    "1h": "1hr",
+    "60m": "1hr",
+    "1d": "1day",
+    "1wk": "7days",
+    "1mo": "1day",
 }
 
 # How many raw bars to request per output bar for resampling
@@ -146,6 +147,8 @@ def _resample_to_interval(df: pd.DataFrame, interval: str) -> pd.DataFrame:
         "5m": "5min",
         "15m": "15min",
         "30m": "30min",
+        "1wk": "W",
+        "1mo": "ME",
     }
     rule = resample_map.get(interval)
     if rule is None or df.empty:
@@ -228,8 +231,14 @@ class MassiveDataProvider:
     def resolve_front_month(self, product_code: str) -> str | None:
         """Resolve a product code (e.g., 'ES') to its front-month contract ticker.
 
-        Returns the active contract ticker (e.g., 'ESZ5') or None on failure.
-        Uses a TTL cache to avoid hammering the contracts endpoint.
+        Uses a robust 3-tier fallback strategy:
+          1. Active contracts on today's date (strict — original approach)
+          2. All contracts filtered to future expiration (most reliable in beta)
+          3. Root symbol fallback (e.g., 'ES') — works for REST aggregates
+
+        Returns the active contract ticker (e.g., 'ESZ5') or root symbol
+        as last resort.  Uses a TTL cache to avoid hammering the contracts
+        endpoint.
         """
         if not self.is_available or self._client is None:
             return None
@@ -242,67 +251,110 @@ class MassiveDataProvider:
             if cached and (now - cached[1]) < self.CONTRACT_CACHE_TTL:
                 return cached[0]
 
-        # Fetch from API
+        today_str = datetime.now(tz=_EST).strftime("%Y-%m-%d")
+        client = self._client  # already checked not None above
+
+        def _is_outright(c) -> bool:
+            """Filter to outright futures only — exclude spreads/combos."""
+            ticker = str(getattr(c, "ticker", "") or "")
+            ctype = getattr(c, "type", "") or ""
+            return (
+                bool(ticker)
+                and ctype in ("future", "single", "")
+                and "-" not in ticker
+                and ":" not in ticker
+            )
+
+        def _sort_by_expiry(c) -> str:
+            """Sort key: nearest last_trade_date first."""
+            ltd = getattr(c, "last_trade_date", None)
+            if ltd is None:
+                return "9999-12-31"
+            return str(ltd)
+
+        # --- Tier 1: Strict active contracts on today's date (original) ---
         try:
-            today_str = datetime.now(tz=_EST).strftime("%Y-%m-%d")
-            client = self._client  # already checked not None above
             contracts = list(
                 client.list_futures_contracts(
                     product_code=product_code,
                     active=True,
+                    type="future",
                     date=today_str,
                     limit=10,
                     sort="date",
                 )
             )
+            active = [
+                c for c in contracts if getattr(c, "active", True) and _is_outright(c)
+            ]
+            if active:
+                active.sort(key=_sort_by_expiry)
+                ticker = str(getattr(active[0], "ticker", ""))
+                if ticker:
+                    with self._lock:
+                        self._contract_cache[product_code] = (ticker, now)
+                    logger.info(
+                        "Resolved %s → %s (tier 1: active today, expires: %s)",
+                        product_code,
+                        ticker,
+                        getattr(active[0], "last_trade_date", "?"),
+                    )
+                    return ticker
+        except Exception as exc:
+            logger.debug("Tier 1 (active today) failed for %s: %s", product_code, exc)
 
-            if not contracts:
-                logger.warning(
-                    "No active contracts found for product_code=%s", product_code
+        # --- Tier 2: All contracts, filter to future expiration ---
+        try:
+            contracts = list(
+                client.list_futures_contracts(
+                    product_code=product_code,
+                    limit=20,
+                    sort="date",
                 )
-                return None
-
-            # Pick the contract with the earliest last_trade_date (front month)
-            # Contracts should already be sorted by last_trade_date
-            active_contracts = [
+            )
+            # Keep only outrights whose last_trade_date is in the future
+            future_contracts = [
                 c
                 for c in contracts
-                if getattr(c, "active", True) and getattr(c, "ticker", None)
+                if _is_outright(c)
+                and str(getattr(c, "last_trade_date", "0000-00-00")) >= today_str
             ]
-
-            if not active_contracts:
-                logger.warning(
-                    "No active contracts with tickers for product_code=%s",
-                    product_code,
-                )
-                return None
-
-            # Sort by last_trade_date to get the nearest expiry
-            def _sort_key(c):
-                ltd = getattr(c, "last_trade_date", None)
-                if ltd is None:
-                    return "9999-12-31"
-                return str(ltd)
-
-            active_contracts.sort(key=_sort_key)
-            front_month = active_contracts[0]
-            ticker = str(getattr(front_month, "ticker", ""))
-
-            # Cache the result
-            with self._lock:
-                self._contract_cache[product_code] = (ticker, now)
-
-            logger.info(
-                "Resolved %s → %s (expires: %s)",
-                product_code,
-                ticker,
-                getattr(front_month, "last_trade_date", "?"),
-            )
-            return ticker
-
+            if future_contracts:
+                future_contracts.sort(key=_sort_by_expiry)
+                ticker = str(getattr(future_contracts[0], "ticker", ""))
+                if ticker:
+                    with self._lock:
+                        self._contract_cache[product_code] = (ticker, now)
+                    logger.info(
+                        "Resolved %s → %s (tier 2: next active, expires: %s)",
+                        product_code,
+                        ticker,
+                        getattr(future_contracts[0], "last_trade_date", "?"),
+                    )
+                    return ticker
         except Exception as exc:
-            logger.error("Failed to resolve front month for %s: %s", product_code, exc)
-            return None
+            logger.debug(
+                "Tier 2 (future expiration) failed for %s: %s", product_code, exc
+            )
+
+        # --- Tier 3: Root symbol fallback ---
+        # The root symbol (e.g., "ES", "GC") works reliably for REST
+        # aggregate endpoints even when the contracts endpoint is flaky.
+        # For WebSocket, the broad subscription (AM.*, T.*) will catch
+        # whatever contract ticker Massive broadcasts.
+        logger.warning(
+            "Resolved %s → %s (tier 3: root symbol fallback — "
+            "contracts endpoint returned no usable results)",
+            product_code,
+            product_code,
+        )
+        with self._lock:
+            # Cache with a shorter TTL (5 min) so we retry sooner
+            self._contract_cache[product_code] = (
+                product_code,
+                now - self.CONTRACT_CACHE_TTL + 300,
+            )
+        return product_code
 
     def resolve_from_yahoo(self, yahoo_ticker: str) -> str | None:
         """Resolve a Yahoo-style ticker (e.g., 'ES=F') to its Massive front-month ticker.
@@ -357,8 +409,8 @@ class MassiveDataProvider:
             return pd.DataFrame()
 
         # Determine the base resolution and whether we need to resample
-        resolution = INTERVAL_TO_RESOLUTION.get(interval, "minute")
-        needs_resample = interval in ("5m", "15m", "30m")
+        resolution = INTERVAL_TO_RESOLUTION.get(interval, "1min")
+        needs_resample = interval in ("5m", "15m", "30m", "1wk", "1mo")
 
         # Calculate date range from period
         days = PERIOD_TO_DAYS.get(period)
@@ -856,6 +908,7 @@ class MassiveFeedManager:
         subscribe_trades: bool = True,
         subscribe_quotes: bool = False,
         subscribe_second_aggs: bool = False,
+        use_broad_subscriptions: bool = True,
     ):
         self._api_key = api_key or os.getenv("MASSIVE_API_KEY", "")
         self._provider = provider
@@ -863,6 +916,7 @@ class MassiveFeedManager:
         self._subscribe_trades = subscribe_trades
         self._subscribe_quotes = subscribe_quotes
         self._subscribe_second_aggs = subscribe_second_aggs
+        self._use_broad_subscriptions = use_broad_subscriptions
 
         self._ws = None  # raw websockets connection or SDK client
         self._thread: threading.Thread | None = None
@@ -1086,12 +1140,27 @@ class MassiveFeedManager:
     # ----- Internal methods -----
 
     def _resolve_tickers(self) -> bool:
-        """Resolve all Yahoo tickers to Massive tickers."""
+        """Resolve all Yahoo tickers to Massive tickers.
+
+        When ``use_broad_subscriptions`` is True, resolution failures are
+        non-fatal — the broad ``AM.*`` / ``T.*`` wildcard channels will
+        receive bars for every contract, and ``_try_reverse_map`` will
+        dynamically learn ticker mappings as messages arrive.  This makes
+        the WebSocket feed resilient to flaky contract-resolution endpoints.
+        """
         if self._provider is None:
             # Create a temporary provider for resolution
             self._provider = MassiveDataProvider(api_key=self._api_key)
 
         if not self._provider.is_available:
+            # With broad subs we can still proceed — reverse mapping will
+            # learn tickers dynamically from the incoming message stream.
+            if self._use_broad_subscriptions:
+                logger.info(
+                    "Massive provider unavailable but broad subscriptions enabled "
+                    "— will reverse-map tickers dynamically"
+                )
+                return True
             return False
 
         resolved_any = False
@@ -1107,6 +1176,16 @@ class MassiveFeedManager:
             else:
                 logger.warning("Could not resolve %s for WebSocket", yt)
 
+        # With broad subscriptions, always succeed — _try_reverse_map will
+        # dynamically discover tickers from the incoming message stream
+        if self._use_broad_subscriptions:
+            if not resolved_any:
+                logger.info(
+                    "No tickers pre-resolved, but broad subscriptions will "
+                    "auto-discover contracts via reverse mapping"
+                )
+            return True
+
         return resolved_any
 
     def _build_subscriptions(self) -> list[str]:
@@ -1117,8 +1196,28 @@ class MassiveFeedManager:
           A.{ticker}   — per-second aggregates
           T.{ticker}   — trades (tick-by-tick)
           Q.{ticker}   — quotes (bid/ask)
+
+        When ``use_broad_subscriptions`` is True, subscribes to ``AM.*``
+        and ``T.*`` wildcard channels instead of per-ticker channels.
+        This is much more robust when the contracts endpoint is flaky,
+        because it receives bars for *every* futures contract — we then
+        filter to the ones we care about in ``_handle_bar`` /
+        ``_handle_trade`` using ``_try_reverse_map``.
         """
-        subs = []
+        subs: list[str] = []
+
+        if self._use_broad_subscriptions:
+            # Broad wildcard subscriptions — most reliable path
+            subs.append(f"{self.PREFIX_MINUTE_AGG}.*")
+            if self._subscribe_trades:
+                subs.append(f"{self.PREFIX_TRADE}.*")
+            if self._subscribe_quotes:
+                subs.append(f"{self.PREFIX_QUOTE}.*")
+            if self._subscribe_second_aggs:
+                subs.append(f"{self.PREFIX_SECOND_AGG}.*")
+            return subs
+
+        # Per-ticker subscriptions (legacy path)
         for mt in self._massive_to_yahoo:
             # Always subscribe to minute aggregates
             subs.append(f"{self.PREFIX_MINUTE_AGG}.{mt}")
@@ -1136,6 +1235,44 @@ class MassiveFeedManager:
                 subs.append(f"{self.PREFIX_SECOND_AGG}.{mt}")
 
         return subs
+
+    def _try_reverse_map(self, symbol: str) -> str | None:
+        """Attempt to map an unknown Massive ticker back to a Yahoo ticker.
+
+        With broad subscriptions (``AM.*``, ``T.*``) we receive bars for
+        *every* futures contract on the exchange.  Most of them are not
+        in our asset universe and should be ignored.
+
+        Mapping strategy:
+          1. Direct lookup (already resolved via ``_resolve_tickers``).
+          2. Strip trailing month-year code to get the root product code
+             (e.g., ``ESZ5`` → ``ES``, ``MESZ5`` → ``MES``, ``GCG6`` → ``GC``)
+             and check against ``MASSIVE_PRODUCT_TO_YAHOO``.
+          3. If still unknown, return None (symbol is outside our universe).
+        """
+        # 1. Already known?
+        if symbol in self._massive_to_yahoo:
+            return self._massive_to_yahoo[symbol]
+
+        # 2. Derive root product code by stripping the 1-letter month + year digits
+        #    CME convention: ticker = <ROOT><month_letter><year_digit(s)>
+        #    e.g. ESZ5, MESZ25, GCG6, MCLM5
+        import re
+
+        m = re.match(r"^([A-Z]{1,4}?)[FGHJKMNQUVXZ]\d{1,2}$", symbol)
+        if m:
+            root = m.group(1)
+            yahoo = MASSIVE_PRODUCT_TO_YAHOO.get(root)
+            if yahoo:
+                # Cache the mapping for future lookups
+                self._massive_to_yahoo[symbol] = yahoo
+                self._yahoo_to_massive.setdefault(yahoo, symbol)
+                logger.debug(
+                    "Reverse-mapped %s → root %s → Yahoo %s", symbol, root, yahoo
+                )
+                return yahoo
+
+        return None
 
     # ----- Raw websockets loop (primary) -----
 
@@ -1182,6 +1319,28 @@ class MassiveFeedManager:
                 )
 
                 # --- 1. Authenticate ---
+                # The server first sends a "connected" status message upon
+                # TCP/TLS handshake, *before* we even send auth.  We need to
+                # consume that greeting, then send our auth payload, and
+                # finally wait for the "auth_success" response.
+
+                # 1a. Consume the initial "connected" greeting
+                greeting_raw = await asyncio.wait_for(ws.recv(), timeout=15)
+                greeting = _json.loads(greeting_raw)
+                greeting_items = greeting if isinstance(greeting, list) else [greeting]
+                is_greeting = any(
+                    item.get("status") == "connected" for item in greeting_items
+                )
+                if is_greeting:
+                    logger.info("WebSocket connected, sending auth …")
+                else:
+                    # Unexpected first message — log but continue with auth
+                    logger.warning(
+                        "Unexpected first WS message (expected 'connected'): %s",
+                        greeting_raw[:200],
+                    )
+
+                # 1b. Send auth and wait for auth_success
                 auth_payload = _json.dumps({"action": "auth", "params": self._api_key})
                 await ws.send(auth_payload)
                 auth_resp_raw = await asyncio.wait_for(ws.recv(), timeout=15)
@@ -1326,9 +1485,19 @@ class MassiveFeedManager:
 
         Raw JSON keys:  o, h, l, c, v, s (start ms), e (end ms), n (txns), vw
         SDK attr names: open, high, low, close, volume, start_timestamp, …
+
+        With broad subscriptions we receive bars for every contract on the
+        exchange.  ``_try_reverse_map`` filters to our asset universe and
+        dynamically learns new contract tickers (e.g. after a roll).
         """
         if not symbol:
             return
+
+        # When using broad subs, filter to our universe (and auto-learn tickers)
+        if self._use_broad_subscriptions:
+            yahoo = self._try_reverse_map(symbol)
+            if yahoo is None:
+                return  # not in our asset universe — ignore
 
         if isinstance(msg, dict):
             bar = {
@@ -1378,9 +1547,18 @@ class MassiveFeedManager:
 
         Raw JSON keys:  p (price), s (size), t (timestamp ms), q (sequence)
         SDK attr names: price, size, timestamp, sequence_number
+
+        With broad subscriptions, filters to our asset universe via
+        ``_try_reverse_map``.
         """
         if not symbol:
             return
+
+        # When using broad subs, filter to our universe
+        if self._use_broad_subscriptions:
+            yahoo = self._try_reverse_map(symbol)
+            if yahoo is None:
+                return  # not in our asset universe — ignore
 
         if isinstance(msg, dict):
             trade = {
@@ -1426,6 +1604,12 @@ class MassiveFeedManager:
         """
         if not symbol:
             return
+
+        # When using broad subs, filter to our universe
+        if self._use_broad_subscriptions:
+            yahoo = self._try_reverse_map(symbol)
+            if yahoo is None:
+                return
 
         if isinstance(msg, dict):
             quote = {

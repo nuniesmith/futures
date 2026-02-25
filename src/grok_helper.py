@@ -116,6 +116,9 @@ def format_market_context(
     cvd_summaries: dict | None = None,
     scorer_results: list[dict] | None = None,
     live_positions: dict | None = None,
+    fks_wave_results: dict | None = None,
+    fks_vol_results: dict | None = None,
+    fks_signal_quality: dict | None = None,
 ) -> dict:
     """Build a structured context dict from all available market data.
 
@@ -271,6 +274,63 @@ def format_market_context(
             + "\n".join(pos_parts)
         )
 
+    # FKS Wave Analysis text
+    fks_wave_text = "Not available"
+    if fks_wave_results:
+        wave_parts = []
+        for asset_name, wave in fks_wave_results.items():
+            bias = wave.get("bias", "NEUTRAL")
+            bias_emoji = (
+                "🟢" if bias == "BULLISH" else "🔴" if bias == "BEARISH" else "⚪"
+            )
+            wave_parts.append(
+                f"  {asset_name}: {bias_emoji} {bias} — "
+                f"wave_ratio={wave.get('wave_ratio_text', '?')}, "
+                f"current={wave.get('current_ratio_text', '?')}, "
+                f"dominance={wave.get('dominance_text', '?')}, "
+                f"phase={wave.get('market_phase', '?')}, "
+                f"momentum={wave.get('momentum_state', '?')}, "
+                f"strength={wave.get('trend_strength', '?')}"
+            )
+        fks_wave_text = "\n".join(wave_parts)
+
+    # FKS Volatility Clustering text
+    fks_vol_text = "Not available"
+    if fks_vol_results:
+        vol_parts = []
+        for asset_name, vol in fks_vol_results.items():
+            cluster = vol.get("cluster", "MEDIUM")
+            cluster_emoji = (
+                "⚡" if cluster == "HIGH" else "🧘" if cluster == "LOW" else "〰️"
+            )
+            vol_parts.append(
+                f"  {asset_name}: {cluster_emoji} {cluster} cluster — "
+                f"percentile={vol.get('percentile', 0):.0%}, "
+                f"ATR={vol.get('raw_atr', 0):.4f}, "
+                f"adaptive_ATR={vol.get('adaptive_atr', 0):.4f}, "
+                f"position_size={vol.get('position_multiplier', 1.0)}x, "
+                f"hint={vol.get('strategy_hint', '?')}"
+            )
+        fks_vol_text = "\n".join(vol_parts)
+
+    # FKS Signal Quality text
+    fks_sq_text = "Not available"
+    if fks_signal_quality:
+        sq_parts = []
+        for asset_name, sq in fks_signal_quality.items():
+            score = sq.get("quality_pct", 0)
+            hq = sq.get("high_quality", False)
+            hq_emoji = "✅" if hq else "⚠️"
+            context = sq.get("market_context", "?")
+            direction = sq.get("trend_direction", "?")
+            sq_parts.append(
+                f"  {asset_name}: {hq_emoji} {score}% — "
+                f"context={context}, direction={direction}, "
+                f"RSI={sq.get('rsi', '?')}, AO={sq.get('ao', '?')}, "
+                f"velocity={sq.get('normalized_velocity', '?')}"
+            )
+        fks_sq_text = "\n".join(sq_parts)
+
     return {
         "time": now_est.strftime("%Y-%m-%d %H:%M EST"),
         "account_size": account_size,
@@ -287,6 +347,9 @@ def format_market_context(
         "scorer_text": scorer_text,
         "positions_text": positions_text,
         "has_positions": has_positions,
+        "fks_wave_text": fks_wave_text,
+        "fks_vol_text": fks_vol_text,
+        "fks_sq_text": fks_sq_text,
     }
 
 
@@ -334,6 +397,15 @@ CONFLUENCE (Multi-Timeframe):
 CVD (Volume Delta):
 {context["cvd_text"]}
 
+FKS WAVE ANALYSIS (Bull/Bear wave dominance, trend speed, market phase):
+{context.get("fks_wave_text", "Not available")}
+
+FKS VOLATILITY CLUSTERS (K-Means adaptive ATR, position sizing):
+{context.get("fks_vol_text", "Not available")}
+
+FKS SIGNAL QUALITY (multi-factor score: vol sweet-spot, velocity, trend speed, candle patterns, HTF bias):
+{context.get("fks_sq_text", "Not available")}
+
 PRE-MARKET SCORES:
 {context["scorer_text"]}
 
@@ -344,6 +416,8 @@ Give me today's game plan:
 4. **Correlations** — what pairs to monitor together
 5. **Risk Warnings** — anything that could trip us up today
 6. **Session Plan** — when to be aggressive vs. patient
+7. **Wave & Volatility Context** — note any assets with strong wave dominance (>1.5x ratio), high-vol clusters (widen stops / reduce size), or low-vol breakout setups
+8. **Signal Quality** — highlight assets with high quality scores (>60%), note which have premium setup conditions, and flag any with poor quality (<40%) to avoid
 
 Keep it actionable. No fluff. This is my reference card for the trading session."""
 
@@ -414,6 +488,15 @@ CVD:
 
 CONFLUENCE:
 {context["conf_text"]}
+
+WAVE ANALYSIS:
+{context.get("fks_wave_text", "Not available")}
+
+VOLATILITY CLUSTERS:
+{context.get("fks_vol_text", "Not available")}
+
+SIGNAL QUALITY (multi-factor: vol sweet-spot, velocity, trend speed, candle patterns, HTF bias):
+{context.get("fks_sq_text", "Not available")}
 
 Give me a quick update (5-8 bullet points max):
 - What moved since last check? Any significant price action?
