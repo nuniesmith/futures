@@ -4,6 +4,10 @@ Futures Intraday Dashboard
 Guided morning workflow → Focus assets → Limit orders → Active trade management.
 Multi-account support: $50k / $100k / $150k TakeProfit Trader accounts.
 Background engine keeps data fresh, optimises, and backtests automatically.
+
+Auto-refreshing panels use @st.fragment(run_every=...) so that live data
+(scanner, trade cards, risk gauges) update without full-page reruns.
+Requires Streamlit >= 1.37.
 """
 
 import json
@@ -36,6 +40,7 @@ from cache import (  # noqa: E402
     set_cached_indicator,
 )
 from confluence import (  # noqa: E402
+    TIMEFRAME_PRESETS,
     check_confluence,
     get_recommended_timeframes,
 )
@@ -59,6 +64,20 @@ from engine import (  # noqa: E402
     filter_session_hours,
     get_engine,
     run_optimization,
+)
+from ict import (  # noqa: E402
+    breakers_to_dataframe,
+    detect_breaker_blocks,
+    detect_fvgs,
+    detect_liquidity_sweeps,
+    detect_order_blocks,
+    fvgs_to_dataframe,
+    get_active_order_blocks,
+    get_unfilled_fvgs,
+    ict_summary,
+    levels_to_dataframe,
+    order_blocks_to_dataframe,
+    sweeps_to_dataframe,
 )
 from models import (  # noqa: E402
     ACCOUNT_PROFILES,
@@ -92,7 +111,7 @@ from scorer import (  # noqa: E402
 from scorer import (  # noqa: E402
     results_to_dataframe as scorer_to_dataframe,
 )
-from strategies import (  # noqa: E402
+from src.strategies import (  # noqa: E402
     STRATEGY_CLASSES,
     STRATEGY_LABELS,
     make_strategy,
@@ -466,6 +485,188 @@ if not session_active and len(open_trades_df) > 0:
         f"FLATTEN NOW — {len(open_trades_df)} open position(s) outside session hours!"
     )
 
+
+# ---------------------------------------------------------------------------
+# Auto-refreshing fragment functions (@st.fragment)
+# ---------------------------------------------------------------------------
+# These wrap live panels so they auto-update on a timer WITHOUT forcing a
+# full Streamlit page rerun.  Only the fragment's own UI subtree rerenders.
+# ---------------------------------------------------------------------------
+
+
+@st.fragment(run_every=timedelta(seconds=30))
+def _live_scanner_fragment():
+    """Auto-refreshing scanner table (runs every 30 s)."""
+    rows = []
+    for name in selected_assets:
+        ticker = ASSETS[name]
+        row = build_scanner_row(name, ticker, interval, period)
+        if row:
+            rows.append(row)
+
+    df_scan_live = pd.DataFrame(rows) if rows else pd.DataFrame()
+    if not df_scan_live.empty:
+        df_scan_live = df_scan_live.sort_values("% Overnight", key=abs, ascending=False)
+        st.dataframe(
+            df_scan_live.style.background_gradient(
+                subset=["% from VWAP"], cmap="RdYlGn"
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.info("No scanner data. Select assets and refresh.")
+
+
+@st.fragment(run_every=timedelta(seconds=15))
+def _live_trades_fragment():
+    """Auto-refreshing open-trade cards (runs every 15 s)."""
+    live_pnl = get_today_pnl(account_size)
+    live_open = get_open_trades(account_size)
+
+    if live_open.empty:
+        st.info("No open trades. Create orders from the Morning Brief tab.")
+        return
+
+    # Summary metrics
+    total_risk = 0.0
+    for _, _r in live_open.iterrows():
+        _spec = CONTRACT_SPECS.get(str(_r["asset"]))
+        if _spec and float(_r["sl"] or 0):
+            total_risk += (
+                abs(float(_r["entry"]) - float(_r["sl"]))
+                * _spec["point"]
+                * int(_r["contracts"])
+            )
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    sc1.metric("Open Positions", len(live_open))
+    sc2.metric("Total Risk Exposure", f"${total_risk:,.0f}")
+    sc3.metric("Today's Realised", f"${live_pnl:,.0f}")
+    sc4.metric(
+        "Remaining Risk Budget",
+        f"${abs(acct['hard_stop']) - abs(live_pnl):,.0f}"
+        if live_pnl < 0
+        else f"${abs(acct['hard_stop']):,.0f}",
+    )
+
+    st.divider()
+
+    # Individual trade cards
+    for _, trow in live_open.iterrows():
+        trade_id = int(trow["id"])
+        asset_name = str(trow["asset"])
+        direction = str(trow["direction"])
+        entry = float(trow["entry"])
+        sl = float(trow["sl"]) if bool(pd.notna(trow["sl"])) else 0.0
+        tp = float(trow["tp"]) if bool(pd.notna(trow["tp"])) else 0.0
+        contracts = int(trow["contracts"])
+        spec = CONTRACT_SPECS.get(asset_name)
+        trade_strategy = str(trow.get("strategy", ""))
+        trade_created = str(trow["created_at"])
+        trade_notes = str(trow.get("notes", ""))
+
+        # Current price
+        current_price: float | None = None
+        if asset_name in data and not data[asset_name].empty:
+            current_price = float(data[asset_name]["Close"].iloc[-1])
+
+        # Unrealised P&L
+        unrealised = 0.0
+        if current_price is not None and spec:
+            unrealised = calc_pnl(
+                asset_name, direction, entry, current_price, contracts
+            )
+
+        emoji = "🟢" if direction.upper() == "LONG" else "🔴"
+        pnl_color = "normal" if unrealised >= 0 else "inverse"
+
+        with st.container(border=True):
+            tc1, tc2, tc3, tc4 = st.columns([3, 1, 1, 1])
+            with tc1:
+                st.markdown(
+                    f"**{emoji} #{trade_id} — {direction} {contracts}x {asset_name}**"
+                )
+                st.caption(
+                    f"Entry: {entry:.2f} | SL: {sl:.2f} | TP: {tp:.2f} | "
+                    f"Strategy: {trade_strategy} | {trade_created}"
+                )
+            with tc2:
+                if current_price is not None:
+                    st.metric("Current", f"{current_price:.2f}")
+                else:
+                    st.metric("Current", "N/A")
+            with tc3:
+                st.metric(
+                    "Unrealised",
+                    f"${unrealised:,.0f}",
+                    delta=f"${unrealised:,.0f}",
+                    delta_color=pnl_color,
+                )
+            with tc4:
+                if current_price is not None and sl and entry != sl:
+                    if direction.upper() == "LONG":
+                        cur_rr = (current_price - entry) / abs(entry - sl)
+                    else:
+                        cur_rr = (entry - current_price) / abs(sl - entry)
+                    st.metric("R Multiple", f"{cur_rr:+.2f}R")
+                else:
+                    st.metric("R Multiple", "—")
+
+            if trade_notes:
+                st.caption(f"Notes: {trade_notes}")
+
+
+@st.fragment(run_every=timedelta(seconds=30))
+def _live_sidebar_risk_fragment():
+    """Auto-refreshing sidebar risk gauges (runs every 30 s)."""
+    _live_pnl = get_today_pnl(account_size)
+    _live_open = get_open_trades(account_size)
+    st.metric("Today P&L (live)", f"${_live_pnl:,.0f}")
+    st.metric("Open Trades (live)", len(_live_open))
+
+    pnl_pct = _live_pnl / account_size * 100 if account_size > 0 else 0.0
+    hard_pct = acct["hard_stop"] / account_size * 100 if account_size > 0 else 0.0
+    remaining = abs(acct["hard_stop"]) - abs(min(_live_pnl, 0))
+    st.progress(
+        min(max(remaining / abs(acct["hard_stop"]), 0.0), 1.0),
+        text=f"Risk budget: ${remaining:,.0f} remaining",
+    )
+    if _live_pnl <= acct["hard_stop"]:
+        st.error("⛔ HARD STOP — walk away")
+    elif _live_pnl <= acct["soft_stop"]:
+        st.warning("⚠️ Soft stop reached")
+
+
+@st.fragment(run_every=timedelta(seconds=30))
+def _live_cvd_fragment():
+    """Auto-refreshing CVD metrics and chart (runs every 30 s)."""
+    cvd_asset_frag = st.session_state.get("cvd_asset")
+    if cvd_asset_frag and cvd_asset_frag in data and not data[cvd_asset_frag].empty:
+        cvd_df = data[cvd_asset_frag]
+        cvd_result = compute_cvd(cvd_df)
+        summary = cvd_summary(cvd_result) if not cvd_result.empty else {}
+
+        m1, m2, m3, m4 = st.columns(4)
+        bias_emoji = summary.get("bias_emoji", "⚪")
+        m1.metric("CVD Bias", f"{bias_emoji} {summary.get('bias', 'neutral').title()}")
+        m2.metric("CVD Current", f"{summary.get('cvd_current', 0):,.0f}")
+        m3.metric("Delta (Latest)", f"{summary.get('delta_current', 0):,.0f}")
+        m4.metric(
+            "CVD Slope",
+            f"{summary.get('cvd_slope', 0):+.3f}",
+            delta=f"{'Buying' if summary.get('cvd_slope', 0) > 0 else 'Selling'} pressure",
+            delta_color="normal" if summary.get("cvd_slope", 0) > 0 else "inverse",
+        )
+
+
+# Render the live sidebar risk gauges
+with st.sidebar:
+    st.divider()
+    st.caption("🔄 Live Risk (auto-refresh)")
+    _live_sidebar_risk_fragment()
+
+
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
@@ -503,23 +704,19 @@ with tab_brief:
         engine.force_refresh()
         st.rerun()
 
+    # Auto-refreshing scanner via @st.fragment
+    _live_scanner_fragment()
+
+    # Also build df_scan for downstream use (Grok prompt, trade idea validation)
     rows = []
     for name in selected_assets:
         ticker = ASSETS[name]
         row = build_scanner_row(name, ticker, interval, period)
         if row:
             rows.append(row)
-
     df_scan = pd.DataFrame(rows) if rows else pd.DataFrame()
     if not df_scan.empty:
         df_scan = df_scan.sort_values("% Overnight", key=abs, ascending=False)
-        st.dataframe(
-            df_scan.style.background_gradient(subset=["% from VWAP"], cmap="RdYlGn"),
-            width="stretch",
-            hide_index=True,
-        )
-    else:
-        st.info("No scanner data. Select assets and refresh.")
 
     # Pre-Market Composite Scorer
     st.divider()
@@ -999,118 +1196,52 @@ with tab_trades:
 
     open_df = get_open_trades(account_size)
 
-    if open_df.empty:
-        st.info("No open trades. Create orders from the Morning Brief tab.")
-    else:
-        # Summary metrics
-        total_risk = 0.0
-        for _, _r in open_df.iterrows():
-            _spec = CONTRACT_SPECS.get(str(_r["asset"]))
-            if _spec and float(_r["sl"] or 0):
-                total_risk += (
-                    abs(float(_r["entry"]) - float(_r["sl"]))
-                    * _spec["point"]
-                    * int(_r["contracts"])
-                )
+    # Auto-refreshing live trade cards via @st.fragment
+    st.caption("🔄 Live positions (auto-refresh every 15 s)")
+    _live_trades_fragment()
 
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        sc1.metric("Open Positions", len(open_df))
-        sc2.metric("Total Risk Exposure", f"${total_risk:,.0f}")
-        sc3.metric("Today's Realised", f"${today_pnl:,.0f}")
-        sc4.metric(
-            "Remaining Risk Budget",
-            f"${abs(acct['hard_stop']) - abs(today_pnl):,.0f}"
-            if today_pnl < 0
-            else f"${abs(acct['hard_stop']):,.0f}",
-        )
-
+    # Interactive close/cancel controls (outside fragment so buttons work)
+    if not open_df.empty:
         st.divider()
-
-        # Individual trade cards
+        st.subheader("Manage Trades")
         for _, trow in open_df.iterrows():
             trade_id = int(trow["id"])
             asset_name = str(trow["asset"])
             direction = str(trow["direction"])
             entry = float(trow["entry"])
-            sl = float(trow["sl"]) if bool(pd.notna(trow["sl"])) else 0.0
-            tp = float(trow["tp"]) if bool(pd.notna(trow["tp"])) else 0.0
             contracts = int(trow["contracts"])
             spec = CONTRACT_SPECS.get(asset_name)
-            ticker = ASSETS.get(asset_name, "")
-            trade_strategy = str(trow.get("strategy", ""))
-            trade_created = str(trow["created_at"])
-            trade_notes = str(trow.get("notes", ""))
 
-            # Current price
             current_price: float | None = None
             if asset_name in data and not data[asset_name].empty:
                 current_price = float(data[asset_name]["Close"].iloc[-1])
 
-            # Unrealised P&L
-            unrealised = 0.0
-            if current_price is not None and spec:
-                unrealised = calc_pnl(
-                    asset_name, direction, entry, current_price, contracts
-                )
-
             emoji = "🟢" if direction.upper() == "LONG" else "🔴"
-            pnl_color = "normal" if unrealised >= 0 else "inverse"
-
             with st.container(border=True):
-                tc1, tc2, tc3, tc4, tc5 = st.columns([2, 1, 1, 1, 2])
-                with tc1:
+                mc1, mc2, mc3 = st.columns([3, 1, 1])
+                with mc1:
                     st.markdown(
-                        f"**{emoji} #{trade_id} — {direction} {contracts}x {asset_name}**"
+                        f"{emoji} **#{trade_id}** {direction} {contracts}x {asset_name}"
                     )
-                    st.caption(
-                        f"Entry: {entry:.2f} | SL: {sl:.2f} | TP: {tp:.2f} | "
-                        f"Strategy: {trade_strategy} | {trade_created}"
+                with mc2:
+                    close_px = st.number_input(
+                        "Close @",
+                        value=current_price if current_price is not None else entry,
+                        step=spec["tick"] if spec else 0.01,
+                        key=f"close_px_{trade_id}",
+                        label_visibility="collapsed",
                     )
-                with tc2:
-                    if current_price is not None:
-                        st.metric("Current", f"{current_price:.2f}")
-                    else:
-                        st.metric("Current", "N/A")
-                with tc3:
-                    st.metric(
-                        "Unrealised",
-                        f"${unrealised:,.0f}",
-                        delta=f"${unrealised:,.0f}",
-                        delta_color=pnl_color,
-                    )
-                with tc4:
-                    if current_price is not None and sl and entry != sl:
-                        if direction.upper() == "LONG":
-                            cur_rr = (current_price - entry) / abs(entry - sl)
-                        else:
-                            cur_rr = (entry - current_price) / abs(sl - entry)
-                        st.metric("R Multiple", f"{cur_rr:+.2f}R")
-                    else:
-                        st.metric("R Multiple", "—")
-                with tc5:
-                    close_col, cancel_col = st.columns(2)
-                    with close_col:
-                        close_px = st.number_input(
-                            "Close @",
-                            value=current_price if current_price is not None else entry,
-                            step=spec["tick"] if spec else 0.01,
-                            key=f"close_px_{trade_id}",
-                            label_visibility="collapsed",
-                        )
-                        if st.button(
-                            "Close Trade", key=f"close_{trade_id}", type="primary"
-                        ):
-                            result = close_trade(trade_id, close_px)
-                            st.success(f"Closed #{trade_id}: P&L ${result['pnl']:,.2f}")
-                            st.rerun()
-                    with cancel_col:
-                        if st.button("Cancel", key=f"cancel_{trade_id}"):
-                            cancel_trade(trade_id)
-                            st.info(f"Cancelled #{trade_id}")
-                            st.rerun()
-
-                if trade_notes:
-                    st.caption(f"Notes: {trade_notes}")
+                    if st.button(
+                        "Close Trade", key=f"close_{trade_id}", type="primary"
+                    ):
+                        result = close_trade(trade_id, close_px)
+                        st.success(f"Closed #{trade_id}: P&L ${result['pnl']:,.2f}")
+                        st.rerun()
+                with mc3:
+                    if st.button("Cancel", key=f"cancel_{trade_id}"):
+                        cancel_trade(trade_id)
+                        st.info(f"Cancelled #{trade_id}")
+                        st.rerun()
 
     # Daily risk summary
     st.divider()
@@ -1452,20 +1583,8 @@ with tab_signals:
         cvd_result = compute_cvd(cvd_df)
         summary = cvd_summary(cvd_result) if not cvd_result.empty else {}
 
-        # Key metrics
-        cvd_m1, cvd_m2, cvd_m3, cvd_m4 = st.columns(4)
-        bias_emoji = summary.get("bias_emoji", "⚪")
-        cvd_m1.metric(
-            "CVD Bias", f"{bias_emoji} {summary.get('bias', 'neutral').title()}"
-        )
-        cvd_m2.metric("CVD Current", f"{summary.get('cvd_current', 0):,.0f}")
-        cvd_m3.metric("Delta (Latest Bar)", f"{summary.get('delta_current', 0):,.0f}")
-        cvd_m4.metric(
-            "CVD Slope",
-            f"{summary.get('cvd_slope', 0):+.3f}",
-            delta=f"{'Buying' if summary.get('cvd_slope', 0) > 0 else 'Selling'} pressure",
-            delta_color="normal" if summary.get("cvd_slope", 0) > 0 else "inverse",
-        )
+        # Auto-refreshing CVD key metrics via @st.fragment
+        _live_cvd_fragment()
 
         # CVD chart
         cvd_fig = go.Figure()
@@ -1541,6 +1660,17 @@ with tab_signals:
 
     conf_asset = st.selectbox("Confluence Asset", selected_assets, key="conf_asset")
 
+    # Multi-timeframe toggle
+    use_multi_tf = st.checkbox(
+        "Enable multi-timeframe data loading",
+        value=False,
+        key="use_multi_tf",
+        help=(
+            "When enabled, fetches separate data at HTF/Setup/Entry intervals "
+            "(e.g. 1H / 15m / 5m for Gold). Otherwise uses the same data for all layers."
+        ),
+    )
+
     if conf_asset in data and not data[conf_asset].empty:
         # Get recommended timeframes for this instrument
         recommended_tfs = get_recommended_timeframes(conf_asset)
@@ -1551,15 +1681,59 @@ with tab_signals:
             f"Entry={recommended_tfs[2]}"
         )
 
-        # Use whatever data we have as the entry timeframe
+        # ---------- Multi-timeframe data loading ----------
+        ticker = ASSETS[conf_asset]
         entry_df = data[conf_asset]
+        setup_df = entry_df
+        htf_df = entry_df
+
+        if use_multi_tf:
+            htf_interval, setup_interval, entry_interval = recommended_tfs
+
+            # Fetch HTF data if different from dashboard interval
+            if htf_interval != interval:
+                try:
+                    htf_df = get_data(ticker, htf_interval, period)
+                    if htf_df.empty:
+                        htf_df = entry_df
+                    else:
+                        st.caption(
+                            f"✅ HTF data loaded: {htf_interval} ({len(htf_df)} bars)"
+                        )
+                except Exception:
+                    htf_df = entry_df
+
+            # Fetch Setup data if different from dashboard interval
+            if setup_interval != interval:
+                try:
+                    setup_df = get_data(ticker, setup_interval, period)
+                    if setup_df.empty:
+                        setup_df = entry_df
+                    else:
+                        st.caption(
+                            f"✅ Setup data loaded: {setup_interval} ({len(setup_df)} bars)"
+                        )
+                except Exception:
+                    setup_df = entry_df
+
+            # Entry uses dashboard interval data
+            if entry_interval != interval:
+                try:
+                    entry_tf_df = get_data(ticker, entry_interval, period)
+                    if not entry_tf_df.empty:
+                        entry_df = entry_tf_df
+                        st.caption(
+                            f"✅ Entry data loaded: {entry_interval} ({len(entry_df)} bars)"
+                        )
+                except Exception:
+                    pass  # keep existing entry_df
 
         # Check confluence
         try:
             conf_result = check_confluence(
                 entry_df=entry_df,
-                setup_df=entry_df,  # Same data for now (single-TF approximation)
-                htf_df=entry_df,
+                setup_df=setup_df,
+                htf_df=htf_df,
             )
 
             # Display confluence score
@@ -1606,10 +1780,29 @@ with tab_signals:
             for asset_name in selected_assets:
                 if asset_name in data and not data[asset_name].empty:
                     try:
+                        # For the summary table, optionally load multi-TF per asset
+                        a_entry = data[asset_name]
+                        a_setup = a_entry
+                        a_htf = a_entry
+                        if use_multi_tf:
+                            a_ticker = ASSETS[asset_name]
+                            a_tfs = get_recommended_timeframes(asset_name)
+                            try:
+                                if a_tfs[0] != interval:
+                                    _h = get_data(a_ticker, a_tfs[0], period)
+                                    if not _h.empty:
+                                        a_htf = _h
+                                if a_tfs[1] != interval:
+                                    _s = get_data(a_ticker, a_tfs[1], period)
+                                    if not _s.empty:
+                                        a_setup = _s
+                            except Exception:
+                                pass
+
                         asset_conf = check_confluence(
-                            entry_df=data[asset_name],
-                            setup_df=data[asset_name],
-                            htf_df=data[asset_name],
+                            entry_df=a_entry,
+                            setup_df=a_setup,
+                            htf_df=a_htf,
                         )
                         a_score = asset_conf.get("score", 0)
                         a_emoji = (
@@ -1654,16 +1847,120 @@ with tab_signals:
 
     st.divider()
 
+    # ── ICT / Smart Money Concepts ─────────────────────────────────────────
+    st.subheader("🏦 ICT / Smart Money Concepts")
+    st.caption(
+        "Institutional price-action analysis: Fair Value Gaps (FVGs), Order Blocks (OBs), "
+        "Liquidity Sweeps, and Breaker Blocks. These concepts reveal where institutional "
+        "traders are likely positioned and where price may react."
+    )
+
+    ict_asset = st.selectbox("ICT Asset", selected_assets, key="ict_asset")
+
+    if ict_asset in data and not data[ict_asset].empty:
+        ict_df = data[ict_asset]
+        summary_ict = ict_summary(ict_df)
+        stats = summary_ict["stats"]
+
+        # Key metrics
+        im1, im2, im3, im4, im5 = st.columns(5)
+        im1.metric("Unfilled FVGs", stats["unfilled_fvgs"])
+        im2.metric("Active OBs", stats["active_obs"])
+        im3.metric("Sweeps", stats["recent_sweeps"])
+        im4.metric("Breakers", stats["breakers"])
+        im5.metric("Current", f"{summary_ict['current_price']:.2f}")
+
+        # Nearest ICT levels
+        nearest = summary_ict.get("nearest_levels", {})
+        if nearest:
+            nl1, nl2 = st.columns(2)
+            if "above" in nearest:
+                nl1.metric(
+                    f"Nearest Above: {nearest['above']['label']}",
+                    f"{nearest['above']['price']:.2f}",
+                    delta=f"+{nearest['above']['distance']:.2f}",
+                    delta_color="normal",
+                )
+            if "below" in nearest:
+                nl2.metric(
+                    f"Nearest Below: {nearest['below']['label']}",
+                    f"{nearest['below']['price']:.2f}",
+                    delta=f"{nearest['below']['distance']:.2f}",
+                    delta_color="inverse",
+                )
+
+        # Combined levels table
+        levels_df = levels_to_dataframe(summary_ict)
+        if not levels_df.empty:
+            st.markdown("**Active ICT Levels (sorted by distance)**")
+            st.dataframe(levels_df, width="stretch", hide_index=True)
+
+        # Detailed breakdowns in expanders
+        with st.expander(
+            f"📊 Fair Value Gaps ({stats['total_fvgs']} total, {stats['unfilled_fvgs']} unfilled)"
+        ):
+            fvg_list = summary_ict["fvgs"]
+            if fvg_list:
+                fvg_display = fvgs_to_dataframe(fvg_list)
+                st.dataframe(fvg_display, width="stretch", hide_index=True)
+
+                # Bullish vs bearish breakdown
+                bull_fvgs = stats.get("bullish_fvgs", 0)
+                bear_fvgs = stats.get("bearish_fvgs", 0)
+                st.caption(f"Unfilled: 🟢 {bull_fvgs} bullish · 🔴 {bear_fvgs} bearish")
+            else:
+                st.info("No FVGs detected in current data.")
+
+        with st.expander(
+            f"🧱 Order Blocks ({stats['total_obs']} total, {stats['active_obs']} active)"
+        ):
+            ob_list = summary_ict["order_blocks"]
+            if ob_list:
+                ob_display = order_blocks_to_dataframe(ob_list)
+                st.dataframe(ob_display, width="stretch", hide_index=True)
+
+                bull_obs = stats.get("bullish_obs", 0)
+                bear_obs = stats.get("bearish_obs", 0)
+                st.caption(f"Active: 🟢 {bull_obs} bullish · 🔴 {bear_obs} bearish")
+            else:
+                st.info("No order blocks detected in current data.")
+
+        with st.expander(f"💧 Liquidity Sweeps ({stats['recent_sweeps']})"):
+            sweep_list = summary_ict["liquidity_sweeps"]
+            if sweep_list:
+                sweep_display = sweeps_to_dataframe(sweep_list)
+                st.dataframe(sweep_display, width="stretch", hide_index=True)
+
+                buy_sweeps = stats.get("buy_side_sweeps", 0)
+                sell_sweeps = stats.get("sell_side_sweeps", 0)
+                st.caption(f"⬆️ {buy_sweeps} buy-side · ⬇️ {sell_sweeps} sell-side")
+            else:
+                st.info("No liquidity sweeps detected in current data.")
+
+        with st.expander(f"🔄 Breaker Blocks ({stats['breakers']})"):
+            breaker_list = summary_ict["breaker_blocks"]
+            if breaker_list:
+                breaker_display = breakers_to_dataframe(breaker_list)
+                st.dataframe(breaker_display, width="stretch", hide_index=True)
+            else:
+                st.info("No breaker blocks detected in current data.")
+    else:
+        st.info("Select an asset with data to view ICT analysis.")
+
+    st.divider()
+
     # ── Alert Dispatcher Status ────────────────────────────────────────────
     st.subheader("🔔 Alerts & Notifications")
     st.caption(
         "Multi-channel alert dispatcher (Slack, Discord, Telegram). "
-        "Configure via environment variables. Redis-backed dedup with 5-min cooldown."
+        "Configure channels via environment variables. "
+        "Use the controls below to tune auto-alert behaviour."
     )
 
     dispatcher = get_dispatcher()
     channels = dispatcher.channels_configured
 
+    # ── Channel status ─────────────────────────────────────────────────
     al1, al2, al3 = st.columns(3)
     al1.metric(
         "Slack",
@@ -1689,12 +1986,76 @@ with tab_signals:
         stats = dispatcher.get_stats()
         st.caption(
             f"Alerts sent: {stats.get('total_sent', 0)} · "
-            f"Deduplicated: {stats.get('deduplicated', 0)}"
+            f"Suppressed: {stats.get('total_suppressed', 0)} · "
+            f"Errors: {stats.get('errors', 0)}"
         )
 
-    # Manual test alert
+    # ── Auto-alert controls ────────────────────────────────────────────
+    with st.expander("⚙️ Auto-Alert Configuration", expanded=False):
+        st.markdown(
+            "Control which automatic alerts the background engine dispatches. "
+            "These settings are stored in session state and take effect immediately."
+        )
+
+        ac1, ac2 = st.columns(2)
+        with ac1:
+            alerts_regime = st.checkbox(
+                "🔄 Regime-change alerts",
+                value=st.session_state.get("alerts_regime_enabled", True),
+                key="alerts_regime_enabled",
+                help="Alert when an asset's volatility regime changes (e.g. trending → volatile).",
+            )
+            alerts_confluence = st.checkbox(
+                "🎯 Confluence alerts (3/3)",
+                value=st.session_state.get("alerts_confluence_enabled", True),
+                key="alerts_confluence_enabled",
+                help="Alert when multi-timeframe confluence reaches full 3/3 alignment.",
+            )
+            alerts_signal = st.checkbox(
+                "📊 Signal alerts",
+                value=st.session_state.get("alerts_signal_enabled", True),
+                key="alerts_signal_enabled",
+                help="Alert on new trade signals from the scanner / strategies.",
+            )
+
+        with ac2:
+            cooldown_min = st.slider(
+                "Cooldown (minutes)",
+                min_value=1,
+                max_value=30,
+                value=st.session_state.get("alert_cooldown_min", 5),
+                key="alert_cooldown_min",
+                help="Minimum time between repeated alerts for the same signal key.",
+            )
+            # Apply cooldown change to the dispatcher
+            new_cooldown_sec = cooldown_min * 60
+            if dispatcher.cooldown_sec != new_cooldown_sec:
+                dispatcher.cooldown_sec = new_cooldown_sec
+                dispatcher._store.cooldown_sec = new_cooldown_sec
+
+            st.caption(
+                f"Current cooldown: **{cooldown_min} min** ({new_cooldown_sec}s)"
+            )
+
+        # Wire session-state flags into the engine so it respects them
+        engine = get_engine()
+        engine._alerts_regime_enabled = st.session_state.get(
+            "alerts_regime_enabled", True
+        )
+        engine._alerts_confluence_enabled = st.session_state.get(
+            "alerts_confluence_enabled", True
+        )
+        engine._alerts_signal_enabled = st.session_state.get(
+            "alerts_signal_enabled", True
+        )
+
+        if st.button("🧹 Clear alert cooldowns", key="clear_cooldowns"):
+            dispatcher.clear_cooldowns()
+            st.success("All cooldown timers reset.")
+
+    # ── Manual test alert ──────────────────────────────────────────────
     if dispatcher.has_channels:
-        if st.button("Send Test Alert", key="test_alert"):
+        if st.button("📤 Send Test Alert", key="test_alert"):
             try:
                 send_signal(
                     signal_key="test_alert",
@@ -1708,15 +2069,37 @@ with tab_signals:
             except Exception as e:
                 st.error(f"Alert failed: {e}")
 
-    # Recent alerts
-    recent = dispatcher.get_recent_alerts()
+    # ── Recent alerts table ────────────────────────────────────────────
+    recent = dispatcher.get_recent_alerts(limit=20)
     if recent:
-        with st.expander(f"Recent Alerts ({len(recent)})"):
-            for alert in recent[-10:]:
-                st.caption(
-                    f"[{alert.get('timestamp', '?')}] "
-                    f"{alert.get('channel', '?')}: {alert.get('message', '?')[:100]}"
+        with st.expander(f"📋 Recent Alerts ({len(recent)})", expanded=False):
+            recent_rows = []
+            for alert in recent:
+                ts = alert.get("timestamp")
+                dt_str = alert.get("datetime", "—")
+                if isinstance(ts, (int, float)):
+                    try:
+                        from datetime import datetime as _dt
+
+                        dt_str = _dt.fromtimestamp(ts, tz=_EST).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        )
+                    except Exception:
+                        pass
+                recent_rows.append(
+                    {
+                        "Time": dt_str,
+                        "Signal Key": alert.get("signal_key", "—"),
+                    }
                 )
+            if recent_rows:
+                st.dataframe(
+                    pd.DataFrame(recent_rows),
+                    width="stretch",
+                    hide_index=True,
+                )
+    else:
+        st.caption("No recent alerts.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

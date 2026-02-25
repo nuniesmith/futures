@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov ruff pyright
+
+      - name: Ruff lint (errors only)
+        run: ruff check src/ tests/ --select=E9,F63,F7,F82 --no-fix
+
+      - name: Ruff format check
+        run: ruff format --check src/ tests/ || true
+
+      - name: Compile all source modules (syntax check)
+        run: |
+          for f in src/*.py; do
+            python -m py_compile "$f"
+          done
+
+      - name: Compile all test modules (syntax check)
+        run: |
+          for f in tests/*.py; do
+            python -m py_compile "$f"
+          done
+
+      - name: Run unit tests with coverage
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python -m pytest tests/ \
+            -v \
+            --tb=short \
+            --co -q 2>/dev/null || true
+          python -m pytest tests/ \
+            -v \
+            --tb=short \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --ignore=src/app.py \
+            -x \
+            --timeout=120 \
+            || python -m pytest tests/ -v --tb=short -x --timeout=120
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyright
+
+      - name: Pyright type check (informational)
+        run: pyright src/ --level basic || true

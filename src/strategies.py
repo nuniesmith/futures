@@ -1,7 +1,7 @@
 """
 Strategy module for futures backtesting.
 
-Provides nine strategy classes with trend filters and ATR-based risk management:
+Provides ten strategy classes with trend filters and ATR-based risk management:
   1. TrendEMACross    — EMA crossover filtered by a longer trend EMA, ATR SL/TP
   2. RSIReversal      — RSI mean-reversion entries with trend filter, ATR SL/TP
   3. BreakoutStrategy  — Breakout of recent high/low with volume filter, ATR SL/TP
@@ -10,6 +10,7 @@ Provides nine strategy classes with trend filters and ATR-based risk management:
   6. MACDMomentum     — MACD crossover with histogram acceleration filter
   7. PullbackEMA      — Pullback-to-EMA with candlestick confirmation
   8. EventReaction    — Post-event continuation/fade with volume confirmation
+  9. ICTTrendEMA      — TrendEMA + ICT Smart Money confluence (FVG/OB filters)
 
 All strategies are compatible with the `backtesting.py` library and expose
 class-level parameters that Optuna can tune.
@@ -18,12 +19,15 @@ The VolumeProfileStrategy is imported from volume_profile.py and registered
 here for unified optimizer access.
 """
 
+import logging
 import math
 
 import numpy as np
 import pandas as pd
 from backtesting import Strategy
 from backtesting.lib import crossover
+
+logger = logging.getLogger("strategies")
 
 # ---------------------------------------------------------------------------
 # Indicator helper functions (compatible with backtesting.py's self.I())
@@ -1050,6 +1054,353 @@ class PlainEMACross(Strategy):
 
 
 # ---------------------------------------------------------------------------
+# Strategy 10 — ICT-Enhanced Trend EMA (Smart Money Confluence)
+# ---------------------------------------------------------------------------
+
+
+def _compute_ict_confluence(
+    df: pd.DataFrame,
+    bar_index: int,
+    direction: str,
+    ob_proximity_atr: float = 1.5,
+    fvg_proximity_atr: float = 2.0,
+    atr_period: int = 14,
+) -> dict:
+    """Pre-compute ICT confluence signals for a single bar.
+
+    Checks whether the current price is near an active OB or unfilled FVG
+    that aligns with the proposed trade direction.
+
+    Returns a dict with boolean flags and optional SL/TP refinements.
+    """
+    result = {
+        "ob_aligned": False,
+        "fvg_aligned": False,
+        "ob_sl": None,
+        "fvg_tp": None,
+        "score": 0,
+    }
+
+    try:
+        from ict import get_active_order_blocks, get_unfilled_fvgs
+    except ImportError:
+        return result
+
+    if df.empty or len(df) < atr_period + 10 or bar_index < atr_period:
+        return result
+
+    # Use data up to (and including) the current bar — no look-ahead
+    df_slice = df.iloc[: bar_index + 1]
+    if len(df_slice) < atr_period + 10:
+        return result
+
+    price = float(df_slice["Close"].iloc[-1])
+    high_s = df_slice["High"].astype(float)
+    low_s = df_slice["Low"].astype(float)
+    close_s = df_slice["Close"].astype(float)
+
+    # Compute ATR at current bar
+    from ict import _atr as ict_atr
+
+    atr_series = ict_atr(high_s, low_s, close_s, atr_period)
+    atr_val = float(atr_series.iloc[-1]) if len(atr_series) > 0 else 0.0
+    if atr_val <= 0:
+        return result
+
+    # --- Order Block alignment ---
+    try:
+        active_obs = get_active_order_blocks(
+            df_slice, impulse_atr_mult=1.2, atr_period=atr_period
+        )
+        for ob in active_obs:
+            dist = abs(price - ob["midpoint"])
+            if dist > ob_proximity_atr * atr_val:
+                continue
+            # Bullish OB aligns with long entries (price near/above OB zone)
+            if direction == "long" and ob["type"] == "bullish":
+                if ob["low"] <= price <= ob["high"] + atr_val * 0.5:
+                    result["ob_aligned"] = True
+                    result["score"] += 1
+                    # Use OB low as a tighter SL
+                    result["ob_sl"] = ob["low"]
+                    break
+            # Bearish OB aligns with short entries (price near/below OB zone)
+            elif direction == "short" and ob["type"] == "bearish":
+                if ob["low"] - atr_val * 0.5 <= price <= ob["high"]:
+                    result["ob_aligned"] = True
+                    result["score"] += 1
+                    result["ob_sl"] = ob["high"]
+                    break
+    except Exception:
+        pass
+
+    # --- FVG alignment ---
+    try:
+        unfilled = get_unfilled_fvgs(df_slice, min_gap_atr=0.2, atr_period=atr_period)
+        for fvg in unfilled:
+            dist = abs(price - fvg["midpoint"])
+            if dist > fvg_proximity_atr * atr_val:
+                continue
+            # Bullish FVG above price → target for long TP
+            if direction == "long" and fvg["type"] == "bullish":
+                if fvg["midpoint"] > price:
+                    result["fvg_aligned"] = True
+                    result["score"] += 1
+                    result["fvg_tp"] = fvg["midpoint"]
+                    break
+            # Bearish FVG below price → target for short TP
+            elif direction == "short" and fvg["type"] == "bearish":
+                if fvg["midpoint"] < price:
+                    result["fvg_aligned"] = True
+                    result["score"] += 1
+                    result["fvg_tp"] = fvg["midpoint"]
+                    break
+    except Exception:
+        pass
+
+    return result
+
+
+def _ict_confluence_array(
+    df: pd.DataFrame,
+    ema_fast_arr,
+    ema_slow_arr,
+    ema_trend_arr,
+    atr_arr,
+    ob_proximity_atr: float = 1.5,
+    fvg_proximity_atr: float = 2.0,
+    atr_period: int = 14,
+) -> np.ndarray:
+    """Pre-compute ICT confluence scores for the entire DataFrame.
+
+    Returns an array of floats where each element is:
+      +score  if long confluence detected (OB/FVG aligned with bullish)
+      -score  if short confluence detected (OB/FVG aligned with bearish)
+       0      if no ICT confluence at this bar
+
+    The score ranges from 0 to 2 (1 for OB match, 1 for FVG match).
+
+    This is done once during init() to avoid per-bar ICT detection overhead.
+    """
+    n = len(df)
+    scores = np.zeros(n, dtype=float)
+
+    try:
+        from ict import get_active_order_blocks, get_unfilled_fvgs
+    except ImportError:
+        return scores
+
+    if n < atr_period + 20:
+        return scores
+
+    # We sample ICT every `stride` bars to keep init() fast.  Between
+    # samples the score carries forward (ICT levels don't change bar-to-bar).
+    stride = max(5, n // 100)
+
+    for i in range(atr_period + 10, n, stride):
+        atr_val = float(atr_arr[i]) if not _is_nan(atr_arr[i]) else 0.0
+        if atr_val <= 0:
+            continue
+
+        price = float(df["Close"].iloc[i])
+        ef = float(ema_fast_arr[i]) if not _is_nan(ema_fast_arr[i]) else price
+        es = float(ema_slow_arr[i]) if not _is_nan(ema_slow_arr[i]) else price
+        et = float(ema_trend_arr[i]) if not _is_nan(ema_trend_arr[i]) else price
+
+        # Determine directional bias from EMAs
+        if ef > es and price > et:
+            direction = "long"
+        elif ef < es and price < et:
+            direction = "short"
+        else:
+            continue  # no clear bias → skip ICT check
+
+        df_slice = df.iloc[: i + 1]
+        score = 0.0
+
+        # Check OBs
+        try:
+            active_obs = get_active_order_blocks(
+                df_slice, impulse_atr_mult=1.2, atr_period=atr_period
+            )
+            for ob in active_obs[:5]:  # check nearest 5
+                dist = abs(price - ob["midpoint"])
+                if dist > ob_proximity_atr * atr_val:
+                    continue
+                if direction == "long" and ob["type"] == "bullish":
+                    if ob["low"] <= price <= ob["high"] + atr_val * 0.5:
+                        score += 1.0
+                        break
+                elif direction == "short" and ob["type"] == "bearish":
+                    if ob["low"] - atr_val * 0.5 <= price <= ob["high"]:
+                        score += 1.0
+                        break
+        except Exception:
+            pass
+
+        # Check FVGs
+        try:
+            unfilled = get_unfilled_fvgs(
+                df_slice, min_gap_atr=0.2, atr_period=atr_period
+            )
+            for fvg in unfilled[:5]:
+                dist = abs(price - fvg["midpoint"])
+                if dist > fvg_proximity_atr * atr_val:
+                    continue
+                if (
+                    direction == "long"
+                    and fvg["type"] == "bullish"
+                    and fvg["midpoint"] > price
+                ):
+                    score += 1.0
+                    break
+                elif (
+                    direction == "short"
+                    and fvg["type"] == "bearish"
+                    and fvg["midpoint"] < price
+                ):
+                    score += 1.0
+                    break
+        except Exception:
+            pass
+
+        if score > 0:
+            signed = score if direction == "long" else -score
+            # Fill forward until next sample
+            end = min(i + stride, n)
+            scores[i:end] = signed
+
+    return scores
+
+
+class ICTTrendEMA(Strategy):
+    """EMA crossover + ICT Smart Money Concepts confluence filter.
+
+    Extends TrendEMACross by requiring ICT alignment before entry:
+    price must be near an active Order Block and/or have an unfilled
+    Fair Value Gap as a target in the trade direction.
+
+    ICT confluence is pre-computed during init() to keep per-bar
+    ``next()`` calls fast.
+
+    Confluence modes (``ict_mode``):
+      - 0 = ICT is optional bonus (standard EMA entry, tighter SL/TP if ICT)
+      - 1 = Require at least 1 ICT signal (OB *or* FVG aligned)
+      - 2 = Require both OB and FVG alignment (highest conviction only)
+
+    Optimisable parameters
+    ----------------------
+    n1              : int    fast EMA period           (5 – 20)
+    n2              : int    slow EMA period            (15 – 55)
+    trend_period    : int    trend-direction EMA period (40 – 120)
+    atr_period      : int    ATR look-back              (10 – 20)
+    atr_sl_mult     : float  SL distance = ATR × this   (1.0 – 3.0)
+    atr_tp_mult     : float  TP distance = ATR × this   (1.5 – 5.0)
+    ob_proximity    : float  OB proximity in ATR multiples (0.5 – 2.5)
+    fvg_proximity   : float  FVG proximity in ATR multiples (1.0 – 3.0)
+    ict_mode        : int    confluence strictness (0, 1, 2)
+    trade_size      : float  fraction of equity per trade (0.05 – 0.30)
+    """
+
+    # EMA parameters (same as TrendEMACross)
+    n1: int = 9
+    n2: int = 21
+    trend_period: int = 50
+    atr_period: int = 14
+    atr_sl_mult: float = 1.5
+    atr_tp_mult: float = 2.5
+
+    # ICT-specific parameters
+    ob_proximity: float = 1.5
+    fvg_proximity: float = 2.0
+    ict_mode: int = 1  # require at least 1 ICT signal
+
+    trade_size: float = 0.10
+
+    def init(self):
+        close = pd.Series(self.data.Close)
+        self.ema_fast = self.I(_ema, close, self.n1, name=f"EMA{self.n1}")
+        self.ema_slow = self.I(_ema, close, self.n2, name=f"EMA{self.n2}")
+        self.ema_trend = self.I(
+            _ema, close, self.trend_period, name=f"Trend{self.trend_period}"
+        )
+        self.atr = self.I(
+            _atr,
+            self.data.High,
+            self.data.Low,
+            self.data.Close,
+            self.atr_period,
+            name="ATR",
+        )
+
+        # Pre-compute ICT confluence scores across entire dataset
+        ema_f_arr = np.asarray(_ema(close, self.n1))
+        ema_s_arr = np.asarray(_ema(close, self.n2))
+        ema_t_arr = np.asarray(_ema(close, self.trend_period))
+        atr_arr = np.asarray(
+            _atr(self.data.High, self.data.Low, self.data.Close, self.atr_period)
+        )
+
+        ict_scores = _ict_confluence_array(
+            self.data.df,
+            ema_f_arr,
+            ema_s_arr,
+            ema_t_arr,
+            atr_arr,
+            ob_proximity_atr=self.ob_proximity,
+            fvg_proximity_atr=self.fvg_proximity,
+            atr_period=self.atr_period,
+        )
+        self.ict_score = self.I(_passthrough, ict_scores, name="ICT_Score")
+
+    def next(self):
+        atr_val = self.atr[-1]
+        if _is_nan(atr_val) or atr_val <= 0:
+            return
+
+        price = self.data.Close[-1]
+        trend = self.ema_trend[-1]
+        if _is_nan(trend):
+            return
+
+        # --- Exit logic (same as TrendEMACross) ---
+        if self.position:
+            if self.position.is_long and crossover(
+                list(self.ema_slow), list(self.ema_fast)
+            ):
+                self.position.close()
+            elif self.position.is_short and crossover(
+                list(self.ema_fast), list(self.ema_slow)
+            ):
+                self.position.close()
+            return
+
+        # --- ICT confluence gate ---
+        ict_val = self.ict_score[-1]
+        ict_score_abs = abs(ict_val) if not _is_nan(ict_val) else 0.0
+
+        if self.ict_mode >= 1 and ict_score_abs < 1:
+            return  # need at least 1 ICT signal
+        if self.ict_mode >= 2 and ict_score_abs < 2:
+            return  # need both OB + FVG
+
+        # --- Entry logic ---
+        if crossover(list(self.ema_fast), list(self.ema_slow)) and price > trend:
+            if self.ict_mode > 0 and ict_val < 0:
+                return  # ICT says short, skip long entry
+            sl = price - atr_val * self.atr_sl_mult
+            tp = price + atr_val * self.atr_tp_mult
+            self.buy(size=self.trade_size, sl=sl, tp=tp)
+
+        elif crossover(list(self.ema_slow), list(self.ema_fast)) and price < trend:
+            if self.ict_mode > 0 and ict_val > 0:
+                return  # ICT says long, skip short entry
+            sl = price + atr_val * self.atr_sl_mult
+            tp = price - atr_val * self.atr_tp_mult
+            self.sell(size=self.trade_size, sl=sl, tp=tp)
+
+
+# ---------------------------------------------------------------------------
 # Strategy registry — used by the optimizer / engine
 # ---------------------------------------------------------------------------
 
@@ -1076,6 +1427,7 @@ STRATEGY_CLASSES = {
     "MACD": MACDMomentum,
     "PullbackEMA": PullbackEMA,
     "EventReaction": EventReaction,
+    "ICTTrendEMA": ICTTrendEMA,
     "PlainEMA": PlainEMACross,
 }
 
@@ -1092,6 +1444,7 @@ STRATEGY_LABELS = {
     "MACD": "MACD Momentum",
     "PullbackEMA": "Pullback-to-EMA + Candle Confirm",
     "EventReaction": "Event Reaction (Post-News)",
+    "ICTTrendEMA": "ICT Smart Money + EMA Cross",
     "VolumeProfile": "Volume Profile (POC/VA)",
     "PlainEMA": "Plain EMA Cross (legacy)",
 }
@@ -1200,6 +1553,22 @@ def suggest_params(trial, strategy_key: str) -> dict:
         params["atr_period"] = trial.suggest_int("atr_period", 10, 20)
         params["atr_sl_mult"] = trial.suggest_float("atr_sl_mult", 1.0, 3.0, step=0.25)
         params["atr_tp_mult"] = trial.suggest_float("atr_tp_mult", 1.5, 5.0, step=0.25)
+        params["trade_size"] = trial.suggest_float("trade_size", 0.05, 0.30, step=0.05)
+
+    elif strategy_key == "ICTTrendEMA":
+        params["n1"] = trial.suggest_int("n1", 5, 20)
+        params["n2"] = trial.suggest_int("n2", max(params["n1"] + 5, 15), 55)
+        params["trend_period"] = trial.suggest_int("trend_period", 40, 120)
+        params["atr_period"] = trial.suggest_int("atr_period", 10, 20)
+        params["atr_sl_mult"] = trial.suggest_float("atr_sl_mult", 1.0, 3.0, step=0.25)
+        params["atr_tp_mult"] = trial.suggest_float("atr_tp_mult", 1.5, 5.0, step=0.25)
+        params["ob_proximity"] = trial.suggest_float(
+            "ob_proximity", 0.5, 2.5, step=0.25
+        )
+        params["fvg_proximity"] = trial.suggest_float(
+            "fvg_proximity", 1.0, 3.0, step=0.25
+        )
+        params["ict_mode"] = trial.suggest_int("ict_mode", 0, 2)
         params["trade_size"] = trial.suggest_float("trade_size", 0.05, 0.30, step=0.05)
 
     elif strategy_key == "PlainEMA":

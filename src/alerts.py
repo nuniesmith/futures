@@ -86,10 +86,18 @@ class _AlertStore:
     falls back to an in-memory dict (cleared on restart).
     """
 
-    def __init__(self, cooldown_sec: int = DEFAULT_COOLDOWN_SEC):
+    def __init__(
+        self,
+        cooldown_sec: int = DEFAULT_COOLDOWN_SEC,
+        _disable_redis: bool = False,
+    ):
         self.cooldown_sec = cooldown_sec
         self._memory_store: dict[str, float] = {}
         self._redis = None
+
+        if _disable_redis:
+            logger.debug("Alert store: Redis explicitly disabled (test mode)")
+            return
 
         # Try to connect to Redis
         try:
@@ -407,6 +415,7 @@ class AlertDispatcher:
         telegram_token: str = "",
         telegram_chat_id: str = "",
         cooldown_sec: int = DEFAULT_COOLDOWN_SEC,
+        _disable_redis: bool = False,
     ):
         self.slack_webhook = slack_webhook
         self.discord_webhook = discord_webhook
@@ -414,7 +423,7 @@ class AlertDispatcher:
         self.telegram_chat_id = telegram_chat_id
         self.cooldown_sec = cooldown_sec
 
-        self._store = _AlertStore(cooldown_sec)
+        self._store = _AlertStore(cooldown_sec, _disable_redis=_disable_redis)
 
         # Track statistics
         self._stats = {

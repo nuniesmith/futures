@@ -8,6 +8,7 @@ Improvements over the original:
   - Volatility regime detection (low/normal/high) per asset
   - Strategy confidence scoring based on out-of-sample consistency
   - Eight strategies optimized: TrendEMA, RSI, Breakout, VWAP, ORB, MACD, PullbackEMA, EventReaction
+  - Engine-triggered alerts: auto-dispatch on regime changes and full confluence
 
 Usage:
     from engine import get_engine
@@ -32,6 +33,7 @@ import optuna  # noqa: E402
 import pandas as pd  # noqa: E402
 from backtesting import Backtest  # noqa: E402
 
+from alerts import get_dispatcher  # noqa: E402
 from cache import (  # noqa: E402
     _cache_key,
     cache_get,
@@ -41,10 +43,11 @@ from cache import (  # noqa: E402
     get_data,
     set_cached_optimization,
 )
+from confluence import check_confluence, get_recommended_timeframes  # noqa: E402
 from costs import slippage_commission_rate  # noqa: E402
 from models import ASSETS, CONTRACT_MODE  # noqa: E402
 from regime import detect_regime_hmm, fit_detector  # noqa: E402
-from strategies import (  # noqa: E402
+from src.strategies import (  # noqa: E402
     STRATEGY_CLASSES,
     STRATEGY_LABELS,
     _safe_float,
@@ -70,6 +73,7 @@ OPTIMIZER_STRATEGIES = [
     "MACD",
     "PullbackEMA",
     "EventReaction",
+    "ICTTrendEMA",
     "VolumeProfile",
 ]
 
@@ -575,6 +579,15 @@ class DashboardEngine:
         self.backtest_results: list[dict] = []
         # Track per-asset strategy confidence across runs
         self.strategy_history: dict[str, list[str]] = {}
+        # Track previous regimes for change detection (alert dispatch)
+        self._previous_regimes: dict[str, str] = {}
+        # Track previous confluence scores for change detection
+        self._previous_confluence: dict[str, int] = {}
+
+        # Alert enable/disable flags (controlled from UI via session state)
+        self._alerts_regime_enabled: bool = True
+        self._alerts_confluence_enabled: bool = True
+        self._alerts_signal_enabled: bool = True
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -631,12 +644,169 @@ class DashboardEngine:
         with self._lock:
             return dict(self.strategy_history)
 
+    # -- alert dispatch ------------------------------------------------------
+
+    def _dispatch_regime_alert(
+        self, asset_name: str, old_regime: str, new_regime: str, confidence: float
+    ) -> None:
+        """Fire a regime-change alert via the alert dispatcher."""
+        if not self._alerts_regime_enabled:
+            logger.debug("Regime alert suppressed (disabled): %s", asset_name)
+            return
+        try:
+            dispatcher = get_dispatcher()
+            if dispatcher.has_channels:
+                dispatcher.send_regime_change(
+                    asset=asset_name,
+                    old_regime=old_regime,
+                    new_regime=new_regime,
+                    confidence=confidence,
+                )
+                logger.info(
+                    "Alert dispatched: %s regime %s → %s (%.0f%%)",
+                    asset_name,
+                    old_regime,
+                    new_regime,
+                    confidence * 100,
+                )
+        except Exception as exc:
+            logger.debug("Regime alert dispatch failed for %s: %s", asset_name, exc)
+
+    def _check_confluence_alerts(self) -> None:
+        """Check confluence across all assets and dispatch alerts on score == 3.
+
+        Uses per-asset recommended timeframes (HTF / Setup / Entry) so the
+        confluence evaluation mirrors what the Signals tab shows in the UI.
+        Falls back to the engine's default interval for any timeframe that
+        fails to fetch.
+        """
+        if not self._alerts_confluence_enabled:
+            logger.debug("Confluence alerts suppressed (disabled)")
+            return
+        try:
+            dispatcher = get_dispatcher()
+            if not dispatcher.has_channels:
+                return
+
+            for name, ticker in ASSETS.items():
+                try:
+                    # Get recommended multi-TF intervals for this asset
+                    htf_interval, setup_interval, entry_interval = (
+                        get_recommended_timeframes(name)
+                    )
+
+                    # Fetch each timeframe independently; fall back to
+                    # the engine's default interval on failure.
+                    htf_df = self._fetch_tf_safe(ticker, htf_interval, name, "HTF")
+                    setup_df = self._fetch_tf_safe(
+                        ticker, setup_interval, name, "Setup"
+                    )
+                    entry_df = self._fetch_tf_safe(
+                        ticker, entry_interval, name, "Entry"
+                    )
+
+                    # Need at least the entry frame to evaluate
+                    if entry_df.empty or len(entry_df) < 30:
+                        continue
+
+                    # If HTF or Setup failed, fall back to entry_df
+                    if htf_df.empty or len(htf_df) < 30:
+                        htf_df = entry_df
+                    if setup_df.empty or len(setup_df) < 30:
+                        setup_df = entry_df
+
+                    result = check_confluence(
+                        htf_df=htf_df,
+                        setup_df=setup_df,
+                        entry_df=entry_df,
+                        asset_name=name,
+                    )
+                    score = result.get("score", 0)
+                    direction = result.get("direction", "neutral")
+                    prev_score = self._previous_confluence.get(name, 0)
+
+                    # Only alert when confluence *transitions* to 3/3
+                    if score == 3 and prev_score < 3:
+                        tf_label = (
+                            f"HTF={htf_interval} Setup={setup_interval} "
+                            f"Entry={entry_interval}"
+                        )
+                        details = result.get("summary", "")
+                        if details:
+                            details = f"{details} [{tf_label}]"
+                        else:
+                            details = tf_label
+
+                        dispatcher.send_confluence_alert(
+                            asset=name,
+                            score=score,
+                            direction=direction,
+                            details=details,
+                        )
+                        logger.info(
+                            "Confluence alert: %s → %d/3 %s (%s)",
+                            name,
+                            score,
+                            direction,
+                            tf_label,
+                        )
+
+                    with self._lock:
+                        self._previous_confluence[name] = score
+
+                except Exception as exc:
+                    logger.debug("Confluence check failed for %s: %s", name, exc)
+        except Exception as exc:
+            logger.debug("Confluence alert sweep failed: %s", exc)
+
+    def _fetch_tf_safe(
+        self, ticker: str, interval: str, name: str, label: str
+    ) -> pd.DataFrame:
+        """Fetch data for a specific timeframe, returning empty DF on failure.
+
+        Uses a sensible period for each interval type:
+          - 1m  → 5d  (Yahoo max for 1m)
+          - 5m  → 5d
+          - 15m → 15d
+          - 1h  → 1mo
+        Falls back to the engine's configured interval/period on error.
+        """
+        _interval_to_period = {
+            "1m": "5d",
+            "2m": "5d",
+            "5m": "5d",
+            "15m": "15d",
+            "30m": "1mo",
+            "60m": "3mo",
+            "1h": "3mo",
+        }
+        period = _interval_to_period.get(interval, self.period)
+        try:
+            df = get_data(ticker, interval, period)
+            if not df.empty:
+                return df
+        except Exception as exc:
+            logger.debug(
+                "Multi-TF fetch failed for %s %s (%s): %s",
+                name,
+                label,
+                interval,
+                exc,
+            )
+
+        # Fallback: use engine's default interval
+        try:
+            return get_data(ticker, self.interval, self.period)
+        except Exception:
+            return pd.DataFrame()
+
     # -- main loop -----------------------------------------------------------
 
     def _loop(self) -> None:
         last_data = 0.0
         last_opt = 0.0
         last_bt = 0.0
+        last_confluence = 0.0
 
         # Initial data load immediately
         self._refresh_data()
@@ -655,6 +825,11 @@ class DashboardEngine:
             if now - last_bt >= self.BACKTEST_INTERVAL:
                 self._run_backtests()
                 last_bt = now
+
+            # Check confluence for alerts every 2 minutes
+            if now - last_confluence >= 120:
+                self._check_confluence_alerts()
+                last_confluence = now
 
             # Sleep in short increments so stop() is responsive
             for _ in range(10):
@@ -725,6 +900,16 @@ class DashboardEngine:
                         confidence,
                         regime,
                     )
+                    # --- Engine-triggered regime-change alerts ---
+                    with self._lock:
+                        prev_regime = self._previous_regimes.get(name)
+                    if prev_regime is not None and prev_regime != regime:
+                        regime_conf = result.get("regime_confidence", 0.0)
+                        self._dispatch_regime_alert(
+                            name, prev_regime, regime, regime_conf
+                        )
+                    with self._lock:
+                        self._previous_regimes[name] = regime
                     # Track strategy selection history
                     with self._lock:
                         history = self.strategy_history.setdefault(name, [])
