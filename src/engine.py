@@ -47,7 +47,7 @@ from confluence import check_confluence, get_recommended_timeframes  # noqa: E40
 from costs import slippage_commission_rate  # noqa: E402
 from models import ASSETS, CONTRACT_MODE  # noqa: E402
 from regime import detect_regime_hmm, fit_detector  # noqa: E402
-from src.strategies import (  # noqa: E402
+from strategies import (  # noqa: E402
     STRATEGY_CLASSES,
     STRATEGY_LABELS,
     _safe_float,

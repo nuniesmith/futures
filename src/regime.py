@@ -23,7 +23,6 @@ Usage:
     mult = info["position_multiplier"]  # scale position size by this
 """
 
-import json
 import logging
 import warnings
 from typing import Any

@@ -41,8 +41,6 @@ Usage:
     summary  = ict_summary(df)
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 
@@ -54,6 +52,13 @@ logger = logging.getLogger("ict")
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _col(df: pd.DataFrame, name: str) -> pd.Series:
+    """Extract a named column as a float Series (type-checker safe)."""
+    s = df[name]
+    assert isinstance(s, pd.Series), f"Expected Series for column {name}"
+    return pd.Series(s.to_numpy(dtype=float), index=s.index, name=s.name)
 
 
 def _safe_float(val: Any) -> float:
@@ -108,11 +113,16 @@ def _atr(
     high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14
 ) -> pd.Series:
     """Average True Range."""
-    tr1 = high - low
-    tr2 = (high - close.shift(1)).abs()
-    tr3 = (low - close.shift(1)).abs()
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    return tr.ewm(span=length, adjust=False).mean()
+    h = high.to_numpy(dtype=float)
+    l = low.to_numpy(dtype=float)  # noqa: E741
+    c = close.to_numpy(dtype=float)
+    c_prev = np.roll(c, 1)
+    c_prev[0] = np.nan
+    tr = np.maximum(np.maximum(h - l, np.abs(h - c_prev)), np.abs(l - c_prev))
+    tr_series = pd.Series(tr, index=high.index)
+    result = tr_series.ewm(span=length, adjust=False).mean()
+    assert isinstance(result, pd.Series)
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -158,9 +168,9 @@ def detect_fvgs(
     if df.empty or len(df) < max(atr_period + 3, 10):
         return []
 
-    high = df["High"].astype(float)
-    low = df["Low"].astype(float)
-    close = df["Close"].astype(float)
+    high = _col(df, "High")
+    low = _col(df, "Low")
+    close = _col(df, "Close")
     atr_series = _atr(high, low, close, atr_period)
 
     fvgs: list[dict[str, Any]] = []
@@ -292,10 +302,10 @@ def detect_order_blocks(
     if df.empty or len(df) < atr_period + lookback + 5:
         return []
 
-    high = df["High"].astype(float)
-    low = df["Low"].astype(float)
-    close = df["Close"].astype(float)
-    open_price = df["Open"].astype(float)
+    high = _col(df, "High")
+    low = _col(df, "Low")
+    close = _col(df, "Close")
+    open_price = _col(df, "Open")
     atr_series = _atr(high, low, close, atr_period)
 
     obs: list[dict[str, Any]] = []
@@ -457,9 +467,9 @@ def detect_liquidity_sweeps(
     if df.empty or len(df) < swing_lookback * 2 + atr_period + 5:
         return []
 
-    high = df["High"].astype(float)
-    low = df["Low"].astype(float)
-    close = df["Close"].astype(float)
+    high = _col(df, "High")
+    low = _col(df, "Low")
+    close = _col(df, "Close")
     atr_series = _atr(high, low, close, atr_period)
 
     swing_highs = _swing_highs(high, swing_lookback)
