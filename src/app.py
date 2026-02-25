@@ -24,6 +24,7 @@ import requests  # noqa: E402
 import streamlit as st  # noqa: E402
 from backtesting import Backtest  # noqa: E402
 
+from alerts import get_dispatcher, send_signal  # noqa: E402
 from cache import (  # noqa: E402
     REDIS_AVAILABLE,
     clear_cached_optimization,
@@ -34,11 +35,21 @@ from cache import (  # noqa: E402
     get_data,
     set_cached_indicator,
 )
+from confluence import (  # noqa: E402
+    check_confluence,
+    get_recommended_timeframes,
+)
 from costs import (  # noqa: E402
     estimate_trade_costs,
     get_cost_model,
     should_use_full_contracts,
     slippage_commission_rate,
+)
+from cvd import (  # noqa: E402
+    compute_cvd,
+    cvd_summary,
+    detect_absorption_candles,
+    detect_cvd_divergences,
 )
 from engine import (  # noqa: E402
     OPTIMIZER_STRATEGIES,
@@ -458,11 +469,20 @@ if not session_active and len(open_trades_df) > 0:
 # ---------------------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------------------
-tab_brief, tab_trades, tab_charts, tab_journal, tab_backtest, tab_engine = st.tabs(
+(
+    tab_brief,
+    tab_trades,
+    tab_charts,
+    tab_signals,
+    tab_journal,
+    tab_backtest,
+    tab_engine,
+) = st.tabs(
     [
         "🌅 Morning Brief",
         "📊 Active Trades",
         "📈 Charts",
+        "🔔 Signals",
         "📓 Journal",
         "🔬 Backtester",
         "⚙️ Engine",
@@ -1413,7 +1433,294 @@ with tab_charts:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# TAB 4 — JOURNAL
+# TAB 4 — SIGNALS (CVD, Confluence, Alerts)
+# ═══════════════════════════════════════════════════════════════════════════
+with tab_signals:
+    st.header("Signals & Confluence")
+
+    # ── CVD (Cumulative Volume Delta) ──────────────────────────────────────
+    st.subheader("📊 Cumulative Volume Delta (CVD)")
+    st.caption(
+        "Approximated from OHLCV data. Buy volume = V × (C−L)/(H−L). "
+        "Divergences between price and CVD reveal hidden accumulation/distribution."
+    )
+
+    cvd_asset = st.selectbox("CVD Asset", selected_assets, key="cvd_asset")
+
+    if cvd_asset in data and not data[cvd_asset].empty:
+        cvd_df = data[cvd_asset]
+        cvd_result = compute_cvd(cvd_df)
+        summary = cvd_summary(cvd_result) if not cvd_result.empty else {}
+
+        # Key metrics
+        cvd_m1, cvd_m2, cvd_m3, cvd_m4 = st.columns(4)
+        bias_emoji = summary.get("bias_emoji", "⚪")
+        cvd_m1.metric(
+            "CVD Bias", f"{bias_emoji} {summary.get('bias', 'neutral').title()}"
+        )
+        cvd_m2.metric("CVD Current", f"{summary.get('cvd_current', 0):,.0f}")
+        cvd_m3.metric("Delta (Latest Bar)", f"{summary.get('delta_current', 0):,.0f}")
+        cvd_m4.metric(
+            "CVD Slope",
+            f"{summary.get('cvd_slope', 0):+.3f}",
+            delta=f"{'Buying' if summary.get('cvd_slope', 0) > 0 else 'Selling'} pressure",
+            delta_color="normal" if summary.get("cvd_slope", 0) > 0 else "inverse",
+        )
+
+        # CVD chart
+        cvd_fig = go.Figure()
+        cvd_fig.add_trace(
+            go.Scatter(
+                x=cvd_result.index,
+                y=cvd_result["cvd"],
+                mode="lines",
+                name="CVD",
+                line=dict(color="#00D4AA", width=2),
+            )
+        )
+        if "cvd_ema" in cvd_result.columns:
+            cvd_fig.add_trace(
+                go.Scatter(
+                    x=cvd_result.index,
+                    y=cvd_result["cvd_ema"],
+                    mode="lines",
+                    name="CVD EMA",
+                    line=dict(color="#FFD700", width=1, dash="dash"),
+                )
+            )
+        cvd_fig.add_hline(y=0, line_dash="dot", line_color="gray", line_width=1)
+        cvd_fig.update_layout(
+            height=350,
+            template="plotly_dark",
+            yaxis_title="Cumulative Delta",
+            title=f"{cvd_asset} — Cumulative Volume Delta",
+        )
+        st.plotly_chart(cvd_fig, use_container_width=True)
+
+        # Divergences
+        divergences = detect_cvd_divergences(cvd_df)
+        if divergences:
+            st.markdown(f"**{len(divergences)} CVD Divergence(s) Detected**")
+            for div in divergences[-5:]:
+                div_emoji = "🟢" if div["type"] == "bullish" else "🔴"
+                st.caption(
+                    f"{div_emoji} **{div['type'].title()}** divergence "
+                    f"at bar {div.get('bar_index', '?')} — "
+                    f"Price {'lower low' if div['type'] == 'bullish' else 'higher high'}, "
+                    f"CVD {'higher low' if div['type'] == 'bullish' else 'lower high'}"
+                )
+        else:
+            st.caption("No CVD divergences detected in current data.")
+
+        # Absorption candles
+        absorption_series = pd.Series(detect_absorption_candles(cvd_result))
+        absorption_nonzero = pd.Series(absorption_series[absorption_series != 0])
+        n_absorptions = len(absorption_nonzero)
+        if n_absorptions > 0:
+            st.markdown(f"**{n_absorptions} Absorption Candle(s)**")
+            tail = absorption_nonzero.tail(5)
+            for i in range(len(tail)):
+                idx_val = tail.index[i]
+                sig_val = int(tail.iloc[i])
+                ab_emoji = "🟢" if sig_val > 0 else "🔴"
+                ab_type = "Bullish Absorption" if sig_val > 0 else "Bearish Absorption"
+                st.caption(f"{ab_emoji} {ab_type} at {idx_val}")
+        else:
+            st.caption("No absorption candles detected.")
+    else:
+        st.info("Select an asset with data to view CVD analysis.")
+
+    st.divider()
+
+    # ── Multi-Timeframe Confluence ─────────────────────────────────────────
+    st.subheader("🎯 Multi-Timeframe Confluence")
+    st.caption(
+        "Three-layer filter: Higher Timeframe (bias) → Setup (pattern) → Entry (timing). "
+        "Score 3/3 = high-conviction trade. Only trade on full alignment."
+    )
+
+    conf_asset = st.selectbox("Confluence Asset", selected_assets, key="conf_asset")
+
+    if conf_asset in data and not data[conf_asset].empty:
+        # Get recommended timeframes for this instrument
+        recommended_tfs = get_recommended_timeframes(conf_asset)
+        st.caption(
+            f"Recommended timeframes for {conf_asset}: "
+            f"HTF={recommended_tfs[0]}, "
+            f"Setup={recommended_tfs[1]}, "
+            f"Entry={recommended_tfs[2]}"
+        )
+
+        # Use whatever data we have as the entry timeframe
+        entry_df = data[conf_asset]
+
+        # Check confluence
+        try:
+            conf_result = check_confluence(
+                entry_df=entry_df,
+                setup_df=entry_df,  # Same data for now (single-TF approximation)
+                htf_df=entry_df,
+            )
+
+            # Display confluence score
+            conf_score = conf_result.get("score", 0)
+            bias = conf_result.get("direction", "neutral")
+
+            cc1, cc2, cc3, cc4 = st.columns(4)
+            score_emoji = "🟢" if conf_score >= 3 else "🟡" if conf_score >= 2 else "🔴"
+            cc1.metric("Confluence Score", f"{score_emoji} {conf_score}/3")
+            cc2.metric("Bias", bias.upper())
+
+            htf_data = conf_result.get("htf", {})
+            setup_data = conf_result.get("setup", {})
+            htf_dir = (
+                htf_data.get("direction", "—") if isinstance(htf_data, dict) else "—"
+            )
+            setup_dir = (
+                setup_data.get("direction", "—")
+                if isinstance(setup_data, dict)
+                else "—"
+            )
+            cc3.metric(
+                "HTF",
+                f"{'✅' if htf_dir in ('bullish', 'bearish') else '❌'} {htf_dir}",
+            )
+            cc4.metric(
+                "Setup",
+                f"{'✅' if setup_dir in ('bullish', 'bearish') else '❌'} {setup_dir}",
+            )
+
+            # Detailed breakdown
+            with st.expander("Confluence Breakdown"):
+                st.json(
+                    {
+                        k: v
+                        for k, v in conf_result.items()
+                        if not isinstance(v, (pd.DataFrame, pd.Series))
+                    }
+                )
+
+            # Confluence table for all assets
+            st.markdown("**All-Asset Confluence Summary**")
+            conf_rows = []
+            for asset_name in selected_assets:
+                if asset_name in data and not data[asset_name].empty:
+                    try:
+                        asset_conf = check_confluence(
+                            entry_df=data[asset_name],
+                            setup_df=data[asset_name],
+                            htf_df=data[asset_name],
+                        )
+                        a_score = asset_conf.get("score", 0)
+                        a_emoji = (
+                            "🟢" if a_score >= 3 else "🟡" if a_score >= 2 else "🔴"
+                        )
+                        a_htf = asset_conf.get("htf", {})
+                        a_setup = asset_conf.get("setup", {})
+                        a_entry = asset_conf.get("entry", {})
+                        conf_rows.append(
+                            {
+                                "Asset": asset_name,
+                                "Score": f"{a_emoji} {a_score}/3",
+                                "Bias": asset_conf.get("direction", "neutral").upper(),
+                                "HTF": a_htf.get("direction", "—")
+                                if isinstance(a_htf, dict)
+                                else "—",
+                                "Setup": a_setup.get("direction", "—")
+                                if isinstance(a_setup, dict)
+                                else "—",
+                                "Entry": a_entry.get("direction", "—")
+                                if isinstance(a_entry, dict)
+                                else "—",
+                            }
+                        )
+                    except Exception:
+                        conf_rows.append(
+                            {
+                                "Asset": asset_name,
+                                "Score": "—",
+                                "Bias": "—",
+                                "HTF": "—",
+                                "Setup": "—",
+                                "Entry": "—",
+                            }
+                        )
+            if conf_rows:
+                st.dataframe(pd.DataFrame(conf_rows), width="stretch", hide_index=True)
+        except Exception as e:
+            st.warning(f"Confluence analysis unavailable: {e}")
+    else:
+        st.info("Select an asset with data to evaluate confluence.")
+
+    st.divider()
+
+    # ── Alert Dispatcher Status ────────────────────────────────────────────
+    st.subheader("🔔 Alerts & Notifications")
+    st.caption(
+        "Multi-channel alert dispatcher (Slack, Discord, Telegram). "
+        "Configure via environment variables. Redis-backed dedup with 5-min cooldown."
+    )
+
+    dispatcher = get_dispatcher()
+    channels = dispatcher.channels_configured
+
+    al1, al2, al3 = st.columns(3)
+    al1.metric(
+        "Slack",
+        "✅ Connected" if "Slack" in channels else "❌ Not configured",
+    )
+    al2.metric(
+        "Discord",
+        "✅ Connected" if "Discord" in channels else "❌ Not configured",
+    )
+    al3.metric(
+        "Telegram",
+        "✅ Connected" if "Telegram" in channels else "❌ Not configured",
+    )
+
+    if not dispatcher.has_channels:
+        st.info(
+            "No alert channels configured. Set environment variables to enable:\n"
+            "- `SLACK_WEBHOOK_URL` for Slack\n"
+            "- `DISCORD_WEBHOOK_URL` for Discord\n"
+            "- `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` for Telegram"
+        )
+    else:
+        stats = dispatcher.get_stats()
+        st.caption(
+            f"Alerts sent: {stats.get('total_sent', 0)} · "
+            f"Deduplicated: {stats.get('deduplicated', 0)}"
+        )
+
+    # Manual test alert
+    if dispatcher.has_channels:
+        if st.button("Send Test Alert", key="test_alert"):
+            try:
+                send_signal(
+                    signal_key="test_alert",
+                    title="🔔 Test Alert",
+                    message="This is a test alert from the Futures Dashboard.",
+                    asset="TEST",
+                    strategy="Test Alert",
+                    direction="LONG",
+                )
+                st.success("Test alert sent!")
+            except Exception as e:
+                st.error(f"Alert failed: {e}")
+
+    # Recent alerts
+    recent = dispatcher.get_recent_alerts()
+    if recent:
+        with st.expander(f"Recent Alerts ({len(recent)})"):
+            for alert in recent[-10:]:
+                st.caption(
+                    f"[{alert.get('timestamp', '?')}] "
+                    f"{alert.get('channel', '?')}: {alert.get('message', '?')[:100]}"
+                )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TAB 5 — JOURNAL
 # ═══════════════════════════════════════════════════════════════════════════
 with tab_journal:
     st.header("Trade Journal")
@@ -1611,7 +1918,7 @@ Bullet points only, honest, constructive."""
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# TAB 5 — BACKTESTER
+# TAB 6 — BACKTESTER
 # ═══════════════════════════════════════════════════════════════════════════
 with tab_backtest:
     st.header("Backtester")
@@ -2241,8 +2548,180 @@ with tab_backtest:
             "trade_size": bt_size,
         }
 
+    elif bt_strat_key == "PullbackEMA":
+        bc1, bc2, bc3, bc4 = st.columns(4)
+        with bc1:
+            bt_ema_fast = st.number_input(
+                "Fast EMA",
+                min_value=3,
+                max_value=20,
+                value=int(opt_p.get("ema_fast", 9)),
+                key="bt_ema_fast",
+            )
+        with bc2:
+            bt_ema_mid = st.number_input(
+                "Mid EMA",
+                min_value=10,
+                max_value=40,
+                value=int(opt_p.get("ema_mid", 21)),
+                key="bt_ema_mid",
+            )
+        with bc3:
+            bt_ema_slow = st.number_input(
+                "Slow EMA",
+                min_value=30,
+                max_value=100,
+                value=int(opt_p.get("ema_slow", 50)),
+                key="bt_ema_slow",
+            )
+        with bc4:
+            bt_size = st.number_input(
+                "Size",
+                min_value=0.01,
+                max_value=0.50,
+                step=0.01,
+                value=float(opt_p.get("trade_size", 0.10)),
+                key="bt_size",
+            )
+        bc5, bc6, bc7, bc8 = st.columns(4)
+        with bc5:
+            bt_rsi_p = st.number_input(
+                "RSI Period",
+                min_value=5,
+                max_value=30,
+                value=int(opt_p.get("rsi_period", 14)),
+                key="bt_rsi_p",
+            )
+        with bc6:
+            bt_rsi_lim = st.number_input(
+                "RSI Limit",
+                min_value=20,
+                max_value=70,
+                value=int(opt_p.get("rsi_limit", 45)),
+                key="bt_rsi_lim",
+                help="RSI must be below this for longs (above 100−this for shorts)",
+            )
+        with bc7:
+            bt_sl_m = st.number_input(
+                "ATR SL ×",
+                min_value=0.5,
+                max_value=5.0,
+                step=0.25,
+                value=float(opt_p.get("atr_sl_mult", 1.5)),
+                key="bt_sl_m",
+            )
+        with bc8:
+            bt_tp_m = st.number_input(
+                "ATR TP ×",
+                min_value=0.5,
+                max_value=8.0,
+                step=0.25,
+                value=float(opt_p.get("atr_tp_mult", 2.5)),
+                key="bt_tp_m",
+            )
+        manual_params = {
+            "ema_fast": bt_ema_fast,
+            "ema_mid": bt_ema_mid,
+            "ema_slow": bt_ema_slow,
+            "rsi_period": bt_rsi_p,
+            "rsi_limit": bt_rsi_lim,
+            "atr_period": int(opt_p.get("atr_period", 14)),
+            "atr_sl_mult": bt_sl_m,
+            "atr_tp_mult": bt_tp_m,
+            "trade_size": bt_size,
+        }
+
+    elif bt_strat_key == "EventReaction":
+        bc1, bc2, bc3, bc4 = st.columns(4)
+        with bc1:
+            bt_vol_spike = st.number_input(
+                "Vol Spike ×",
+                min_value=1.0,
+                max_value=5.0,
+                step=0.25,
+                value=float(opt_p.get("vol_spike_mult", 2.0)),
+                key="bt_vol_spike",
+                help="Volume must exceed average × this to detect an event bar",
+            )
+        with bc2:
+            bt_move_atr = st.number_input(
+                "Move ATR ×",
+                min_value=0.25,
+                max_value=3.0,
+                step=0.25,
+                value=float(opt_p.get("move_atr_mult", 1.0)),
+                key="bt_move_atr",
+                help="Price move must exceed ATR × this to qualify as event bar",
+            )
+        with bc3:
+            bt_wait = st.number_input(
+                "Wait Bars",
+                min_value=1,
+                max_value=10,
+                value=int(opt_p.get("wait_bars", 2)),
+                key="bt_wait",
+                help="Bars to wait after spike before entering",
+            )
+        with bc4:
+            bt_size = st.number_input(
+                "Size",
+                min_value=0.01,
+                max_value=0.50,
+                step=0.01,
+                value=float(opt_p.get("trade_size", 0.10)),
+                key="bt_size",
+            )
+        bc5, bc6, bc7, bc8 = st.columns(4)
+        with bc5:
+            bt_vol_conf = st.number_input(
+                "Vol Confirm ×",
+                min_value=0.5,
+                max_value=4.0,
+                step=0.25,
+                value=float(opt_p.get("vol_confirm", 1.5)),
+                key="bt_vol_conf",
+                help="Post-wait volume must exceed average × this to confirm entry",
+            )
+        with bc6:
+            bt_vol_sma = st.number_input(
+                "Vol SMA",
+                min_value=5,
+                max_value=50,
+                value=int(opt_p.get("vol_sma_period", 20)),
+                key="bt_vol_sma",
+            )
+        with bc7:
+            bt_sl_m = st.number_input(
+                "ATR SL ×",
+                min_value=0.5,
+                max_value=5.0,
+                step=0.25,
+                value=float(opt_p.get("atr_sl_mult", 1.5)),
+                key="bt_sl_m",
+            )
+        with bc8:
+            bt_tp_m = st.number_input(
+                "ATR TP ×",
+                min_value=0.5,
+                max_value=8.0,
+                step=0.25,
+                value=float(opt_p.get("atr_tp_mult", 3.0)),
+                key="bt_tp_m",
+            )
+        manual_params = {
+            "vol_spike_mult": bt_vol_spike,
+            "move_atr_mult": bt_move_atr,
+            "wait_bars": bt_wait,
+            "vol_confirm": bt_vol_conf,
+            "vol_sma_period": bt_vol_sma,
+            "atr_period": int(opt_p.get("atr_period", 14)),
+            "atr_sl_mult": bt_sl_m,
+            "atr_tp_mult": bt_tp_m,
+            "trade_size": bt_size,
+        }
+
     else:
-        # Fallback for any unhandled strategy key
+        # Fallback for any unhandled strategy key (VolumeProfile, PlainEMA, etc.)
         manual_params = {"trade_size": 0.10}
 
     if asset_bt in data and not data[asset_bt].empty:
@@ -2631,7 +3110,7 @@ with tab_backtest:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# TAB 6 — ENGINE STATUS
+# TAB 7 — ENGINE STATUS
 # ═══════════════════════════════════════════════════════════════════════════
 with tab_engine:
     st.header("Background Engine")

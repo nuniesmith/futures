@@ -7,7 +7,7 @@ Improvements over the original:
   - Session time filtering (only backtest during the 3 AM–noon EST window)
   - Volatility regime detection (low/normal/high) per asset
   - Strategy confidence scoring based on out-of-sample consistency
-  - Six strategies optimized: TrendEMA, RSI, Breakout, VWAP, ORB, MACD
+  - Eight strategies optimized: TrendEMA, RSI, Breakout, VWAP, ORB, MACD, PullbackEMA, EventReaction
 
 Usage:
     from engine import get_engine
@@ -68,6 +68,8 @@ OPTIMIZER_STRATEGIES = [
     "VWAP",
     "ORB",
     "MACD",
+    "PullbackEMA",
+    "EventReaction",
     "VolumeProfile",
 ]
 

@@ -1,13 +1,15 @@
 """
 Strategy module for futures backtesting.
 
-Provides seven strategy classes with trend filters and ATR-based risk management:
+Provides nine strategy classes with trend filters and ATR-based risk management:
   1. TrendEMACross    — EMA crossover filtered by a longer trend EMA, ATR SL/TP
   2. RSIReversal      — RSI mean-reversion entries with trend filter, ATR SL/TP
   3. BreakoutStrategy  — Breakout of recent high/low with volume filter, ATR SL/TP
   4. VWAPReversion    — Mean-reversion around daily VWAP with trend filter
   5. ORBStrategy      — Opening Range Breakout of first N bars each session
   6. MACDMomentum     — MACD crossover with histogram acceleration filter
+  7. PullbackEMA      — Pullback-to-EMA with candlestick confirmation
+  8. EventReaction    — Post-event continuation/fade with volume confirmation
 
 All strategies are compatible with the `backtesting.py` library and expose
 class-level parameters that Optuna can tune.
@@ -708,6 +710,316 @@ class MACDMomentum(Strategy):
 
 
 # ---------------------------------------------------------------------------
+# Strategy 7 — Pullback-to-EMA with Candlestick Confirmation
+# ---------------------------------------------------------------------------
+
+
+def _is_bullish_engulfing(o_prev, c_prev, o_now, c_now):
+    """Detect a bullish engulfing pattern (two-bar)."""
+    prev_bearish = c_prev < o_prev
+    curr_bullish = c_now > o_now
+    engulfs = c_now > o_prev and o_now < c_prev
+    return prev_bearish and curr_bullish and engulfs
+
+
+def _is_bearish_engulfing(o_prev, c_prev, o_now, c_now):
+    """Detect a bearish engulfing pattern (two-bar)."""
+    prev_bullish = c_prev > o_prev
+    curr_bearish = c_now < o_now
+    engulfs = c_now < o_prev and o_now > c_prev
+    return prev_bullish and curr_bearish and engulfs
+
+
+def _is_hammer(o, h, lo, c, atr_val):
+    """Detect a hammer / pin-bar (bullish reversal)."""
+    body = abs(c - o)
+    full_range = h - lo
+    if full_range < 1e-10:
+        return False
+    lower_wick = min(o, c) - lo
+    upper_wick = h - max(o, c)
+    # Lower wick >= 2× body, upper wick small, close in upper half
+    return (
+        lower_wick >= 2 * body
+        and upper_wick <= body * 0.5
+        and c >= (h + lo) / 2
+        and full_range >= atr_val * 0.3
+    )
+
+
+def _is_shooting_star(o, h, lo, c, atr_val):
+    """Detect a shooting star / inverted pin (bearish reversal)."""
+    body = abs(c - o)
+    full_range = h - lo
+    if full_range < 1e-10:
+        return False
+    upper_wick = h - max(o, c)
+    lower_wick = min(o, c) - lo
+    return (
+        upper_wick >= 2 * body
+        and lower_wick <= body * 0.5
+        and c <= (h + lo) / 2
+        and full_range >= atr_val * 0.3
+    )
+
+
+class PullbackEMA(Strategy):
+    """Pullback-to-EMA with candlestick confirmation and ATR-based SL/TP.
+
+    Waits for EMAs to be stacked in trend order (fast > mid > slow for
+    bullish), then enters when price retraces to the pullback EMA and
+    prints a confirming candlestick pattern (bullish engulfing or hammer
+    for longs; bearish engulfing or shooting star for shorts).
+
+    An RSI filter prevents entries on exhausted pullbacks (e.g., RSI too
+    high in an uptrend pullback means it hasn't really pulled back).
+
+    Recommended EMA presets by instrument:
+      - ES/GC: 9/21/50  (5-min)
+      - NQ:   10/20/50  (5-min)
+      - CL:    8/21/50  (3-min, faster due to volatility)
+
+    Optimisable parameters
+    ----------------------
+    ema_fast       : int    fast EMA period (trend direction)  (5 – 15)
+    ema_mid        : int    pullback target EMA period          (15 – 30)
+    ema_slow       : int    slow EMA (trend backbone)           (40 – 80)
+    rsi_period     : int    RSI look-back for exhaustion filter (7 – 21)
+    rsi_limit      : int    RSI must be below this for longs    (30 – 60)
+    atr_period     : int    ATR look-back                       (10 – 20)
+    atr_sl_mult    : float  SL distance = ATR × this            (1.0 – 3.0)
+    atr_tp_mult    : float  TP distance = ATR × this            (1.5 – 5.0)
+    trade_size     : float  fraction of equity per trade         (0.05 – 0.30)
+    """
+
+    ema_fast: int = 9
+    ema_mid: int = 21
+    ema_slow: int = 50
+    rsi_period: int = 14
+    rsi_limit: int = 45
+    atr_period: int = 14
+    atr_sl_mult: float = 1.5
+    atr_tp_mult: float = 2.5
+    trade_size: float = 0.10
+
+    def init(self):
+        close = pd.Series(self.data.Close)
+        self.ema_f = self.I(_ema, close, self.ema_fast, name=f"EMA{self.ema_fast}")
+        self.ema_m = self.I(_ema, close, self.ema_mid, name=f"EMA{self.ema_mid}")
+        self.ema_s = self.I(_ema, close, self.ema_slow, name=f"EMA{self.ema_slow}")
+        self.rsi = self.I(_rsi, close, self.rsi_period, name=f"RSI{self.rsi_period}")
+        self.atr = self.I(
+            _atr,
+            self.data.High,
+            self.data.Low,
+            self.data.Close,
+            self.atr_period,
+            name="ATR",
+        )
+
+    def next(self):
+        atr_val = self.atr[-1]
+        if _is_nan(atr_val) or atr_val <= 0:
+            return
+
+        # Need at least 2 bars for candle patterns
+        if len(self.data.Close) < 3:
+            return
+
+        rsi_now = self.rsi[-1]
+        if _is_nan(rsi_now):
+            return
+
+        ef = self.ema_f[-1]
+        em = self.ema_m[-1]
+        es = self.ema_s[-1]
+        if _is_nan(ef) or _is_nan(em) or _is_nan(es):
+            return
+
+        # Let SL/TP manage exits
+        if self.position:
+            return
+
+        price = self.data.Close[-1]
+        o_now = self.data.Open[-1]
+        h_now = self.data.High[-1]
+        l_now = self.data.Low[-1]
+        c_now = self.data.Close[-1]
+        o_prev = self.data.Open[-2]
+        c_prev = self.data.Close[-2]
+
+        # Check EMA stacking
+        bullish_stack = ef > em > es
+        bearish_stack = ef < em < es
+
+        # Pullback detection: price touched / crossed below the mid EMA
+        pulled_to_mid_bull = l_now <= em * 1.002  # within 0.2% of mid EMA
+        pulled_to_mid_bear = h_now >= em * 0.998
+
+        # Candlestick confirmation
+        bull_candle = _is_bullish_engulfing(o_prev, c_prev, o_now, c_now) or _is_hammer(
+            o_now, h_now, l_now, c_now, atr_val
+        )
+        bear_candle = _is_bearish_engulfing(
+            o_prev, c_prev, o_now, c_now
+        ) or _is_shooting_star(o_now, h_now, l_now, c_now, atr_val)
+
+        # --- Long: stacked bull + pullback to mid EMA + bull candle + RSI filter ---
+        if (
+            bullish_stack
+            and pulled_to_mid_bull
+            and bull_candle
+            and c_now > em
+            and rsi_now < self.rsi_limit
+        ):
+            sl = price - atr_val * self.atr_sl_mult
+            tp = price + atr_val * self.atr_tp_mult
+            self.buy(size=self.trade_size, sl=sl, tp=tp)
+
+        # --- Short: stacked bear + pullback to mid EMA + bear candle + RSI filter ---
+        elif (
+            bearish_stack
+            and pulled_to_mid_bear
+            and bear_candle
+            and c_now < em
+            and rsi_now > (100 - self.rsi_limit)
+        ):
+            sl = price + atr_val * self.atr_sl_mult
+            tp = price - atr_val * self.atr_tp_mult
+            self.sell(size=self.trade_size, sl=sl, tp=tp)
+
+
+# ---------------------------------------------------------------------------
+# Strategy 8 — Event Reaction (Post-News Continuation/Fade)
+# ---------------------------------------------------------------------------
+
+
+class EventReaction(Strategy):
+    """Post-event continuation or fade strategy with volume confirmation.
+
+    This strategy is designed for high-impact economic events (CPI, NFP,
+    EIA, FOMC).  It detects "event bars" by looking for sudden volume
+    spikes (volume > vol_spike_mult × average) combined with large price
+    moves (move > move_atr_mult × ATR).  After the initial spike bar:
+
+      1. Wait `wait_bars` for the dust to settle
+      2. Enter in the direction of the spike if volume remains elevated
+         (continuation) — the most common profitable pattern
+      3. ATR-based SL/TP manage exits
+
+    The strategy naturally fires on any high-volatility catalyst bar,
+    making it useful even without an explicit event calendar.
+
+    Optimisable parameters
+    ----------------------
+    vol_spike_mult : float  volume must exceed avg × this to detect event  (1.5 – 4.0)
+    move_atr_mult  : float  price move must exceed ATR × this              (0.5 – 2.0)
+    wait_bars      : int    bars to wait after spike before entry           (1 – 5)
+    vol_confirm    : float  post-wait volume must exceed avg × this         (1.0 – 3.0)
+    vol_sma_period : int    volume SMA look-back                            (10 – 30)
+    atr_period     : int    ATR look-back                                   (10 – 20)
+    atr_sl_mult    : float  SL distance = ATR × this                        (1.0 – 3.0)
+    atr_tp_mult    : float  TP distance = ATR × this                        (1.5 – 5.0)
+    trade_size     : float  fraction of equity per trade                    (0.05 – 0.30)
+    """
+
+    vol_spike_mult: float = 2.0
+    move_atr_mult: float = 1.0
+    wait_bars: int = 2
+    vol_confirm: float = 1.5
+    vol_sma_period: int = 20
+    atr_period: int = 14
+    atr_sl_mult: float = 1.5
+    atr_tp_mult: float = 3.0
+    trade_size: float = 0.10
+
+    def init(self):
+        self.atr = self.I(
+            _atr,
+            self.data.High,
+            self.data.Low,
+            self.data.Close,
+            self.atr_period,
+            name="ATR",
+        )
+        self.vol_avg = self.I(
+            _sma, self.data.Volume, self.vol_sma_period, name="VolSMA"
+        )
+        # Track detected spike bars: direction (+1 long, -1 short) and countdown
+        # We use pre-computed arrays to avoid look-ahead
+        df = self.data.df
+        n = len(df)
+        close = df["Close"].values
+        volume = df["Volume"].values
+        high = df["High"].values
+        low = df["Low"].values
+
+        # Pre-compute ATR and volume SMA for spike detection
+        atr_arr = np.asarray(_atr(high, low, close, self.atr_period))
+        vol_sma_arr = np.asarray(pd.Series(volume).rolling(self.vol_sma_period).mean())
+
+        # Detect spike bars and build a signal array:
+        #   spike_signal[i] = direction of a spike that occurred `wait_bars` ago
+        # This avoids look-ahead: we only act on spikes from the past
+        spike_dir = np.zeros(n, dtype=float)
+        for i in range(1, n):
+            if np.isnan(atr_arr[i]) or np.isnan(vol_sma_arr[i]) or vol_sma_arr[i] <= 0:
+                continue
+            if atr_arr[i] <= 0:
+                continue
+            vol_ratio = volume[i] / vol_sma_arr[i]
+            price_move = close[i] - close[i - 1]
+            move_magnitude = abs(price_move) / atr_arr[i]
+            if (
+                vol_ratio >= self.vol_spike_mult
+                and move_magnitude >= self.move_atr_mult
+            ):
+                spike_dir[i] = 1.0 if price_move > 0 else -1.0
+
+        # Shift spike signal forward by wait_bars so we act after waiting
+        signal = np.zeros(n, dtype=float)
+        wait = int(self.wait_bars)
+        for i in range(wait, n):
+            if spike_dir[i - wait] != 0:
+                signal[i] = spike_dir[i - wait]
+
+        self.event_signal = self.I(_passthrough, signal, name="EventSignal")
+
+    def next(self):
+        atr_val = self.atr[-1]
+        if _is_nan(atr_val) or atr_val <= 0:
+            return
+
+        # Let SL/TP manage exits
+        if self.position:
+            return
+
+        signal = self.event_signal[-1]
+        if signal == 0:
+            return
+
+        # Volume confirmation: current volume must still be elevated
+        vol = self.data.Volume[-1]
+        vol_avg = self.vol_avg[-1]
+        if _is_nan(vol_avg) or vol_avg <= 0:
+            return
+        if vol < vol_avg * self.vol_confirm:
+            return  # Volume has died down — skip
+
+        price = self.data.Close[-1]
+
+        # Continuation entry in the direction of the spike
+        if signal > 0:
+            sl = price - atr_val * self.atr_sl_mult
+            tp = price + atr_val * self.atr_tp_mult
+            self.buy(size=self.trade_size, sl=sl, tp=tp)
+        elif signal < 0:
+            sl = price + atr_val * self.atr_sl_mult
+            tp = price - atr_val * self.atr_tp_mult
+            self.sell(size=self.trade_size, sl=sl, tp=tp)
+
+
+# ---------------------------------------------------------------------------
 # Legacy compatibility: plain EMA Cross (no filters, no stops)
 # ---------------------------------------------------------------------------
 
@@ -762,6 +1074,8 @@ STRATEGY_CLASSES = {
     "VWAP": VWAPReversion,
     "ORB": ORBStrategy,
     "MACD": MACDMomentum,
+    "PullbackEMA": PullbackEMA,
+    "EventReaction": EventReaction,
     "PlainEMA": PlainEMACross,
 }
 
@@ -776,6 +1090,8 @@ STRATEGY_LABELS = {
     "VWAP": "VWAP Reversion",
     "ORB": "Opening Range Breakout",
     "MACD": "MACD Momentum",
+    "PullbackEMA": "Pullback-to-EMA + Candle Confirm",
+    "EventReaction": "Event Reaction (Post-News)",
     "VolumeProfile": "Volume Profile (POC/VA)",
     "PlainEMA": "Plain EMA Cross (legacy)",
 }
@@ -851,6 +1167,36 @@ def suggest_params(trial, strategy_key: str) -> dict:
         )
         params["macd_signal"] = trial.suggest_int("macd_signal", 6, 12)
         params["trend_period"] = trial.suggest_int("trend_period", 40, 120)
+        params["atr_period"] = trial.suggest_int("atr_period", 10, 20)
+        params["atr_sl_mult"] = trial.suggest_float("atr_sl_mult", 1.0, 3.0, step=0.25)
+        params["atr_tp_mult"] = trial.suggest_float("atr_tp_mult", 1.5, 5.0, step=0.25)
+        params["trade_size"] = trial.suggest_float("trade_size", 0.05, 0.30, step=0.05)
+
+    elif strategy_key == "PullbackEMA":
+        params["ema_fast"] = trial.suggest_int("ema_fast", 5, 15)
+        params["ema_mid"] = trial.suggest_int(
+            "ema_mid", max(params["ema_fast"] + 5, 15), 30
+        )
+        params["ema_slow"] = trial.suggest_int(
+            "ema_slow", max(params["ema_mid"] + 10, 40), 80
+        )
+        params["rsi_period"] = trial.suggest_int("rsi_period", 7, 21)
+        params["rsi_limit"] = trial.suggest_int("rsi_limit", 30, 60)
+        params["atr_period"] = trial.suggest_int("atr_period", 10, 20)
+        params["atr_sl_mult"] = trial.suggest_float("atr_sl_mult", 1.0, 3.0, step=0.25)
+        params["atr_tp_mult"] = trial.suggest_float("atr_tp_mult", 1.5, 5.0, step=0.25)
+        params["trade_size"] = trial.suggest_float("trade_size", 0.05, 0.30, step=0.05)
+
+    elif strategy_key == "EventReaction":
+        params["vol_spike_mult"] = trial.suggest_float(
+            "vol_spike_mult", 1.5, 4.0, step=0.25
+        )
+        params["move_atr_mult"] = trial.suggest_float(
+            "move_atr_mult", 0.5, 2.0, step=0.25
+        )
+        params["wait_bars"] = trial.suggest_int("wait_bars", 1, 5)
+        params["vol_confirm"] = trial.suggest_float("vol_confirm", 1.0, 3.0, step=0.25)
+        params["vol_sma_period"] = trial.suggest_int("vol_sma_period", 10, 30)
         params["atr_period"] = trial.suggest_int("atr_period", 10, 20)
         params["atr_sl_mult"] = trial.suggest_float("atr_sl_mult", 1.0, 3.0, step=0.25)
         params["atr_tp_mult"] = trial.suggest_float("atr_tp_mult", 1.5, 5.0, step=0.25)
