@@ -19,6 +19,24 @@ import pandas as pd
 DB_PATH = os.getenv("DB_PATH", "futures_journal.db")
 
 # ---------------------------------------------------------------------------
+# Daily journal schema — simple end-of-day P&L entries
+# ---------------------------------------------------------------------------
+_SCHEMA_DAILY_JOURNAL = """
+CREATE TABLE IF NOT EXISTS daily_journal (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date      TEXT    NOT NULL UNIQUE,
+    account_size    INTEGER NOT NULL,
+    gross_pnl       REAL    NOT NULL DEFAULT 0.0,
+    net_pnl         REAL    NOT NULL DEFAULT 0.0,
+    commissions     REAL    NOT NULL DEFAULT 0.0,
+    num_contracts   INTEGER DEFAULT 0,
+    instruments     TEXT    DEFAULT '',
+    notes           TEXT    DEFAULT '',
+    created_at      TEXT    NOT NULL
+);
+"""
+
+# ---------------------------------------------------------------------------
 # Contract mode: "micro" (default) or "full"
 # Set via environment variable CONTRACT_MODE or toggle at runtime.
 # ---------------------------------------------------------------------------
@@ -262,7 +280,7 @@ def _get_conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Initialise the trades_v2 table, migrating from v1 if needed."""
+    """Initialise the trades_v2 and daily_journal tables, migrating from v1 if needed."""
     conn = _get_conn()
 
     # Check if new table already exists
@@ -270,11 +288,16 @@ def init_db() -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='trades_v2'"
     )
     if cur.fetchone() is not None:
+        # trades_v2 exists — just ensure daily_journal also exists
+        conn.executescript(_SCHEMA_DAILY_JOURNAL)
         conn.close()
         return
 
     # Create v2 schema
     conn.executescript(_SCHEMA_V2)
+
+    # Create daily journal schema
+    conn.executescript(_SCHEMA_DAILY_JOURNAL)
 
     # Migrate from v1 if it exists
     cur = conn.execute(
@@ -552,3 +575,170 @@ def calc_pnl(
         return (close_price - entry) * point_value * contracts
     else:
         return (entry - close_price) * point_value * contracts
+
+
+# ---------------------------------------------------------------------------
+# Daily Journal CRUD
+# ---------------------------------------------------------------------------
+
+
+def save_daily_journal(
+    trade_date: str,
+    account_size: int,
+    gross_pnl: float,
+    net_pnl: float,
+    num_contracts: int = 0,
+    instruments: str = "",
+    notes: str = "",
+) -> int:
+    """Save or update a daily journal entry.
+
+    Commissions are auto-calculated as gross_pnl - net_pnl.
+    If an entry already exists for the given date, it is updated.
+    Returns the row id.
+    """
+    commissions = round(gross_pnl - net_pnl, 2)
+    now = datetime.now(tz=_EST).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+
+    # Check if entry exists for this date
+    existing = conn.execute(
+        "SELECT id FROM daily_journal WHERE trade_date = ?", (trade_date,)
+    ).fetchone()
+
+    if existing:
+        conn.execute(
+            """UPDATE daily_journal
+               SET account_size = ?, gross_pnl = ?, net_pnl = ?,
+                   commissions = ?, num_contracts = ?, instruments = ?,
+                   notes = ?, created_at = ?
+               WHERE trade_date = ?""",
+            (
+                account_size,
+                round(gross_pnl, 2),
+                round(net_pnl, 2),
+                commissions,
+                num_contracts,
+                instruments,
+                notes,
+                now,
+                trade_date,
+            ),
+        )
+        row_id = existing["id"]
+    else:
+        cur = conn.execute(
+            """INSERT INTO daily_journal
+               (trade_date, account_size, gross_pnl, net_pnl, commissions,
+                num_contracts, instruments, notes, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                trade_date,
+                account_size,
+                round(gross_pnl, 2),
+                round(net_pnl, 2),
+                commissions,
+                num_contracts,
+                instruments,
+                notes,
+                now,
+            ),
+        )
+        row_id = cur.lastrowid
+
+    conn.commit()
+    conn.close()
+    return row_id  # type: ignore[return-value]
+
+
+def get_daily_journal(
+    limit: int = 30,
+    account_size: Optional[int] = None,
+) -> pd.DataFrame:
+    """Return recent daily journal entries."""
+    conn = _get_conn()
+    if account_size:
+        df = pd.read_sql(
+            """SELECT * FROM daily_journal
+               WHERE account_size = ?
+               ORDER BY trade_date DESC LIMIT ?""",
+            conn,
+            params=(account_size, limit),
+        )
+    else:
+        df = pd.read_sql(
+            "SELECT * FROM daily_journal ORDER BY trade_date DESC LIMIT ?",
+            conn,
+            params=(limit,),
+        )
+    conn.close()
+    return df
+
+
+def get_journal_stats(account_size: Optional[int] = None) -> dict:
+    """Compute aggregate stats from the daily journal.
+
+    Returns dict with total_days, total_gross, total_net, total_commissions,
+    win_days, loss_days, win_rate, avg_daily_pnl, best_day, worst_day,
+    current_streak.
+    """
+    df = get_daily_journal(limit=9999, account_size=account_size)
+    if df.empty:
+        return {
+            "total_days": 0,
+            "total_gross": 0.0,
+            "total_net": 0.0,
+            "total_commissions": 0.0,
+            "win_days": 0,
+            "loss_days": 0,
+            "break_even_days": 0,
+            "win_rate": 0.0,
+            "avg_daily_net": 0.0,
+            "best_day": 0.0,
+            "worst_day": 0.0,
+            "current_streak": 0,
+        }
+
+    total_days = len(df)
+    total_gross = float(df["gross_pnl"].sum())
+    total_net = float(df["net_pnl"].sum())
+    total_commissions = float(df["commissions"].sum())
+    win_days = int((df["net_pnl"] > 0).sum())
+    loss_days = int((df["net_pnl"] < 0).sum())
+    break_even_days = int((df["net_pnl"] == 0).sum())
+    win_rate = win_days / total_days * 100 if total_days > 0 else 0.0
+    avg_daily_net = total_net / total_days if total_days > 0 else 0.0
+    best_day = float(df["net_pnl"].max())
+    worst_day = float(df["net_pnl"].min())
+
+    # Current streak (sorted by date ascending for streak calc)
+    sorted_df = df.sort_values("trade_date", ascending=True)
+    streak = 0
+    for pnl in reversed(sorted_df["net_pnl"].tolist()):
+        if pnl > 0:
+            if streak >= 0:
+                streak += 1
+            else:
+                break
+        elif pnl < 0:
+            if streak <= 0:
+                streak -= 1
+            else:
+                break
+        else:
+            break
+
+    return {
+        "total_days": total_days,
+        "total_gross": round(total_gross, 2),
+        "total_net": round(total_net, 2),
+        "total_commissions": round(total_commissions, 2),
+        "win_days": win_days,
+        "loss_days": loss_days,
+        "break_even_days": break_even_days,
+        "win_rate": round(win_rate, 1),
+        "avg_daily_net": round(avg_daily_net, 2),
+        "best_day": round(best_day, 2),
+        "worst_day": round(worst_day, 2),
+        "current_streak": streak,
+    }

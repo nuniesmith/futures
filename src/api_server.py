@@ -5,24 +5,28 @@ Run alongside the Streamlit dashboard:
     python api_server.py
 
 Listens on port 8000. Supports:
-    POST /trades          - Create a new OPEN trade
-    POST /trades/{id}/close - Close a trade with exit price
-    POST /trades/{id}/cancel - Cancel an open trade
-    POST /log_trade       - Legacy endpoint (creates and immediately closes)
-    GET  /trades          - List trades (filterable by status, account_size)
-    GET  /trades/open     - List open trades
-    GET  /trades/{id}     - Get single trade
-    GET  /health          - Health check
+    POST /trades              - Create a new OPEN trade
+    POST /trades/{id}/close   - Close a trade with exit price
+    POST /trades/{id}/cancel  - Cancel an open trade
+    POST /log_trade           - Legacy endpoint (creates and immediately closes)
+    GET  /trades              - List trades (filterable by status, account_size)
+    GET  /trades/open         - List open trades
+    GET  /trades/{id}         - Get single trade
+    POST /update_positions    - NinjaTrader live position bridge (push)
+    GET  /positions           - Current live positions from NinjaTrader
+    GET  /health              - Health check
 """
 
+import json
+import logging
 import os
 import sqlite3
 import sys
 from datetime import datetime
+from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 _EST = ZoneInfo("America/New_York")
-from typing import Optional
 
 # Ensure sibling modules are importable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -30,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from cache import _cache_key, cache_get, cache_set
 from models import (
     ACCOUNT_PROFILES,
     CONTRACT_SPECS,
@@ -46,14 +51,26 @@ from models import (
     init_db,
 )
 
+logger = logging.getLogger("api_server")
+
 app = FastAPI(
     title="Futures Dashboard Trade API",
-    description="REST API for trade management — supports $50k / $100k / $150k accounts",
-    version="2.0.0",
+    description=(
+        "REST API for trade management and NinjaTrader live position bridge — "
+        "supports $50k / $100k / $150k accounts"
+    ),
+    version="3.0.0",
 )
 
 # Initialise DB on startup
 init_db()
+
+
+# ---------------------------------------------------------------------------
+# Cache key & TTL for live positions from NinjaTrader
+# ---------------------------------------------------------------------------
+_POSITIONS_CACHE_KEY = _cache_key("live_positions", "current")
+_POSITIONS_TTL = 7200  # 2 hours — positions persist across brief disconnects
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +127,43 @@ class TradeResponse(BaseModel):
     rr: Optional[float] = None
     notes: str = ""
     strategy: str = ""
+
+
+# ---------------------------------------------------------------------------
+# NinjaTrader Live Position Bridge models
+# ---------------------------------------------------------------------------
+
+
+class NTPosition(BaseModel):
+    """A single live position pushed from NinjaTrader."""
+
+    symbol: str = Field(..., description="Instrument full name, e.g. 'MESZ5'")
+    side: str = Field(..., description="Long or Short")
+    quantity: float = Field(..., description="Number of contracts")
+    avgPrice: float = Field(..., description="Average fill price")
+    unrealizedPnL: float = Field(0.0, description="Current unrealized P&L in USD")
+    lastUpdate: Optional[str] = Field(None, description="ISO timestamp of last update")
+
+
+class NTPositionsPayload(BaseModel):
+    """Payload pushed by the LivePositionBridge NinjaTrader indicator."""
+
+    account: str = Field(..., description="NinjaTrader account name, e.g. 'Sim101'")
+    positions: List[NTPosition] = Field(
+        default_factory=list, description="List of open positions"
+    )
+    timestamp: Optional[str] = Field(None, description="UTC timestamp from NT")
+
+
+class NTPositionsResponse(BaseModel):
+    """Response returned by GET /positions."""
+
+    account: str = ""
+    positions: List[NTPosition] = []
+    timestamp: str = ""
+    received_at: str = ""
+    has_positions: bool = False
+    total_unrealized_pnl: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +335,165 @@ def log_trade(trade: LegacyTradeRequest):
 
 
 # ---------------------------------------------------------------------------
+# NinjaTrader Live Position Bridge
+# ---------------------------------------------------------------------------
+
+
+@app.post("/update_positions")
+def api_update_positions(payload: NTPositionsPayload):
+    """Receive live positions from NinjaTrader's LivePositionBridge indicator.
+
+    The NinjaTrader indicator POSTs here on every position change (open,
+    close, partial fill, PnL tick).  The payload is stored in the cache
+    so the Streamlit dashboard can read it instantly.
+
+    Payload example (from NT indicator):
+        {
+            "account": "Sim101",
+            "positions": [
+                {
+                    "symbol": "MESZ5",
+                    "side": "Long",
+                    "quantity": 5,
+                    "avgPrice": 6045.25,
+                    "unrealizedPnL": 125.00,
+                    "lastUpdate": "2025-01-15T14:30:00Z"
+                }
+            ],
+            "timestamp": "2025-01-15T14:30:00Z"
+        }
+    """
+    received_at = datetime.now(tz=_EST).isoformat()
+
+    # Build the stored object
+    stored = {
+        "account": payload.account,
+        "positions": [p.model_dump() for p in payload.positions],
+        "timestamp": payload.timestamp or received_at,
+        "received_at": received_at,
+    }
+
+    cache_set(_POSITIONS_CACHE_KEY, json.dumps(stored).encode(), _POSITIONS_TTL)
+
+    total_pnl = sum(p.unrealizedPnL for p in payload.positions)
+    open_count = len([p for p in payload.positions if p.quantity > 0])
+
+    logger.info(
+        "Position update from %s: %d open, unrealized P&L: $%.2f",
+        payload.account,
+        open_count,
+        total_pnl,
+    )
+
+    return {
+        "status": "ok",
+        "positions_received": len(payload.positions),
+        "open_positions": open_count,
+        "total_unrealized_pnl": round(total_pnl, 2),
+        "received_at": received_at,
+    }
+
+
+@app.get("/positions", response_model=NTPositionsResponse)
+def api_get_positions():
+    """Get current live positions from NinjaTrader.
+
+    Returns the most recent position snapshot pushed by the
+    LivePositionBridge indicator.  If no data has been received
+    (or the cache has expired), returns an empty response.
+    """
+    raw = cache_get(_POSITIONS_CACHE_KEY)
+    if raw is None:
+        return NTPositionsResponse()
+
+    try:
+        data = json.loads(raw.decode())
+        positions = [NTPosition(**p) for p in data.get("positions", [])]
+        total_pnl = sum(p.unrealizedPnL for p in positions)
+
+        return NTPositionsResponse(
+            account=data.get("account", ""),
+            positions=positions,
+            timestamp=data.get("timestamp", ""),
+            received_at=data.get("received_at", ""),
+            has_positions=len(positions) > 0,
+            total_unrealized_pnl=round(total_pnl, 2),
+        )
+    except Exception as exc:
+        logger.error("Failed to parse cached positions: %s", exc)
+        return NTPositionsResponse()
+
+
+@app.delete("/positions")
+def api_clear_positions():
+    """Clear cached live positions (e.g. end of day reset).
+
+    Useful when NinjaTrader is closed but stale position data
+    remains in cache.
+    """
+    from cache import REDIS_AVAILABLE
+
+    if REDIS_AVAILABLE:
+        from cache import _r
+
+        if _r is not None:
+            _r.delete(_POSITIONS_CACHE_KEY)
+    else:
+        from cache import _mem_cache
+
+        _mem_cache.pop(_POSITIONS_CACHE_KEY, None)
+
+    return {"status": "cleared", "timestamp": datetime.now(tz=_EST).isoformat()}
+
+
+# ---------------------------------------------------------------------------
+# Helper: read live positions from cache (importable by other modules)
+# ---------------------------------------------------------------------------
+
+
+def get_live_positions() -> dict:
+    """Read the latest NinjaTrader positions from cache.
+
+    Returns a dict with keys: account, positions (list of dicts),
+    timestamp, received_at, has_positions, total_unrealized_pnl.
+
+    Importable by app.py and grok_helper.py without going through HTTP.
+    """
+    raw = cache_get(_POSITIONS_CACHE_KEY)
+    if raw is None:
+        return {
+            "account": "",
+            "positions": [],
+            "timestamp": "",
+            "received_at": "",
+            "has_positions": False,
+            "total_unrealized_pnl": 0.0,
+        }
+
+    try:
+        data = json.loads(raw.decode())
+        positions = data.get("positions", [])
+        total_pnl = sum(p.get("unrealizedPnL", 0) for p in positions)
+        return {
+            "account": data.get("account", ""),
+            "positions": positions,
+            "timestamp": data.get("timestamp", ""),
+            "received_at": data.get("received_at", ""),
+            "has_positions": len(positions) > 0,
+            "total_unrealized_pnl": round(total_pnl, 2),
+        }
+    except Exception:
+        return {
+            "account": "",
+            "positions": [],
+            "timestamp": "",
+            "received_at": "",
+            "has_positions": False,
+            "total_unrealized_pnl": 0.0,
+        }
+
+
+# ---------------------------------------------------------------------------
 # Info endpoints
 # ---------------------------------------------------------------------------
 
@@ -300,10 +513,17 @@ def api_assets():
 @app.get("/health")
 def health():
     """Health check."""
+    positions = get_live_positions()
     return {
         "status": "ok",
         "db_path": DB_PATH,
         "timestamp": datetime.now(tz=_EST).isoformat(),
+        "nt_bridge": {
+            "connected": positions["has_positions"],
+            "account": positions["account"],
+            "open_positions": len(positions["positions"]),
+            "last_update": positions["received_at"],
+        },
     }
 
 

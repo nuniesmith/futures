@@ -41,10 +41,16 @@ from cache import (  # noqa: E402
     get_cached_optimization,
     get_daily,
     get_data,
+    get_data_source,
     set_cached_optimization,
 )
 from confluence import check_confluence, get_recommended_timeframes  # noqa: E402
 from costs import slippage_commission_rate  # noqa: E402
+from massive_client import (  # noqa: E402
+    MassiveFeedManager,
+    get_massive_provider,
+    is_massive_available,
+)
 from models import ASSETS, CONTRACT_MODE  # noqa: E402
 from regime import detect_regime_hmm, fit_detector  # noqa: E402
 from strategies import (  # noqa: E402
@@ -574,6 +580,14 @@ class DashboardEngine:
                 "progress": "",
                 "error": None,
             },
+            "live_feed": {
+                "status": "off",
+                "connected": False,
+                "bars": 0,
+                "trades": 0,
+                "data_source": "yfinance",
+                "error": None,
+            },
         }
 
         self.backtest_results: list[dict] = []
@@ -589,6 +603,10 @@ class DashboardEngine:
         self._alerts_confluence_enabled: bool = True
         self._alerts_signal_enabled: bool = True
 
+        # Massive WebSocket live feed manager
+        self._live_feed: MassiveFeedManager | None = None
+        self._live_feed_enabled: bool = False
+
     # -- lifecycle -----------------------------------------------------------
 
     def start(self) -> None:
@@ -599,20 +617,133 @@ class DashboardEngine:
         self._thread.start()
         with self._lock:
             self.status["engine"] = "running"
+            self.status["live_feed"]["data_source"] = get_data_source()
         logger.info(
-            "Engine started  account=%s  interval=%s  period=%s",
+            "Engine started  account=%s  interval=%s  period=%s  data_source=%s",
             self.account_size,
             self.interval,
             self.period,
+            get_data_source(),
         )
 
-    def stop(self) -> None:
+        # Auto-start the live WebSocket feed if Massive API is available
+        if is_massive_available():
+            self.start_live_feed()
+
+    async def stop(self) -> None:
         self._running = False
+        await self.stop_live_feed()
         with self._lock:
             self.status["engine"] = "stopped"
         if self._thread is not None:
             self._thread.join(timeout=5)
         logger.info("Engine stopped")
+
+    # -- live feed management ------------------------------------------------
+
+    def start_live_feed(self) -> bool:
+        """Start the Massive WebSocket live feed for all tracked assets.
+
+        Streams real-time minute bars and trades into the cache so the
+        dashboard stays current without polling.  Returns True on success.
+        """
+        if self._live_feed is not None and self._live_feed.is_running:
+            logger.info("Live feed already running")
+            return True
+
+        if not is_massive_available():
+            logger.info("Massive API not available — live feed skipped")
+            with self._lock:
+                self.status["live_feed"]["status"] = "unavailable"
+                self.status["live_feed"]["error"] = "MASSIVE_API_KEY not set"
+            return False
+
+        try:
+            yahoo_tickers = list(ASSETS.values())
+            self._live_feed = MassiveFeedManager(
+                yahoo_tickers=yahoo_tickers,
+                provider=get_massive_provider(),
+                subscribe_trades=True,
+                subscribe_quotes=False,
+            )
+
+            # Register a callback to log new bars
+            def _on_bar(yahoo_ticker: str, bar: dict) -> None:
+                logger.debug(
+                    "Live bar: %s  O=%.2f H=%.2f L=%.2f C=%.2f V=%s",
+                    yahoo_ticker,
+                    bar.get("open", 0),
+                    bar.get("high", 0),
+                    bar.get("low", 0),
+                    bar.get("close", 0),
+                    bar.get("volume", 0),
+                )
+
+            self._live_feed.on_bar(_on_bar)
+            started = self._live_feed.start()
+
+            with self._lock:
+                if started:
+                    self.status["live_feed"]["status"] = "running"
+                    self.status["live_feed"]["connected"] = True
+                    self.status["live_feed"]["error"] = None
+                    self._live_feed_enabled = True
+                    logger.info("Live feed started for %d assets", len(yahoo_tickers))
+                else:
+                    self.status["live_feed"]["status"] = "failed"
+                    self.status["live_feed"]["error"] = "Could not start WebSocket"
+
+            return started
+
+        except Exception as exc:
+            logger.error("Failed to start live feed: %s", exc)
+            with self._lock:
+                self.status["live_feed"]["status"] = "error"
+                self.status["live_feed"]["error"] = str(exc)
+            return False
+
+    async def stop_live_feed(self) -> None:
+        """Stop the Massive WebSocket live feed."""
+        if self._live_feed is not None:
+            await self._live_feed.stop()
+            with self._lock:
+                self.status["live_feed"]["status"] = "off"
+                self.status["live_feed"]["connected"] = False
+            self._live_feed_enabled = False
+            logger.info("Live feed stopped")
+
+    def upgrade_live_feed(self) -> None:
+        """Switch the live feed to per-second aggregates (positions open)."""
+        if self._live_feed is not None and self._live_feed.is_running:
+            self._live_feed.upgrade_to_second_aggs()
+            logger.info("Live feed upgraded to per-second aggregates")
+
+    def downgrade_live_feed(self) -> None:
+        """Switch the live feed back to per-minute aggregates."""
+        if self._live_feed is not None and self._live_feed.is_running:
+            self._live_feed.downgrade_to_minute_aggs()
+            logger.info("Live feed downgraded to per-minute aggregates")
+
+    def get_live_feed_status(self) -> dict:
+        """Return current live feed status for the UI."""
+        if self._live_feed is None:
+            return {
+                "status": "off",
+                "connected": False,
+                "data_source": get_data_source(),
+            }
+        feed_status = self._live_feed.get_status()
+        return {
+            "status": "running" if feed_status["running"] else "off",
+            "connected": feed_status["connected"],
+            "tickers": feed_status["tickers"],
+            "bars": feed_status["bar_count"],
+            "trades": feed_status["trade_count"],
+            "msgs": feed_status["msg_count"],
+            "uptime": feed_status["uptime_seconds"],
+            "errors": feed_status["errors"],
+            "data_source": get_data_source(),
+        }
 
     def update_settings(
         self,
@@ -630,13 +761,35 @@ class DashboardEngine:
 
     def get_status(self) -> dict:
         with self._lock:
-            return {
+            status_copy = {
                 k: (dict(v) if isinstance(v, dict) else v)
                 for k, v in self.status.items()
             }
+        # Merge in live feed stats if running
+        if self._live_feed is not None:
+            feed_info = self._live_feed.get_status()
+            status_copy["live_feed"] = {
+                "status": "running" if feed_info["running"] else "off",
+                "connected": feed_info["connected"],
+                "bars": feed_info["bar_count"],
+                "trades": feed_info["trade_count"],
+                "data_source": get_data_source(),
+                "error": (feed_info["errors"][-1] if feed_info["errors"] else None),
+            }
+        else:
+            status_copy.setdefault("live_feed", {})
+            status_copy["live_feed"]["data_source"] = get_data_source()
+        return status_copy
 
     def force_refresh(self) -> None:
         """Trigger an immediate data refresh in a separate thread."""
+        # Invalidate Massive contract cache so we pick up any rolls
+        try:
+            provider = get_massive_provider()
+            if provider.is_available:
+                provider.invalidate_contract_cache()
+        except Exception:
+            pass
         threading.Thread(target=self._refresh_data, daemon=True).start()
 
     def get_strategy_history(self) -> dict[str, list[str]]:
@@ -846,8 +999,28 @@ class DashboardEngine:
         errors: list[str] = []
         for name, ticker in ASSETS.items():
             try:
+                # Primary interval (5m)
                 get_data(ticker, self.interval, self.period)
                 get_daily(ticker)
+
+                # 1-minute data — the live heartbeat
+                try:
+                    get_data(ticker, "1m", "1d")
+                except Exception as exc_1m:
+                    logger.debug("1m fetch failed for %s: %s", name, exc_1m)
+
+                # Multi-TF prefetch for confluence (HTF / Setup / Entry)
+                htf_iv, setup_iv, entry_iv = get_recommended_timeframes(name)
+                for iv, label in [
+                    (htf_iv, "HTF"),
+                    (setup_iv, "Setup"),
+                    (entry_iv, "Entry"),
+                ]:
+                    if iv != self.interval and iv != "1m":
+                        try:
+                            self._fetch_tf_safe(ticker, iv, name, label)
+                        except Exception:
+                            pass
             except Exception as exc:
                 msg = f"{name}: {exc}"
                 errors.append(msg)
@@ -859,7 +1032,11 @@ class DashboardEngine:
             self.status["data_refresh"]["status"] = "idle"
             self.status["data_refresh"]["error"] = "; ".join(errors) if errors else None
         if not errors:
-            logger.info("Data refresh complete for %d assets", len(ASSETS))
+            logger.info(
+                "Data refresh complete for %d assets (1m + %s + multi-TF)",
+                len(ASSETS),
+                self.interval,
+            )
 
     # -- optimization --------------------------------------------------------
 

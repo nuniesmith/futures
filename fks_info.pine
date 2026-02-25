@@ -1,0 +1,1159 @@
+//  FKS Information Dashboard
+//  © nuniesmith
+
+//@version=6
+indicator("FKS Info Dashboard", overlay=true, max_labels_count=500)
+
+// ==================================================================================
+// DASHBOARD CONFIGURATION
+// ==================================================================================
+
+// --- Dashboard Settings ---
+var group_dashboard = "Dashboard Settings"
+show_trend_info = input.bool(true, title = "Show Trend Info", group = group_dashboard)
+show_wave_analysis = input.bool(true, title = "Show Wave Analysis", group = group_dashboard)
+show_market_regime = input.bool(true, title = "Show Market Regime", group = group_dashboard)
+show_sr_analysis = input.bool(true, title = "Show Support/Resistance Analysis", group = group_dashboard)
+show_volatility = input.bool(true, title = "Show Volatility Analysis", group = group_dashboard)
+dashboard_position = input.string("top_right", title = "Dashboard Position", options = ["top_right", "top_left", "bottom_right", "bottom_left"], group = group_dashboard)
+color_theme = input.string("dark", title = "Color Theme", options = ["dark", "light"], group = group_dashboard)
+show_plot_values = input.bool(false, title = "Show Core Calculation Plots", tooltip = "Enable to show plots for use with alerts", group = group_dashboard)
+
+// --- Trend Speed Parameters ---
+var group_trend_speed = "Trend Speed Analysis"
+asset_type = input.string('Gold', title = 'Asset Type', options = ['Gold', 'Crypto', 'Stocks', 'Forex'], group = group_trend_speed)
+max_length = input.int(20, minval = 1, title = 'Maximum Length', group = group_trend_speed)
+accel_multiplier = input.float(0.02, minval = 0.01, step = 0.01, title = 'Accelerator Multiplier', group = group_trend_speed)
+lookback_period = input.int(200, minval = 1, step = 1, title = 'Lookback Period', group = group_trend_speed)
+min_wave_ratio = input.float(1.5, minval = 0.1, step = 0.1, title = 'Minimum Wave Ratio', group = group_trend_speed)
+exit_momentum_threshold = input.float(0.7, minval = 0.1, maxval = 1.0, step = 0.1, title = 'Exit Momentum Threshold', group = group_trend_speed)
+collen = input.int(100, step = 10, minval = 5, title = 'Collection Period', group = group_trend_speed)
+
+// --- Alert Settings ---
+var group_alerts = "Alert Settings"
+signal_threshold = input.float(1.3, minval = 0.5, step = 0.1, title = "Signal Threshold", group = group_alerts)
+quality_threshold = input.float(0.6, minval = 0.1, maxval = 1.0, step = 0.1, title = "Quality Threshold", group = group_alerts)
+require_trend_alignment = input.bool(true, title = "Require Trend Alignment", group = group_alerts)
+minimum_wave_ratio = input.float(1.5, minval = 0.1, step = 0.1, title = "Minimum Wave Ratio", group = group_alerts)
+
+// --- Support/Resistance Settings ---
+var group_sr = "Support/Resistance Settings"
+sr_lookback = input.int(20, minval = 5, title = 'S/R Lookback Periods', group = group_sr)
+sr_threshold = input.float(0.3, minval = 0.1, maxval = 1.0, step = 0.1, title = 'S/R Sensitivity', group = group_sr)
+include_sr = input.bool(true, title = 'Use Higher TF S/R Analysis', group = group_sr)
+
+// --- Time Settings ---
+var group_time_settings = "Time Settings"
+start_date = input.time(timestamp('1 Jan 2020'), "Start Date", group = group_time_settings)
+timer_option = input.string('From start', title = 'Timer Option', options = ['Custom', 'From start'], group = group_time_settings)
+
+// ==================================================================================
+// UTILITY FUNCTIONS (All top-level)
+// ==================================================================================
+
+// Function to safely divide avoiding zeros
+safeDivide(numerator, denominator, defaultValue) =>
+    denominator == 0 or na(denominator) ? defaultValue : numerator / denominator
+
+// Function to determine trend strength category
+trendStrengthCategory(ratio) =>
+    if ratio > 2.0
+        "Very Strong"
+    else if ratio > 1.5
+        "Strong"
+    else if ratio > 1.0
+        "Moderate"
+    else if ratio > 0.5
+        "Weak"
+    else
+        "Very Weak"
+
+// Define StartTime function
+StartTime() =>
+    timer_option == "Custom" ? time > start_date : true
+
+// Function to compute the accelerator factor with normalization
+calc_accel_factor(float counts_diff, float prev_counts_diff) =>
+    // Compute the change in counts_diff
+    delta_counts_diff = math.abs(counts_diff - prev_counts_diff)
+
+    // Normalize delta_counts_diff over last 200 bars
+    float max_delta_counts_diff = ta.highest(delta_counts_diff, 200)
+    max_delta_counts_diff := max_delta_counts_diff == 0 ? 1 : max_delta_counts_diff
+
+    // Compute accelerator factor
+    float accel_factor = delta_counts_diff / max_delta_counts_diff
+
+    accel_factor
+
+// Function to adjust alpha using the accelerator factor
+adjust_alpha(float dyn_length, float accel_factor, float accel_multiplier) =>
+    // Adjust alpha with accelerator factor
+    alpha_base = 2 / (dyn_length + 1)
+    alpha = alpha_base * (1 + accel_factor * accel_multiplier * 0.8) // Reduced sensitivity by 20%
+    alpha := math.min(0.9, alpha)  // Cap at 0.9 instead of 1.0 for smoother transitions
+
+    alpha
+
+// Function to detect bullish candlestick patterns
+detectBullishCandlePattern() =>
+    body_size = math.abs(close - open)
+    candle_range = high - low
+    candle_range := candle_range == 0 ? 0.00001 : candle_range // Avoid division by zero
+    lower_wick = math.min(open, close) - low
+    upper_wick = high - math.max(open, close)
+
+    // Hammer pattern (small body, long lower wick)
+    hammer = body_size < candle_range * 0.3 and lower_wick > body_size * 2 and upper_wick < body_size
+
+    // Bullish engulfing (current green body engulfs previous red body)
+    bullish_engulfing = close > open and close[1] < open[1] and close > open[1] and open < close[1]
+
+    // Pin bar / rejection (long lower wick rejecting lower prices)
+    pin_bar = lower_wick > candle_range * 0.6 and body_size < candle_range * 0.3 and upper_wick < candle_range * 0.3
+
+    hammer or bullish_engulfing or pin_bar
+
+// Function to detect bearish candlestick patterns
+detectBearishCandlePattern() =>
+    body_size = math.abs(close - open)
+    candle_range = high - low
+    candle_range := candle_range == 0 ? 0.00001 : candle_range // Avoid division by zero
+    lower_wick = math.min(open, close) - low
+    upper_wick = high - math.max(open, close)
+
+    // Shooting star (small body, long upper wick)
+    shooting_star = body_size < candle_range * 0.3 and upper_wick > body_size * 2 and lower_wick < body_size
+
+    // Bearish engulfing (current red body engulfs previous green body)
+    bearish_engulfing = close < open and close[1] > open[1] and close < open[1] and open > close[1]
+
+    // Pin bar / rejection (long upper wick rejecting higher prices)
+    pin_bar = upper_wick > candle_range * 0.6 and body_size < candle_range * 0.3 and lower_wick < candle_range * 0.3
+
+    shooting_star or bearish_engulfing or pin_bar
+
+// Function to find significant swing highs
+findSwingHighs(src, length, threshold) =>
+    var pivots = array.new_float(0)
+    if pivots.size() > 10  // Limit array size
+        pivots.shift()
+
+    float highest_val = ta.highest(src, length - 1)
+    float lowest_val = ta.lowest(src, length * 2)
+    float atr_val = ta.atr(14)
+
+    isSwingHigh = src[length] > src[length + 1] and src[length] > src[length - 1] and
+                 src[length] > highest_val and
+                 (src[length] - lowest_val) / atr_val > threshold
+
+    if isSwingHigh
+        pivots.unshift(src[length])
+
+    pivots
+
+// Function to find significant swing lows
+findSwingLows(src, length, threshold) =>
+    var pivots = array.new_float(0)
+    if pivots.size() > 10  // Limit array size
+        pivots.shift()
+
+    float lowest_val = ta.lowest(src, length - 1)
+    float highest_val = ta.highest(src, length * 2)
+    float atr_val = ta.atr(14)
+
+    isSwingLow = src[length] < src[length + 1] and src[length] < src[length - 1] and
+                 src[length] < lowest_val and
+                 (highest_val - src[length]) / atr_val > threshold
+
+    if isSwingLow
+        pivots.unshift(src[length])
+
+    pivots
+
+// Find nearest level from an array
+getNearestLevel(price, levels) =>
+    float nearest = na
+    float min_distance = float(10000000)  // Start with a large number
+
+    // Only proceed if the array has elements
+    if array.size(levels) > 0
+        for i = 0 to math.min(levels.size() - 1, 5)
+            level = array.get(levels, i)
+            distance = math.abs(price - level)
+            if distance < min_distance
+                min_distance := distance
+                nearest := level
+
+    nearest
+
+// Function to get nearest SR levels directly
+getNearestSRLevels(timeframe) =>
+    // Get S/R levels for this timeframe
+    request_result_highs = request.security(syminfo.tickerid, timeframe, findSwingHighs(high, sr_lookback, sr_threshold), lookahead=barmerge.lookahead_off)
+    request_result_lows = request.security(syminfo.tickerid, timeframe, findSwingLows(low, sr_lookback, sr_threshold), lookahead=barmerge.lookahead_off)
+
+    // Find nearest level directly
+    nearest_res = getNearestLevel(close, request_result_highs)
+    nearest_sup = getNearestLevel(close, request_result_lows)
+
+    [nearest_res, nearest_sup]
+
+// ==================================================================================
+// TREND SPEED CALCULATIONS
+// ==================================================================================
+
+// Override parameters based on asset type
+if barstate.isfirst
+    max_length := switch asset_type
+        'Crypto' => 20
+        'Gold' => 20
+        'Stocks' => 20
+        'Forex' => 20
+
+    accel_multiplier := switch asset_type
+        'Crypto' => 0.03
+        'Gold' => 0.015
+        'Stocks' => 0.01
+        'Forex' => 0.02
+
+    lookback_period := switch asset_type
+        'Crypto' => 100
+        'Gold' => 200
+        'Stocks' => 150
+        'Forex' => 150
+
+// ~~  Dynamic Average Calculation
+counts_diff = close
+max_abs_counts_diff = ta.highest(math.abs(counts_diff), 200)
+counts_diff_norm = safeDivide(counts_diff + max_abs_counts_diff, 2 * max_abs_counts_diff, 0.5)
+dyn_length = 5 + counts_diff_norm * (max_length - 5)
+
+// Accelerator Factor
+accel_factor = calc_accel_factor(counts_diff, nz(counts_diff[1]))
+alpha = adjust_alpha(dyn_length, accel_factor, accel_multiplier)
+
+// Compute dynamic Ema with adaptive alpha
+var float dyn_ema = na
+dyn_ema := na(dyn_ema[1]) ? close : alpha * close + (1 - alpha) * dyn_ema[1]
+
+// ~~ Trend Speed Logic
+trend = dyn_ema
+bullsrc = close
+bearsrc = close
+
+// Define a custom type to hold trend data
+type TrendData
+    array<float> change
+    array<int> t
+
+// Initialize data arrays for bullish and bearish waves
+var bullish = TrendData.new(array.new<float>(), array.new<int>())
+var bearish = TrendData.new(array.new<float>(), array.new<int>())
+var x1 = int(na)
+var y1 = float(na)
+var pos = 0
+var speed = 0.0
+c = ta.rma(close, 10)
+o = ta.rma(open, 10)
+
+// First value initialization
+if na(x1) and StartTime()
+    x1 := bar_index
+    y1 := o
+
+// Trend direction calculation
+float lowest_speed = ta.lowest(speed, math.max(1, bar_index - x1))
+float highest_speed = ta.highest(speed, math.max(1, bar_index - x1))
+
+// Track wave transitions and update arrays
+if StartTime()
+    // Bull to bear transition
+    if bullsrc > trend and bullsrc[1] <= trend
+        bearish.change.unshift(lowest_speed)
+        bearish.t.unshift(bar_index - x1)
+        x1 := bar_index
+        y1 := bullsrc
+        pos := 1
+        speed := c - o
+
+    // Bear to bull transition
+    if bearsrc < trend and bearsrc[1] >= trend
+        bullish.change.unshift(highest_speed)
+        bullish.t.unshift(bar_index - x1)
+        x1 := bar_index
+        y1 := bearsrc
+        pos := -1
+        speed := c - o
+
+// Update speed
+speed := speed + c - o
+trendspeed = ta.hma(speed, 5)
+
+// Trend-based wave analysis
+is_trending_up = ta.wma(close, 2) > dyn_ema
+is_trending_down = ta.wma(close, 2) < dyn_ema
+
+// Identify pullbacks to MA
+pullback_to_ma = close[1] < dyn_ema and close > dyn_ema and low <= dyn_ema // Bullish rejection
+pullback_to_ma_bear = close[1] > dyn_ema and close < dyn_ema and high >= dyn_ema // Bearish rejection
+
+// ==================================================================================
+// MARKET REGIME CALCULATIONS
+// ==================================================================================
+
+// Market phase detection
+var market_phase = "ACCUMULATION"
+var color phase_color = color.yellow
+
+// Momentum & Market Phase Analysis
+// Awesome Oscillator for momentum
+fastMA = ta.sma(hl2, 5)  // Fast Period
+slowMA = ta.sma(hl2, 34)  // Slow Period
+AO = fastMA - slowMA
+signal = ta.sma(AO, 7)  // Signal Period
+
+// Get higher timeframe trend MA
+higher_tf_ma = request.security(syminfo.tickerid, "60", ta.sma(close, 50), lookahead=barmerge.lookahead_off)
+
+// Slope calculation for trend strength
+ma_current = ta.sma(close, 200) // Length from regime_ma_length
+ma_prev = nz(ma_current[20], ma_current)
+ma_slope = (ma_current - ma_prev) / 20
+
+// Normalized slope for regime strength
+avg_slope_abs = ta.sma(math.abs(ta.change(ma_current)), 100) // Length from regime_std_length
+norm_slope = avg_slope_abs == 0 ? 0 : ma_slope / avg_slope_abs
+
+// Volatility calculation
+returns = ta.change(close) / nz(close[1], close)
+current_volatility_std = ta.stdev(returns, 100) // Length from regime_std_length
+avg_volatility_std = ta.sma(current_volatility_std, 50)
+norm_volatility = avg_volatility_std == 0 ? 1 : current_volatility_std / avg_volatility_std
+
+// Define market regimes
+string market_regime = "NEUTRAL" // Default
+if norm_slope > 1.0 // Threshold from regime_threshold
+    market_regime := "TRENDING BULL"
+else if norm_slope < -1.0
+    market_regime := "TRENDING BEAR"
+else
+    if norm_volatility > 1.5
+        market_regime := "VOLATILE"
+    else if norm_volatility < 0.8
+        market_regime := "RANGING"
+
+// Track regime changes for alerts
+var string prev_market_regime = market_regime
+bool regime_changed = market_regime != prev_market_regime and bar_index > 5
+bool regime_to_trending_bull = regime_changed and market_regime == "TRENDING BULL"
+bool regime_to_trending_bear = regime_changed and market_regime == "TRENDING BEAR"
+bool regime_to_volatile = regime_changed and market_regime == "VOLATILE"
+bool regime_to_ranging = regime_changed and market_regime == "RANGING"
+bool regime_to_neutral = regime_changed and market_regime == "NEUTRAL"
+prev_market_regime := market_regime
+
+// Detect market phases
+if ta.crossover(close, ta.highest(high, 10)) and AO > 0
+    market_phase := "UPTREND"
+    phase_color := color.green
+
+if ta.crossunder(close, ta.lowest(low, 10)) and AO < 0
+    market_phase := "DOWNTREND"
+    phase_color := color.red
+
+if close > ta.highest(high, 5) and close < ta.highest(high, 10) and AO > 0 and AO < AO[10]
+    market_phase := "DISTRIBUTION"
+    phase_color := color.orange
+
+if close < ta.lowest(low, 5) and close > ta.lowest(low, 10) and AO < 0 and AO > AO[10]
+    market_phase := "ACCUMULATION"
+    phase_color := color.yellow
+
+// ==================================================================================
+// WAVE ANALYSIS CALCULATIONS
+// ==================================================================================
+
+// Initialize variables to store wave analysis data
+var float bull_max = 0.0001
+var float bear_max = -0.0001
+var float bull_avg = 0.0001
+var float bear_avg = -0.0001
+var string wave_size_text_avg = "0.0x"
+var string wave_size_text_max = "0.0x"
+var color wave_size_color_avg = color.lime
+var color wave_size_color_max = color.lime
+var string dominance_avg_text = "Neutral"
+var string dominance_max_text = "Neutral"
+var color dominance_avg_color = color.silver
+var color dominance_max_color = color.silver
+var float wave_size_ratio_avg = 1.0
+var float wave_size_ratio_max = 1.0
+var float current_ratio_avg = 0.0
+var float current_ratio_max = 0.0
+var string current_text_avg = "0.0x"
+var string current_text_max = "0.0x"
+var color current_color_avg = color.lime
+var color current_color_max = color.lime
+var float dominance_avg_value = 0.0
+var float dominance_max_value = 0.0
+var string trend_strength_category = "Moderate"
+var string market_bias = "Neutral"
+
+// Update the wave analysis calculations every bar
+if barstate.isconfirmed
+    // Get recent wave data
+    bullish_recent = array.size(bullish.change) > 0 ?
+         array.slice(bullish.change, 0, math.min(lookback_period, array.size(bullish.change))) :
+         array.new<float>()
+
+    bearish_recent = array.size(bearish.change) > 0 ?
+         array.slice(bearish.change, 0, math.min(lookback_period, array.size(bearish.change))) :
+         array.new<float>()
+
+    // Calculate trend speed statistics
+    bull_max := array.size(bullish_recent) > 0 ? array.max(bullish_recent) : 0.0001
+    bear_max := array.size(bearish_recent) > 0 ? array.min(bearish_recent) : -0.0001
+    bull_avg := array.size(bullish_recent) > 0 ? array.avg(bullish_recent) : 0.0001
+    bear_avg := array.size(bearish_recent) > 0 ? array.avg(bearish_recent) : -0.0001
+
+    // Calculate wave size ratios
+    wave_size_ratio_avg := safeDivide(bull_avg, math.abs(bear_avg), 1)
+    wave_size_text_avg := str.tostring(math.round(wave_size_ratio_avg, 2)) + 'x'
+    wave_size_color_avg := wave_size_ratio_avg > 0 ? color.lime : color.red
+
+    wave_size_ratio_max := safeDivide(bull_max, math.abs(bear_max), 1)
+    wave_size_text_max := str.tostring(math.round(wave_size_ratio_max, 2)) + 'x'
+    wave_size_color_max := wave_size_ratio_max > 0 ? color.lime : color.red
+
+    // Dominance calculation for market bias
+    dominance_avg_value := bull_avg - math.abs(bear_avg)
+    dominance_avg_text := dominance_avg_value > 0 ?
+         'Bullish +' + str.tostring(math.round(wave_size_ratio_avg, 2)) + 'x' :
+         'Bearish -' + str.tostring(math.round(safeDivide(1, wave_size_ratio_avg, 0), 2)) + 'x'
+    dominance_avg_color := dominance_avg_value > 0 ? color.lime : color.red
+
+    dominance_max_value := bull_max - math.abs(bear_max)
+    dominance_max_text := dominance_max_value > 0 ?
+         'Bullish +' + str.tostring(math.round(wave_size_ratio_max, 2)) + 'x' :
+         'Bearish -' + str.tostring(math.round(safeDivide(1, wave_size_ratio_max, 0), 2)) + 'x'
+    dominance_max_color := dominance_max_value > 0 ? color.lime : color.red
+
+    // Current ratio calculations
+    current_ratio_avg := speed > 0 ?
+         safeDivide(speed, bull_avg, 1) :
+         safeDivide(speed, math.abs(bear_avg), -1)
+
+    current_ratio_max := speed > 0 ?
+         safeDivide(speed, bull_max, 1) :
+         safeDivide(speed, math.abs(bear_max), -1)
+
+    current_text_avg := str.tostring(math.round(math.abs(current_ratio_avg), 2)) + 'x'
+    current_text_max := str.tostring(math.round(math.abs(current_ratio_max), 2)) + 'x'
+
+    current_color_avg := current_ratio_avg > 0 ? color.lime : color.red
+    current_color_max := current_ratio_max > 0 ? color.lime : color.red
+
+    // Determine trend strength category and market bias
+    trend_strength_category := trendStrengthCategory(math.abs(current_ratio_avg))
+    market_bias := dominance_avg_value > 0 ? "Bullish" : dominance_avg_value < 0 ? "Bearish" : "Neutral"
+
+// Track dominance shifts for alerts
+var bool prev_bullish_dominance = dominance_avg_value > 0
+bool dominance_shift_bullish = dominance_avg_value > 0 and not prev_bullish_dominance and barstate.isconfirmed
+bool dominance_shift_bearish = dominance_avg_value < 0 and prev_bullish_dominance and barstate.isconfirmed
+prev_bullish_dominance := dominance_avg_value > 0
+
+// ==================================================================================
+// SUPPORT & RESISTANCE ANALYSIS
+// ==================================================================================
+
+// Initialize nearest level variables
+var float nearest_resistance_1m = na
+var float nearest_support_1m = na
+var float nearest_resistance_5m = na
+var float nearest_support_5m = na
+
+// Only calculate S/R levels if needed
+if include_sr
+    // Get 1-minute levels
+    [resistance_1m_temp, support_1m_temp] = getNearestSRLevels("1")
+    nearest_resistance_1m := resistance_1m_temp
+    nearest_support_1m := support_1m_temp
+
+    // Get 5-minute levels
+    [resistance_5m_temp, support_5m_temp] = getNearestSRLevels("5")
+    nearest_resistance_5m := resistance_5m_temp
+    nearest_support_5m := support_5m_temp
+else
+    // Reset to na if not using S/R
+    nearest_resistance_1m := na
+    nearest_support_1m := na
+    nearest_resistance_5m := na
+    nearest_support_5m := na
+
+// Determine long/short bias based on position relative to S/R levels
+bool long_bias_1m = include_sr and not na(nearest_support_1m) and not na(nearest_resistance_1m) ?
+     close > nearest_support_1m and nearest_resistance_1m - close > close - nearest_support_1m :
+     false
+bool short_bias_1m = include_sr and not na(nearest_support_1m) and not na(nearest_resistance_1m) ?
+     close < nearest_resistance_1m and nearest_resistance_1m - close < close - nearest_support_1m :
+     false
+bool long_bias_5m = include_sr and not na(nearest_support_5m) and not na(nearest_resistance_5m) ?
+     close > nearest_support_5m and nearest_resistance_5m - close > close - nearest_support_5m :
+     false
+bool short_bias_5m = include_sr and not na(nearest_support_5m) and not na(nearest_resistance_5m) ?
+     close < nearest_resistance_5m and nearest_resistance_5m - close < close - nearest_support_5m :
+     false
+
+// ==================================================================================
+// VOLATILITY ANALYSIS
+// ==================================================================================
+
+// Calculate raw ATR with safeguards against NaN
+float volatility = nz(ta.atr(10), 0.00001) // Length from atr_len
+volatility := volatility <= 0 ? 0.00001 : volatility  // Ensure non-zero positive value
+
+// Calculate standard ATR(14) for general context/backup
+float atr_14 = nz(ta.atr(14), volatility)
+
+// Store historical volatility for percentile calculation
+var volatility_array = array.new_float(500, volatility) // Length from volatility_history
+
+// Update volatility array
+if barstate.isconfirmed
+    volatility_array.push(volatility)
+    if volatility_array.size() > 500
+        volatility_array.shift()
+
+// Determine volatility percentile
+float volatility_percentile = 0.5 // Default
+if volatility_array.size() > 1
+    int count_less = 0
+    for i = 0 to volatility_array.size() - 1
+        if volatility_array.get(i) < volatility
+            count_less += 1
+    volatility_percentile := count_less / volatility_array.size()
+
+// Create volatility regime labels based on percentile
+string volatility_regime = "MEDIUM" // Default
+if volatility_percentile < 0.2
+    volatility_regime := "VERY LOW"
+else if volatility_percentile < 0.4
+    volatility_regime := "LOW"
+else if volatility_percentile >= 0.8
+    volatility_regime := "VERY HIGH"
+else if volatility_percentile >= 0.6
+    volatility_regime := "HIGH"
+
+// Track volatility regime changes for alerts
+var string prev_volatility_regime = volatility_regime
+bool vol_regime_changed = volatility_regime != prev_volatility_regime and barstate.isconfirmed
+bool vol_regime_to_very_high = vol_regime_changed and volatility_regime == "VERY HIGH"
+bool vol_regime_to_very_low = vol_regime_changed and volatility_regime == "VERY LOW"
+prev_volatility_regime := volatility_regime
+
+// Simple clustering - for display labels only
+string vol_status = "MEDIUM" // Default status
+int cluster = 1 // Default cluster (medium)
+
+// Determine cluster based on percentiles
+if volatility_percentile >= 0.8
+    vol_status := "HIGH"
+    cluster := 0
+else if volatility_percentile <= 0.2
+    vol_status := "LOW"
+    cluster := 2
+else
+    vol_status := "MEDIUM"
+    cluster := 1
+
+// ==================================================================================
+// SIGNAL QUALITY ANALYSIS
+// ==================================================================================
+
+// Calculate RSI for trend alignment
+float rsi_value = ta.rsi(close, 14)
+
+// Trend alignment check
+bool in_uptrend = market_phase == "UPTREND" or (market_phase == "ACCUMULATION" and AO > 0 and rsi_value > 50)
+bool in_downtrend = market_phase == "DOWNTREND" or (market_phase == "DISTRIBUTION" and AO < 0 and rsi_value < 50)
+
+// Multi-timeframe trend alignment
+bool strong_trend_aligned = in_uptrend and close > higher_tf_ma or in_downtrend and close < higher_tf_ma
+
+// Enhanced momentum confirmation
+float rate_of_change = ta.roc(close, 3) // Length from momentum_lookback
+bool strong_momentum = in_uptrend ? rate_of_change > 0 : in_downtrend ? rate_of_change < 0 : true
+
+// Calculate volume SMA
+float volume_sma_20 = ta.sma(volume, 20)
+
+// Candlestick pattern confirmation
+bool bullish_candle_confirmation = detectBullishCandlePattern()
+bool bearish_candle_confirmation = detectBearishCandlePattern()
+
+// Define basic buy/sell conditions
+bool bottom = low <= ta.lowest(low[1], 20) and low > ta.lowest(low[1], 30)
+bool top = high >= ta.highest(high[1], 20) and high < ta.highest(high[1], 30)
+
+// Trend-based conditions
+float price_velocity = ta.change(close, 3) / nz(close[3], close)
+float stdev_velocity = ta.stdev(price_velocity, 100)
+float normalized_velocity = stdev_velocity == 0 ? 0 : price_velocity / stdev_velocity
+
+// --- Simple Signal Quality Calculation ---
+float signal_quality_score = 0.0
+
+// Multi-factor signal quality calculation based on market context
+if in_uptrend
+    // For uptrends, we want low-medium volatility and positive momentum
+    signal_quality_score := (
+         (volatility_percentile > 0.2 and volatility_percentile < 0.7 ? 1.5 : 0.5) +  // 37.5%
+         (normalized_velocity > 0 ? 1.0 : 0.0) +                                      // 25.0%
+         (current_ratio_avg > 0 ? 0.5 : 0.0) +                                        // 12.5%
+         (bullish_candle_confirmation ? 0.5 : 0.0) +                                  // 12.5%
+         (long_bias_1m or long_bias_5m ? 0.5 : 0.0)                                   // 12.5%
+         ) / 4.0
+else if in_downtrend
+    // For downtrends, we want low-medium volatility and negative momentum
+    signal_quality_score := (
+         (volatility_percentile > 0.2 and volatility_percentile < 0.7 ? 1.5 : 0.5) +  // 37.5%
+         (normalized_velocity < 0 ? 1.0 : 0.0) +                                      // 25.0%
+         (current_ratio_avg < 0 ? 0.5 : 0.0) +                                        // 12.5%
+         (bearish_candle_confirmation ? 0.5 : 0.0) +                                  // 12.5%
+         (short_bias_1m or short_bias_5m ? 0.5 : 0.0)                                 // 12.5%
+         ) / 4.0
+else
+    // For ranging markets, we want very low volatility and momentum near zero
+    signal_quality_score := (
+         (volatility_percentile < 0.3 ? 1.5 : 0.5) +                                  // 37.5%
+         (math.abs(normalized_velocity) < 0.5 ? 1.0 : 0.0) +                          // 25.0%
+         (math.abs(current_ratio_avg) < 0.8 ? 0.5 : 0.0) +                            // 12.5%
+         ((bullish_candle_confirmation or bearish_candle_confirmation) ? 0.5 : 0.0) + // 12.5%
+         ((long_bias_1m or long_bias_5m or short_bias_1m or short_bias_5m) ? 0.5 : 0.0) // 12.5%
+         ) / 4.0
+
+// Signal quality passes threshold check
+bool high_quality_signal = signal_quality_score >= quality_threshold
+
+// ==================================================================================
+// SIGNAL DETECTION
+// ==================================================================================
+
+// Signal detection based on trend speed and wave ratio
+bool strong_bullish_signal = trendspeed > 0 and math.abs(current_ratio_avg) >= signal_threshold and current_ratio_avg > 0
+bool strong_bearish_signal = trendspeed < 0 and math.abs(current_ratio_avg) >= signal_threshold and current_ratio_avg < 0
+
+// Detect transitions between signals
+bool bull_to_bear_transition = ta.crossunder(trendspeed, 0)
+bool bear_to_bull_transition = ta.crossover(trendspeed, 0)
+
+// Trend acceleration/deceleration detection
+bool accelerating_bull = trendspeed > 0 and trendspeed > trendspeed[1] and trendspeed[1] > trendspeed[2]
+bool accelerating_bear = trendspeed < 0 and trendspeed < trendspeed[1] and trendspeed[1] < trendspeed[2]
+bool decelerating_bull = trendspeed > 0 and trendspeed < trendspeed[1] and trendspeed[1] < trendspeed[2]
+bool decelerating_bear = trendspeed < 0 and trendspeed > trendspeed[1] and trendspeed[1] > trendspeed[2]
+
+// Final trading signals with quality filters
+bool final_buy_signal = bottom and strong_bullish_signal and high_quality_signal and in_uptrend
+bool final_sell_signal = top and strong_bearish_signal and high_quality_signal and in_downtrend
+
+// Premium setup conditions (used for alerts)
+bool premium_buy_setup = final_buy_signal and signal_quality_score > 0.8 and
+                     volatility_percentile > 0.2 and volatility_percentile < 0.8 and long_bias_5m
+bool premium_sell_setup = final_sell_signal and signal_quality_score > 0.8 and
+                     volatility_percentile > 0.2 and volatility_percentile < 0.8 and short_bias_5m
+
+// ==================================================================================
+// DASHBOARD TABLES
+// ==================================================================================
+
+if barstate.islast
+    // Define table position based on user setting
+    var pos = dashboard_position == "top_right" ? position.top_right :
+              dashboard_position == "top_left" ? position.top_left :
+              dashboard_position == "bottom_right" ? position.bottom_right :
+              position.bottom_left
+
+    // Define color scheme based on theme
+    var color bg_color = color_theme == "dark" ? color.rgb(0, 0, 0, 90) : color.rgb(255, 255, 255, 90)
+    var color text_color = color_theme == "dark" ? color.white : color.black
+    var color header_bg = color_theme == "dark" ? color.rgb(40, 40, 40) : color.rgb(200, 200, 200)
+    var color label_color = color_theme == "dark" ? color.silver : color.gray
+    var color up_color = color.green
+    var color down_color = color.red
+    var color neutral_color = color.silver
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Create main dashboard table
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    var table dashboard = table.new(pos, 4, 18, bg_color, border_width=1,
+         border_color=color.gray, frame_color=color.gray, frame_width=1)
+
+    // Clear existing content
+    table.clear(dashboard, 0, 0, 3, 17)  // Clear all cells
+
+    // --- HEADER SECTION ---
+    table.cell(dashboard, 0, 0, "FKS DASHBOARD",
+         bgcolor=header_bg, text_color=text_color, text_halign=text.align_center, text_size=size.normal)
+    table.merge_cells(dashboard, 0, 0, 3, 0)
+
+    // Current row for tracking position as we add sections
+    var int current_row = 1
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // TREND INFORMATION SECTION
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if show_trend_info
+        // Section Header
+        table.cell(dashboard, 0, current_row, "TREND INFORMATION",
+             bgcolor=header_bg, text_color=text_color, text_halign=text.align_center, text_size=size.small)
+        table.merge_cells(dashboard, 0, current_row, 3, current_row)
+        current_row += 1
+
+        // Trend Direction Row
+        string trend_direction = trendspeed > 0 ? "BULLISH ↗️" : trendspeed < 0 ? "BEARISH ↘️" : "NEUTRAL ↔️"
+        color trend_direction_color = trendspeed > 0 ? up_color : trendspeed < 0 ? down_color : neutral_color
+
+        table.cell(dashboard, 0, current_row, "Direction:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, trend_direction,
+             bgcolor=bg_color, text_color=trend_direction_color, text_halign=text.align_left, text_size=size.small)
+
+        // Trend Speed Value
+        string trend_speed_text = str.tostring(math.round(trendspeed, 4))
+        table.cell(dashboard, 2, current_row, "Speed:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, trend_speed_text,
+             bgcolor=bg_color, text_color=trend_direction_color, text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+        // Trend Strength Row
+        table.cell(dashboard, 0, current_row, "Strength:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, trend_strength_category,
+             bgcolor=bg_color, text_color=trend_strength_category == "Very Strong" ? up_color :
+                                     trend_strength_category == "Strong" ? color.new(up_color, 20) :
+                                     trend_strength_category == "Moderate" ? color.orange :
+                                     color.gray,
+             text_halign=text.align_left, text_size=size.small)
+
+        // Signal Status
+        string signal_status = "NO SIGNAL"
+        color signal_status_color = neutral_color
+
+        if final_buy_signal
+            signal_status := "BUY SIGNAL"
+            signal_status_color := up_color
+        else if final_sell_signal
+            signal_status := "SELL SIGNAL"
+            signal_status_color := down_color
+        else if strong_bullish_signal
+            signal_status := "BULLISH WAVE"
+            signal_status_color := color.new(up_color, 40)
+        else if strong_bearish_signal
+            signal_status := "BEARISH WAVE"
+            signal_status_color := color.new(down_color, 40)
+        else if accelerating_bull
+            signal_status := "BULL ACCEL."
+            signal_status_color := color.new(up_color, 60)
+        else if accelerating_bear
+            signal_status := "BEAR ACCEL."
+            signal_status_color := color.new(down_color, 60)
+
+        table.cell(dashboard, 2, current_row, "Signal:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, signal_status,
+             bgcolor=bg_color, text_color=signal_status_color, text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+        // Quality Score Row
+        string quality_text = str.tostring(math.round(signal_quality_score * 100, 1)) + "%"
+        color quality_color = signal_quality_score > 0.7 ? up_color :
+                           signal_quality_score > 0.5 ? color.orange :
+                           down_color
+
+        table.cell(dashboard, 0, current_row, "Quality:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, quality_text,
+             bgcolor=bg_color, text_color=quality_color, text_halign=text.align_left, text_size=size.small)
+
+        // Active Sessions
+        string session_text = "ACTIVE"
+        color session_color = up_color
+
+        table.cell(dashboard, 2, current_row, "Session:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, session_text,
+             bgcolor=bg_color, text_color=session_color, text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+        // Add a blank row for spacing
+        table.cell(dashboard, 0, current_row, "", bgcolor=bg_color)
+        table.merge_cells(dashboard, 0, current_row, 3, current_row)
+        current_row += 1
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // WAVE ANALYSIS SECTION
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if show_wave_analysis
+        // Section Header
+        table.cell(dashboard, 0, current_row, "WAVE ANALYSIS",
+             bgcolor=header_bg, text_color=text_color, text_halign=text.align_center, text_size=size.small)
+        table.merge_cells(dashboard, 0, current_row, 3, current_row)
+        current_row += 1
+
+        // Wave Ratio Row
+        table.cell(dashboard, 0, current_row, "Wave Ratio:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, wave_size_text_avg,
+             bgcolor=bg_color, text_color=wave_size_color_avg, text_halign=text.align_left, text_size=size.small)
+
+        // Current Ratio
+        table.cell(dashboard, 2, current_row, "Current:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, current_text_avg,
+             bgcolor=bg_color, text_color=current_color_avg, text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+        // Dominance Row
+        table.cell(dashboard, 0, current_row, "Dominance:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, dominance_avg_text,
+             bgcolor=bg_color, text_color=dominance_avg_color, text_halign=text.align_left, text_size=size.small)
+
+        // Market Bias
+        table.cell(dashboard, 2, current_row, "Bias:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, market_bias,
+             bgcolor=bg_color, text_color=market_bias == "Bullish" ? up_color :
+                                     market_bias == "Bearish" ? down_color :
+                                     neutral_color,
+             text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+        // Bull/Bear Wave Stats
+        table.cell(dashboard, 0, current_row, "Bull Avg:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, str.tostring(math.round(bull_avg, 4)),
+             bgcolor=bg_color, text_color=up_color, text_halign=text.align_left, text_size=size.small)
+
+        table.cell(dashboard, 2, current_row, "Bear Avg:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, str.tostring(math.round(bear_avg, 4)),
+             bgcolor=bg_color, text_color=down_color, text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+        // Add a blank row for spacing
+        table.cell(dashboard, 0, current_row, "", bgcolor=bg_color)
+        table.merge_cells(dashboard, 0, current_row, 3, current_row)
+        current_row += 1
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MARKET REGIME SECTION
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if show_market_regime
+        // Section Header
+        table.cell(dashboard, 0, current_row, "MARKET REGIME",
+             bgcolor=header_bg, text_color=text_color, text_halign=text.align_center, text_size=size.small)
+        table.merge_cells(dashboard, 0, current_row, 3, current_row)
+        current_row += 1
+
+        // Regime Row
+        string regime_emoji = ""
+        if market_regime == "TRENDING BULL"
+            regime_emoji := "🐂"
+        else if market_regime == "TRENDING BEAR"
+            regime_emoji := "🐻"
+        else if market_regime == "VOLATILE"
+            regime_emoji := "⚡"
+        else if market_regime == "RANGING"
+            regime_emoji := "↔️"
+        else // NEUTRAL
+            regime_emoji := "⚖️"
+
+        color regime_color = market_regime == "TRENDING BULL" ? up_color :
+                         market_regime == "TRENDING BEAR" ? down_color :
+                         market_regime == "VOLATILE" ? color.orange :
+                         market_regime == "RANGING" ? color.blue :
+                         neutral_color
+
+        table.cell(dashboard, 0, current_row, "Regime:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, regime_emoji + " " + market_regime,
+             bgcolor=bg_color, text_color=regime_color, text_halign=text.align_left, text_size=size.small)
+
+        // Phase Row
+        string phase_emoji = ""
+        if market_phase == "UPTREND"
+            phase_emoji := "🚀"
+        else if market_phase == "DOWNTREND"
+            phase_emoji := "🧸"
+        else if market_phase == "ACCUMULATION"
+            phase_emoji := "🏗️"
+        else // DISTRIBUTION
+            phase_emoji := "📦"
+
+        color phase_color = market_phase == "UPTREND" ? up_color :
+                          market_phase == "DOWNTREND" ? down_color :
+                          market_phase == "ACCUMULATION" ? color.yellow :
+                          color.orange
+
+        table.cell(dashboard, 2, current_row, "Phase:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, phase_emoji + " " + market_phase,
+             bgcolor=bg_color, text_color=phase_color, text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+        // Momentum Row
+        string ao_state = AO > 0 ? "BULLISH" : "BEARISH"
+        string ao_direction = AO > AO[5] ? " ↗️" : " ↘️"
+
+        table.cell(dashboard, 0, current_row, "Momentum:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, ao_state + ao_direction,
+             bgcolor=bg_color, text_color=AO > 0 ? up_color : down_color, text_halign=text.align_left, text_size=size.small)
+
+        // RSI Row
+        string rsi_state = rsi_value > 60 ? "BULLISH" : rsi_value < 40 ? "BEARISH" : "NEUTRAL"
+        color rsi_color = rsi_value > 60 ? up_color : rsi_value < 40 ? down_color : neutral_color
+
+        table.cell(dashboard, 2, current_row, "RSI:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, rsi_state + " (" + str.tostring(math.round(rsi_value, 1)) + ")",
+             bgcolor=bg_color, text_color=rsi_color, text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+        // Add a blank row for spacing
+        table.cell(dashboard, 0, current_row, "", bgcolor=bg_color)
+        table.merge_cells(dashboard, 0, current_row, 3, current_row)
+        current_row += 1
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // S/R ANALYSIS SECTION
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if show_sr_analysis and include_sr
+        // Section Header
+        table.cell(dashboard, 0, current_row, "SUPPORT & RESISTANCE",
+             bgcolor=header_bg, text_color=text_color, text_halign=text.align_center, text_size=size.small)
+        table.merge_cells(dashboard, 0, current_row, 3, current_row)
+        current_row += 1
+
+        // 1-Minute Timeframe
+        table.cell(dashboard, 0, current_row, "1m Bias:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, long_bias_1m ? "LONG" : short_bias_1m ? "SHORT" : "NEUTRAL",
+             bgcolor=bg_color, text_color=long_bias_1m ? up_color : short_bias_1m ? down_color : neutral_color,
+             text_halign=text.align_left, text_size=size.small)
+
+        // 5-Minute Timeframe
+        table.cell(dashboard, 2, current_row, "5m Bias:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, long_bias_5m ? "LONG" : short_bias_5m ? "SHORT" : "NEUTRAL",
+             bgcolor=bg_color, text_color=long_bias_5m ? up_color : short_bias_5m ? down_color : neutral_color,
+             text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+        // Support Levels
+        table.cell(dashboard, 0, current_row, "1m Support:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, str.tostring(nearest_support_1m, format.mintick),
+             bgcolor=bg_color, text_color=up_color, text_halign=text.align_left, text_size=size.small)
+
+        table.cell(dashboard, 2, current_row, "5m Support:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, str.tostring(nearest_support_5m, format.mintick),
+             bgcolor=bg_color, text_color=up_color, text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+        // Resistance Levels
+        table.cell(dashboard, 0, current_row, "1m Resist:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, str.tostring(nearest_resistance_1m, format.mintick),
+             bgcolor=bg_color, text_color=down_color, text_halign=text.align_left, text_size=size.small)
+
+        table.cell(dashboard, 2, current_row, "5m Resist:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, str.tostring(nearest_resistance_5m, format.mintick),
+             bgcolor=bg_color, text_color=down_color, text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+        // Add a blank row for spacing
+        table.cell(dashboard, 0, current_row, "", bgcolor=bg_color)
+        table.merge_cells(dashboard, 0, current_row, 3, current_row)
+        current_row += 1
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // VOLATILITY ANALYSIS SECTION
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if show_volatility
+        // Section Header
+        table.cell(dashboard, 0, current_row, "VOLATILITY ANALYSIS",
+             bgcolor=header_bg, text_color=text_color, text_halign=text.align_center, text_size=size.small)
+        table.merge_cells(dashboard, 0, current_row, 3, current_row)
+        current_row += 1
+
+        // ATR Value Row
+        table.cell(dashboard, 0, current_row, "ATR:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, str.tostring(math.round(atr_14, 5)),
+             bgcolor=bg_color, text_color=text_color, text_halign=text.align_left, text_size=size.small)
+
+        // Volatility Percentile
+        table.cell(dashboard, 2, current_row, "Percentile:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, str.tostring(math.round(volatility_percentile * 100, 1)) + "%",
+             bgcolor=bg_color, text_color=text_color, text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+        // Volatility Regime Row
+        string vol_emoji = volatility_regime == "VERY HIGH" ? "⚡⚡" :
+                         volatility_regime == "HIGH" ? "⚡" :
+                         volatility_regime == "VERY LOW" ? "🧘🧘" :
+                         volatility_regime == "LOW" ? "🧘" : "〰️"
+
+        color vol_regime_color = volatility_regime == "VERY HIGH" ? color.red :
+                               volatility_regime == "HIGH" ? color.orange :
+                               volatility_regime == "VERY LOW" ? up_color :
+                               volatility_regime == "LOW" ? color.new(up_color, 30) :
+                               neutral_color
+
+        table.cell(dashboard, 0, current_row, "Vol Regime:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 1, current_row, vol_emoji + " " + volatility_regime,
+             bgcolor=bg_color, text_color=vol_regime_color, text_halign=text.align_left, text_size=size.small)
+
+        // Volatility Analysis
+        string vol_analysis = ""
+        color vol_analysis_color = neutral_color
+
+        if volatility_percentile > 0.8
+            vol_analysis := "AVOID TIGHT STOPS"
+            vol_analysis_color := down_color
+        else if volatility_percentile < 0.2
+            vol_analysis := "BREAKOUT WATCH"
+            vol_analysis_color := up_color
+        else if volatility_percentile > 0.6
+            vol_analysis := "WIDER STOPS"
+            vol_analysis_color := color.orange
+        else if volatility_percentile < 0.4
+            vol_analysis := "TIGHTER STOPS"
+            vol_analysis_color := color.new(up_color, 40)
+        else
+            vol_analysis := "NORMAL STOPS"
+            vol_analysis_color := neutral_color
+
+        table.cell(dashboard, 2, current_row, "Strategy:",
+             bgcolor=bg_color, text_color=label_color, text_halign=text.align_left, text_size=size.small)
+        table.cell(dashboard, 3, current_row, vol_analysis,
+             bgcolor=bg_color, text_color=vol_analysis_color, text_halign=text.align_left, text_size=size.small)
+        current_row += 1
+
+// ==================================================================================
+// EXPORT PLOTS FOR ALERTS
+// ==================================================================================
+
+// Plot values if show_plot_values is enabled, otherwise plot na
+plot(show_plot_values ? trendspeed : na, "Trend Speed", color=color.new(color.blue, 0))
+plot(show_plot_values ? current_ratio_avg : na, "Current Ratio", color=color.new(color.green, 0))
+plot(show_plot_values ? wave_size_ratio_avg : na, "Wave Ratio", color=color.new(color.purple, 0))
+plot(show_plot_values ? signal_quality_score : na, "Signal Quality", color=color.new(color.orange, 0))
+plot(show_plot_values ? volatility_percentile : na, "Vol Percentile", color=color.new(color.yellow, 0))
+
+// ==================================================================================
+// ALERT CONDITIONS
+// ==================================================================================
+
+// --- Trend Speed Alerts ---
+alertcondition(
+     strong_bullish_signal,
+     title="Strong Bullish Wave",
+     message="FKS: Strong Bullish Wave Detected. Check dashboard for details.")
+
+alertcondition(
+     strong_bearish_signal,
+     title="Strong Bearish Wave",
+     message="FKS: Strong Bearish Wave Detected. Check dashboard for details.")
+
+// --- Combined High-Quality Signals ---
+alertcondition(
+     final_buy_signal,
+     title="High Quality Buy Signal",
+     message="FKS: High Quality Buy Signal. Check dashboard for details.")
+
+alertcondition(
+     final_sell_signal,
+     title="High Quality Sell Signal",
+     message="FKS: High Quality Sell Signal. Check dashboard for details.")
+
+// --- Market Regime Change Alerts (Separate for each type) ---
+alertcondition(
+     regime_to_trending_bull,
+     title="Regime Change to Trending Bull",
+     message="FKS: Market Regime Changed to TRENDING BULL")
+
+alertcondition(
+     regime_to_trending_bear,
+     title="Regime Change to Trending Bear",
+     message="FKS: Market Regime Changed to TRENDING BEAR")
+
+alertcondition(
+     regime_to_volatile,
+     title="Regime Change to Volatile",
+     message="FKS: Market Regime Changed to VOLATILE")
+
+alertcondition(
+     regime_to_ranging,
+     title="Regime Change to Ranging",
+     message="FKS: Market Regime Changed to RANGING")
+
+alertcondition(
+     regime_to_neutral,
+     title="Regime Change to Neutral",
+     message="FKS: Market Regime Changed to NEUTRAL")
+
+// --- Trend Transition Alerts ---
+alertcondition(
+     bear_to_bull_transition,
+     title="Bear to Bull Transition",
+     message="FKS: Bear to Bull Transition - Potential Uptrend Starting")
+
+alertcondition(
+     bull_to_bear_transition,
+     title="Bull to Bear Transition",
+     message="FKS: Bull to Bear Transition - Potential Downtrend Starting")
+
+// --- Volatility Alerts ---
+alertcondition(
+     vol_regime_to_very_high,
+     title="Extreme Volatility Alert",
+     message="FKS: Extreme Volatility Detected - Use Caution")
+
+alertcondition(
+     vol_regime_to_very_low and volatility_percentile < 0.15,
+     title="Very Low Volatility Alert",
+     message="FKS: Very Low Volatility - Potential Breakout Setup")
+
+// --- Combined Context Alerts ---
+// High probability setups with multiple confirmations
+alertcondition(
+     premium_buy_setup,
+     title="Premium Buy Setup",
+     message="FKS: Premium Buy Setup with Multiple Confirmations")
+
+alertcondition(
+     premium_sell_setup,
+     title="Premium Sell Setup",
+     message="FKS: Premium Sell Setup with Multiple Confirmations")
+
+// --- Wave Dominance Shift Alerts ---
+alertcondition(
+     dominance_shift_bullish,
+     title="Bullish Dominance Shift",
+     message="FKS: Market Shifted to Bullish Dominance")
+
+alertcondition(
+     dominance_shift_bearish,
+     title="Bearish Dominance Shift",
+     message="FKS: Market Shifted to Bearish Dominance")

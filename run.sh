@@ -29,6 +29,12 @@ run_docker() {
 # Get yours at https://console.x.ai
 XAI_API_KEY=your_xai_api_key_here
 
+# Massive.com API key for real-time futures data (CME/CBOT/NYMEX/COMEX)
+# Sign up at https://massive.com/dashboard → API Keys
+# Enables: REST aggregates, WebSocket live bars & trades, snapshots
+# Without this key the app falls back to yfinance (delayed data)
+MASSIVE_API_KEY=your_massive_api_key_here
+
 # Redis URL (set automatically by docker-compose, only override for custom setups)
 # REDIS_URL=redis://redis:6379/0
 
@@ -43,6 +49,14 @@ EOF
     if grep -q "your_xai_api_key_here" .env; then
         echo "WARNING: XAI_API_KEY is still set to placeholder in .env"
         echo "  The Grok AI Analyst tab will not work until you update it."
+        echo ""
+    fi
+
+    # Check if MASSIVE_API_KEY is still the placeholder
+    if grep -q "your_massive_api_key_here" .env; then
+        echo "NOTE: MASSIVE_API_KEY is still set to placeholder in .env"
+        echo "  Real-time futures data (Massive.com) will be disabled."
+        echo "  The app will fall back to yfinance for market data."
         echo ""
     fi
 

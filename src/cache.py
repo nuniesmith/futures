@@ -1,12 +1,17 @@
 """
 Redis caching layer for market data and computed indicators.
 
+Data source priority:
+  1. Massive.com (formerly Polygon.io) — real-time futures data from CME/CBOT/NYMEX/COMEX
+  2. yfinance — fallback when MASSIVE_API_KEY is not set or Massive call fails
+
 Falls back to in-memory dict if Redis is unavailable, so the app
 still works without Docker / Redis running.
 """
 
 import hashlib
 import json
+import logging
 import os
 import re
 from datetime import date, datetime, timedelta
@@ -14,6 +19,8 @@ from io import StringIO
 
 import pandas as pd
 import yfinance as yf
+
+logger = logging.getLogger("cache")
 
 
 def _flatten_columns(df: "pd.DataFrame | None") -> pd.DataFrame:
@@ -56,7 +63,8 @@ except Exception:
 _mem_cache: dict = {}
 
 # Default TTLs in seconds
-TTL_INTRADAY = 60  # 1-min / 5-min OHLCV
+TTL_MINUTE = 30  # 1-min OHLCV — short TTL for live freshness
+TTL_INTRADAY = 60  # 5-min / 15-min OHLCV
 TTL_DAILY = 300  # daily bars (pivots, etc.)
 TTL_INDICATOR = 120  # computed indicators (ATR, EMA, VWAP)
 TTL_OPTIMIZATION = 3600  # optimization results (1 hour)
@@ -265,33 +273,132 @@ def _yf_download(ticker: str, interval: str, period: str, **kwargs) -> pd.DataFr
         )
 
 
+# ---------------------------------------------------------------------------
+# Data source: Massive.com (primary) with yfinance fallback
+# ---------------------------------------------------------------------------
+
+# Lazy import — massive_client is optional; if MASSIVE_API_KEY isn't set
+# the provider reports is_available=False and we skip straight to yfinance.
+_massive_provider = None
+_massive_checked = False
+
+
+def _get_massive_provider():
+    """Lazily initialise the Massive data provider singleton."""
+    global _massive_provider, _massive_checked
+    if not _massive_checked:
+        try:
+            from massive_client import get_massive_provider
+
+            _massive_provider = get_massive_provider()
+        except Exception as exc:
+            logger.debug("Massive provider unavailable: %s", exc)
+            _massive_provider = None
+        _massive_checked = True
+    return _massive_provider
+
+
+def _try_massive(ticker: str, interval: str, period: str) -> pd.DataFrame:
+    """Attempt to fetch OHLCV data from Massive.
+
+    Returns a non-empty DataFrame on success, or an empty DataFrame
+    if Massive is unavailable or the call fails.
+    """
+    provider = _get_massive_provider()
+    if provider is None or not provider.is_available:
+        return pd.DataFrame()
+
+    try:
+        df = provider.get_aggs(ticker, interval=interval, period=period)
+        if not df.empty:
+            logger.debug(
+                "Massive: got %d bars for %s %s/%s", len(df), ticker, interval, period
+            )
+        return df
+    except Exception as exc:
+        logger.debug("Massive fetch failed for %s: %s", ticker, exc)
+        return pd.DataFrame()
+
+
+def _try_massive_daily(ticker: str, period: str) -> pd.DataFrame:
+    """Attempt to fetch daily bars from Massive."""
+    provider = _get_massive_provider()
+    if provider is None or not provider.is_available:
+        return pd.DataFrame()
+
+    try:
+        df = provider.get_daily(ticker, period=period)
+        if not df.empty:
+            logger.debug(
+                "Massive: got %d daily bars for %s/%s", len(df), ticker, period
+            )
+        return df
+    except Exception as exc:
+        logger.debug("Massive daily fetch failed for %s: %s", ticker, exc)
+        return pd.DataFrame()
+
+
+def get_data_source() -> str:
+    """Return the name of the active primary data source.
+
+    Returns 'Massive' if the Massive API is configured and reachable,
+    otherwise 'yfinance'.
+    """
+    provider = _get_massive_provider()
+    if provider is not None and provider.is_available:
+        return "Massive"
+    return "yfinance"
+
+
 def get_data(ticker: str, interval: str, period: str) -> pd.DataFrame:
     """Fetch OHLCV data, cached in Redis for TTL_INTRADAY seconds.
+
+    Data source priority:
+      1. Massive.com REST API (if MASSIVE_API_KEY is set)
+      2. yfinance (fallback)
 
     Automatically clamps the period to Yahoo Finance's maximum for the
     requested interval to avoid empty responses. Non-standard periods
     (e.g. 10d, 15d) are converted to start/end dates for reliability.
     """
-    period = _clamp_period(interval, period)
-    key = _cache_key("ohlcv", ticker, interval, period)
+    clamped_period = _clamp_period(interval, period)
+    key = _cache_key("ohlcv", ticker, interval, clamped_period)
     cached = cache_get(key)
     if cached is not None:
         return _bytes_to_df(cached)
 
-    df = _yf_download(ticker, interval, period, prepost=True, auto_adjust=True)
+    # Try Massive first
+    df = _try_massive(ticker, interval, period)
+
+    # Fallback to yfinance
+    if df.empty:
+        df = _yf_download(
+            ticker, interval, clamped_period, prepost=True, auto_adjust=True
+        )
+
     if not df.empty:
-        cache_set(key, _df_to_bytes(df), TTL_INTRADAY)
+        ttl = TTL_MINUTE if interval == "1m" else TTL_INTRADAY
+        cache_set(key, _df_to_bytes(df), ttl)
     return df
 
 
 def get_daily(ticker: str, period: str = "10d") -> pd.DataFrame:
-    """Fetch daily bars, cached longer since they change less often."""
+    """Fetch daily bars, cached longer since they change less often.
+
+    Tries Massive first, falls back to yfinance.
+    """
     key = _cache_key("daily", ticker, period)
     cached = cache_get(key)
     if cached is not None:
         return _bytes_to_df(cached)
 
-    df = _yf_download(ticker, "1d", period, auto_adjust=True)
+    # Try Massive first
+    df = _try_massive_daily(ticker, period)
+
+    # Fallback to yfinance
+    if df.empty:
+        df = _yf_download(ticker, "1d", period, auto_adjust=True)
+
     if not df.empty:
         cache_set(key, _df_to_bytes(df), TTL_DAILY)
     return df
