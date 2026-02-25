@@ -31,7 +31,15 @@ from cache import (
     get_data,
     set_cached_indicator,
 )
-from engine import DashboardEngine, get_engine, run_optimization
+from engine import (
+    DashboardEngine,
+    OPTIMIZER_STRATEGIES,
+    TRAIN_RATIO,
+    TRIALS_PER_STRATEGY,
+    filter_session_hours,
+    get_engine,
+    run_optimization,
+)
 from models import (
     ACCOUNT_PROFILES,
     ASSETS,
@@ -287,12 +295,27 @@ for name in selected_assets:
         data[name] = df
 
 # ---------------------------------------------------------------------------
+# Session time guard — no trading outside the window
+# ---------------------------------------------------------------------------
+now_est = datetime.now()  # assumes server runs in EST
+current_hour = now_est.hour
+session_active = 3 <= current_hour < 12
+session_warning = 10 <= current_hour < 12  # wind-down period
+
+st.sidebar.divider()
+if session_active and not session_warning:
+    st.sidebar.success(f"Session OPEN — {now_est.strftime('%H:%M')} EST")
+elif session_warning:
+    st.sidebar.warning(f"WIND DOWN — {now_est.strftime('%H:%M')} EST — close positions by noon")
+else:
+    st.sidebar.error(f"Session CLOSED — {now_est.strftime('%H:%M')} EST — no new trades")
+
+# ---------------------------------------------------------------------------
 # Daily P&L guard (shown in sidebar)
 # ---------------------------------------------------------------------------
 today_pnl = get_today_pnl(account_size)
 open_trades_df = get_open_trades(account_size)
 
-st.sidebar.divider()
 st.sidebar.metric("Today's Realised P&L", f"${today_pnl:,.0f}")
 st.sidebar.metric("Open Trades", len(open_trades_df))
 
@@ -302,6 +325,12 @@ elif today_pnl <= acct["soft_stop"]:
     st.sidebar.warning("Soft stop reached — tighten up!")
 elif today_pnl >= abs(acct["soft_stop"]):
     st.sidebar.success("Great day! Consider locking profits.")
+
+# Warn about open positions outside session
+if not session_active and len(open_trades_df) > 0:
+    st.sidebar.error(
+        f"FLATTEN NOW — {len(open_trades_df)} open position(s) outside session hours!"
+    )
 
 # ---------------------------------------------------------------------------
 # Tabs
@@ -366,14 +395,20 @@ with tab_brief:
             corr = returns.corr().round(2)
             corr_text = corr.to_string()
 
-        # Optimisation results
+        # Optimisation results (with walk-forward and confidence data)
         opt_text_parts = []
         for name in selected_assets:
             ticker = ASSETS[name]
             opt = get_cached_optimization(ticker, interval, period)
             if opt:
+                strat_label = opt.get("strategy_label", opt.get("strategy", "?"))
+                confidence = opt.get("confidence", "?")
+                regime = opt.get("regime", "?")
+                wf = "yes" if opt.get("walk_forward") else "no"
                 opt_text_parts.append(
-                    f"  {name}: n1={opt['n1']}, n2={opt['n2']}, size={opt.get('size', '?')}, return={opt['return_pct']}%"
+                    f"  {name}: strategy={strat_label}, return={opt['return_pct']}%, "
+                    f"sharpe={opt.get('sharpe', '?')}, win_rate={opt.get('win_rate', '?')}%, "
+                    f"confidence={confidence}, regime={regime}, walk_forward={wf}"
                 )
         opt_text = "\n".join(opt_text_parts) if opt_text_parts else "Not yet run"
 
@@ -393,14 +428,17 @@ Rules you MUST follow:
 - Max {max_contracts} contracts per trade (25% rule)
 - Risk exactly 1% (USD {risk_dollars:,}) per trade
 - Only early-morning trades (3 AM - noon EST), close everything by noon
+- No new entries after 10 AM EST, only manage existing positions
 - Daily P&L limits: soft stop -USD {abs(acct["soft_stop"]):,}, hard stop -USD {abs(acct["hard_stop"]):,}
 - Focus on correlations (Gold/Silver/Copper/Oil/ES/NQ)
+- All positions MUST be flat before end of day — no overnight holds
 
 FORMATTING RULE: NEVER use bare $ signs for dollar amounts — always write "USD" instead.
 Do not use LaTeX or math notation. Use plain text only.
 
 Current time: {datetime.now().strftime("%Y-%m-%d %H:%M")} EST
 Account: USD {account_size:,}
+Session status: {"ACTIVE — primary entry window" if 3 <= current_hour < 10 else "WIND DOWN — manage only" if 10 <= current_hour < 12 else "CLOSED — no trading"}
 
 Scanner data:
 {scan_text}
@@ -408,18 +446,20 @@ Scanner data:
 Correlation matrix (5-min returns):
 {corr_text}
 
-Auto-optimized EMA parameters:
+Optimized strategy results (walk-forward validated):
 {opt_text}
 
-Backtest results (last {period}):
+Backtest results (last {period}, session-hours only):
 {bt_text}
 
 Give me a complete morning game plan:
 1. Overall market bias & rank 1-5 best assets to focus on today
 2. For each focus asset: direction, entry zone, SL, TP, contracts, RR, rationale
+   - Pay attention to which strategies the optimizer chose and their confidence levels
+   - Prioritise assets where the optimizer has "high" confidence
 3. Key correlations to watch and how to use them
 4. News/events awareness
-5. Risk reminders
+5. Risk reminders (including session time rules)
 
 After your analysis, provide your trade ideas as a JSON code block using this EXACT format
 (entry_low/entry_high define the limit order zone):
@@ -1140,14 +1180,13 @@ with tab_backtest:
     # Show latest engine backtest results
     bt_results = engine.get_backtest_results()
     if bt_results:
-        st.subheader("Auto-Backtest Results (Background Engine)")
+        st.subheader("Auto-Backtest Results (Session Hours, Walk-Forward Validated)")
         df_bt_all = pd.DataFrame(bt_results)
         display_cols_bt = [
             "Asset",
             "Strategy",
-            "n1",
-            "n2",
-            "Size",
+            "Confidence",
+            "Regime",
             "Params",
             "Return %",
             "Buy & Hold %",
@@ -1155,6 +1194,7 @@ with tab_backtest:
             "Win Rate %",
             "Max DD %",
             "Sharpe",
+            "Sortino",
             "Profit Factor",
             "Expectancy %",
             "Final Equity $",
@@ -1217,7 +1257,7 @@ with tab_backtest:
             go.Bar(
                 x=df_bt_all["Asset"],
                 y=df_bt_all["Return %"],
-                name="EMA Strategy",
+                name="Optimized Strategy",
                 marker_color="#2196f3",
             )
         )
@@ -1271,6 +1311,8 @@ with tab_backtest:
         opt_strat = opt_params.get("strategy_label", opt_params.get("strategy", "EMA"))
         opt_sharpe = opt_params.get("sharpe", "?")
         opt_ret = opt_params.get("return_pct", "?")
+        opt_confidence = opt_params.get("confidence", "?")
+        opt_regime = opt_params.get("regime", "?")
         opt_detail_parts = []
         if "params" in opt_params:
             for pk, pv in opt_params["params"].items():
@@ -1280,7 +1322,8 @@ with tab_backtest:
             opt_detail_parts.append(f"n2={opt_params.get('n2', '?')}")
             opt_detail_parts.append(f"size={opt_params.get('size', '?')}")
         st.success(
-            f"**Best strategy: {opt_strat}** — Sharpe={opt_sharpe}, Return={opt_ret}% · "
+            f"**Best strategy: {opt_strat}** — Sharpe={opt_sharpe}, Return={opt_ret}%, "
+            f"Confidence={opt_confidence}, Regime={opt_regime} · "
             + " · ".join(opt_detail_parts)
         )
         use_opt = st.checkbox(
@@ -1530,12 +1573,240 @@ with tab_backtest:
             "trade_size": bt_size,
         }
 
+    elif bt_strat_key == "VWAP":
+        bc1, bc2, bc3, bc4 = st.columns(4)
+        with bc1:
+            bt_trend = st.number_input(
+                "Trend EMA",
+                min_value=20,
+                max_value=200,
+                value=int(opt_p.get("trend_period", 50)),
+                key="bt_trend",
+            )
+        with bc2:
+            bt_size = st.number_input(
+                "Size",
+                min_value=0.01,
+                max_value=0.50,
+                step=0.01,
+                value=float(opt_p.get("trade_size", 0.10)),
+                key="bt_size",
+            )
+        with bc3:
+            bt_vol_mult = st.number_input(
+                "Vol ×",
+                min_value=0.5,
+                max_value=3.0,
+                step=0.1,
+                value=float(opt_p.get("vol_mult", 1.0)),
+                key="bt_vol_mult",
+            )
+        with bc4:
+            bt_atr_p = st.number_input(
+                "ATR Period",
+                min_value=5,
+                max_value=30,
+                value=int(opt_p.get("atr_period", 14)),
+                key="bt_atr_p",
+            )
+        bc5, bc6, bc7 = st.columns(3)
+        with bc5:
+            bt_sl_m = st.number_input(
+                "ATR SL ×",
+                min_value=0.5,
+                max_value=5.0,
+                step=0.25,
+                value=float(opt_p.get("atr_sl_mult", 1.5)),
+                key="bt_sl_m",
+            )
+        with bc6:
+            bt_tp_m = st.number_input(
+                "ATR TP ×",
+                min_value=0.5,
+                max_value=8.0,
+                step=0.25,
+                value=float(opt_p.get("atr_tp_mult", 2.0)),
+                key="bt_tp_m",
+            )
+        with bc7:
+            bt_vol_sma = st.number_input(
+                "Vol SMA",
+                min_value=5,
+                max_value=50,
+                value=int(opt_p.get("vol_sma_period", 20)),
+                key="bt_vol_sma",
+            )
+        manual_params = {
+            "trend_period": bt_trend,
+            "atr_period": bt_atr_p,
+            "atr_sl_mult": bt_sl_m,
+            "atr_tp_mult": bt_tp_m,
+            "vol_sma_period": bt_vol_sma,
+            "vol_mult": bt_vol_mult,
+            "trade_size": bt_size,
+        }
+
+    elif bt_strat_key == "ORB":
+        bc1, bc2, bc3, bc4 = st.columns(4)
+        with bc1:
+            bt_orb_bars = st.number_input(
+                "ORB Bars",
+                min_value=2,
+                max_value=24,
+                value=int(opt_p.get("orb_bars", 6)),
+                key="bt_orb_bars",
+                help="Number of bars forming the opening range (e.g. 6 × 5min = 30 min)",
+            )
+        with bc2:
+            bt_vol_mult = st.number_input(
+                "Vol ×",
+                min_value=0.5,
+                max_value=3.0,
+                step=0.1,
+                value=float(opt_p.get("vol_mult", 1.0)),
+                key="bt_vol_mult",
+            )
+        with bc3:
+            bt_size = st.number_input(
+                "Size",
+                min_value=0.01,
+                max_value=0.50,
+                step=0.01,
+                value=float(opt_p.get("trade_size", 0.10)),
+                key="bt_size",
+            )
+        with bc4:
+            bt_atr_p = st.number_input(
+                "ATR Period",
+                min_value=5,
+                max_value=30,
+                value=int(opt_p.get("atr_period", 14)),
+                key="bt_atr_p",
+            )
+        bc5, bc6, bc7 = st.columns(3)
+        with bc5:
+            bt_sl_m = st.number_input(
+                "ATR SL ×",
+                min_value=0.5,
+                max_value=5.0,
+                step=0.25,
+                value=float(opt_p.get("atr_sl_mult", 1.5)),
+                key="bt_sl_m",
+            )
+        with bc6:
+            bt_tp_m = st.number_input(
+                "ATR TP ×",
+                min_value=0.5,
+                max_value=8.0,
+                step=0.25,
+                value=float(opt_p.get("atr_tp_mult", 2.5)),
+                key="bt_tp_m",
+            )
+        with bc7:
+            bt_vol_sma = st.number_input(
+                "Vol SMA",
+                min_value=5,
+                max_value=50,
+                value=int(opt_p.get("vol_sma_period", 20)),
+                key="bt_vol_sma",
+            )
+        manual_params = {
+            "orb_bars": bt_orb_bars,
+            "atr_period": bt_atr_p,
+            "atr_sl_mult": bt_sl_m,
+            "atr_tp_mult": bt_tp_m,
+            "vol_sma_period": bt_vol_sma,
+            "vol_mult": bt_vol_mult,
+            "trade_size": bt_size,
+        }
+
+    elif bt_strat_key == "MACD":
+        bc1, bc2, bc3, bc4 = st.columns(4)
+        with bc1:
+            bt_macd_fast = st.number_input(
+                "MACD Fast",
+                min_value=4,
+                max_value=20,
+                value=int(opt_p.get("macd_fast", 12)),
+                key="bt_macd_fast",
+            )
+        with bc2:
+            bt_macd_slow = st.number_input(
+                "MACD Slow",
+                min_value=15,
+                max_value=50,
+                value=int(opt_p.get("macd_slow", 26)),
+                key="bt_macd_slow",
+            )
+        with bc3:
+            bt_macd_sig = st.number_input(
+                "Signal",
+                min_value=3,
+                max_value=20,
+                value=int(opt_p.get("macd_signal", 9)),
+                key="bt_macd_sig",
+            )
+        with bc4:
+            bt_size = st.number_input(
+                "Size",
+                min_value=0.01,
+                max_value=0.50,
+                step=0.01,
+                value=float(opt_p.get("trade_size", 0.10)),
+                key="bt_size",
+            )
+        bc5, bc6, bc7, bc8 = st.columns(4)
+        with bc5:
+            bt_trend = st.number_input(
+                "Trend EMA",
+                min_value=20,
+                max_value=200,
+                value=int(opt_p.get("trend_period", 50)),
+                key="bt_trend",
+            )
+        with bc6:
+            bt_atr_p = st.number_input(
+                "ATR Period",
+                min_value=5,
+                max_value=30,
+                value=int(opt_p.get("atr_period", 14)),
+                key="bt_atr_p",
+            )
+        with bc7:
+            bt_sl_m = st.number_input(
+                "ATR SL ×",
+                min_value=0.5,
+                max_value=5.0,
+                step=0.25,
+                value=float(opt_p.get("atr_sl_mult", 1.5)),
+                key="bt_sl_m",
+            )
+        with bc8:
+            bt_tp_m = st.number_input(
+                "ATR TP ×",
+                min_value=0.5,
+                max_value=8.0,
+                step=0.25,
+                value=float(opt_p.get("atr_tp_mult", 2.5)),
+                key="bt_tp_m",
+            )
+        manual_params = {
+            "macd_fast": bt_macd_fast,
+            "macd_slow": bt_macd_slow,
+            "macd_signal": bt_macd_sig,
+            "trend_period": bt_trend,
+            "atr_period": bt_atr_p,
+            "atr_sl_mult": bt_sl_m,
+            "atr_tp_mult": bt_tp_m,
+            "trade_size": bt_size,
+        }
+
     else:
         # Fallback for any unhandled strategy key
         manual_params = {"trade_size": 0.10}
 
     if asset_bt in data and not data[asset_bt].empty:
-        df_bt = data[asset_bt].copy()
+        df_bt = filter_session_hours(data[asset_bt].copy())
 
         # Build strategy class with the selected params
         configured_cls = make_strategy(bt_strat_key, manual_params)
@@ -1576,14 +1847,16 @@ with tab_backtest:
         if st.button("Force Re-Optimize This Asset", key="bt_force_opt"):
             ticker = ASSETS[asset_bt]
             clear_cached_optimization(ticker, interval, period)
-            with st.spinner(f"Optimizing {asset_bt} (3 strategies × 30 trials)..."):
+            with st.spinner(f"Optimizing {asset_bt} (6 strategies × 30 trials, walk-forward)..."):
                 result = run_optimization(ticker, interval, period, account_size)
                 if result:
                     strat_name = result.get("strategy_label", "?")
+                    confidence = result.get("confidence", "?")
                     st.success(
                         f"Done! Best: **{strat_name}** — "
                         f"Sharpe={result.get('sharpe', '?')}, "
-                        f"Return={result['return_pct']}%"
+                        f"Return={result['return_pct']}%, "
+                        f"Confidence={confidence}"
                     )
                     st.rerun()
     else:
@@ -1608,9 +1881,15 @@ with tab_backtest:
                 {
                     "Asset": name,
                     "Strategy": strat_label,
+                    "Confidence": cached.get("confidence", "—"),
+                    "Regime": cached.get("regime", "—"),
                     "Sharpe": cached.get("sharpe", "?"),
+                    "Sortino": cached.get("sortino", "?"),
+                    "Win Rate": cached.get("win_rate", "?"),
                     "Return %": cached["return_pct"],
-                    "Score": cached.get("score", "?"),
+                    "Train Score": cached.get("train_score", "?"),
+                    "Test Score": cached.get("test_score", "?"),
+                    "WF": "yes" if cached.get("walk_forward") else "no",
                     "Params": params_str,
                     "Updated": cached["updated"],
                 }
@@ -1699,6 +1978,35 @@ with tab_engine:
             engine.force_refresh()
             st.success("Cache cleared, engine will re-optimize on next cycle")
 
+    # Strategy history
+    st.divider()
+    st.subheader("Strategy Selection History")
+    st.caption(
+        "Shows which strategies the optimizer has been choosing for each asset "
+        "across recent runs. Consistency indicates a robust strategy fit."
+    )
+    strat_history = engine.get_strategy_history()
+    if strat_history:
+        history_rows = []
+        for asset_name, selections in strat_history.items():
+            # Find the most common strategy
+            from collections import Counter
+
+            counts = Counter(selections)
+            dominant = counts.most_common(1)[0]
+            consistency = f"{dominant[1]}/{len(selections)}"
+            history_rows.append(
+                {
+                    "Asset": asset_name,
+                    "Recent Selections": " → ".join(selections[-5:]),
+                    "Dominant": STRATEGY_LABELS.get(dominant[0], dominant[0]),
+                    "Consistency": consistency,
+                }
+            )
+        st.dataframe(pd.DataFrame(history_rows), width="stretch", hide_index=True)
+    else:
+        st.info("Strategy history will populate after multiple optimization cycles.")
+
     # Settings
     st.divider()
     st.subheader("Engine Settings")
@@ -1707,6 +2015,10 @@ with tab_engine:
             "account_size": engine.account_size,
             "interval": engine.interval,
             "period": engine.period,
+            "session_window": "3 AM – 12 PM EST",
+            "strategies_optimized": OPTIMIZER_STRATEGIES,
+            "trials_per_strategy": TRIALS_PER_STRATEGY,
+            "walk_forward_split": f"{int(TRAIN_RATIO * 100)}% train / {int((1 - TRAIN_RATIO) * 100)}% test",
             "data_refresh_interval_s": engine.DATA_REFRESH_INTERVAL,
             "optimization_interval_s": engine.OPTIMIZATION_INTERVAL,
             "backtest_interval_s": engine.BACKTEST_INTERVAL,

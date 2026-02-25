@@ -1,10 +1,13 @@
 """
 Strategy module for futures backtesting.
 
-Provides three strategy classes with trend filters and ATR-based risk management:
-  1. TrendEMACross  — EMA crossover filtered by a longer trend EMA, ATR SL/TP
-  2. RSIReversal    — RSI mean-reversion entries with trend filter, ATR SL/TP
-  3. BreakoutStrategy — Breakout of recent high/low with volume filter, ATR SL/TP
+Provides seven strategy classes with trend filters and ATR-based risk management:
+  1. TrendEMACross    — EMA crossover filtered by a longer trend EMA, ATR SL/TP
+  2. RSIReversal      — RSI mean-reversion entries with trend filter, ATR SL/TP
+  3. BreakoutStrategy  — Breakout of recent high/low with volume filter, ATR SL/TP
+  4. VWAPReversion    — Mean-reversion around daily VWAP with trend filter
+  5. ORBStrategy      — Opening Range Breakout of first N bars each session
+  6. MACDMomentum     — MACD crossover with histogram acceleration filter
 
 All strategies are compatible with the `backtesting.py` library and expose
 class-level parameters that Optuna can tune.
@@ -12,6 +15,7 @@ class-level parameters that Optuna can tune.
 
 import math
 
+import numpy as np
 import pandas as pd
 from backtesting import Strategy
 from backtesting.lib import crossover
@@ -19,6 +23,11 @@ from backtesting.lib import crossover
 # ---------------------------------------------------------------------------
 # Indicator helper functions (compatible with backtesting.py's self.I())
 # ---------------------------------------------------------------------------
+
+
+def _passthrough(arr):
+    """Identity function for pre-computed indicator arrays."""
+    return arr
 
 
 def _ema(series, length: int):
@@ -61,6 +70,25 @@ def _rolling_max(series, length: int):
 def _rolling_min(series, length: int):
     """Rolling minimum (for breakout low detection)."""
     return pd.Series(series).rolling(length).min()
+
+
+def _macd_line(series, fast: int = 12, slow: int = 26):
+    """MACD line (fast EMA - slow EMA)."""
+    s = pd.Series(series)
+    return s.ewm(span=fast, adjust=False).mean() - s.ewm(span=slow, adjust=False).mean()
+
+
+def _macd_signal(series, fast: int = 12, slow: int = 26, signal: int = 9):
+    """MACD signal line."""
+    macd = _macd_line(series, fast, slow)
+    return macd.ewm(span=signal, adjust=False).mean()
+
+
+def _macd_histogram(series, fast: int = 12, slow: int = 26, signal: int = 9):
+    """MACD histogram (MACD line - signal line)."""
+    macd = _macd_line(series, fast, slow)
+    sig = macd.ewm(span=signal, adjust=False).mean()
+    return macd - sig
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +354,359 @@ class BreakoutStrategy(Strategy):
 
 
 # ---------------------------------------------------------------------------
+# Strategy 4 — VWAP Mean-Reversion
+# ---------------------------------------------------------------------------
+
+
+class VWAPReversion(Strategy):
+    """Mean-reversion around daily VWAP with trend filter and ATR SL/TP.
+
+    Enters LONG when price crosses back above VWAP after being below it
+    (pullback buy in an uptrend).  Enters SHORT when price crosses below
+    VWAP after being above it (rally sell in a downtrend).
+
+    Designed for intraday futures where VWAP acts as a magnet / fair-value
+    anchor.  Requires a trend EMA to filter direction and volume confirmation.
+
+    Optimisable parameters
+    ----------------------
+    trend_period   : int    trend-direction EMA period   (40 – 120)
+    atr_period     : int    ATR look-back                (10 – 20)
+    atr_sl_mult    : float  SL distance = ATR × this     (1.0 – 3.0)
+    atr_tp_mult    : float  TP distance = ATR × this     (1.5 – 5.0)
+    vol_sma_period : int    volume SMA look-back          (10 – 30)
+    vol_mult       : float  volume filter multiplier      (0.8 – 1.5)
+    trade_size     : float  fraction of equity per trade  (0.05 – 0.30)
+    """
+
+    trend_period: int = 50
+    atr_period: int = 14
+    atr_sl_mult: float = 1.5
+    atr_tp_mult: float = 2.0
+    vol_sma_period: int = 20
+    vol_mult: float = 1.0
+    trade_size: float = 0.10
+
+    def init(self):
+        close = pd.Series(self.data.Close)
+        self.ema_trend = self.I(
+            _ema, close, self.trend_period, name=f"Trend{self.trend_period}"
+        )
+        self.atr = self.I(
+            _atr,
+            self.data.High,
+            self.data.Low,
+            self.data.Close,
+            self.atr_period,
+            name="ATR",
+        )
+        self.vol_avg = self.I(
+            _sma, self.data.Volume, self.vol_sma_period, name="VolSMA"
+        )
+
+        # Pre-compute daily-resetting VWAP
+        df = self.data.df
+        idx = df.index
+        high = df["High"]
+        low = df["Low"]
+        close_s = df["Close"]
+        volume = df["Volume"]
+        typical = (high + low + close_s) / 3
+        tpv = typical * volume
+
+        try:
+            dates = idx.date
+            cum_tpv = tpv.groupby(dates).cumsum()
+            cum_vol = volume.groupby(dates).cumsum()
+        except AttributeError:
+            # Non-datetime index — running cumulative VWAP
+            cum_tpv = tpv.cumsum()
+            cum_vol = volume.cumsum()
+
+        vwap_arr = (cum_tpv / (cum_vol + 1e-10)).values
+        self.vwap = self.I(_passthrough, vwap_arr, name="VWAP")
+
+    def next(self):
+        atr_val = self.atr[-1]
+        if _is_nan(atr_val) or atr_val <= 0:
+            return
+
+        if len(self.vwap) < 2 or _is_nan(self.vwap[-1]) or _is_nan(self.vwap[-2]):
+            return
+
+        price = self.data.Close[-1]
+        prev_close = self.data.Close[-2]
+        vwap_now = self.vwap[-1]
+        vwap_prev = self.vwap[-2]
+        trend = self.ema_trend[-1]
+
+        if _is_nan(trend) or _is_nan(vwap_now):
+            return
+
+        # Volume filter
+        vol = self.data.Volume[-1]
+        vol_avg = self.vol_avg[-1]
+        if _is_nan(vol_avg) or vol_avg <= 0 or vol < vol_avg * self.vol_mult:
+            return
+
+        # --- Exit: price reverts back through VWAP ---
+        if self.position:
+            if self.position.is_long and price < vwap_now:
+                self.position.close()
+            elif self.position.is_short and price > vwap_now:
+                self.position.close()
+            return
+
+        # --- Entry: VWAP crossover with trend filter ---
+        crossed_above = prev_close <= vwap_prev and price > vwap_now
+        crossed_below = prev_close >= vwap_prev and price < vwap_now
+
+        if crossed_above and price > trend:
+            sl = price - atr_val * self.atr_sl_mult
+            tp = price + atr_val * self.atr_tp_mult
+            self.buy(size=self.trade_size, sl=sl, tp=tp)
+
+        elif crossed_below and price < trend:
+            sl = price + atr_val * self.atr_sl_mult
+            tp = price - atr_val * self.atr_tp_mult
+            self.sell(size=self.trade_size, sl=sl, tp=tp)
+
+
+# ---------------------------------------------------------------------------
+# Strategy 5 — Opening Range Breakout
+# ---------------------------------------------------------------------------
+
+
+class ORBStrategy(Strategy):
+    """Opening Range Breakout — classic morning intraday strategy.
+
+    Computes the high/low of the first `orb_bars` bars each session day.
+    After the opening range is established:
+      - LONG when price breaks above the opening range high
+      - SHORT when price breaks below the opening range low
+
+    Ideal for the first 2-3 hours of futures trading where morning
+    momentum drives directional moves off the opening range.
+
+    Optimisable parameters
+    ----------------------
+    orb_bars       : int    bars forming the opening range (3 – 12)
+    atr_period     : int    ATR look-back                  (10 – 20)
+    atr_sl_mult    : float  SL distance = ATR × this       (1.0 – 3.0)
+    atr_tp_mult    : float  TP distance = ATR × this       (1.5 – 5.0)
+    vol_sma_period : int    volume SMA look-back            (10 – 30)
+    vol_mult       : float  volume filter multiplier        (0.8 – 1.5)
+    trade_size     : float  fraction of equity per trade    (0.05 – 0.30)
+    """
+
+    orb_bars: int = 6  # 6 × 5min = 30 minute opening range
+    atr_period: int = 14
+    atr_sl_mult: float = 1.5
+    atr_tp_mult: float = 2.5
+    vol_sma_period: int = 20
+    vol_mult: float = 1.0
+    trade_size: float = 0.10
+
+    def init(self):
+        self.atr = self.I(
+            _atr,
+            self.data.High,
+            self.data.Low,
+            self.data.Close,
+            self.atr_period,
+            name="ATR",
+        )
+        self.vol_avg = self.I(
+            _sma, self.data.Volume, self.vol_sma_period, name="VolSMA"
+        )
+
+        # Pre-compute ORB levels per session day
+        df = self.data.df
+        idx = df.index
+        h = df["High"]
+        low_s = df["Low"]
+        orb_bars = int(self.orb_bars)
+
+        orb_h = np.full(len(idx), np.nan)
+        orb_l = np.full(len(idx), np.nan)
+
+        try:
+            dates = idx.date
+            unique_dates = sorted(set(dates))
+            for date_val in unique_dates:
+                day_positions = np.where(dates == date_val)[0]
+                if len(day_positions) < orb_bars + 1:
+                    continue
+                range_positions = day_positions[:orb_bars]
+                trade_positions = day_positions[orb_bars:]
+                range_high = h.iloc[range_positions].max()
+                range_low = low_s.iloc[range_positions].min()
+                orb_h[trade_positions] = range_high
+                orb_l[trade_positions] = range_low
+        except AttributeError:
+            # Non-datetime index — use rolling lookback as fallback
+            orb_h = pd.Series(h).rolling(orb_bars).max().shift(1).values
+            orb_l = pd.Series(low_s).rolling(orb_bars).min().shift(1).values
+
+        self.orb_high = self.I(_passthrough, orb_h, name="ORB_H")
+        self.orb_low = self.I(_passthrough, orb_l, name="ORB_L")
+
+    def next(self):
+        atr_val = self.atr[-1]
+        if _is_nan(atr_val) or atr_val <= 0:
+            return
+
+        orb_h = self.orb_high[-1]
+        orb_l = self.orb_low[-1]
+        if _is_nan(orb_h) or _is_nan(orb_l):
+            return  # Still in opening range formation
+
+        price = self.data.Close[-1]
+
+        # Volume gate
+        vol = self.data.Volume[-1]
+        vol_avg = self.vol_avg[-1]
+        if _is_nan(vol_avg) or vol_avg <= 0 or vol < vol_avg * self.vol_mult:
+            return
+
+        # SL/TP manage exits — no signal-based close
+        if self.position:
+            return
+
+        # Breakout long
+        if price > orb_h:
+            sl = price - atr_val * self.atr_sl_mult
+            tp = price + atr_val * self.atr_tp_mult
+            self.buy(size=self.trade_size, sl=sl, tp=tp)
+
+        # Breakout short
+        elif price < orb_l:
+            sl = price + atr_val * self.atr_sl_mult
+            tp = price - atr_val * self.atr_tp_mult
+            self.sell(size=self.trade_size, sl=sl, tp=tp)
+
+
+# ---------------------------------------------------------------------------
+# Strategy 6 — MACD Momentum
+# ---------------------------------------------------------------------------
+
+
+class MACDMomentum(Strategy):
+    """MACD crossover with histogram acceleration and trend filter.
+
+    Enters LONG when MACD crosses above its signal line, histogram is
+    accelerating (building momentum), and price is above the trend EMA.
+    Mirror logic for shorts.  Exits on the opposite MACD crossover.
+
+    Good for catching medium-momentum intraday moves where the initial
+    impulse is confirmed by accelerating MACD histogram.
+
+    Optimisable parameters
+    ----------------------
+    macd_fast      : int    fast EMA period for MACD      (8 – 16)
+    macd_slow      : int    slow EMA period for MACD      (20 – 34)
+    macd_signal    : int    signal line EMA period         (6 – 12)
+    trend_period   : int    trend-direction EMA period     (40 – 120)
+    atr_period     : int    ATR look-back                  (10 – 20)
+    atr_sl_mult    : float  SL distance = ATR × this       (1.0 – 3.0)
+    atr_tp_mult    : float  TP distance = ATR × this       (1.5 – 5.0)
+    trade_size     : float  fraction of equity per trade    (0.05 – 0.30)
+    """
+
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
+    trend_period: int = 50
+    atr_period: int = 14
+    atr_sl_mult: float = 1.5
+    atr_tp_mult: float = 2.5
+    trade_size: float = 0.10
+
+    def init(self):
+        close = pd.Series(self.data.Close)
+        self.macd = self.I(
+            _macd_line, close, self.macd_fast, self.macd_slow, name="MACD"
+        )
+        self.signal = self.I(
+            _macd_signal,
+            close,
+            self.macd_fast,
+            self.macd_slow,
+            self.macd_signal,
+            name="Signal",
+        )
+        self.histogram = self.I(
+            _macd_histogram,
+            close,
+            self.macd_fast,
+            self.macd_slow,
+            self.macd_signal,
+            name="Hist",
+        )
+        self.ema_trend = self.I(
+            _ema, close, self.trend_period, name=f"Trend{self.trend_period}"
+        )
+        self.atr = self.I(
+            _atr,
+            self.data.High,
+            self.data.Low,
+            self.data.Close,
+            self.atr_period,
+            name="ATR",
+        )
+
+    def next(self):
+        atr_val = self.atr[-1]
+        if _is_nan(atr_val) or atr_val <= 0:
+            return
+
+        if len(self.histogram) < 2:
+            return
+
+        price = self.data.Close[-1]
+        trend = self.ema_trend[-1]
+        hist_now = self.histogram[-1]
+        hist_prev = self.histogram[-2]
+
+        if _is_nan(trend) or _is_nan(hist_now) or _is_nan(hist_prev):
+            return
+
+        # Histogram acceleration: momentum is building, not fading
+        hist_growing = hist_now > hist_prev
+
+        # --- Exit: opposite MACD crossover ---
+        if self.position:
+            if self.position.is_long and crossover(
+                list(self.signal), list(self.macd)
+            ):
+                self.position.close()
+            elif self.position.is_short and crossover(
+                list(self.macd), list(self.signal)
+            ):
+                self.position.close()
+            return
+
+        # --- Entry: MACD crossover + histogram acceleration + trend filter ---
+        if (
+            crossover(list(self.macd), list(self.signal))
+            and hist_growing
+            and price > trend
+        ):
+            sl = price - atr_val * self.atr_sl_mult
+            tp = price + atr_val * self.atr_tp_mult
+            self.buy(size=self.trade_size, sl=sl, tp=tp)
+
+        elif (
+            crossover(list(self.signal), list(self.macd))
+            and not hist_growing
+            and price < trend
+        ):
+            sl = price + atr_val * self.atr_sl_mult
+            tp = price - atr_val * self.atr_tp_mult
+            self.sell(size=self.trade_size, sl=sl, tp=tp)
+
+
+# ---------------------------------------------------------------------------
 # Legacy compatibility: plain EMA Cross (no filters, no stops)
 # ---------------------------------------------------------------------------
 
@@ -363,6 +744,9 @@ STRATEGY_CLASSES = {
     "TrendEMA": TrendEMACross,
     "RSI": RSIReversal,
     "Breakout": BreakoutStrategy,
+    "VWAP": VWAPReversion,
+    "ORB": ORBStrategy,
+    "MACD": MACDMomentum,
     "PlainEMA": PlainEMACross,
 }
 
@@ -371,6 +755,9 @@ STRATEGY_LABELS = {
     "TrendEMA": "Trend-Filtered EMA Cross",
     "RSI": "RSI Mean-Reversion",
     "Breakout": "Breakout + Volume",
+    "VWAP": "VWAP Reversion",
+    "ORB": "Opening Range Breakout",
+    "MACD": "MACD Momentum",
     "PlainEMA": "Plain EMA Cross (legacy)",
 }
 
@@ -414,6 +801,36 @@ def suggest_params(trial, strategy_key: str) -> dict:
         params["vol_mult"] = trial.suggest_float("vol_mult", 1.0, 2.0, step=0.1)
         params["trade_size"] = trial.suggest_float("trade_size", 0.05, 0.30, step=0.05)
 
+    elif strategy_key == "VWAP":
+        params["trend_period"] = trial.suggest_int("trend_period", 40, 120)
+        params["atr_period"] = trial.suggest_int("atr_period", 10, 20)
+        params["atr_sl_mult"] = trial.suggest_float("atr_sl_mult", 1.0, 3.0, step=0.25)
+        params["atr_tp_mult"] = trial.suggest_float("atr_tp_mult", 1.5, 5.0, step=0.25)
+        params["vol_sma_period"] = trial.suggest_int("vol_sma_period", 10, 30)
+        params["vol_mult"] = trial.suggest_float("vol_mult", 0.8, 1.5, step=0.1)
+        params["trade_size"] = trial.suggest_float("trade_size", 0.05, 0.30, step=0.05)
+
+    elif strategy_key == "ORB":
+        params["orb_bars"] = trial.suggest_int("orb_bars", 3, 12)
+        params["atr_period"] = trial.suggest_int("atr_period", 10, 20)
+        params["atr_sl_mult"] = trial.suggest_float("atr_sl_mult", 1.0, 3.0, step=0.25)
+        params["atr_tp_mult"] = trial.suggest_float("atr_tp_mult", 1.5, 5.0, step=0.25)
+        params["vol_sma_period"] = trial.suggest_int("vol_sma_period", 10, 30)
+        params["vol_mult"] = trial.suggest_float("vol_mult", 0.8, 1.5, step=0.1)
+        params["trade_size"] = trial.suggest_float("trade_size", 0.05, 0.30, step=0.05)
+
+    elif strategy_key == "MACD":
+        params["macd_fast"] = trial.suggest_int("macd_fast", 8, 16)
+        params["macd_slow"] = trial.suggest_int(
+            "macd_slow", max(params["macd_fast"] + 8, 20), 34
+        )
+        params["macd_signal"] = trial.suggest_int("macd_signal", 6, 12)
+        params["trend_period"] = trial.suggest_int("trend_period", 40, 120)
+        params["atr_period"] = trial.suggest_int("atr_period", 10, 20)
+        params["atr_sl_mult"] = trial.suggest_float("atr_sl_mult", 1.0, 3.0, step=0.25)
+        params["atr_tp_mult"] = trial.suggest_float("atr_tp_mult", 1.5, 5.0, step=0.25)
+        params["trade_size"] = trial.suggest_float("trade_size", 0.05, 0.30, step=0.05)
+
     elif strategy_key == "PlainEMA":
         params["n1"] = trial.suggest_int("n1", 5, 20)
         params["n2"] = trial.suggest_int("n2", max(params["n1"] + 5, 15), 55)
@@ -443,11 +860,27 @@ def make_strategy(strategy_key: str, params: dict) -> type:
 _PENALTY = -100.0  # returned for invalid / degenerate runs
 
 
+def _safe_float(val, fallback: float = 0.0) -> float:
+    """Extract a float from backtest stats, returning fallback for NaN/missing."""
+    try:
+        f = float(val)
+        return fallback if math.isnan(f) else f
+    except (TypeError, ValueError):
+        return fallback
+
+
 def score_backtest(stats, min_trades: int = 3) -> float:
     """Compute a risk-adjusted score from backtest stats.
 
-    Primary metric : Sharpe Ratio
-    Penalties      : < min_trades, NaN Sharpe, drawdown > 8%
+    Designed for funded-account (TPT) trading where drawdown control is
+    paramount and consistent win rates matter more than occasional big wins.
+
+    Scoring components:
+      - Base: Sharpe (40%) + Sortino (30%) + normalised Profit Factor (30%)
+      - Drawdown penalty: progressive, severe above 6%
+      - Win rate bonus: rewards consistency above 45%
+      - Expectancy bonus: rewards positive per-trade edge
+      - Trade count bonus: prefers statistically significant sample sizes
     """
     n_trades = int(stats["# Trades"])
     if n_trades < min_trades:
@@ -458,16 +891,38 @@ def score_backtest(stats, min_trades: int = 3) -> float:
         return _PENALTY
 
     max_dd = abs(float(stats["Max. Drawdown [%]"]))
+    wr = _safe_float(stats["Win Rate [%]"])
+    pf = _safe_float(stats.get("Profit Factor", 0))
+    sortino = _safe_float(stats.get("Sortino Ratio", sharpe))
+    expectancy = _safe_float(stats.get("Expectancy [%]", 0))
 
-    # Start from Sharpe, penalise large drawdowns
-    score = sharpe
-    if max_dd > 8:
-        score -= (max_dd - 8) * 0.15
+    # Base: weighted combination of risk-adjusted metrics
+    pf_norm = min(pf / 3.0, 1.0) * 2.0 if pf > 0 else 0.0
+    score = 0.4 * sharpe + 0.3 * sortino + 0.3 * pf_norm
 
-    # Small bonus for win-rate above 40 %
-    wr = float(stats["Win Rate [%]"])
-    if not _is_nan(wr) and wr > 40:
-        score += (wr - 40) * 0.01
+    # Drawdown penalty — progressive and severe for funded accounts
+    if max_dd > 3:
+        score -= (max_dd - 3) * 0.08
+    if max_dd > 6:
+        score -= (max_dd - 6) * 0.15
+    if max_dd > 10:
+        score -= (max_dd - 10) * 0.30
+
+    # Win rate bonus (consistent winners)
+    if wr > 45:
+        score += (wr - 45) * 0.015
+    if wr > 60:
+        score += (wr - 60) * 0.01  # diminishing returns above 60%
+
+    # Expectancy bonus (per-trade edge)
+    if expectancy > 0:
+        score += min(expectancy * 0.1, 0.5)
+
+    # Trade count: prefer statistical significance
+    if n_trades >= 8:
+        score += 0.1
+    if n_trades >= 15:
+        score += 0.1
 
     return score
 
