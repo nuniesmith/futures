@@ -165,14 +165,14 @@ CONTRACT_SPECS = (
 # Convenience: name → data ticker (for Yahoo Finance fetching).
 # Micro contracts track the same underlying price as full-size, so we always
 # fetch from the full-size ticker which Yahoo reliably supports.
-ASSETS = {
-    name: spec.get("data_ticker", spec["ticker"])
+ASSETS: dict[str, str] = {
+    name: str(spec.get("data_ticker", spec["ticker"]))
     for name, spec in CONTRACT_SPECS.items()
 }
 
 # Reverse lookup: data ticker → name
-TICKER_TO_NAME = {
-    spec.get("data_ticker", spec["ticker"]): name
+TICKER_TO_NAME: dict[str, str] = {
+    str(spec.get("data_ticker", spec["ticker"])): name
     for name, spec in CONTRACT_SPECS.items()
 }
 

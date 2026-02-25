@@ -29,8 +29,6 @@ _EST = ZoneInfo("America/New_York")
 # Ensure sibling modules are importable when run as `streamlit run src/app.py`
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from wave import calculate_wave_analysis, wave_summary_text  # noqa: E402
-
 import pandas as pd  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 import requests  # noqa: E402
@@ -81,6 +79,7 @@ from scorer import (  # noqa: E402
 )
 from scorer import results_to_dataframe as scorer_to_dataframe  # noqa: E402
 from volatility import kmeans_volatility_clusters, volatility_summary_text  # noqa: E402
+from wave_analysis import calculate_wave_analysis, wave_summary_text  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Initialise database

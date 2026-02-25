@@ -77,7 +77,7 @@ MASSIVE_PRODUCT_TO_YAHOO: dict[str, str] = {
 
 # Interval mapping: our internal intervals → Massive resolution strings
 # The Massive futures aggs endpoint uses a 'resolution' query param
-# Format: "<count><unit>" e.g. "1min", "1hr", "1day", "1sec"
+# Valid resolutions: "1sec", "1min", "1day"
 # For intervals >1m we fetch 1min bars and resample client-side.
 INTERVAL_TO_RESOLUTION: dict[str, str] = {
     "1s": "1sec",
@@ -85,10 +85,10 @@ INTERVAL_TO_RESOLUTION: dict[str, str] = {
     "5m": "1min",
     "15m": "1min",
     "30m": "1min",
-    "1h": "1hr",
-    "60m": "1hr",
+    "1h": "1min",
+    "60m": "1min",
     "1d": "1day",
-    "1wk": "7days",
+    "1wk": "1day",
     "1mo": "1day",
 }
 
@@ -100,8 +100,8 @@ INTERVAL_MULTIPLIER: dict[str, int] = {
     "5m": 5,
     "15m": 15,
     "30m": 30,
-    "1h": 1,
-    "60m": 1,
+    "1h": 60,
+    "60m": 60,
     "1d": 1,
     "1wk": 1,
     "1mo": 1,
@@ -138,15 +138,17 @@ def _dropna_ohlc(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _resample_to_interval(df: pd.DataFrame, interval: str) -> pd.DataFrame:
-    """Resample 1-minute bars to the requested interval.
+    """Resample 1-minute or 1-day bars to the requested interval.
 
-    Only needed when interval is >1m (e.g., 5m, 15m, 30m).
-    For 1m, 1h, 1d, etc. we get the right resolution from the API directly.
+    Needed when interval doesn't map to a native API resolution
+    (e.g., 5m, 15m, 30m, 1h from 1min; 1wk from 1day).
     """
     resample_map = {
         "5m": "5min",
         "15m": "15min",
         "30m": "30min",
+        "1h": "1h",
+        "60m": "1h",
         "1wk": "W",
         "1mo": "ME",
     }
@@ -278,7 +280,7 @@ class MassiveDataProvider:
                 client.list_futures_contracts(
                     product_code=product_code,
                     active=True,
-                    type="future",
+                    type="single",
                     date=today_str,
                     limit=10,
                     sort="date",
@@ -308,6 +310,7 @@ class MassiveDataProvider:
             contracts = list(
                 client.list_futures_contracts(
                     product_code=product_code,
+                    type="single",
                     limit=20,
                     sort="date",
                 )
@@ -410,7 +413,7 @@ class MassiveDataProvider:
 
         # Determine the base resolution and whether we need to resample
         resolution = INTERVAL_TO_RESOLUTION.get(interval, "1min")
-        needs_resample = interval in ("5m", "15m", "30m", "1wk", "1mo")
+        needs_resample = interval in ("5m", "15m", "30m", "1h", "60m", "1wk", "1mo")
 
         # Calculate date range from period
         days = PERIOD_TO_DAYS.get(period)

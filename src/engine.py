@@ -29,8 +29,6 @@ from zoneinfo import ZoneInfo
 
 _EST = ZoneInfo("America/New_York")
 
-from wave import calculate_wave_analysis, wave_summary_text  # noqa: E402
-
 import optuna  # noqa: E402
 import pandas as pd  # noqa: E402
 from backtesting import Backtest  # noqa: E402
@@ -64,7 +62,8 @@ from strategies import (  # noqa: E402
     score_backtest,
     suggest_params,
 )
-from volatility import kmeans_volatility_clusters, volatility_summary_text  # noqa: E402
+from volatility import kmeans_volatility_clusters  # noqa: E402
+from wave_analysis import calculate_wave_analysis  # noqa: E402
 
 logger = logging.getLogger("engine")
 logger.setLevel(logging.INFO)

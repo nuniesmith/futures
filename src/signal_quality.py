@@ -18,7 +18,7 @@ The score adapts based on detected market phase:
 
 Design decisions:
   - Stateless: operates on DataFrame + pre-computed analysis dicts
-  - Reuses existing wave.py and volatility.py outputs (no redundant compute)
+  - Reuses existing wave_analysis.py and volatility.py outputs (no redundant compute)
   - Candle pattern detection ported directly from fks.pine's
     f_detect_bullish_candle_pattern / f_detect_bearish_candle_pattern
   - Can be called on every 1m bar (via WebSocket) or per 5m refresh

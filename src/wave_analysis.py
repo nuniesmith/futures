@@ -13,8 +13,11 @@ All calculations are stateless (pure functions on DataFrames), designed to
 be called once per refresh cycle and cached. No new dependencies — pure
 NumPy/pandas.
 
+Note: This module was renamed from ``wave.py`` to ``wave_analysis.py`` to
+avoid shadowing Python's built-in ``wave`` (audio) module.
+
 Usage:
-    from wave import calculate_wave_analysis
+    from wave_analysis import calculate_wave_analysis
 
     result = calculate_wave_analysis(df)
     # result = {
@@ -40,7 +43,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-logger = logging.getLogger("wave")
+logger = logging.getLogger("wave_analysis")
 
 # ---------------------------------------------------------------------------
 # Asset-specific tuning (ported from fks.pine barstate.isfirst block)

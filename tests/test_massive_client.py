@@ -143,7 +143,7 @@ def _make_futures_contract(
         settlement_date=None,
         days_to_maturity=30,
         trading_venue="CME",
-        type="future",
+        type="single",
         group_code=None,
         max_order_quantity=None,
         min_order_quantity=None,
@@ -328,15 +328,17 @@ class TestContractResolution:
         mock_rest_client.list_futures_contracts.return_value = []
         provider = _make_provider_with_mock(mock_rest_client)
 
+        # Tier 3 fallback: returns root symbol itself when no contracts found
         result = provider.resolve_front_month("UNKNOWN")
-        assert result is None
+        assert result == "UNKNOWN"
 
     def test_resolve_front_month_api_error(self, mock_rest_client):
         mock_rest_client.list_futures_contracts.side_effect = Exception("timeout")
         provider = _make_provider_with_mock(mock_rest_client)
 
+        # Tier 3 fallback: returns root symbol itself when API errors out
         result = provider.resolve_front_month("ES")
-        assert result is None
+        assert result == "ES"
 
     def test_resolve_front_month_caches_result(self, mock_rest_client):
         contract = _make_futures_contract(ticker="ESZ5")
@@ -416,6 +418,31 @@ class TestContractResolution:
 
         result = provider.resolve_front_month("ES")
         assert result == "ESZ5"
+
+    def test_combo_contracts_filtered_out(self, mock_rest_client):
+        """Products like CL return many combo/spread contracts that must be
+        excluded so the outright front-month is found (regression test)."""
+        combos = [
+            _make_futures_contract(
+                ticker=f"CL:BF F6-G6-H{i}",
+                product_code="CL",
+                last_trade_date="2026-12-19",
+            )
+            for i in range(15)
+        ]
+        # Override type to 'combo' and keep the dash/colon in ticker
+        for c in combos:
+            c.type = "combo"
+        outright = _make_futures_contract(
+            ticker="CLJ6",
+            product_code="CL",
+            last_trade_date="2026-03-20",
+        )
+        mock_rest_client.list_futures_contracts.return_value = combos + [outright]
+        provider = _make_provider_with_mock(mock_rest_client)
+
+        result = provider.resolve_front_month("CL")
+        assert result == "CLJ6"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -876,10 +903,10 @@ class TestResampling:
         result = _resample_to_interval(df, "1m")
         assert len(result) == 10  # unchanged
 
-    def test_no_resample_for_1h(self):
-        df = _make_ohlcv_df(n=5, freq="1h")
+    def test_resample_1m_to_1h(self):
+        df = _make_ohlcv_df(n=120, freq="1min")
         result = _resample_to_interval(df, "1h")
-        assert len(result) == 5
+        assert len(result) == 2
 
     def test_no_resample_for_1d(self):
         df = _make_ohlcv_df(n=5, freq="1D")
@@ -939,7 +966,12 @@ class TestFeedManager:
         assert not feed.is_running
 
     def test_start_without_resolved_tickers(self, mock_rest_client):
-        """Start should fail if no tickers can be resolved."""
+        """Start succeeds with broad subscriptions even if no tickers resolve.
+
+        Broad subscriptions (AM.*, T.*) auto-discover contracts via reverse
+        mapping, so the feed manager returns True and relies on runtime
+        discovery instead of upfront resolution.
+        """
         provider = _make_provider_with_mock(mock_rest_client)
         mock_rest_client.list_futures_contracts.return_value = []
 
@@ -949,7 +981,7 @@ class TestFeedManager:
             provider=provider,
         )
         result = feed.start()
-        assert not result
+        assert result
 
     def test_get_status(self):
         feed = MassiveFeedManager(api_key="test")
@@ -976,6 +1008,28 @@ class TestFeedManager:
         feed._resolve_tickers()
         subs = feed._build_subscriptions()
 
+        # Default is broad subscriptions (AM.*, T.*)
+        assert any("AM." in s for s in subs)  # minute aggs
+        assert any("T." in s for s in subs)  # trades
+        assert not any("Q." in s for s in subs)  # no quotes
+
+    def test_build_subscriptions_per_ticker(self, mock_rest_client):
+        """Legacy per-ticker subscriptions when broad mode is disabled."""
+        contract = _make_futures_contract(ticker="ESZ5")
+        mock_rest_client.list_futures_contracts.return_value = [contract]
+        provider = _make_provider_with_mock(mock_rest_client)
+
+        feed = MassiveFeedManager(
+            api_key="test_key",
+            yahoo_tickers=["ES=F"],
+            provider=provider,
+            subscribe_trades=True,
+            subscribe_quotes=False,
+            use_broad_subscriptions=False,
+        )
+        feed._resolve_tickers()
+        subs = feed._build_subscriptions()
+
         assert any("AM.ESZ5" in s for s in subs)  # minute aggs
         assert any("T.ESZ5" in s for s in subs)  # trades
         assert not any("Q." in s for s in subs)  # no quotes
@@ -995,6 +1049,26 @@ class TestFeedManager:
         feed._resolve_tickers()
         subs = feed._build_subscriptions()
 
+        # Broad mode: Q.*
+        assert any("Q." in s for s in subs)
+
+    def test_build_subscriptions_with_quotes_per_ticker(self, mock_rest_client):
+        """Per-ticker quote subscriptions when broad mode is disabled."""
+        contract = _make_futures_contract(ticker="ESZ5")
+        mock_rest_client.list_futures_contracts.return_value = [contract]
+        provider = _make_provider_with_mock(mock_rest_client)
+
+        feed = MassiveFeedManager(
+            api_key="test_key",
+            yahoo_tickers=["ES=F"],
+            provider=provider,
+            subscribe_trades=True,
+            subscribe_quotes=True,
+            use_broad_subscriptions=False,
+        )
+        feed._resolve_tickers()
+        subs = feed._build_subscriptions()
+
         assert any("Q.ESZ5" in s for s in subs)
 
     def test_build_subscriptions_with_second_aggs(self, mock_rest_client):
@@ -1007,6 +1081,25 @@ class TestFeedManager:
             yahoo_tickers=["ES=F"],
             provider=provider,
             subscribe_second_aggs=True,
+        )
+        feed._resolve_tickers()
+        subs = feed._build_subscriptions()
+
+        # Broad mode: A.*
+        assert any("A." in s for s in subs)
+
+    def test_build_subscriptions_with_second_aggs_per_ticker(self, mock_rest_client):
+        """Per-ticker second-agg subscriptions when broad mode is disabled."""
+        contract = _make_futures_contract(ticker="ESZ5")
+        mock_rest_client.list_futures_contracts.return_value = [contract]
+        provider = _make_provider_with_mock(mock_rest_client)
+
+        feed = MassiveFeedManager(
+            api_key="test_key",
+            yahoo_tickers=["ES=F"],
+            provider=provider,
+            subscribe_second_aggs=True,
+            use_broad_subscriptions=False,
         )
         feed._resolve_tickers()
         subs = feed._build_subscriptions()
