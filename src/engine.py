@@ -2,6 +2,13 @@
 Background engine that keeps market data fresh, runs Optuna optimizations
 when cached results expire, and backtests all assets with optimal parameters.
 
+Improvements over the original:
+  - Walk-forward validation (train/test split) to prevent overfitting
+  - Session time filtering (only backtest during the 3 AM–noon EST window)
+  - Volatility regime detection (low/normal/high) per asset
+  - Strategy confidence scoring based on out-of-sample consistency
+  - Six strategies optimized: TrendEMA, RSI, Breakout, VWAP, ORB, MACD
+
 Usage:
     from engine import get_engine
     engine = get_engine(account_size=150_000, interval="5m", period="5d")
@@ -34,6 +41,7 @@ from cache import (
 from models import ASSETS
 from strategies import (
     STRATEGY_LABELS,
+    _safe_float,
     make_strategy,
     score_backtest,
     suggest_params,
@@ -46,15 +54,80 @@ if not logger.handlers:
     _h.setFormatter(logging.Formatter("[ENGINE] %(asctime)s  %(message)s", "%H:%M:%S"))
     logger.addHandler(_h)
 
-# Strategy keys the optimizer will explore (exclude legacy PlainEMA by default)
-OPTIMIZER_STRATEGIES = ["TrendEMA", "RSI", "Breakout"]
+# Strategy keys the optimizer will explore (all active strategies)
+OPTIMIZER_STRATEGIES = ["TrendEMA", "RSI", "Breakout", "VWAP", "ORB", "MACD"]
 
 # Number of Optuna trials per strategy during optimization
 TRIALS_PER_STRATEGY = 30
 
+# Walk-forward split: train on first portion, validate on the rest
+TRAIN_RATIO = 0.70
+MIN_TRAIN_BARS = 150  # minimum bars needed for training split
+MIN_TEST_BARS = 50  # minimum bars for validation to be meaningful
+
+# Session hours (EST) — only trade during this window
+SESSION_START_HOUR = 3  # 3 AM EST (futures pre-market)
+SESSION_END_HOUR = 12  # 12 PM EST (noon — hard close)
+
 
 # ---------------------------------------------------------------------------
-# Optimization runner — multi-strategy, Sharpe-based
+# Session time filtering
+# ---------------------------------------------------------------------------
+
+
+def filter_session_hours(
+    df: pd.DataFrame,
+    start_hour: int = SESSION_START_HOUR,
+    end_hour: int = SESSION_END_HOUR,
+) -> pd.DataFrame:
+    """Filter DataFrame to only include bars within the trading session.
+
+    Default window: 3 AM – 12 PM EST, matching the morning trading playbook.
+    Returns the full DataFrame if the index is not datetime-based.
+    """
+    if df.empty:
+        return df
+    try:
+        hours = df.index.hour
+        mask = (hours >= start_hour) & (hours < end_hour)
+        filtered = df.loc[mask]
+        return filtered if len(filtered) >= 20 else df
+    except AttributeError:
+        return df
+
+
+# ---------------------------------------------------------------------------
+# Volatility regime detection
+# ---------------------------------------------------------------------------
+
+
+def detect_regime(df: pd.DataFrame) -> str:
+    """Classify current volatility regime using short-vs-long ATR ratio.
+
+    Returns "low_vol", "normal", or "high_vol".
+    Useful for adjusting strategy expectations and risk parameters.
+    """
+    if df.empty or len(df) < 50:
+        return "normal"
+    high, low, close = df["High"], df["Low"], df["Close"]
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    atr_short = tr.iloc[-14:].mean()
+    atr_long = tr.iloc[-50:].mean()
+    ratio = atr_short / (atr_long + 1e-10)
+
+    if ratio < 0.7:
+        return "low_vol"
+    elif ratio > 1.5:
+        return "high_vol"
+    return "normal"
+
+
+# ---------------------------------------------------------------------------
+# Optimization runner — multi-strategy with walk-forward validation
 # ---------------------------------------------------------------------------
 
 
@@ -63,9 +136,14 @@ def run_optimization(
 ) -> dict | None:
     """Run Optuna optimization across all strategy types for one asset.
 
-    Each strategy type gets its own Optuna study (TRIALS_PER_STRATEGY trials).
-    The strategy+params combination with the highest risk-adjusted score
-    (Sharpe-based) wins.  Returns the best result dict or None.
+    Walk-forward approach:
+      1. Split data into train (70%) and test (30%)
+      2. Optimize each strategy on the training set
+      3. Validate the winner on the test set
+      4. Combined score = 40% train + 60% test (prioritise OOS performance)
+      5. Assign confidence based on train→test score degradation
+
+    Returns the best result dict (with walk-forward metrics) or None.
     """
     cached = get_cached_optimization(ticker, interval, period)
     if cached is not None:
@@ -75,7 +153,20 @@ def run_optimization(
     if df.empty:
         return None
 
-    df_opt = df.copy()
+    # Apply session filter for more realistic optimisation
+    df_session = filter_session_hours(df)
+    regime = detect_regime(df_session)
+
+    # Walk-forward split
+    use_walk_forward = len(df_session) >= (MIN_TRAIN_BARS + MIN_TEST_BARS)
+    if use_walk_forward:
+        split_idx = int(len(df_session) * TRAIN_RATIO)
+        df_train = df_session.iloc[:split_idx].copy()
+        df_test = df_session.iloc[split_idx:].copy()
+    else:
+        df_train = df_session.copy()
+        df_test = None
+
     best_score = -1e9
     best_result: dict | None = None
 
@@ -83,15 +174,15 @@ def run_optimization(
 
     for strat_key in OPTIMIZER_STRATEGIES:
 
-        def _make_objective(sk):
-            """Closure so each strategy key is captured properly."""
+        def _make_objective(sk, data):
+            """Closure so each strategy key and dataset is captured properly."""
 
             def objective(trial):
                 params = suggest_params(trial, sk)
                 strat_cls = make_strategy(sk, params)
                 try:
                     bt = Backtest(
-                        df_opt,
+                        data,
                         strat_cls,
                         cash=account_size,
                         commission=0.0002,
@@ -107,22 +198,48 @@ def run_optimization(
 
         study = optuna.create_study(direction="maximize")
         study.optimize(
-            _make_objective(strat_key),
+            _make_objective(strat_key, df_train),
             n_trials=TRIALS_PER_STRATEGY,
             show_progress_bar=False,
         )
 
-        if study.best_value > best_score:
-            best_score = study.best_value
-            bp = dict(study.best_params)
-            bp["strategy"] = strat_key
-            bp["score"] = round(study.best_value, 4)
+        train_score = study.best_value
+        bp = dict(study.best_params)
 
-            # Run the winning trial once more to capture full stats
+        # Walk-forward validation on test set
+        test_score = train_score  # default if no test set
+        if df_test is not None and len(df_test) >= MIN_TEST_BARS:
+            winning_cls = make_strategy(strat_key, bp)
+            try:
+                bt_test = Backtest(
+                    df_test,
+                    winning_cls,
+                    cash=account_size,
+                    commission=0.0002,
+                    exclusive_orders=True,
+                    finalize_trades=True,
+                )
+                test_stats = bt_test.run()
+                test_score = score_backtest(test_stats, min_trades=1)
+            except Exception:
+                test_score = -100.0
+
+        # Combined score: prioritise out-of-sample performance
+        if use_walk_forward:
+            combined = 0.4 * train_score + 0.6 * test_score
+        else:
+            combined = train_score
+
+        if combined > best_score:
+            best_score = combined
+            bp["strategy"] = strat_key
+            bp["score"] = round(combined, 4)
+
+            # Run the winning trial on FULL session data for final stats
             winning_cls = make_strategy(strat_key, bp)
             try:
                 bt = Backtest(
-                    df_opt,
+                    df_session,
                     winning_cls,
                     cash=account_size,
                     commission=0.0002,
@@ -131,14 +248,36 @@ def run_optimization(
                 )
                 stats = bt.run()
                 return_pct = round(float(stats["Return [%]"]), 2)
-                sharpe = (
-                    round(float(stats["Sharpe Ratio"]), 2)
-                    if bool(pd.notna(stats["Sharpe Ratio"]))
-                    else 0.0
-                )
+                sharpe = _safe_float(stats["Sharpe Ratio"])
+                sortino = _safe_float(stats.get("Sortino Ratio", 0))
+                profit_factor = _safe_float(stats.get("Profit Factor", 0))
+                win_rate = _safe_float(stats["Win Rate [%]"])
+                max_dd = _safe_float(stats["Max. Drawdown [%]"])
+                n_trades = int(stats["# Trades"])
             except Exception:
                 return_pct = 0.0
                 sharpe = 0.0
+                sortino = 0.0
+                profit_factor = 0.0
+                win_rate = 0.0
+                max_dd = 0.0
+                n_trades = 0
+
+            # Confidence assessment based on train→test degradation
+            if use_walk_forward and train_score > -50:
+                degradation = (
+                    (train_score - test_score) / (abs(train_score) + 1e-10)
+                    if train_score > 0
+                    else 0
+                )
+                if degradation < 0.2:
+                    confidence = "high"
+                elif degradation < 0.5:
+                    confidence = "medium"
+                else:
+                    confidence = "low"
+            else:
+                confidence = "medium"  # no walk-forward data available
 
             best_result = {
                 "ticker": ticker,
@@ -148,12 +287,22 @@ def run_optimization(
                     k: v for k, v in bp.items() if k not in ("strategy", "score")
                 },
                 "return_pct": return_pct,
-                "sharpe": sharpe,
+                "sharpe": round(sharpe, 2),
+                "sortino": round(sortino, 2),
+                "profit_factor": round(profit_factor, 2),
+                "win_rate": round(win_rate, 1),
+                "max_dd": round(max_dd, 2),
+                "n_trades": n_trades,
                 "score": round(best_score, 4),
+                "train_score": round(train_score, 4),
+                "test_score": round(test_score, 4),
+                "walk_forward": use_walk_forward,
+                "confidence": confidence,
+                "regime": regime,
                 "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 # Legacy fields for backward compatibility with app.py
-                "n1": bp.get("n1", 9),
-                "n2": bp.get("n2", 21),
+                "n1": bp.get("n1", bp.get("macd_fast", 9)),
+                "n2": bp.get("n2", bp.get("macd_slow", 21)),
                 "size": bp.get("trade_size", 0.10),
             }
 
@@ -179,11 +328,13 @@ def run_backtest(
     use_optimized: bool = True,
     strategy_key: str | None = None,
     strategy_params: dict | None = None,
+    session_filter: bool = True,
 ) -> dict | None:
     """Run a backtest for a single asset.  Returns stats dict or None.
 
     If use_optimized is True, uses cached optimization results (strategy
     type + params).  Otherwise falls back to TrendEMACross defaults.
+    When session_filter is True, restricts data to trading hours (3AM-noon).
     """
     cache_key = _cache_key("bt", ticker, interval, period, str(account_size))
     cached = cache_get(cache_key)
@@ -197,7 +348,9 @@ def run_backtest(
     if df.empty:
         return None
 
-    df_bt = df.copy()
+    df_bt = filter_session_hours(df) if session_filter else df.copy()
+    if df_bt.empty:
+        return None
 
     # Determine strategy class and params
     opt = get_cached_optimization(ticker, interval, period) if use_optimized else None
@@ -263,16 +416,14 @@ def run_backtest(
         if int(stats["# Trades"]) > 0
         else 0.0,
         "Max DD %": round(float(stats["Max. Drawdown [%]"]), 2),
-        "Sharpe": round(float(stats["Sharpe Ratio"]), 2)
-        if bool(pd.notna(stats["Sharpe Ratio"]))
-        else 0.0,
-        "Profit Factor": round(float(stats["Profit Factor"]), 2)
-        if bool(pd.notna(stats["Profit Factor"]))
-        else 0.0,
-        "Expectancy %": round(float(stats["Expectancy [%]"]), 3)
-        if bool(pd.notna(stats["Expectancy [%]"]))
-        else 0.0,
+        "Sharpe": round(_safe_float(stats["Sharpe Ratio"]), 2),
+        "Sortino": round(_safe_float(stats.get("Sortino Ratio", 0)), 2),
+        "Profit Factor": round(_safe_float(stats.get("Profit Factor", 0)), 2),
+        "Expectancy %": round(_safe_float(stats.get("Expectancy [%]", 0)), 3),
         "Final Equity $": round(float(stats["Equity Final [$]"]), 2),
+        "Confidence": opt.get("confidence", "—") if opt else "—",
+        "Regime": opt.get("regime", "—") if opt else "—",
+        "Walk-Forward": opt.get("walk_forward", False) if opt else False,
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
 
@@ -336,6 +487,8 @@ class DashboardEngine:
         }
 
         self.backtest_results: list[dict] = []
+        # Track per-asset strategy confidence across runs
+        self.strategy_history: dict[str, list[str]] = {}
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -386,6 +539,11 @@ class DashboardEngine:
     def force_refresh(self) -> None:
         """Trigger an immediate data refresh in a separate thread."""
         threading.Thread(target=self._refresh_data, daemon=True).start()
+
+    def get_strategy_history(self) -> dict[str, list[str]]:
+        """Return per-asset strategy selection history (thread-safe)."""
+        with self._lock:
+            return dict(self.strategy_history)
 
     # -- main loop -----------------------------------------------------------
 
@@ -457,13 +615,25 @@ class DashboardEngine:
                 )
                 if result:
                     strat_label = result.get("strategy_label", "?")
+                    confidence = result.get("confidence", "?")
+                    regime = result.get("regime", "?")
                     logger.info(
-                        "Optimized %s → %s (sharpe=%.2f, return=%.2f%%)",
+                        "Optimized %s → %s (sharpe=%.2f, return=%.2f%%, "
+                        "confidence=%s, regime=%s)",
                         name,
                         strat_label,
                         result.get("sharpe", 0),
                         result.get("return_pct", 0),
+                        confidence,
+                        regime,
                     )
+                    # Track strategy selection history
+                    with self._lock:
+                        history = self.strategy_history.setdefault(name, [])
+                        history.append(result["strategy"])
+                        # Keep last 10 selections
+                        if len(history) > 10:
+                            self.strategy_history[name] = history[-10:]
             except Exception as exc:
                 msg = f"{name}: {exc}"
                 errors.append(msg)
