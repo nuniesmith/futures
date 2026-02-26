@@ -100,10 +100,12 @@ from api.actions import set_engine as actions_set_engine  # noqa: E402
 from api.analysis import router as analysis_router  # noqa: E402
 from api.analysis import set_engine as analysis_set_engine  # noqa: E402
 from api.auth import require_api_key  # noqa: E402
+from api.dashboard import router as dashboard_router  # noqa: E402
 from api.health import router as health_router  # noqa: E402
 from api.journal import router as journal_router  # noqa: E402
 from api.market_data import router as market_data_router  # noqa: E402
 from api.positions import router as positions_router  # noqa: E402
+from api.sse import router as sse_router  # noqa: E402
 from api.trades import router as trades_router  # noqa: E402
 
 from models import init_db  # noqa: E402
@@ -132,6 +134,7 @@ class _RemoteEngineProxy:
     def _redis_get_json(self, key: str, default=None):
         try:
             from cache import cache_get
+
             raw = cache_get(key)
             if raw:
                 return json.loads(raw)
@@ -140,13 +143,16 @@ class _RemoteEngineProxy:
         return default
 
     def get_status(self) -> dict:
-        return self._redis_get_json("engine:status", {
-            "engine": "remote",
-            "data_refresh": {"last": None, "status": "unknown"},
-            "optimization": {"last": None, "status": "unknown"},
-            "backtest": {"last": None, "status": "unknown"},
-            "live_feed": {"status": "unknown"},
-        })
+        return self._redis_get_json(
+            "engine:status",
+            {
+                "engine": "remote",
+                "data_refresh": {"last": None, "status": "unknown"},
+                "optimization": {"last": None, "status": "unknown"},
+                "backtest": {"last": None, "status": "unknown"},
+                "live_feed": {"status": "unknown"},
+            },
+        )
 
     def get_backtest_results(self) -> list:
         return self._redis_get_json("engine:backtest_results", [])
@@ -155,15 +161,19 @@ class _RemoteEngineProxy:
         return self._redis_get_json("engine:strategy_history", {})
 
     def get_live_feed_status(self) -> dict:
-        return self._redis_get_json("engine:live_feed_status", {
-            "status": "unknown",
-            "connected": False,
-            "data_source": "unknown",
-        })
+        return self._redis_get_json(
+            "engine:live_feed_status",
+            {
+                "status": "unknown",
+                "connected": False,
+                "data_source": "unknown",
+            },
+        )
 
     def force_refresh(self) -> None:
         try:
             from cache import flush_all
+
             flush_all()
         except Exception:
             pass
@@ -229,6 +239,7 @@ async def lifespan(app: FastAPI):
         logger.info("Using remote engine proxy (reads from Redis)")
     else:
         from engine import get_engine
+
         _engine = get_engine(
             account_size=account_size,
             interval=interval,
@@ -250,6 +261,7 @@ async def lifespan(app: FastAPI):
     # 5. Log data source
     try:
         from cache import get_data_source
+
         ds = get_data_source()
         logger.info("Primary data source: %s", ds)
     except Exception:
@@ -296,6 +308,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
         "http://localhost:8501",
         "http://streamlit-app:8501",
         "http://127.0.0.1:8501",
@@ -309,6 +323,15 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Register routers
 # ---------------------------------------------------------------------------
+# Dashboard: / (HTML page), /api/focus, /api/focus/html, /api/time, etc.
+# NOTE: dashboard_router is mounted WITHOUT a prefix so GET / serves the HTML
+# dashboard and /api/focus, /api/focus/html etc. are top-level paths.
+app.include_router(dashboard_router, tags=["Dashboard"])
+
+# SSE: /sse/dashboard (live event stream), /sse/health
+# NOTE: sse_router is mounted WITHOUT a prefix so /sse/dashboard is top-level.
+app.include_router(sse_router, tags=["SSE"])
+
 # Analysis: /analysis/latest, /analysis/latest/{ticker}, /analysis/status, etc.
 app.include_router(analysis_router, prefix="/analysis", tags=["Analysis"])
 
@@ -332,11 +355,12 @@ app.include_router(health_router, tags=["Health"])
 
 
 # ---------------------------------------------------------------------------
-# Root endpoint
+# Root endpoint — now served by dashboard_router (GET / returns HTML dashboard)
+# The old JSON root is moved to /api/info for programmatic consumers.
 # ---------------------------------------------------------------------------
-@app.get("/")
-def root():
-    """Service info and links to docs."""
+@app.get("/api/info")
+def api_info():
+    """Service info and links to docs (formerly GET /)."""
     return {
         "service": "futures-data-service",
         "version": "1.0.0",
@@ -344,6 +368,11 @@ def root():
         "docs": "/docs",
         "health": "/health",
         "endpoints": {
+            "dashboard": "/",
+            "focus_json": "/api/focus",
+            "focus_html": "/api/focus/html",
+            "sse_dashboard": "/sse/dashboard",
+            "sse_health": "/sse/health",
             "analysis": "/analysis/latest",
             "status": "/analysis/status",
             "force_refresh": "/actions/force_refresh",
