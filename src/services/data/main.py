@@ -106,17 +106,89 @@ from api.market_data import router as market_data_router  # noqa: E402
 from api.positions import router as positions_router  # noqa: E402
 from api.trades import router as trades_router  # noqa: E402
 
-from engine import DashboardEngine, get_engine  # noqa: E402
 from models import init_db  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Engine singleton — shared across all routers
+# Engine mode: embedded (legacy, all-in-one) or remote (reads from Redis)
+# Set ENGINE_MODE=remote when running engine as separate container.
 # ---------------------------------------------------------------------------
-_engine: DashboardEngine | None = None
+_ENGINE_MODE = os.getenv("ENGINE_MODE", "embedded")  # "embedded" or "remote"
+
+_engine = None
 
 
-def get_current_engine() -> DashboardEngine:
-    """Return the running engine instance. Used by health router."""
+class _RemoteEngineProxy:
+    """Lightweight proxy that reads engine state from Redis.
+
+    When the engine runs in a separate container, it publishes status,
+    backtest results, and strategy history to Redis keys.  This proxy
+    reads those keys so the API routers work without modification.
+    """
+
+    def __init__(self):
+        self.interval = os.getenv("ENGINE_INTERVAL", "5m")
+        self.period = os.getenv("ENGINE_PERIOD", "5d")
+
+    def _redis_get_json(self, key: str, default=None):
+        try:
+            from cache import cache_get
+            raw = cache_get(key)
+            if raw:
+                return json.loads(raw)
+        except Exception:
+            pass
+        return default
+
+    def get_status(self) -> dict:
+        return self._redis_get_json("engine:status", {
+            "engine": "remote",
+            "data_refresh": {"last": None, "status": "unknown"},
+            "optimization": {"last": None, "status": "unknown"},
+            "backtest": {"last": None, "status": "unknown"},
+            "live_feed": {"status": "unknown"},
+        })
+
+    def get_backtest_results(self) -> list:
+        return self._redis_get_json("engine:backtest_results", [])
+
+    def get_strategy_history(self) -> dict:
+        return self._redis_get_json("engine:strategy_history", {})
+
+    def get_live_feed_status(self) -> dict:
+        return self._redis_get_json("engine:live_feed_status", {
+            "status": "unknown",
+            "connected": False,
+            "data_source": "unknown",
+        })
+
+    def force_refresh(self) -> None:
+        try:
+            from cache import flush_all
+            flush_all()
+        except Exception:
+            pass
+
+    def start_live_feed(self) -> bool:
+        return False
+
+    async def stop_live_feed(self) -> None:
+        pass
+
+    def upgrade_live_feed(self) -> None:
+        pass
+
+    def downgrade_live_feed(self) -> None:
+        pass
+
+    def update_settings(self, **kwargs) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+
+def get_current_engine():
+    """Return the running engine instance (or remote proxy). Used by health router."""
     global _engine
     if _engine is None:
         raise RuntimeError("Engine not initialised — service is still starting up")
@@ -131,10 +203,10 @@ async def lifespan(app: FastAPI):
     global _engine
 
     logger.info("=" * 60)
-    logger.info("  Data Service starting up")
+    logger.info("  Data Service starting up (engine_mode=%s)", _ENGINE_MODE)
     logger.info("=" * 60)
 
-    # 1. Initialise the database (SQLite for now, Postgres later)
+    # 1. Initialise the database
     try:
         init_db()
         logger.info(
@@ -151,30 +223,33 @@ async def lifespan(app: FastAPI):
     interval = os.getenv("ENGINE_INTERVAL", os.getenv("DEFAULT_INTERVAL", "5m"))
     period = os.getenv("ENGINE_PERIOD", os.getenv("DEFAULT_PERIOD", "5d"))
 
-    # 3. Create and start the background engine
-    #    get_engine() returns the singleton — it auto-starts a daemon thread
-    _engine = get_engine(
-        account_size=account_size,
-        interval=interval,
-        period=period,
-    )
+    # 3. Start engine (embedded) or connect proxy (remote)
+    if _ENGINE_MODE == "remote":
+        _engine = _RemoteEngineProxy()
+        logger.info("Using remote engine proxy (reads from Redis)")
+    else:
+        from engine import get_engine
+        _engine = get_engine(
+            account_size=account_size,
+            interval=interval,
+            period=period,
+        )
+        logger.info(
+            "Embedded engine started: account=$%s  interval=%s  period=%s",
+            f"{account_size:,}",
+            interval,
+            period,
+        )
+
     app.state.engine = _engine
 
     # 4. Inject engine into routers that need it
     analysis_set_engine(_engine)
     actions_set_engine(_engine)
 
-    logger.info(
-        "Engine started: account=$%s  interval=%s  period=%s",
-        f"{account_size:,}",
-        interval,
-        period,
-    )
-
     # 5. Log data source
     try:
         from cache import get_data_source
-
         ds = get_data_source()
         logger.info("Primary data source: %s", ds)
     except Exception:
