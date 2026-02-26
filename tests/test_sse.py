@@ -493,7 +493,18 @@ class TestSSEHealthEndpoint:
 
 
 class TestSSEDashboardEndpoint:
-    """Test the /sse/dashboard endpoint returns proper SSE response."""
+    """Test the /sse/dashboard endpoint returns proper SSE response.
+
+    These tests use ``client.stream("GET", ...)`` which opens a streaming
+    connection to the infinite SSE generator.  To avoid timeouts we:
+      1. Patch ``asyncio.sleep`` so the generator's polling loop yields
+         immediately instead of blocking for 5 seconds.
+      2. Collect only the *initial* batch of events (connected, catch-up,
+         positions, session) which are all emitted *before* the infinite
+         loop, so ``iter_bytes`` returns them in the first chunk.
+      3. Break out of ``iter_bytes`` / ``iter_text`` after reading enough
+         data rather than waiting for the stream to close.
+    """
 
     @pytest.fixture(autouse=True)
     def _reset(self):
@@ -511,8 +522,18 @@ class TestSSEDashboardEndpoint:
         return TestClient(app)
 
     def _sse_patches(self):
-        """Context manager stack that patches all Redis/cache helpers for SSE tests."""
+        """Context manager stack that patches all Redis/cache helpers for SSE tests.
+
+        Also patches ``asyncio.sleep`` inside the generator so the infinite
+        loop yields control immediately and the first ``iter_bytes`` call
+        returns all buffered events without blocking.
+        """
         from contextlib import ExitStack
+
+        async def _instant_sleep(_t):
+            """Replace asyncio.sleep with a no-op that raises after first call
+            so the generator exits quickly during tests."""
+            raise asyncio.CancelledError("test: stop generator")
 
         stack = ExitStack()
         stack.enter_context(patch("api.sse._get_redis", return_value=None))
@@ -522,20 +543,39 @@ class TestSSEDashboardEndpoint:
             patch("api.sse._get_positions_from_cache", return_value=None)
         )
         stack.enter_context(patch("api.sse._get_engine_status", return_value=None))
+        # Patch asyncio.sleep inside the sse module so the infinite loop
+        # terminates after emitting the initial events.
+        stack.enter_context(patch("api.sse.asyncio.sleep", side_effect=_instant_sleep))
         return stack
 
+    def _read_initial_events(self, resp, max_bytes: int = 8192) -> str:
+        """Read the initial burst of SSE events from a streaming response.
+
+        Reads up to *max_bytes* of raw bytes from the stream and returns
+        the decoded text.  This avoids blocking on the infinite generator.
+        """
+        collected = b""
+        for chunk in resp.iter_bytes():
+            collected += chunk
+            if len(collected) >= max_bytes:
+                break
+            # The generator emits all initial events then hits the sleep
+            # (which we patched to raise CancelledError), so the stream
+            # will end naturally after the initial batch.
+            break
+        return collected.decode("utf-8", errors="replace")
+
+    @pytest.mark.timeout(10)
     def test_sse_content_type(self, client):
         """SSE endpoint must return text/event-stream content type."""
         with self._sse_patches():
-            # Use stream=True to get the streaming response
             with client.stream("GET", "/sse/dashboard") as resp:
                 assert resp.status_code == 200
                 assert "text/event-stream" in resp.headers.get("content-type", "")
-                # Read just the first chunk and close
-                for chunk in resp.iter_text():
-                    assert "event: connected" in chunk
-                    break
+                text = self._read_initial_events(resp)
+                assert "event: connected" in text
 
+    @pytest.mark.timeout(10)
     def test_sse_no_cache_headers(self, client):
         """SSE responses must not be cached."""
         with self._sse_patches():
@@ -543,30 +583,27 @@ class TestSSEDashboardEndpoint:
                 cache_control = resp.headers.get("cache-control", "")
                 assert "no-cache" in cache_control
                 # Consume at least one chunk so the connection is used
-                for _ in resp.iter_text():
-                    break
+                self._read_initial_events(resp)
 
+    @pytest.mark.timeout(10)
     def test_sse_x_accel_buffering(self, client):
         """Should set X-Accel-Buffering: no for nginx compatibility."""
         with self._sse_patches():
             with client.stream("GET", "/sse/dashboard") as resp:
                 assert resp.headers.get("x-accel-buffering") == "no"
-                for _ in resp.iter_text():
-                    break
+                self._read_initial_events(resp)
 
+    @pytest.mark.timeout(10)
     def test_sse_sends_connected_event_first(self, client):
         """First event must be `connected` with retry directive."""
         with self._sse_patches():
             with client.stream("GET", "/sse/dashboard") as resp:
-                collected = ""
-                for chunk in resp.iter_text():
-                    collected += chunk
-                    # Stop after we have enough to check the first event
-                    if "event: connected" in collected:
-                        break
-                assert "retry: 3000" in collected
-                assert "data: connected" in collected
+                text = self._read_initial_events(resp)
+                assert "event: connected" in text
+                assert "retry: 3000" in text
+                assert "data: connected" in text
 
+    @pytest.mark.timeout(10)
     def test_sse_sends_catchup_when_available(self, client):
         """When catchup messages exist, they should be sent after connected."""
         catchup = [
@@ -576,22 +613,23 @@ class TestSSEDashboardEndpoint:
                 "ts": "2026-02-26T09:00:00",
             }
         ]
+
+        async def _instant_sleep(_t):
+            raise asyncio.CancelledError("test: stop generator")
+
         with (
             patch("api.sse._get_redis", return_value=None),
             patch("api.sse._get_catchup_messages", return_value=catchup),
             patch("api.sse._get_focus_from_cache", return_value=None),
             patch("api.sse._get_positions_from_cache", return_value=None),
             patch("api.sse._get_engine_status", return_value=None),
+            patch("api.sse.asyncio.sleep", side_effect=_instant_sleep),
         ):
             with client.stream("GET", "/sse/dashboard") as resp:
-                collected = ""
-                for chunk in resp.iter_text():
-                    collected += chunk
-                    if "focus-update" in collected:
-                        break
-                assert "event: focus-update" in collected
-                assert "id: 100-0" in collected
-                assert "MGC" in collected
+                text = self._read_initial_events(resp)
+                assert "event: focus-update" in text
+                assert "id: 100-0" in text
+                assert "MGC" in text
 
 
 # ===========================================================================

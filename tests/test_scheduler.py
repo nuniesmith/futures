@@ -132,8 +132,8 @@ class TestPreMarketActions:
         pending1 = mgr.get_pending_actions(now=now)
         assert any(a.action == ActionType.COMPUTE_DAILY_FOCUS for a in pending1)
 
-        # Mark it done
-        mgr.mark_done(ActionType.COMPUTE_DAILY_FOCUS)
+        # Mark it done (pass now= so the recorded date matches the test date)
+        mgr.mark_done(ActionType.COMPUTE_DAILY_FOCUS, now=now)
 
         # Second call should NOT include daily focus (already ran today)
         now2 = datetime(2026, 2, 27, 3, 5, 0, tzinfo=_EST)
@@ -286,7 +286,7 @@ class TestDayTransitions:
         now1 = datetime(2026, 2, 27, 3, 0, 0, tzinfo=_EST)
         pending1 = mgr.get_pending_actions(now=now1)
         assert any(a.action == ActionType.COMPUTE_DAILY_FOCUS for a in pending1)
-        mgr.mark_done(ActionType.COMPUTE_DAILY_FOCUS)
+        mgr.mark_done(ActionType.COMPUTE_DAILY_FOCUS, now=now1)
 
         # Still Day 1 — should NOT be pending
         now2 = datetime(2026, 2, 27, 4, 0, 0, tzinfo=_EST)
@@ -366,7 +366,7 @@ class TestGetStatus:
         mgr = ScheduleManager()
         now = datetime(2026, 2, 27, 8, 0, 0, tzinfo=_EST)
         mgr.get_pending_actions(now=now)
-        status = mgr.get_status()
+        status = mgr.get_status(now=now)
 
         assert "session_mode" in status
         assert "session_emoji" in status
@@ -375,7 +375,7 @@ class TestGetStatus:
         assert "actions" in status
         assert status["session_mode"] == "active"
 
-    def test_status_reflects_completed_actions(self):
+    def test_status_reflects_completed_actions(self):  # noqa: E501
         mgr = ScheduleManager()
         now = datetime(2026, 2, 27, 3, 0, 0, tzinfo=_EST)
         mgr.get_pending_actions(now=now)

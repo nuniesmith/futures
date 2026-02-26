@@ -196,11 +196,22 @@ class ScheduleManager:
         pending.sort(key=lambda a: a.priority)
         return pending
 
-    def mark_done(self, action: ActionType) -> None:
-        """Mark an action as completed. Called after successful execution."""
+    def mark_done(self, action: ActionType, now: Optional[datetime] = None) -> None:
+        """Mark an action as completed. Called after successful execution.
+
+        Parameters
+        ----------
+        action : ActionType
+            The action that completed.
+        now : datetime, optional
+            Override the current time (used by tests).  When *None* the
+            real wall-clock time is used.
+        """
+        if now is None:
+            now = datetime.now(tz=_EST)
         tracker = self._trackers[action]
         tracker.last_run = time.monotonic()
-        tracker.last_run_date = datetime.now(tz=_EST).date()
+        tracker.last_run_date = now.date()
         tracker.last_run_session = (
             self._current_session.value if self._current_session else None
         )
@@ -216,9 +227,16 @@ class ScheduleManager:
         logger.warning("Action failed: %s — %s", action.value, error)
         # Don't update last_run so it gets retried
 
-    def get_status(self) -> dict:
-        """Return scheduler status for health/monitoring."""
-        now = datetime.now(tz=_EST)
+    def get_status(self, now: Optional[datetime] = None) -> dict:
+        """Return scheduler status for health/monitoring.
+
+        Parameters
+        ----------
+        now : datetime, optional
+            Override the current time (used by tests).
+        """
+        if now is None:
+            now = datetime.now(tz=_EST)
         session = self.get_session_mode(now)
 
         action_statuses = {}
@@ -445,13 +463,16 @@ class ScheduleManager:
         """Check if action has already run today."""
         return self._trackers[action].last_run_date == today
 
-    def _ran_this_session(self, action: ActionType, session_value: str) -> bool:
+    def _ran_this_session(
+        self, action: ActionType, session_value: str, today: Optional[date] = None
+    ) -> bool:
         """Check if action has already run during this session instance."""
         tracker = self._trackers[action]
         if tracker.last_run_session != session_value:
             return False
         # Also ensure it ran today (not a stale session marker from yesterday)
-        today = datetime.now(tz=_EST).date()
+        if today is None:
+            today = datetime.now(tz=_EST).date()
         return tracker.last_run_date == today
 
     def _interval_elapsed(

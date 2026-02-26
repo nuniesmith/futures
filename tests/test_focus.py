@@ -427,8 +427,7 @@ class TestComputeDailyFocusPayload:
             "skip": False,
         }
 
-        with patch("services.engine.focus.ASSETS", {"Gold": "MGC=F"}):
-            result = compute_daily_focus(account_size=50_000, symbols=["Gold"])
+        result = compute_daily_focus(account_size=50_000, symbols=["Gold"])
 
         assert "assets" in result
         assert "no_trade" in result
@@ -482,17 +481,9 @@ class TestComputeDailyFocusPayload:
 
         mock_asset_focus.side_effect = side_effect
 
-        with patch(
-            "services.engine.focus.ASSETS",
-            {
-                "Gold": "MGC=F",
-                "Nasdaq": "MNQ=F",
-                "S&P": "MES=F",
-            },
-        ):
-            result = compute_daily_focus(
-                account_size=50_000, symbols=["Gold", "Nasdaq", "S&P"]
-            )
+        result = compute_daily_focus(
+            account_size=50_000, symbols=["Gold", "Nasdaq", "S&P"]
+        )
 
         symbols = [a["symbol"] for a in result["assets"]]
         # S&P (0.9) should come first, then Gold (0.8), then Nasdaq (0.6)
@@ -535,8 +526,7 @@ class TestComputeDailyFocusPayload:
             "skip": True,
         }
 
-        with patch("services.engine.focus.ASSETS", {"Gold": "MGC=F"}):
-            result = compute_daily_focus(account_size=50_000, symbols=["Gold"])
+        result = compute_daily_focus(account_size=50_000, symbols=["Gold"])
 
         assert result["no_trade"] is True
         assert "quality" in result["no_trade_reason"].lower()
@@ -548,10 +538,32 @@ class TestComputeDailyFocusPayload:
 
 
 class TestPublishFocusToRedis:
-    @patch("services.engine.focus.cache_set")
-    @patch("services.engine.focus.REDIS_AVAILABLE", False)
-    def test_publishes_to_cache_key(self, mock_cache_set):
+    """Test publish_focus_to_redis.
+
+    publish_focus_to_redis does ``from cache import REDIS_AVAILABLE, _r, cache_set``
+    inside the function body.  The real ``cache`` module imports ``yfinance`` at the
+    top level, which may not be installed in the test venv.  To avoid that we
+    inject a lightweight mock into ``sys.modules["cache"]`` *before* the function
+    runs its lazy import.
+    """
+
+    def _ensure_mock_cache(self):
+        """Install (or refresh) a mock cache module in sys.modules.
+
+        Returns the mock so tests can inspect call args.
+        """
+        mock_mod = MagicMock()
+        mock_mod.REDIS_AVAILABLE = False
+        mock_mod._r = None
+        mock_mod.cache_set = MagicMock()
+        mock_mod.cache_get = MagicMock(return_value=None)
+        sys.modules["cache"] = mock_mod
+        return mock_mod
+
+    def test_publishes_to_cache_key(self):
         """Should write focus payload to engine:daily_focus key."""
+        mock_cache = self._ensure_mock_cache()
+
         from services.engine.focus import publish_focus_to_redis
 
         data = {
@@ -565,13 +577,15 @@ class TestPublishFocusToRedis:
         assert result is True
 
         # Verify cache_set was called with the right key
-        calls = mock_cache_set.call_args_list
+        calls = mock_cache.cache_set.call_args_list
         keys_written = [c[0][0] for c in calls]
         assert "engine:daily_focus" in keys_written
         assert "engine:daily_focus:ts" in keys_written
 
     def test_handles_non_serializable_gracefully(self):
         """Should handle data that can't be JSON-serialized."""
+        self._ensure_mock_cache()
+
         from services.engine.focus import publish_focus_to_redis
 
         # datetime objects are handled via default=str
@@ -580,7 +594,5 @@ class TestPublishFocusToRedis:
             "computed_at": datetime.now(tz=_EST),
         }
 
-        with patch("services.engine.focus.cache_set"):
-            with patch("services.engine.focus.REDIS_AVAILABLE", False):
-                result = publish_focus_to_redis(data)
+        result = publish_focus_to_redis(data)
         assert result is True
