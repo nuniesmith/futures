@@ -947,11 +947,25 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
 
             // --- Positions update: refresh panel ---
             if (eventName === 'positions-update') {{
-                htmx.ajax('GET', '/api/positions/html', {{target: '#positions-panel', swap: 'innerHTML'}});
+                htmx.ajax('GET', '/api/positions/html', {{target: '#positions-container', swap: 'innerHTML'}});
+            }}
+
+            // --- Grok compact update: refresh panel (TASK-602) ---
+            if (eventName === 'grok-update') {{
+                htmx.ajax('GET', '/api/grok/html', {{target: '#grok-container', swap: 'innerHTML'}});
+                const lastUpd = document.getElementById('sse-last-update');
+                if (lastUpd) {{
+                    lastUpd.textContent = 'Last Grok: ' + new Date().toLocaleTimeString();
+                }}
+            }}
+
+            // --- Risk status update: refresh panel ---
+            if (eventName === 'risk-update') {{
+                htmx.ajax('GET', '/api/risk/html', {{target: '#risk-container', swap: 'innerHTML'}});
             }}
 
             // --- Per-asset updates: flash the specific card ---
-            if (eventName.endsWith('-update') && eventName !== 'focus-update' && eventName !== 'positions-update') {{
+            if (eventName.endsWith('-update') && eventName !== 'focus-update' && eventName !== 'positions-update' && eventName !== 'grok-update' && eventName !== 'risk-update') {{
                 const symbol = eventName.replace('-update', '').replace(' ', '_').replace('&', '');
                 const card = document.getElementById('asset-card-' + symbol);
                 if (card) {{

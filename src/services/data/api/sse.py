@@ -18,6 +18,8 @@ Event types sent to browser:
     - no-trade-alert     — No-trade condition triggered
     - session-change     — Session mode changed (pre-market/active/off-hours)
     - positions-update   — Live positions changed
+    - grok-update        — Grok compact AI summary (TASK-602)
+    - risk-update        — Risk status changed (TASK-502)
     - heartbeat          — Keep-alive every 30 seconds
 """
 
@@ -207,6 +209,32 @@ def _get_engine_status() -> Optional[dict]:
     return None
 
 
+def _get_grok_from_cache() -> Optional[str]:
+    """Read the latest Grok compact update from Redis cache (TASK-602)."""
+    try:
+        from cache import cache_get
+
+        raw = cache_get("engine:grok_update")
+        if raw:
+            return raw.decode() if isinstance(raw, bytes) else str(raw)
+    except Exception:
+        pass
+    return None
+
+
+def _get_risk_from_cache() -> Optional[str]:
+    """Read the latest risk status from Redis cache."""
+    try:
+        from cache import cache_get
+
+        raw = cache_get("engine:risk_status")
+        if raw:
+            return raw.decode() if isinstance(raw, bytes) else str(raw)
+    except Exception:
+        pass
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Main SSE generator
 # ---------------------------------------------------------------------------
@@ -274,6 +302,16 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
     if pos:
         yield _format_sse(data=pos, event="positions-update")
 
+    # Send initial Grok compact update (TASK-602)
+    grok = _get_grok_from_cache()
+    if grok:
+        yield _format_sse(data=grok, event="grok-update")
+
+    # Send initial risk status
+    risk = _get_risk_from_cache()
+    if risk:
+        yield _format_sse(data=risk, event="risk-update")
+
     # Send initial session info
     status = _get_engine_status()
     if status:
@@ -302,6 +340,8 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
     last_heartbeat = time.monotonic()
     last_focus_hash = ""
     last_positions_hash = ""
+    last_grok_hash = ""
+    last_risk_hash = ""
     last_session = ""
 
     try:
@@ -374,6 +414,16 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                             if not _should_throttle("positions-update"):
                                 yield _format_sse(data=data, event="positions-update")
 
+                        elif channel == "dashboard:grok":
+                            # Grok compact AI summary (TASK-602)
+                            if not _should_throttle("grok-update"):
+                                yield _format_sse(data=data, event="grok-update")
+
+                        elif channel == "dashboard:risk":
+                            # Risk status update
+                            if not _should_throttle("risk-update"):
+                                yield _format_sse(data=data, event="risk-update")
+
                 except Exception as exc:
                     logger.debug("Pub/sub read error: %s", exc)
                     # Don't break — keep trying
@@ -443,6 +493,24 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                             if not _should_throttle("positions-update"):
                                 yield _format_sse(data=pos, event="positions-update")
 
+                    # Check Grok update (TASK-602)
+                    grok = _get_grok_from_cache()
+                    if grok:
+                        grok_hash = str(hash(grok))
+                        if grok_hash != last_grok_hash:
+                            last_grok_hash = grok_hash
+                            if not _should_throttle("grok-update"):
+                                yield _format_sse(data=grok, event="grok-update")
+
+                    # Check risk status
+                    risk = _get_risk_from_cache()
+                    if risk:
+                        risk_hash = str(hash(risk))
+                        if risk_hash != last_risk_hash:
+                            last_risk_hash = risk_hash
+                            if not _should_throttle("risk-update"):
+                                yield _format_sse(data=risk, event="risk-update")
+
                     # Check session
                     status = _get_engine_status()
                     if status:
@@ -491,6 +559,8 @@ async def sse_dashboard(request: Request):
             <div sse-swap="focus-update" hx-swap="innerHTML">...</div>
             <div sse-swap="mgc-update" hx-swap="innerHTML">...</div>
             <div sse-swap="no-trade-alert" hx-swap="innerHTML">...</div>
+            <div sse-swap="grok-update" hx-swap="innerHTML">...</div>
+            <div sse-swap="risk-update" hx-swap="innerHTML">...</div>
             <div sse-swap="heartbeat">...</div>
         </div>
 
@@ -499,6 +569,8 @@ async def sse_dashboard(request: Request):
         es.addEventListener('focus-update', (e) => { ... });
         es.addEventListener('mgc-update', (e) => { ... });
         es.addEventListener('no-trade-alert', (e) => { ... });
+        es.addEventListener('grok-update', (e) => { ... });
+        es.addEventListener('risk-update', (e) => { ... });
         es.addEventListener('heartbeat', (e) => { ... });
 
     Events:
@@ -508,6 +580,8 @@ async def sse_dashboard(request: Request):
         - no-trade-alert    — No-trade condition (JSON)
         - session-change    — Session mode changed (JSON)
         - positions-update  — Live positions changed (JSON)
+        - grok-update       — Grok compact AI summary (TASK-602)
+        - risk-update       — Risk status changed (TASK-502)
         - heartbeat         — Keep-alive with server time (JSON)
 
     Catch-up: On connect, the last 8 focus updates from the Redis Stream

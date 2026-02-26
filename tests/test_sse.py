@@ -75,7 +75,18 @@ def _reset_cache_mock():
     Since the lazy imports inside sse.py functions resolve to
     _mock_cache attributes, we control behaviour by resetting
     the mock's return values here.
+
+    Crucially, we also re-install the mock into sys.modules["cache"]
+    because other test modules (e.g. test_focus.py) may have imported
+    the real cache module and replaced our mock when running in the
+    same pytest session.
     """
+    # Re-install mock so lazy `from cache import ...` inside sse.py
+    # function bodies picks up _mock_cache regardless of test ordering.
+    sys.modules["cache"] = _mock_cache
+
+    _mock_cache.REDIS_AVAILABLE = False
+    _mock_cache._r = None
     _mock_cache.cache_get.reset_mock()
     _mock_cache.cache_get.return_value = None
     _mock_cache.cache_get.side_effect = None

@@ -1,4 +1,17 @@
 """
+⚠️  DEPRECATED — TASK-304: Streamlit UI retired in favor of HTMX dashboard.
+====================================================================
+The HTMX dashboard served by data-service at localhost:8000 is now the
+primary UI.  This file is kept in the repository as a reference only.
+The Streamlit container has been removed from docker-compose.yml.
+
+To use the new dashboard:
+    docker compose up -d --build
+    open http://localhost:8000
+
+Original docstring follows:
+--------------------------------------------------------------------
+
 Futures Trading Co-Pilot — Streamlit UI (Thin Client)
 =====================================================
 Pure presentation layer. ALL heavy computation runs in the data-service.
