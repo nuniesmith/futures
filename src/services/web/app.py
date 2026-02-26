@@ -84,6 +84,7 @@ from scorer import results_to_dataframe as scorer_to_dataframe  # noqa: E402
 # Configuration
 # ---------------------------------------------------------------------------
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://localhost:8000")
+API_KEY = os.getenv("API_KEY", "").strip()
 API_TIMEOUT = 10.0
 
 # ---------------------------------------------------------------------------
@@ -102,13 +103,21 @@ class DataServiceClient:
     initialises its own Massive client or calls yfinance directly.
     """
 
-    def __init__(self, base_url: str = DATA_SERVICE_URL, timeout: float = API_TIMEOUT):
+    def __init__(
+        self,
+        base_url: str = DATA_SERVICE_URL,
+        timeout: float = API_TIMEOUT,
+        api_key: str = API_KEY,
+    ):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self._headers: dict[str, str] = {}
+        if api_key:
+            self._headers["X-API-Key"] = api_key
 
     def _get(self, path: str, params: dict | None = None) -> dict | list | None:
         try:
-            with httpx.Client(timeout=self.timeout) as client:
+            with httpx.Client(timeout=self.timeout, headers=self._headers) as client:
                 resp = client.get(f"{self.base_url}{path}", params=params)
                 resp.raise_for_status()
                 return resp.json()
@@ -121,7 +130,7 @@ class DataServiceClient:
 
     def _post(self, path: str, json_data: dict | None = None) -> dict | None:
         try:
-            with httpx.Client(timeout=self.timeout) as client:
+            with httpx.Client(timeout=self.timeout, headers=self._headers) as client:
                 resp = client.post(f"{self.base_url}{path}", json=json_data)
                 resp.raise_for_status()
                 return resp.json()

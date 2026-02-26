@@ -72,6 +72,7 @@ docker-compose services:
 
 ## Phase 4: Database & Persistence ✅ COMPLETE
 
+- [x] `logging_config.py` — Structured logging via `structlog` (console + JSON modes, `LOG_FORMAT` env var)
 - [x] `models.py` — Dual-backend (SQLite + Postgres) with auto-detection
 - [x] `init_db()` runs on both data-service and streamlit startup
 - [x] Journal CRUD: `save_daily_journal`, `get_daily_journal`, `get_journal_stats`
@@ -81,7 +82,7 @@ docker-compose services:
 
 ## Phase 5: Testing & Polish ✅ COMPLETE
 
-- [x] **627 tests passing** (0 failures, 2 minor warnings)
+- [x] **627 tests passing** (0 failures, 0 warnings)
 - [x] `tests/test_data_service.py` — 76 tests covering all API routers:
   - [x] Root endpoint, health, metrics
   - [x] Analysis endpoints (latest, status, assets, accounts, backtest, strategy history)
@@ -112,11 +113,11 @@ docker-compose services:
 
 ### Nice-to-Have Improvements
 - [ ] Wire up `BackgroundManager` in `tasks/background.py` as the lifespan manager (currently `main.py` handles lifecycle directly — both approaches work)
-- [ ] Fix async coroutine warning in `test_massive_client.py::test_stop_idempotent` (needs `await feed.stop()`)
-- [ ] Add structured logging with `structlog` across all services
+- [x] Fix async coroutine warning in `test_massive_client.py::test_stop_idempotent` — wrapped `feed.stop()` in `asyncio.run()`
+- [x] Add structured logging with `structlog` across all services — `src/logging_config.py` module with `setup_logging()` / `get_logger()`, console + JSON output modes, wired into data-service `main.py`
 - [ ] Add `/metrics` endpoint in Prometheus format (currently JSON)
 - [ ] Redis pub/sub or SSE for real-time push updates to Streamlit
-- [ ] API key authentication between streamlit ↔ data-service (localhost-only = safe for now)
+- [x] API key authentication between streamlit ↔ data-service — `api/auth.py` with `require_api_key` dependency, `X-API-Key` header, constant-time comparison, public path exclusions (`/health`, `/docs`), `DataServiceClient` sends key automatically
 - [ ] Rate limiting on data-service endpoints
 
 ### Docker Deployment Checklist
@@ -126,7 +127,7 @@ docker-compose services:
 - [ ] Test "Force Refresh" button → data updates
 - [ ] Test NinjaTrader LivePositionBridge → positions appear in UI
 - [ ] Run SQLite → Postgres migration script if switching to persistent Postgres
-- [ ] Tighten CORS origins (remove `"*"` wildcard) for production
+- [x] Tighten CORS origins (remove `"*"` wildcard) — replaced with explicit `http://app:8501` for Docker service name
 
 ### Future Enhancements
 - [ ] Separate Massive WS listener into its own container (for independent scaling)

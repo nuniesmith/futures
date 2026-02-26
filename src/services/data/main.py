@@ -38,7 +38,7 @@ for _p in (_src_dir, _this_dir):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from fastapi import FastAPI  # noqa: E402
+from fastapi import Depends, FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 
@@ -84,14 +84,12 @@ class SafeJSONResponse(JSONResponse):
 
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging — structured via structlog
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO").upper(),
-    format="[DATA-SVC] %(asctime)s %(name)s %(levelname)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger("data_service")
+from logging_config import get_logger, setup_logging  # noqa: E402
+
+setup_logging(service="data-service")
+logger = get_logger("data_service")
 
 # ---------------------------------------------------------------------------
 # Import routers — these live under src/services/data/api/
@@ -101,6 +99,7 @@ from api.actions import router as actions_router  # noqa: E402
 from api.actions import set_engine as actions_set_engine  # noqa: E402
 from api.analysis import router as analysis_router  # noqa: E402
 from api.analysis import set_engine as analysis_set_engine  # noqa: E402
+from api.auth import require_api_key  # noqa: E402
 from api.health import router as health_router  # noqa: E402
 from api.journal import router as journal_router  # noqa: E402
 from api.market_data import router as market_data_router  # noqa: E402
@@ -215,6 +214,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
     default_response_class=SafeJSONResponse,
+    dependencies=[Depends(require_api_key)],
 )
 
 # CORS — allow Streamlit (typically on port 8501) and local dev
@@ -224,7 +224,7 @@ app.add_middleware(
         "http://localhost:8501",
         "http://streamlit-app:8501",
         "http://127.0.0.1:8501",
-        "*",  # For development; tighten in production
+        "http://app:8501",
     ],
     allow_credentials=True,
     allow_methods=["*"],

@@ -21,6 +21,7 @@ Covers:
   - Graceful error handling / fallback paths
 """
 
+import asyncio
 import os
 import sys
 import threading
@@ -1614,8 +1615,8 @@ class TestFeedManager:
 
     def test_stop_idempotent(self):
         feed = MassiveFeedManager(api_key="test")
-        feed.stop()  # should not crash
-        feed.stop()
+        asyncio.run(feed.stop())  # should not crash
+        asyncio.run(feed.stop())
         assert not feed.is_running
 
     def test_push_bar_to_cache(self, mock_rest_client):
