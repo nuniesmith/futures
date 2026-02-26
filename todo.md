@@ -407,16 +407,21 @@ Tasks are ordered by priority within each workstream. Cross-workstream dependenc
 
 ## WS-8: Pattern Detection & Trading Intelligence
 
-### TASK-801: Opening Range Breakout Detection
+### TASK-801: Opening Range Breakout Detection ✅ DONE
 - **Priority:** 🟢 P2 — Matches Jordan's observed daily patterns
 - **Context:** Jordan sees breakout patterns daily from market opens. Detect the opening range (first 30-60 min after 9:30 ET) and flag breakouts.
 - **Files:**
-  - `src/services/engine/patterns.py` — `detect_opening_range_breakout(bars_1m, symbol)`
+  - `src/services/engine/orb.py` — `detect_opening_range_breakout(bars_1m, symbol)`, `compute_atr()`, `compute_opening_range()`, `scan_orb_all_assets()`
+  - `src/services/engine/main.py` — `_handle_check_orb()` handler wired to scheduler
+  - `src/services/engine/scheduler.py` — `CHECK_ORB` action type (every 2 min, 09:30–11:00 ET)
+  - `src/services/data/api/sse.py` — `orb-update` SSE event (pub/sub + polling)
+  - `src/services/data/api/dashboard.py` — `_render_orb_panel()`, `/api/orb/html` endpoint, JS handler
+  - `tests/test_orb.py` — 80 tests covering ORB core, scanner, publishing, scheduler, dashboard, SSE
 - **Acceptance Criteria:**
-  - [ ] Computes OR high/low from first 30 minutes of 1-min bars after 9:30 ET
-  - [ ] Flags breakout when close > OR_high + 0.5 × ATR(14) or close < OR_low - 0.5 × ATR(14)
-  - [ ] Returns: `{type: "ORB", direction: "LONG"/"SHORT", trigger_price, or_high, or_low, timestamp}`
-  - [ ] Published to Redis → appears as alert on dashboard
+  - [x] Computes OR high/low from first 30 minutes of 1-min bars after 9:30 ET
+  - [x] Flags breakout when close > OR_high + 0.5 × ATR(14) or close < OR_low - 0.5 × ATR(14)
+  - [x] Returns: `{type: "ORB", direction: "LONG"/"SHORT", trigger_price, or_high, or_low, timestamp}`
+  - [x] Published to Redis → appears as alert on dashboard
 - **Dependencies:** TASK-201, TASK-204 (uses historical bars for ATR)
 
 ### TASK-802: "Should Not Trade" Detector
@@ -486,6 +491,49 @@ Tasks are ordered by priority within each workstream. Cross-workstream dependenc
 
 ---
 
+## WS-10: Risk Enforcement & API
+
+### TASK-1001: Risk API Router ✅ DONE
+- **Priority:** 🟡 P1 — Enables pre-flight risk checks from NinjaTrader and other clients
+- **Files:**
+  - `src/services/data/api/risk.py` — `/risk/status`, `/risk/check`, `/risk/history` endpoints
+  - `src/services/data/main.py` — Risk router mounted at `/risk`
+- **Acceptance Criteria:**
+  - [x] GET /risk/status reads from Redis (engine) or local RiskManager fallback
+  - [x] POST /risk/check performs pre-flight risk check for proposed trades
+  - [x] GET /risk/history returns in-memory audit trail of risk events
+  - [x] Risk events published to Redis for persistence
+
+### TASK-1002: Risk-Wired Trade Entry ✅ DONE
+- **Priority:** 🟡 P1 — Prevents overtrading by checking risk before trade creation
+- **Files:**
+  - `src/services/data/api/trades.py` — Risk check in `api_create_trade()`, `enforce_risk` field
+- **Acceptance Criteria:**
+  - [x] POST /trades performs pre-flight risk check before creating trade
+  - [x] Response includes `risk_checked`, `risk_blocked`, `risk_reason`, `risk_details` fields
+  - [x] `enforce_risk=True` returns HTTP 403 when risk rules block the trade
+  - [x] Default (`enforce_risk=False`) creates trade with advisory warning
+
+### TASK-1003: Risk-Wired Position Updates ✅ DONE
+- **Priority:** 🟡 P1 — Real-time risk evaluation when NinjaTrader pushes positions
+- **Files:**
+  - `src/services/data/api/positions.py` — Risk evaluation in `update_positions()`
+- **Acceptance Criteria:**
+  - [x] POST /positions/update syncs positions into local RiskManager
+  - [x] Response includes `risk` dict with `can_trade`, `block_reason`, `warnings`
+  - [x] Warnings logged when risk thresholds are hit
+
+### TASK-1004: Test Isolation Fix ✅ DONE
+- **Priority:** 🔴 P0 — Fixes flaky tests caused by cross-module cache mock pollution
+- **Files:**
+  - `tests/test_sse.py` — Save/restore `sys.modules["cache"]` around SSE import and via module-scoped fixture
+  - `tests/test_focus.py` — Save/restore in `TestPublishFocusToRedis` setup/teardown
+- **Acceptance Criteria:**
+  - [x] 959 tests pass with 0 failures (excluding pre-existing missing-dep tests)
+  - [x] test_positions.py and test_data_service.py no longer fail when run after test_sse.py or test_focus.py
+
+---
+
 ## Execution Order (Recommended Sprint Plan)
 
 ### Day 1: Critical Fixes + Architecture Foundation ✅
@@ -519,6 +567,14 @@ Tasks are ordered by priority within each workstream. Cross-workstream dependenc
 20. ✅ TASK-602 — Grok SSE integration (grok-update + risk-update events wired)
 21. Full end-to-end test with Sim101 account — ready to run
 
+### Day 6: Risk Enforcement + ORB Detection ✅
+22. ✅ TASK-1004 — Test isolation fix (test_sse.py + test_focus.py cache mock pollution)
+23. ✅ TASK-801 — Opening Range Breakout detector (ORB module, scheduler, SSE, dashboard panel)
+24. ✅ TASK-1001 — Risk API router (/risk/status, /risk/check, /risk/history)
+25. ✅ TASK-1002 — Risk-wired trade entry (pre-flight check in POST /trades, enforce_risk flag)
+26. ✅ TASK-1003 — Risk-wired position updates (evaluate risk on POST /positions/update)
+27. 80 new tests (959 total passing, 0 failures)
+
 ### Backlog (Next Week+)
 - TASK-204 — Historical data backfill
 - TASK-403 — Dynamic volume analysis in NT8
@@ -526,4 +582,3 @@ Tasks are ordered by priority within each workstream. Cross-workstream dependenc
 - TASK-702 — SQLite → Postgres migration
 - TASK-703 — Rate limiting
 - TASK-704 — Prometheus metrics
-- TASK-801 — Opening range breakout detection

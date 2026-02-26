@@ -105,6 +105,7 @@ from api.health import router as health_router  # noqa: E402
 from api.journal import router as journal_router  # noqa: E402
 from api.market_data import router as market_data_router  # noqa: E402
 from api.positions import router as positions_router  # noqa: E402
+from api.risk import router as risk_router  # noqa: E402
 from api.sse import router as sse_router  # noqa: E402
 from api.trades import router as trades_router  # noqa: E402
 
@@ -343,6 +344,9 @@ app.include_router(positions_router, prefix="/positions", tags=["Positions"])
 
 # Trades: /trades, /trades/{id}/close, /log_trade, etc.  (trade CRUD)
 app.include_router(trades_router, prefix="", tags=["Trades"])
+
+# Risk: /risk/status, /risk/check, /risk/history  (risk engine API)
+app.include_router(risk_router, prefix="/risk", tags=["Risk"])
 
 # Journal: /journal/save, /journal/entries, /journal/stats, /journal/today
 app.include_router(journal_router, prefix="/journal", tags=["Journal"])

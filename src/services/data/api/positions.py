@@ -2,13 +2,20 @@
 Positions API router — NinjaTrader live position bridge.
 
 Handles receiving live position snapshots from NinjaTrader's
-LivePositionBridge indicator and serving them to the Streamlit UI.
+LivePositionBridge indicator and serving them to the dashboard.
+
+Risk enforcement:
+  When NinjaTrader pushes a position snapshot via POST /positions/update,
+  the router syncs the positions into the local RiskManager and evaluates
+  all risk rules.  The response includes risk status fields so the NT8
+  indicator (or any caller) knows immediately if trading limits have been
+  hit.  Warnings are also published to Redis for SSE/dashboard consumption.
 """
 
 import json
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter
@@ -76,12 +83,17 @@ def update_positions(payload: NTPositionsPayload):
 
     The NinjaTrader indicator POSTs here every few seconds with the
     current state of all open positions in the account.
+
+    The response now includes risk evaluation fields so the caller
+    knows immediately if any risk limits have been reached.
     """
     received_at = datetime.now(tz=_EST).isoformat()
 
+    position_dicts = [p.model_dump() for p in payload.positions]
+
     data = {
         "account": payload.account,
-        "positions": [p.model_dump() for p in payload.positions],
+        "positions": position_dicts,
         "timestamp": payload.timestamp or received_at,
         "received_at": received_at,
     }
@@ -92,18 +104,39 @@ def update_positions(payload: NTPositionsPayload):
         _POSITIONS_TTL,
     )
 
+    total_pnl = sum(p.unrealizedPnL for p in payload.positions)
     logger.info(
         "Position update: account=%s positions=%d total_pnl=%.2f",
         payload.account,
         len(payload.positions),
-        sum(p.unrealizedPnL for p in payload.positions),
+        total_pnl,
     )
+
+    # --- Risk evaluation ---
+    risk_status: Dict[str, Any] = {}
+    try:
+        from api.risk import evaluate_position_risk
+
+        risk_status = evaluate_position_risk(position_dicts)
+
+        if not risk_status.get("can_trade", True):
+            logger.warning(
+                "⚠️ Risk block after position sync: %s (daily P&L $%.2f)",
+                risk_status.get("block_reason", ""),
+                risk_status.get("daily_pnl", 0.0),
+            )
+        for warning in risk_status.get("warnings", []):
+            logger.warning("⚠️ Risk warning: %s", warning)
+    except Exception as exc:
+        logger.debug("Risk evaluation skipped (non-fatal): %s", exc)
 
     return {
         "status": "received",
         "account": payload.account,
         "positions_count": len(payload.positions),
+        "total_unrealized_pnl": round(total_pnl, 2),
         "received_at": received_at,
+        "risk": risk_status,
     }
 
 

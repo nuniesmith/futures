@@ -37,6 +37,8 @@ for _p in (_src_dir, _data_dir):
 # Build a mock cache module that the lazy `from cache import ...` calls will resolve to.
 # Since sse.py does `from cache import cache_get` inside function bodies, the mock must
 # live in sys.modules["cache"] BEFORE sse is imported.
+_original_cache_module = sys.modules.get("cache", None)
+
 _mock_cache = MagicMock()
 _mock_cache.REDIS_AVAILABLE = False
 _mock_cache._r = None
@@ -66,6 +68,19 @@ from api.sse import (
     _should_throttle,
 )
 
+# Immediately restore the real cache module after importing SSE symbols.
+# The mock was only needed so that `api.sse` could be imported without a
+# live Redis connection.  Leaving the mock in sys.modules["cache"] would
+# pollute every test file that pytest collects *after* this module
+# (e.g. test_positions.py, test_data_service.py) because their fixtures
+# do `from cache import _mem_cache` at runtime, which resolves via
+# sys.modules.  The mock is re-installed by _reset_cache_mock() at the
+# start of each SSE test that needs it.
+if _original_cache_module is not None:
+    sys.modules["cache"] = _original_cache_module
+else:
+    sys.modules.pop("cache", None)
+
 _EST = ZoneInfo("America/New_York")
 
 
@@ -76,13 +91,10 @@ def _reset_cache_mock():
     _mock_cache attributes, we control behaviour by resetting
     the mock's return values here.
 
-    Crucially, we also re-install the mock into sys.modules["cache"]
-    because other test modules (e.g. test_focus.py) may have imported
-    the real cache module and replaced our mock when running in the
-    same pytest session.
+    Re-installs the mock into sys.modules["cache"] so that lazy
+    ``from cache import ...`` inside sse.py function bodies picks up
+    _mock_cache regardless of test ordering.
     """
-    # Re-install mock so lazy `from cache import ...` inside sse.py
-    # function bodies picks up _mock_cache regardless of test ordering.
     sys.modules["cache"] = _mock_cache
 
     _mock_cache.REDIS_AVAILABLE = False
@@ -95,6 +107,27 @@ def _reset_cache_mock():
     _mock_cache._cache_key.side_effect = lambda *parts: (
         "futures:mock:" + ":".join(str(p) for p in parts)
     )
+
+
+def _restore_real_cache_module():
+    """Restore the original cache module into sys.modules.
+
+    Called after each SSE test class / group finishes so that later test
+    files (e.g. test_positions.py, test_data_service.py) that do
+    ``from cache import _mem_cache`` get the real module, not the mock.
+    """
+    if _original_cache_module is not None:
+        sys.modules["cache"] = _original_cache_module
+    else:
+        sys.modules.pop("cache", None)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _sse_cache_mock_lifecycle():
+    """Module-scoped fixture: install mock before SSE tests, restore after."""
+    sys.modules["cache"] = _mock_cache
+    yield
+    _restore_real_cache_module()
 
 
 # ===========================================================================

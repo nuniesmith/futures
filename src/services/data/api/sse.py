@@ -235,6 +235,19 @@ def _get_risk_from_cache() -> Optional[str]:
     return None
 
 
+def _get_orb_from_cache() -> Optional[str]:
+    """Read the latest Opening Range Breakout result from Redis cache (TASK-801)."""
+    try:
+        from cache import cache_get
+
+        raw = cache_get("engine:orb")
+        if raw:
+            return raw.decode() if isinstance(raw, bytes) else str(raw)
+    except Exception:
+        pass
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Main SSE generator
 # ---------------------------------------------------------------------------
@@ -312,6 +325,11 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
     if risk:
         yield _format_sse(data=risk, event="risk-update")
 
+    # Send initial ORB status (TASK-801)
+    orb = _get_orb_from_cache()
+    if orb:
+        yield _format_sse(data=orb, event="orb-update")
+
     # Send initial session info
     status = _get_engine_status()
     if status:
@@ -342,6 +360,7 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
     last_positions_hash = ""
     last_grok_hash = ""
     last_risk_hash = ""
+    last_orb_hash = ""
     last_session = ""
 
     try:
@@ -423,6 +442,11 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                             # Risk status update
                             if not _should_throttle("risk-update"):
                                 yield _format_sse(data=data, event="risk-update")
+
+                        elif channel == "dashboard:orb":
+                            # Opening Range Breakout alert (TASK-801)
+                            if not _should_throttle("orb-update"):
+                                yield _format_sse(data=data, event="orb-update")
 
                 except Exception as exc:
                     logger.debug("Pub/sub read error: %s", exc)
@@ -510,6 +534,15 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                             last_risk_hash = risk_hash
                             if not _should_throttle("risk-update"):
                                 yield _format_sse(data=risk, event="risk-update")
+
+                    # Check ORB status (TASK-801)
+                    orb = _get_orb_from_cache()
+                    if orb:
+                        orb_hash = str(hash(orb))
+                        if orb_hash != last_orb_hash:
+                            last_orb_hash = orb_hash
+                            if not _should_throttle("orb-update"):
+                                yield _format_sse(data=orb, event="orb-update")
 
                     # Check session
                     status = _get_engine_status()
