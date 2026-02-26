@@ -39,7 +39,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         [NinjaScriptProperty]
         [Display(Name = "Signal Listener Port", GroupName = "2. Web App", Order = 2)]
-        public int SignalListenerPort { get; set; } = 8081;
+        public int SignalListenerPort { get; set; } = 8080;
 
         [NinjaScriptProperty]
         [Display(Name = "Enable Position Push", GroupName = "3. Options", Order = 1)]
