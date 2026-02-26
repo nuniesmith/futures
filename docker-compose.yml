@@ -1,16 +1,17 @@
 # =============================================================================
-# Futures Trading Co-Pilot — Docker Compose (4-Service Architecture)
+# Futures Trading Co-Pilot — Docker Compose (5-Service Architecture)
 # =============================================================================
 #
 # Services:
 #   postgres       — durable storage (journal, historical opts, alerts)
 #   redis          — hot cache (latest FKS metrics, live positions, 1m bars)
-#   data-service   — FastAPI + background engine (all heavy computation)
-#   streamlit-app  — pure UI client (fast reloads, reads from data-service + Redis)
+#   data-service   — FastAPI API layer (reads from Redis, serves to UI)
+#   engine         — background computation (FKS, optimization, backtesting)
+#   streamlit-app  — pure UI client (reads from data-service + Redis)
 #
 # Usage:
 #   docker compose up -d --build
-#   docker compose logs -f data
+#   docker compose logs -f engine
 #   docker compose ps
 #
 # =============================================================================
@@ -59,9 +60,9 @@ services:
             retries: 3
 
     # -------------------------------------------------------------------------
-    # Data Service — FastAPI + DashboardEngine + background workers
-    # All heavy computation runs here (Massive WS, optimization, backtesting,
-    # wave analysis, volatility, signal quality, regime, CVD, ICT)
+    # Data Service — FastAPI API layer (thin)
+    # Serves REST API, reads computed results from Redis cache.
+    # ENGINE_MODE=remote means it does NOT run heavy computation itself.
     # -------------------------------------------------------------------------
     data:
         build:
@@ -78,6 +79,7 @@ services:
             - DB_PATH=/app/data/futures_journal.db
             - DATA_SERVICE_HOST=0.0.0.0
             - DATA_SERVICE_PORT=8000
+            - ENGINE_MODE=remote
             - PYTHONPATH=/app/src:/app/src/services/data:/app
             - PYTHONUNBUFFERED=1
         volumes:
@@ -99,6 +101,33 @@ services:
             timeout: 5s
             start_period: 30s
             retries: 3
+
+    # -------------------------------------------------------------------------
+    # Engine — Background computation worker
+    # Heavy: DashboardEngine, FKS modules, optimization, backtesting,
+    # Massive WebSocket, wave analysis, volatility, signal quality, regime,
+    # CVD, ICT. Reads data from Massive/Redis, writes results to Redis.
+    # -------------------------------------------------------------------------
+    engine:
+        build:
+            context: .
+            dockerfile: docker/engine/Dockerfile
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            - REDIS_URL=redis://redis:6379/0
+            - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD:-futures_dev_pass}@postgres:5432/${POSTGRES_DB:-futures_db}
+            - DB_PATH=/app/data/futures_journal.db
+            - PYTHONPATH=/app/src:/app/src/services/engine:/app
+            - PYTHONUNBUFFERED=1
+        volumes:
+            - app_data:/app/data
+        depends_on:
+            redis:
+                condition: service_healthy
+            postgres:
+                condition: service_healthy
 
     # -------------------------------------------------------------------------
     # Streamlit App — pure UI client (fast reloads)

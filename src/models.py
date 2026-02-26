@@ -149,7 +149,7 @@ FULL_CONTRACT_SPECS = {
 MICRO_CONTRACT_SPECS = {
     "Gold": {
         "ticker": "MGC=F",
-        "data_ticker": "GC=F",
+        "data_ticker": "MGC=F",
         "point": 10,
         "tick": 0.10,
         "margin": 1_100,
@@ -198,9 +198,9 @@ CONTRACT_SPECS = (
     MICRO_CONTRACT_SPECS if CONTRACT_MODE == "micro" else FULL_CONTRACT_SPECS
 )
 
-# Convenience: name → data ticker (for Yahoo Finance fetching).
-# Micro contracts track the same underlying price as full-size, so we always
-# fetch from the full-size ticker which Yahoo reliably supports.
+# Convenience: name → data ticker (for data fetching).
+# When data_ticker differs from ticker, data is fetched using data_ticker.
+# Gold uses MGC=F directly to avoid front-month mismatch between GC and MGC.
 ASSETS: dict[str, str] = {
     name: str(spec.get("data_ticker", spec["ticker"]))
     for name, spec in CONTRACT_SPECS.items()
