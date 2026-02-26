@@ -385,22 +385,48 @@ Tasks are ordered by priority within each workstream. Cross-workstream dependenc
   - [ ] SQLite file kept as backup but no longer used
 - **Dependencies:** TASK-701
 
-### TASK-703: Add Rate Limiting to Data Service
+### TASK-703: Add Rate Limiting to Data Service ✅ DONE
 - **Priority:** 🟢 P2 — Security hardening
-- **Files:** `src/services/data/main.py`
+- **Files:**
+  - `src/services/data/api/rate_limit.py` — Rate limiting module (slowapi-based, per-client key derivation, path-based limits)
+  - `src/services/data/main.py` — `setup_rate_limiting(app)` call wired in
+  - `tests/test_metrics_and_ratelimit.py` — 121 tests covering rate limiting + metrics
 - **Acceptance Criteria:**
-  - [ ] Add `slowapi` or similar rate limiter
-  - [ ] Public endpoints (`/health`, `/docs`): 60 req/min
-  - [ ] API endpoints: 30 req/min per client
-  - [ ] SSE endpoint: 5 connections per client
+  - [x] Add `slowapi` or similar rate limiter
+  - [x] Public endpoints (`/health`, `/docs`): 60 req/min
+  - [x] API endpoints: 30 req/min per client
+  - [x] SSE endpoint: 5 connections per client
+  - [x] Trades / position mutations: 20 req/min per client
+  - [x] Heavy actions (force_refresh, optimize): 5 req/min per client
+  - [x] Custom 429 JSON response with Retry-After header
+  - [x] Configurable via environment variables (RATE_LIMIT_ENABLED, RATE_LIMIT_DEFAULT, etc.)
+  - [x] Client key derivation: X-API-Key → X-Forwarded-For → remote address
 - **Dependencies:** None
 
-### TASK-704: Add Prometheus Metrics Endpoint
+### TASK-704: Add Prometheus Metrics Endpoint ✅ DONE
 - **Priority:** 🟢 P3 — Nice-to-have for monitoring
-- **Files:** `src/services/data/api/health.py`
+- **Files:**
+  - `src/services/data/api/metrics.py` — Prometheus metrics module (registry, counters, gauges, histograms, middleware, endpoint)
+  - `src/services/data/main.py` — PrometheusMiddleware + metrics router wired in
+  - `src/services/data/api/auth.py` — `/metrics/prometheus` added to public paths
+  - `tests/test_metrics_and_ratelimit.py` — 121 tests covering metrics + rate limiting
 - **Acceptance Criteria:**
-  - [ ] `GET /metrics` returns Prometheus-format text
-  - [ ] Metrics: request count, latency histogram, active SSE connections, engine last refresh time
+  - [x] `GET /metrics/prometheus` returns Prometheus text exposition format
+  - [x] Metrics: `http_requests_total` counter (method, path, status labels)
+  - [x] Metrics: `http_request_duration_seconds` histogram (method, path labels)
+  - [x] Metrics: `sse_connections_active` gauge
+  - [x] Metrics: `sse_events_total` counter (event_type label)
+  - [x] Metrics: `engine_last_refresh_epoch` gauge
+  - [x] Metrics: `engine_cycle_duration_seconds` histogram
+  - [x] Metrics: `risk_checks_total` counter (result label: allowed/blocked/advisory)
+  - [x] Metrics: `orb_detections_total` counter (direction label)
+  - [x] Metrics: `no_trade_alerts_total` counter (condition label)
+  - [x] Metrics: `focus_quality_gauge` gauge (per-symbol)
+  - [x] Metrics: `positions_open_count` gauge
+  - [x] Metrics: `redis_connected` gauge
+  - [x] PrometheusMiddleware auto-instruments all requests
+  - [x] Live gauges refreshed from cache on each scrape
+  - [x] Path normalization to reduce metric cardinality
 - **Dependencies:** None
 
 ---
@@ -424,22 +450,32 @@ Tasks are ordered by priority within each workstream. Cross-workstream dependenc
   - [x] Published to Redis → appears as alert on dashboard
 - **Dependencies:** TASK-201, TASK-204 (uses historical bars for ATR)
 
-### TASK-802: "Should Not Trade" Detector
+### TASK-802: "Should Not Trade" Detector ✅ DONE
 - **Priority:** 🟡 P1 — Directly addresses "hard for me to figure when I should not trade"
 - **Context:** Rules-based filter that flags low-conviction days to prevent overtrading.
 - **Files:**
-  - `src/services/engine/patterns.py` — `should_not_trade(focus_data)` function
+  - `src/services/engine/patterns.py` — `evaluate_no_trade()`, `publish_no_trade_alert()`, `clear_no_trade_alert()`, 7 condition checkers
+  - `src/services/engine/main.py` — `_handle_check_no_trade()` handler wired to scheduler
+  - `src/services/engine/scheduler.py` — `CHECK_NO_TRADE` action type (every 2 min during active hours)
+  - `src/services/data/api/sse.py` — `no-trade-alert` SSE event (pub/sub + polling + catchup)
+  - `src/services/data/api/dashboard.py` — `_render_no_trade_banner()`, `/api/no-trade` endpoint, `sse-swap="no-trade-alert"` JS handler
+  - `tests/test_integration.py` — TestNoTradeIntegration (6 tests)
+  - `tests/test_focus.py` — TestShouldNotTrade (6 tests)
+  - `tests/test_metrics_and_ratelimit.py` — TestShouldNotTradePatterns (12 tests)
 - **Conditions for NO TRADE:**
-  - [ ] All focus assets have quality < 55%
-  - [ ] Any focus asset has volatility percentile > 88% (extreme vol, stops get hit easily)
-  - [ ] Daily loss already exceeds -$250
-  - [ ] More than 2 consecutive losing trades today
-  - [ ] It's after 10:00 AM ET and no setups have triggered
+  - [x] No market data available (empty focus assets)
+  - [x] All focus assets have quality < 55%
+  - [x] Any focus asset has volatility percentile > 88% (extreme vol, stops get hit easily)
+  - [x] Daily loss already exceeds -$250
+  - [x] More than 2 consecutive losing trades today
+  - [x] It's after 10:00 AM ET and no setups have triggered
+  - [x] Trading session has ended (after 12:00 PM ET)
 - **Acceptance Criteria:**
-  - [ ] Returns `(bool, reason_string)` 
-  - [ ] Reason displayed on dashboard NO TRADE banner
-  - [ ] Checked every engine cycle during active hours
-  - [ ] Published to Redis → SSE `no-trade-alert` event
+  - [x] Returns `NoTradeResult` with `should_skip`, `reasons`, `checks`, `severity`
+  - [x] Reason displayed on dashboard NO TRADE banner (red pulsing banner with ⛔)
+  - [x] Checked every engine cycle during active hours (every 2 min via scheduler)
+  - [x] Published to Redis → SSE `no-trade-alert` event
+  - [x] Clears automatically when conditions improve
 - **Dependencies:** TASK-203, TASK-502
 
 ---
@@ -575,10 +611,14 @@ Tasks are ordered by priority within each workstream. Cross-workstream dependenc
 26. ✅ TASK-1003 — Risk-wired position updates (evaluate risk on POST /positions/update)
 27. 80 new tests (959 total passing, 0 failures)
 
+### Day 7: Observability + Security Hardening + No-Trade Detector ✅
+28. ✅ TASK-704 — Prometheus metrics endpoint (/metrics/prometheus, 12 metric families, auto-instrumented middleware)
+29. ✅ TASK-703 — Rate limiting (slowapi, per-client keys, path-based limits, custom 429 handler)
+30. ✅ TASK-802 — "Should Not Trade" detector (7 conditions, NO TRADE banner, SSE no-trade-alert, scheduler integration)
+31. 121 new tests (1,080 total passing, 0 failures)
+
 ### Backlog (Next Week+)
 - TASK-204 — Historical data backfill
 - TASK-403 — Dynamic volume analysis in NT8
 - TASK-701 — Docker first boot verification (full checklist)
 - TASK-702 — SQLite → Postgres migration
-- TASK-703 — Rate limiting
-- TASK-704 — Prometheus metrics

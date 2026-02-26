@@ -104,7 +104,10 @@ from api.dashboard import router as dashboard_router  # noqa: E402
 from api.health import router as health_router  # noqa: E402
 from api.journal import router as journal_router  # noqa: E402
 from api.market_data import router as market_data_router  # noqa: E402
+from api.metrics import PrometheusMiddleware  # noqa: E402
+from api.metrics import router as metrics_router  # noqa: E402
 from api.positions import router as positions_router  # noqa: E402
+from api.rate_limit import setup_rate_limiting  # noqa: E402
 from api.risk import router as risk_router  # noqa: E402
 from api.sse import router as sse_router  # noqa: E402
 from api.trades import router as trades_router  # noqa: E402
@@ -321,6 +324,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Prometheus metrics middleware — records request count + latency (TASK-704)
+app.add_middleware(PrometheusMiddleware)
+
+# Rate limiting (TASK-703) — slowapi-based per-client rate limits
+setup_rate_limiting(app)
+
 # ---------------------------------------------------------------------------
 # Register routers
 # ---------------------------------------------------------------------------
@@ -356,6 +365,9 @@ app.include_router(market_data_router, prefix="/data", tags=["Market Data"])
 
 # Health: /health, /metrics  (no prefix — top-level)
 app.include_router(health_router, tags=["Health"])
+
+# Prometheus metrics: /metrics/prometheus  (TASK-704)
+app.include_router(metrics_router, tags=["Metrics"])
 
 
 # ---------------------------------------------------------------------------

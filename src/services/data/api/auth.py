@@ -54,6 +54,7 @@ _PUBLIC_PATHS: frozenset[str] = frozenset(
         "/",
         "/health",
         "/metrics",
+        "/metrics/prometheus",
         "/docs",
         "/openapi.json",
         "/redoc",
