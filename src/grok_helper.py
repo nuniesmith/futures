@@ -40,6 +40,7 @@ GROK_API_URL = "https://api.x.ai/v1/chat/completions"
 GROK_MODEL = "grok-4-1-fast-reasoning"
 DEFAULT_MAX_TOKENS_BRIEFING = 3000
 DEFAULT_MAX_TOKENS_LIVE = 800
+DEFAULT_MAX_TOKENS_LIVE_COMPACT = 350
 DEFAULT_TEMPERATURE = 0.3
 
 
@@ -447,11 +448,206 @@ def run_live_analysis(
     previous_briefing: str | None = None,
     previous_update: str | None = None,
     update_number: int = 1,
+    compact: bool = True,
 ) -> str | None:
-    """Generate a concise 15-minute market update during active trading.
+    """Generate a 15-minute market update during active trading.
+
+    When compact=True (default), uses the simplified ≤8-line format
+    per TASK-601. When compact=False, uses the original verbose format.
 
     This is designed to be cheap (~$0.007 per call) and fast.
     Returns formatted update text, or None on error.
+    """
+    if compact:
+        return _run_live_compact(
+            context=context,
+            api_key=api_key,
+            previous_briefing=previous_briefing,
+            update_number=update_number,
+        )
+
+    return _run_live_verbose(
+        context=context,
+        api_key=api_key,
+        previous_briefing=previous_briefing,
+        previous_update=previous_update,
+        update_number=update_number,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Compact live update (TASK-601) — ≤8 lines total
+# ---------------------------------------------------------------------------
+
+_COMPACT_SYSTEM = (
+    "You are a real-time futures trading co-pilot. Respond in EXACTLY this format with no extra lines:\n"
+    "Line 1-N: One status line per focus asset: SYMBOL EMOJI PRICE (CHANGE) | Bias STATUS | Watch LEVEL\n"
+    "Line N+1: blank line\n"
+    "Line N+2: DO NOW: one clear actionable sentence\n\n"
+    "Rules:\n"
+    "- Use 🟢 for bullish/valid bias, 🔴 for bearish, ⚪ for neutral/invalid\n"
+    "- CHANGE is the price move since prior check (e.g. +4, -12)\n"
+    "- Bias STATUS is VALID or INVALID (did price action confirm or break the plan?)\n"
+    "- Watch LEVEL is the single most important price level right now\n"
+    "- DO NOW must be 1 sentence: hold, enter, exit, tighten stop, or wait\n"
+    "- NEVER use bare $ signs — write USD instead\n"
+    "- Total output MUST be 8 lines or fewer"
+)
+
+
+def _run_live_compact(
+    context: dict,
+    api_key: str,
+    previous_briefing: str | None = None,
+    update_number: int = 1,
+) -> str | None:
+    """Generate a compact ≤8-line live update (TASK-601).
+
+    Format per asset:
+        GOLD 🟢 2712 (+4) | Bias VALID | Watch 2725
+        MNQ  🔴 21450 (-38) | Bias INVALID | Watch 21400
+
+    Final line:
+        DO NOW: Hold GOLD long, tighten stop to 2700; avoid MNQ — bias broken.
+    """
+    plan_ref = ""
+    if previous_briefing:
+        plan_ref = f"MORNING PLAN (brief):\n{previous_briefing[:400]}\n"
+
+    positions_block = ""
+    if context.get("has_positions"):
+        positions_block = f"LIVE POSITIONS:\n{context['positions_text']}\n"
+
+    prompt = f"""Update #{update_number} — {context["time"]}
+Account: USD {context["account_size"]:,} | Session: {context["session_status"]}
+{plan_ref}{positions_block}
+SCANNER: {context["scanner_text"]}
+ICT: {context["ict_text"]}
+WAVE: {context.get("fks_wave_text", "N/A")}
+SIGNAL QUALITY: {context.get("fks_sq_text", "N/A")}
+CONFLUENCE: {context["conf_text"]}
+
+Respond with exactly one status line per focus asset, then a blank line, then one DO NOW line.
+Example format:
+GOLD 🟢 2712 (+4) | Bias VALID | Watch 2725
+MNQ 🔴 21450 (-38) | Bias INVALID | Watch 21400
+
+DO NOW: Hold GOLD long, stop to 2700; skip MNQ — bias broken."""
+
+    result = _call_grok(
+        prompt,
+        api_key,
+        max_tokens=DEFAULT_MAX_TOKENS_LIVE_COMPACT,
+        system_prompt=_COMPACT_SYSTEM,
+    )
+    if result:
+        result = _enforce_compact_limit(result)
+    return result
+
+
+def _enforce_compact_limit(text: str, max_lines: int = 8) -> str:
+    """Ensure the output is at most max_lines lines, trimming if needed."""
+    lines = [ln for ln in text.strip().splitlines() if ln.strip()]
+    if len(lines) <= max_lines:
+        return text.strip()
+    # Keep first (max_lines - 2) status lines + blank + last "DO NOW" line
+    # Find the DO NOW line
+    do_now_idx = None
+    for i, ln in enumerate(lines):
+        if ln.strip().upper().startswith("DO NOW"):
+            do_now_idx = i
+            break
+    if do_now_idx is not None:
+        status_lines = [ln for ln in lines[:do_now_idx] if ln.strip()]
+        do_now_line = lines[do_now_idx]
+        # Keep at most (max_lines - 2) status lines + blank + DO NOW
+        max_status = max_lines - 2
+        kept = status_lines[:max_status]
+        return "\n".join(kept) + "\n\n" + do_now_line
+    # Fallback: just truncate
+    return "\n".join(lines[:max_lines])
+
+
+def format_live_compact(
+    focus_assets: list[dict],
+    do_now: str = "",
+) -> str:
+    """Build a compact ≤8-line status string from focus asset data.
+
+    This is the *local* formatter — used when Grok is unavailable or
+    as a fast fallback.  Each focus asset gets one status line; the
+    final line is the DO NOW action.
+
+    Args:
+        focus_assets: List of asset focus dicts (from compute_daily_focus).
+        do_now: Optional action line. Auto-generated if empty.
+
+    Returns:
+        Formatted string, ≤8 lines.
+    """
+    lines: list[str] = []
+
+    for asset in focus_assets[:5]:  # max 5 assets to stay ≤8 lines
+        symbol = asset.get("symbol", "?")
+        bias = asset.get("bias", "NEUTRAL")
+        emoji = {"LONG": "🟢", "SHORT": "🔴"}.get(bias, "⚪")
+        price = asset.get("last_price", 0)
+        quality = asset.get("quality_pct", 0)
+        skip = asset.get("skip", False)
+
+        # Determine bias validity from quality
+        bias_status = "VALID" if quality >= 55 and not skip else "INVALID"
+
+        # Key watch level: TP1 for valid bias, stop for invalid
+        if bias_status == "VALID":
+            watch = asset.get("tp1", 0)
+        else:
+            watch = asset.get("stop", 0)
+
+        # Pad symbol for alignment
+        sym_padded = f"{symbol:<5s}"
+        lines.append(
+            f"{sym_padded} {emoji} {price:,.2f} | Bias {bias_status} | Watch {watch:,.2f}"
+        )
+
+    # Blank separator
+    lines.append("")
+
+    # DO NOW line
+    if not do_now:
+        tradeable = [a for a in focus_assets if not a.get("skip")]
+        if not tradeable:
+            do_now = "DO NOW: No quality setups — stand aside and wait."
+        elif len(tradeable) == 1:
+            t = tradeable[0]
+            do_now = (
+                f"DO NOW: Focus on {t['symbol']} {t.get('bias', 'NEUTRAL')} "
+                f"near {t.get('entry_low', 0):,.2f}–{t.get('entry_high', 0):,.2f}."
+            )
+        else:
+            symbols = ", ".join(t["symbol"] for t in tradeable[:2])
+            do_now = f"DO NOW: Watch {symbols} for entries at planned levels."
+
+    lines.append(do_now)
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Verbose live update (original format, available via compact=False)
+# ---------------------------------------------------------------------------
+
+
+def _run_live_verbose(
+    context: dict,
+    api_key: str,
+    previous_briefing: str | None = None,
+    previous_update: str | None = None,
+    update_number: int = 1,
+) -> str | None:
+    """Generate the original verbose 15-minute market update.
+
+    This is the full-detail format for pre-market or when toggled.
     """
     # Include a summary of the morning plan for continuity
     plan_ref = ""
@@ -578,8 +774,16 @@ class GrokSession:
             return False
         return (time.time() - self.last_update_time) >= self.LIVE_INTERVAL_SEC
 
-    def run_update(self, context: dict, api_key: str) -> str | None:
+    def run_update(
+        self, context: dict, api_key: str, compact: bool = True
+    ) -> str | None:
         """Run a live analysis update if the interval has elapsed.
+
+        Args:
+            context: Market context dict from format_market_context().
+            api_key: Grok API key.
+            compact: If True (default), use ≤8-line compact format (TASK-601).
+                     If False, use original verbose format.
 
         Returns the update text, or None if not yet time or on error.
         """
@@ -595,6 +799,7 @@ class GrokSession:
             previous_briefing=self.morning_briefing,
             previous_update=previous_update,
             update_number=update_number,
+            compact=compact,
         )
 
         if result:
@@ -603,12 +808,17 @@ class GrokSession:
                     "time": datetime.now(tz=_EST).strftime("%H:%M EST"),
                     "text": result,
                     "number": update_number,
+                    "compact": compact,
                 }
             )
             self.last_update_time = time.time()
             self.total_calls += 1
-            self.estimated_cost += 0.007  # ~$0.007 per live update
-            logger.info("Grok live update #%d completed", update_number)
+            self.estimated_cost += 0.005 if compact else 0.007
+            logger.info(
+                "Grok live update #%d completed (%s)",
+                update_number,
+                "compact" if compact else "verbose",
+            )
 
         return result
 

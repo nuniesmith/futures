@@ -1,7 +1,13 @@
 """
-Dashboard API Router (TASK-301 / TASK-303)
-============================================
+Dashboard API Router (TASK-301 / TASK-303 / TASK-501)
+=======================================================
 Serves the HTMX dashboard and HTML fragment endpoints.
+
+Day 4 additions (TASK-501):
+  - Positions panel now shows risk status, total risk % of account,
+    and red warning banner when total risk > 5%.
+  - Risk status bar sourced from engine:risk_status Redis key.
+  - Grok compact update panel (TASK-601) shows latest ≤8-line summary.
 
 Endpoints:
     GET /                     — Full HTML dashboard page
@@ -9,6 +15,8 @@ Endpoints:
     GET /api/focus/html       — All asset cards as HTML fragments
     GET /api/focus/{symbol}   — Single asset card HTML fragment
     GET /api/positions/html   — Live positions panel HTML
+    GET /api/risk/html        — Risk status panel HTML
+    GET /api/grok/html        — Grok compact update panel HTML
     GET /api/alerts/html      — Alerts panel HTML
     GET /api/time             — Formatted time string with session indicator
     GET /api/no-trade         — No-trade banner HTML (if applicable)
@@ -94,7 +102,45 @@ def _get_positions() -> list[dict[str, Any]]:
                 return data.get("positions", [])
     except Exception:
         pass
+    # Try the positions router's hashed cache key as fallback
+    try:
+        from api.positions import _POSITIONS_CACHE_KEY
+
+        from cache import cache_get as cg2
+
+        raw2 = cg2(_POSITIONS_CACHE_KEY)
+        if raw2:
+            data2 = json.loads(raw2)
+            return data2.get("positions", [])
+    except Exception:
+        pass
     return []
+
+
+def _get_risk_status() -> Optional[dict[str, Any]]:
+    """Read risk manager status from Redis."""
+    try:
+        from cache import cache_get
+
+        raw = cache_get("engine:risk_status")
+        if raw:
+            return json.loads(raw)
+    except Exception:
+        pass
+    return None
+
+
+def _get_grok_update() -> Optional[dict[str, Any]]:
+    """Read latest Grok compact update from Redis."""
+    try:
+        from cache import cache_get
+
+        raw = cache_get("engine:grok_update")
+        if raw:
+            return json.loads(raw)
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -237,13 +283,102 @@ def _render_no_trade_banner(reason: str) -> str:
     """
 
 
-def _render_positions_panel(positions: list[dict[str, Any]]) -> str:
-    """Render live positions panel as HTML fragment."""
+def _render_positions_panel(
+    positions: list[dict[str, Any]],
+    risk_status: Optional[dict[str, Any]] = None,
+) -> str:
+    """Render live positions panel with risk status as HTML fragment (TASK-501).
+
+    Shows:
+      - Each position: symbol, LONG/SHORT, qty, avg price, unrealized P&L
+      - Total risk % prominently (sum of position risks / account value)
+      - Red warning banner if total risk > 5% of account
+      - Risk rules status bar (daily P&L, open trades, block reason)
+    """
+    # ---- Risk status bar (always shown) ----
+    risk_bar = ""
+    if risk_status:
+        daily_pnl = risk_status.get("daily_pnl", 0)
+        daily_color = "text-green-400" if daily_pnl >= 0 else "text-red-400"
+        open_count = risk_status.get("open_trade_count", 0)
+        max_trades = risk_status.get("max_open_trades", 2)
+        risk_pct = risk_status.get("risk_pct_of_account", 0)
+        can_trade = risk_status.get("can_trade", True)
+        block_reason = risk_status.get("block_reason", "")
+        consecutive = risk_status.get("consecutive_losses", 0)
+        is_overnight = risk_status.get("is_overnight_warning", False)
+
+        # Risk percentage color + warning threshold
+        if risk_pct > 5:
+            risk_pct_color = "text-red-400 font-bold"
+            risk_pct_emoji = "🔴"
+        elif risk_pct > 3:
+            risk_pct_color = "text-yellow-400"
+            risk_pct_emoji = "🟡"
+        else:
+            risk_pct_color = "text-green-400"
+            risk_pct_emoji = "🟢"
+
+        # Risk warning banner (> 5% of account)
+        risk_warning_html = ""
+        if risk_pct > 5:
+            risk_warning_html = f"""
+            <div class="bg-red-900/60 border border-red-500 rounded px-3 py-2 mb-2 text-center">
+                <span class="text-red-300 text-xs font-bold">
+                    ⚠️ TOTAL RISK {risk_pct:.1f}% OF ACCOUNT — EXCEEDS 5% LIMIT
+                </span>
+            </div>
+            """
+
+        # Overnight warning
+        overnight_html = ""
+        if is_overnight:
+            overnight_html = """
+            <div class="bg-yellow-900/60 border border-yellow-600 rounded px-3 py-2 mb-2 text-center">
+                <span class="text-yellow-300 text-xs font-bold">
+                    ⏰ SESSION ENDING — Close or protect open positions
+                </span>
+            </div>
+            """
+
+        # Trade block banner
+        block_html = ""
+        if not can_trade and block_reason:
+            block_html = f"""
+            <div class="bg-red-900/40 border border-red-700 rounded px-3 py-1.5 mb-2">
+                <span class="text-red-400 text-xs">🚫 {block_reason}</span>
+            </div>
+            """
+
+        risk_bar = f"""
+        {risk_warning_html}{overnight_html}{block_html}
+        <div class="grid grid-cols-4 gap-2 mb-3 text-xs">
+            <div class="bg-zinc-800/60 rounded p-1.5 text-center">
+                <div class="text-zinc-500">Daily P&L</div>
+                <div class="{daily_color} font-mono font-bold">${daily_pnl:,.2f}</div>
+            </div>
+            <div class="bg-zinc-800/60 rounded p-1.5 text-center">
+                <div class="text-zinc-500">Trades</div>
+                <div class="text-zinc-200 font-mono">{open_count}/{max_trades}</div>
+            </div>
+            <div class="bg-zinc-800/60 rounded p-1.5 text-center">
+                <div class="text-zinc-500">Risk %</div>
+                <div class="{risk_pct_color} font-mono">{risk_pct_emoji} {risk_pct:.1f}%</div>
+            </div>
+            <div class="bg-zinc-800/60 rounded p-1.5 text-center">
+                <div class="text-zinc-500">L-Streak</div>
+                <div class="{"text-red-400" if consecutive > 1 else "text-zinc-200"} font-mono">{consecutive}</div>
+            </div>
+        </div>
+        """
+
+    # ---- Empty state ----
     if not positions:
-        return """
+        return f"""
         <div id="positions-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
              hx-swap-oob="true">
             <h3 class="text-sm font-semibold text-zinc-400 mb-2">LIVE POSITIONS</h3>
+            {risk_bar}
             <div class="flex items-center gap-2 text-zinc-500">
                 <span class="text-green-500">✓</span>
                 <span>No open positions</span>
@@ -251,14 +386,17 @@ def _render_positions_panel(positions: list[dict[str, Any]]) -> str:
         </div>
         """
 
+    # ---- Position rows ----
     rows = ""
     total_pnl = 0.0
     for pos in positions:
         sym = pos.get("symbol", pos.get("instrument", "?"))
         side = pos.get("side", pos.get("direction", "?"))
         qty = pos.get("quantity", pos.get("contracts", 0))
-        avg_price = pos.get("avg_price", pos.get("entry", 0))
-        unrealized = pos.get("unrealized_pnl", pos.get("pnl", 0))
+        avg_price = pos.get("avgPrice", pos.get("avg_price", pos.get("entry", 0)))
+        unrealized = pos.get(
+            "unrealizedPnL", pos.get("unrealized_pnl", pos.get("pnl", 0))
+        )
         total_pnl += unrealized
 
         side_color = (
@@ -285,6 +423,7 @@ def _render_positions_panel(positions: list[dict[str, Any]]) -> str:
             <h3 class="text-sm font-semibold text-zinc-400">LIVE POSITIONS</h3>
             <span class="{total_color} font-mono font-bold">${total_pnl:,.2f}</span>
         </div>
+        {risk_bar}
         <table class="w-full">
             <thead>
                 <tr class="text-xs text-zinc-500 border-b border-zinc-700">
@@ -297,6 +436,128 @@ def _render_positions_panel(positions: list[dict[str, Any]]) -> str:
             </thead>
             <tbody>{rows}</tbody>
         </table>
+    </div>
+    """
+
+
+def _render_risk_panel(risk_status: Optional[dict[str, Any]]) -> str:
+    """Render standalone risk status panel as HTML fragment."""
+    if not risk_status:
+        return """
+        <div id="risk-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+             hx-swap-oob="true">
+            <h3 class="text-sm font-semibold text-zinc-400 mb-2">RISK STATUS</h3>
+            <div class="text-zinc-500 text-sm">Waiting for risk engine...</div>
+        </div>
+        """
+
+    daily_pnl = risk_status.get("daily_pnl", 0)
+    max_daily = risk_status.get("max_daily_loss", -500)
+    risk_per_trade = risk_status.get("max_risk_per_trade", 375)
+    can_trade = risk_status.get("can_trade", True)
+    block_reason = risk_status.get("block_reason", "")
+    risk_pct = risk_status.get("risk_pct_of_account", 0)
+    rules = risk_status.get("rules", {})
+
+    status_emoji = "🟢" if can_trade else "🔴"
+    status_text = "CLEAR" if can_trade else "BLOCKED"
+    status_color = "text-green-400" if can_trade else "text-red-400"
+    pnl_color = "text-green-400" if daily_pnl >= 0 else "text-red-400"
+
+    # Daily P&L progress bar (relative to max daily loss)
+    pnl_pct = min(abs(daily_pnl / max_daily) * 100, 100) if max_daily != 0 else 0
+    pnl_bar_color = (
+        "bg-green-500"
+        if daily_pnl >= 0
+        else ("bg-red-500" if pnl_pct > 60 else "bg-yellow-500")
+    )
+
+    block_html = ""
+    if not can_trade:
+        block_html = f"""
+        <div class="bg-red-900/40 border border-red-700 rounded px-3 py-1.5 mt-2">
+            <span class="text-red-400 text-xs">🚫 {block_reason}</span>
+        </div>
+        """
+
+    return f"""
+    <div id="risk-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+         hx-swap-oob="true">
+        <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold text-zinc-400">RISK STATUS</h3>
+            <span class="{status_color} text-sm font-bold">{status_emoji} {status_text}</span>
+        </div>
+
+        <div class="space-y-2 text-xs">
+            <div>
+                <div class="flex justify-between text-zinc-400 mb-0.5">
+                    <span>Daily P&L</span>
+                    <span class="{pnl_color} font-mono">${daily_pnl:,.2f} / ${max_daily:,.2f}</span>
+                </div>
+                <div class="w-full bg-zinc-700 rounded-full h-1.5">
+                    <div class="{pnl_bar_color} h-1.5 rounded-full transition-all duration-500"
+                         style="width: {pnl_pct:.0f}%"></div>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <div class="text-zinc-400">Max risk/trade: <span class="text-zinc-200 font-mono">${risk_per_trade:,.0f}</span></div>
+                <div class="text-zinc-400">Exposure: <span class="text-zinc-200 font-mono">{risk_pct:.1f}%</span></div>
+                <div class="text-zinc-400">Cutoff: <span class="text-zinc-200 font-mono">{rules.get("no_entry_after", "10:00")} ET</span></div>
+                <div class="text-zinc-400">Close by: <span class="text-zinc-200 font-mono">{rules.get("session_end", "12:00")} ET</span></div>
+            </div>
+        </div>
+        {block_html}
+    </div>
+    """
+
+
+def _render_grok_panel(grok_data: Optional[dict[str, Any]]) -> str:
+    """Render the Grok compact update panel as HTML fragment (TASK-601)."""
+    if not grok_data:
+        return """
+        <div id="grok-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+             hx-swap-oob="true">
+            <h3 class="text-sm font-semibold text-zinc-400 mb-2">🤖 GROK UPDATE</h3>
+            <div class="text-zinc-500 text-sm">Waiting for next update...</div>
+        </div>
+        """
+
+    text = grok_data.get("text", "")
+    time_et = grok_data.get("time_et", "")
+
+    # Convert the compact text to styled HTML lines
+    lines_html = ""
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            lines_html += '<div class="h-1"></div>'
+            continue
+        if stripped.upper().startswith("DO NOW"):
+            # Highlight the DO NOW line
+            lines_html += (
+                f'<div class="text-yellow-300 font-bold text-sm mt-1">{stripped}</div>'
+            )
+        else:
+            # Asset status line — detect emoji for coloring
+            css = "text-zinc-200"
+            if "🟢" in stripped:
+                css = "text-green-300"
+            elif "🔴" in stripped:
+                css = "text-red-300"
+            elif "⚪" in stripped:
+                css = "text-zinc-400"
+            lines_html += f'<div class="{css} font-mono text-xs">{stripped}</div>'
+
+    return f"""
+    <div id="grok-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+         hx-swap-oob="true">
+        <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold text-zinc-400">🤖 GROK UPDATE</h3>
+            <span class="text-xs text-zinc-500">{time_et}</span>
+        </div>
+        <div class="space-y-0.5">
+            {lines_html}
+        </div>
     </div>
     """
 
@@ -324,9 +585,17 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
             focus_data.get("no_trade_reason", "Low-conviction day")
         )
 
-    # Positions panel
+    # Positions panel with risk status (TASK-501)
     positions = _get_positions()
-    positions_html = _render_positions_panel(positions)
+    risk_status = _get_risk_status()
+    positions_html = _render_positions_panel(positions, risk_status=risk_status)
+
+    # Risk status panel
+    risk_html = _render_risk_panel(risk_status)
+
+    # Grok compact update panel (TASK-601)
+    grok_data = _get_grok_update()
+    grok_html = _render_grok_panel(grok_data)
 
     # Focus summary
     total = focus_data.get("total_assets", 0) if focus_data else 0
@@ -462,12 +731,28 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
 
             <!-- Sidebar (1/3 width) -->
             <div class="space-y-4">
-                <!-- Positions Panel — SSE live + HTMX polling fallback -->
-                <div id="positions-panel"
+                <!-- Positions Panel — SSE live + HTMX polling fallback (TASK-501) -->
+                <div id="positions-container"
                      hx-get="/api/positions/html"
                      hx-trigger="every 10s"
                      hx-swap="innerHTML">
                     {positions_html}
+                </div>
+
+                <!-- Risk Status Panel (TASK-502) -->
+                <div id="risk-container"
+                     hx-get="/api/risk/html"
+                     hx-trigger="every 15s"
+                     hx-swap="innerHTML">
+                    {risk_html}
+                </div>
+
+                <!-- Grok Compact Update Panel (TASK-601) -->
+                <div id="grok-container"
+                     hx-get="/api/grok/html"
+                     hx-trigger="every 60s"
+                     hx-swap="innerHTML">
+                    {grok_html}
                 </div>
 
                 <!-- Alerts Panel -->
@@ -760,9 +1045,26 @@ def get_focus_symbol(symbol: str):
 
 @router.get("/api/positions/html", response_class=HTMLResponse)
 def get_positions_html():
-    """Return live positions panel as HTML fragment."""
+    """Return live positions panel with risk status as HTML fragment."""
     positions = _get_positions()
-    return HTMLResponse(content=_render_positions_panel(positions))
+    risk_status = _get_risk_status()
+    return HTMLResponse(
+        content=_render_positions_panel(positions, risk_status=risk_status)
+    )
+
+
+@router.get("/api/risk/html", response_class=HTMLResponse)
+def get_risk_html():
+    """Return risk status panel as HTML fragment (TASK-502)."""
+    risk_status = _get_risk_status()
+    return HTMLResponse(content=_render_risk_panel(risk_status))
+
+
+@router.get("/api/grok/html", response_class=HTMLResponse)
+def get_grok_html():
+    """Return Grok compact update panel as HTML fragment (TASK-601)."""
+    grok_data = _get_grok_update()
+    return HTMLResponse(content=_render_grok_panel(grok_data))
 
 
 @router.get("/api/alerts/html", response_class=HTMLResponse)

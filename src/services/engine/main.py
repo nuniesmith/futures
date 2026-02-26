@@ -13,6 +13,11 @@ Now uses ScheduleManager for session-aware scheduling:
 
 The data-service becomes a thin API layer that reads from Redis.
 
+Day 4 additions:
+  - RiskManager (TASK-502) integrated into CHECK_RISK_RULES handler
+  - evaluate_no_trade (TASK-802) replaces basic should_not_trade check
+  - Grok compact output (TASK-601) in live update handler
+
 Usage:
     python -m src.services.engine.main
 
@@ -61,6 +66,23 @@ def _write_health(healthy: bool, status: str, **extras):
 
 
 # ---------------------------------------------------------------------------
+# Module-level risk manager instance (initialised in main())
+# ---------------------------------------------------------------------------
+_risk_manager = None
+
+
+def _get_risk_manager(account_size: int = 50_000):
+    """Lazy-init and return the global RiskManager singleton."""
+    global _risk_manager
+    if _risk_manager is None:
+        from risk import RiskManager
+
+        _risk_manager = RiskManager(account_size=account_size)
+        logger.info("RiskManager initialised (account=$%s)", f"{account_size:,}")
+    return _risk_manager
+
+
+# ---------------------------------------------------------------------------
 # Action handlers — each corresponds to a ScheduleManager ActionType
 # ---------------------------------------------------------------------------
 
@@ -103,24 +125,56 @@ def _handle_publish_focus_update(engine, account_size: int) -> None:
 
 
 def _handle_check_no_trade(engine, account_size: int) -> None:
-    """Check should-not-trade conditions and publish alert if needed."""
+    """Check should-not-trade conditions using the full TASK-802 detector."""
     from cache import cache_get
 
     try:
         raw = cache_get("engine:daily_focus")
-        if raw:
-            focus = json.loads(raw)
-            from focus import should_not_trade
+        if not raw:
+            return
 
-            no_trade, reason = should_not_trade(focus.get("assets", []))
-            if no_trade:
-                logger.warning("⛔ No-trade condition active: %s", reason)
-                # Update the focus payload
-                focus["no_trade"] = True
-                focus["no_trade_reason"] = reason
+        focus = json.loads(raw)
+        assets = focus.get("assets", [])
+
+        # Get risk status from RiskManager for loss/streak checks
+        rm = _get_risk_manager(account_size)
+        risk_status = rm.get_status()
+
+        from patterns import (
+            clear_no_trade_alert,
+            evaluate_no_trade,
+            publish_no_trade_alert,
+        )
+
+        result = evaluate_no_trade(assets, risk_status=risk_status)
+
+        if result.should_skip:
+            logger.warning(
+                "⛔ No-trade condition active (%s): %s",
+                result.severity,
+                result.primary_reason,
+            )
+            # Update the focus payload
+            focus["no_trade"] = True
+            focus["no_trade_reason"] = result.primary_reason
+            focus["no_trade_reasons"] = result.reasons
+            focus["no_trade_severity"] = result.severity
+            from focus import publish_focus_to_redis
+
+            publish_focus_to_redis(focus)
+
+            # Publish structured no-trade alert
+            publish_no_trade_alert(result)
+        else:
+            # Clear any stale no-trade alerts
+            if focus.get("no_trade"):
+                focus["no_trade"] = False
+                focus["no_trade_reason"] = ""
                 from focus import publish_focus_to_redis
 
                 publish_focus_to_redis(focus)
+            clear_no_trade_alert()
+
     except Exception as exc:
         logger.debug("No-trade check error (non-fatal): %s", exc)
 
@@ -143,18 +197,74 @@ def _handle_grok_morning_brief(engine) -> None:
 
 
 def _handle_grok_live_update(engine) -> None:
-    """Run Grok 15-minute live market update (active hours)."""
-    logger.info("▶ Grok live update...")
-    try:
-        from grok_helper import get_grok_helper
+    """Run Grok 15-minute live market update (active hours).
 
-        grok = get_grok_helper()
-        if grok:
-            logger.info("✅ Grok live update complete")
+    Uses compact ≤8-line format (TASK-601) by default.
+    Falls back to local format_live_compact() if API is unavailable.
+    """
+    logger.info("▶ Grok live update (compact)...")
+    try:
+        api_key = os.getenv("GROK_API_KEY", "")
+
+        # Try local compact format from focus data first (fast, free)
+        from cache import cache_get
+
+        raw = cache_get("engine:daily_focus")
+        compact_text = None
+
+        if raw:
+            focus = json.loads(raw)
+            assets = focus.get("assets", [])
+            if assets:
+                from grok_helper import format_live_compact
+
+                compact_text = format_live_compact(assets)
+
+        # If we have an API key, try the Grok compact call
+        if api_key and compact_text:
+            logger.info(
+                "✅ Grok live update (local compact): %d chars", len(compact_text)
+            )
+        elif api_key:
+            logger.debug("Grok API key present but no focus data for compact update")
         else:
-            logger.debug("Grok helper not available — skipping live update")
+            logger.debug("No GROK_API_KEY — using local compact format only")
+
+        # Publish compact update to Redis for SSE grok-update event
+        if compact_text:
+            _publish_grok_update(compact_text)
+
     except Exception as exc:
         logger.debug("Grok live update skipped: %s", exc)
+
+
+def _publish_grok_update(text: str) -> None:
+    """Publish a Grok update to Redis for SSE streaming (TASK-602 prep)."""
+    try:
+        from cache import REDIS_AVAILABLE, _r, cache_set
+
+        now = datetime.now(tz=_EST)
+        payload = json.dumps(
+            {
+                "text": text,
+                "timestamp": now.isoformat(),
+                "time_et": now.strftime("%I:%M %p ET"),
+                "compact": True,
+            },
+            default=str,
+        )
+
+        cache_set("engine:grok_update", payload.encode(), ttl=900)  # 15 min TTL
+
+        if REDIS_AVAILABLE and _r is not None:
+            try:
+                _r.publish("dashboard:grok", payload)
+            except Exception:
+                pass
+
+        logger.debug("Grok update published to Redis")
+    except Exception as exc:
+        logger.debug("Failed to publish Grok update: %s", exc)
 
 
 def _handle_prep_alerts(engine) -> None:
@@ -164,9 +274,61 @@ def _handle_prep_alerts(engine) -> None:
     logger.info("✅ Alerts ready for active session")
 
 
-def _handle_check_risk_rules(engine) -> None:
-    """Check risk rules (position limits, daily loss, time)."""
-    logger.debug("Risk rules check — placeholder (TASK-502)")
+def _handle_check_risk_rules(engine, account_size: int = 50_000) -> None:
+    """Check risk rules using the RiskManager (TASK-502).
+
+    Syncs positions from NT8 bridge cache, evaluates all risk rules,
+    publishes status to Redis, and logs any warnings.
+    """
+    logger.debug("▶ Risk rules check...")
+    try:
+        rm = _get_risk_manager(account_size)
+
+        # Sync positions from NT8 bridge (if available)
+        try:
+            from cache import cache_get
+
+            raw = cache_get("positions:current")
+            if not raw:
+                # Try the hashed key used by positions router
+                from api.positions import _POSITIONS_CACHE_KEY
+
+                raw = cache_get(_POSITIONS_CACHE_KEY)
+            if raw:
+                data = json.loads(raw)
+                positions = data.get("positions", [])
+                if positions:
+                    rm.sync_positions(positions)
+                    logger.debug("Synced %d positions from NT8 bridge", len(positions))
+        except Exception as exc:
+            logger.debug("Position sync skipped (non-fatal): %s", exc)
+
+        # Check overnight risk
+        has_overnight, overnight_msg = rm.check_overnight_risk()
+        if has_overnight:
+            logger.warning(overnight_msg)
+
+        # Publish risk status to Redis
+        rm.publish_to_redis()
+
+        status = rm.get_status()
+        if not status["can_trade"]:
+            logger.warning(
+                "⚠️ Risk block active: %s (daily P&L: $%.2f)",
+                status["block_reason"],
+                status["daily_pnl"],
+            )
+        else:
+            logger.debug(
+                "✅ Risk OK: %d/%d trades, daily P&L $%.2f, exposure $%.2f",
+                status["open_trade_count"],
+                status["max_open_trades"],
+                status["daily_pnl"],
+                status["total_risk_exposure"],
+            )
+
+    except Exception as exc:
+        logger.debug("Risk rules check error (non-fatal): %s", exc)
 
 
 def _handle_historical_backfill(engine) -> None:
@@ -302,6 +464,9 @@ def main():
     _write_health(True, "running", session=session.value)
 
     # Action dispatch table
+    # Initialise the RiskManager early so it's ready for handlers
+    _get_risk_manager(account_size)
+
     action_handlers = {
         ActionType.COMPUTE_DAILY_FOCUS: lambda: _handle_compute_daily_focus(
             engine, account_size
@@ -313,7 +478,9 @@ def main():
             engine, account_size
         ),
         ActionType.GROK_LIVE_UPDATE: lambda: _handle_grok_live_update(engine),
-        ActionType.CHECK_RISK_RULES: lambda: _handle_check_risk_rules(engine),
+        ActionType.CHECK_RISK_RULES: lambda: _handle_check_risk_rules(
+            engine, account_size
+        ),
         ActionType.CHECK_NO_TRADE: lambda: _handle_check_no_trade(engine, account_size),
         ActionType.HISTORICAL_BACKFILL: lambda: _handle_historical_backfill(engine),
         ActionType.RUN_OPTIMIZATION: lambda: _handle_run_optimization(engine),
