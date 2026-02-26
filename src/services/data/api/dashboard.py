@@ -16,7 +16,6 @@ Endpoints:
 
 import json
 import logging
-import os
 from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -105,7 +104,7 @@ def _get_positions() -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _render_asset_card(asset: dict[str, Any]) -> str:
+def _render_asset_card(asset: dict) -> str:
     """Render a single asset focus card as an HTML fragment."""
     symbol = asset.get("symbol", "?")
     bias = asset.get("bias", "NEUTRAL")
@@ -156,12 +155,15 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
     symbol_lower = symbol.lower().replace(" ", "_").replace("&", "")
 
     return f"""
-    <div id="card-{symbol_lower}"
+    <div id="asset-card-{symbol_lower}"
          class="border {border_color} rounded-lg p-4 {bias_bg} {opacity} transition-all duration-300"
          data-quality="{quality_pct}"
          data-wave="{wave_ratio}"
          data-bias="{bias}"
-         hx-swap-oob="true">
+         data-symbol="{symbol_lower}"
+         hx-swap-oob="true"
+         _="on load if my @data-quality as Number < 55 add .opacity-50 to me
+              else remove .opacity-50 from me end">
 
         <!-- Header -->
         <div class="flex items-center justify-between mb-3">
@@ -337,6 +339,18 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
         except Exception:
             pass
 
+    # Build per-asset SSE swap targets for granular live updates
+    asset_sse_targets = ""
+    if focus_data and focus_data.get("assets"):
+        for asset in focus_data["assets"]:
+            sym = asset.get("symbol", "").lower().replace(" ", "_").replace("&", "")
+            if sym:
+                asset_sse_targets += (
+                    f'<div id="sse-asset-{sym}" sse-swap="{sym}-update" '
+                    f'hx-swap="innerHTML" hx-target="#asset-card-{sym}" '
+                    f'style="display:none;"></div>\n                    '
+                )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -347,7 +361,7 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- HTMX -->
+    <!-- HTMX + SSE Extension + Idiomorph (smooth DOM merge) -->
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
 
@@ -358,9 +372,29 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
         body {{ font-family: 'Inter', system-ui, -apple-system, sans-serif; }}
         .glow-green {{ box-shadow: 0 0 15px rgba(34, 197, 94, 0.2); }}
         .glow-red {{ box-shadow: 0 0 15px rgba(239, 68, 68, 0.2); }}
+        .glow-purple {{ box-shadow: 0 0 15px rgba(168, 85, 247, 0.2); }}
+        /* Flash animation for live updates */
+        @keyframes sse-flash {{
+            0% {{ outline: 2px solid rgba(34, 197, 94, 0.8); outline-offset: -2px; }}
+            100% {{ outline: 2px solid transparent; outline-offset: -2px; }}
+        }}
+        .sse-updated {{
+            animation: sse-flash 1.2s ease-out;
+        }}
+        /* SSE connection indicator */
+        #sse-status-dot.connected {{ color: #22c55e; }}
+        #sse-status-dot.disconnected {{ color: #ef4444; }}
+        #sse-status-dot.connecting {{ color: #eab308; }}
     </style>
 </head>
 <body class="bg-zinc-950 text-white min-h-screen">
+
+    <!-- SSE Connection Wrapper — streams live events from engine via data-service -->
+    <div id="sse-container"
+         hx-ext="sse"
+         sse-connect="/sse/dashboard"
+         sse-close="close">
+
     <div class="max-w-7xl mx-auto px-4 py-4">
         <!-- Header -->
         <header class="flex items-center justify-between mb-6 border-b border-zinc-800 pb-4">
@@ -370,6 +404,8 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
                 </h1>
                 <div class="text-sm text-zinc-500 mt-1">
                     {session["date"]}
+                    <span id="sse-status-dot" class="connecting ml-2" title="SSE: connecting...">●</span>
+                    <span id="sse-status-text" class="text-xs text-zinc-600">connecting</span>
                 </div>
             </div>
             <div class="text-right">
@@ -382,15 +418,21 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
             </div>
         </header>
 
-        <!-- No Trade Banner (if applicable) -->
-        {no_trade_html}
+        <!-- No Trade Banner — live-swapped via SSE no-trade-alert event -->
+        <div id="no-trade-container"
+             sse-swap="no-trade-alert"
+             hx-swap="innerHTML"
+             _="on no-trade-alert add .glow-red to me then wait 2s then remove .glow-red from me">
+            {no_trade_html}
+        </div>
 
         <!-- Focus Summary Bar -->
-        <div class="flex items-center justify-between bg-zinc-900/60 border border-zinc-800 rounded-lg px-4 py-2 mb-4">
+        <div id="focus-summary"
+             class="flex items-center justify-between bg-zinc-900/60 border border-zinc-800 rounded-lg px-4 py-2 mb-4">
             <div class="flex items-center gap-4 text-sm">
                 <span class="text-zinc-400">TODAY'S FOCUS</span>
-                <span class="text-zinc-300">{tradeable}/{total} tradeable</span>
-                <span class="text-zinc-500">Updated: {computed}</span>
+                <span id="focus-count" class="text-zinc-300">{tradeable}/{total} tradeable</span>
+                <span id="focus-updated" class="text-zinc-500">Updated: {computed}</span>
             </div>
             <div class="flex items-center gap-2">
                 <button hx-get="/api/focus/html"
@@ -409,6 +451,7 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <!-- Focus Cards (2/3 width) -->
             <div class="lg:col-span-2">
+                <!-- SSE full focus swap target (fallback: HTMX polling every 30s) -->
                 <div id="focus-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4"
                      hx-get="/api/focus/html"
                      hx-trigger="every 30s"
@@ -419,8 +462,9 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
 
             <!-- Sidebar (1/3 width) -->
             <div class="space-y-4">
-                <!-- Positions Panel -->
-                <div hx-get="/api/positions/html"
+                <!-- Positions Panel — SSE live + HTMX polling fallback -->
+                <div id="positions-panel"
+                     hx-get="/api/positions/html"
                      hx-trigger="every 10s"
                      hx-swap="innerHTML">
                     {positions_html}
@@ -448,14 +492,34 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
                         Connecting...
                     </div>
                 </div>
+
+                <!-- SSE Connection Health -->
+                <div class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4">
+                    <h3 class="text-sm font-semibold text-zinc-400 mb-2">LIVE FEED</h3>
+                    <div id="sse-heartbeat" class="text-xs text-zinc-500">
+                        Waiting for heartbeat...
+                    </div>
+                    <div id="sse-last-update" class="text-xs text-zinc-600 mt-1">
+                        —
+                    </div>
+                </div>
             </div>
         </div>
 
         <!-- Footer -->
         <footer class="mt-8 pt-4 border-t border-zinc-800 text-center text-xs text-zinc-600">
             Futures Trading Co-Pilot v1.0 — Session rules: Pre-market 00–05 | Active 05–12 | Off-hours 12–00 ET
+            | <a href="/sse/health" class="underline hover:text-zinc-400">SSE Health</a>
+            | <a href="/api/info" class="underline hover:text-zinc-400">API Info</a>
         </footer>
     </div>
+
+    <!-- Hidden SSE swap targets for per-asset events -->
+    <div style="display:none;">
+        {asset_sse_targets}
+    </div>
+
+    </div><!-- end sse-container -->
 
     <!-- Live clock JS (updates every second, no page refresh needed) -->
     <script>
@@ -494,6 +558,131 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
         }}
         setInterval(updateClock, 1000);
         updateClock();
+    </script>
+
+    <!-- SSE Event Handlers — process JSON events and update DOM -->
+    <script>
+        // SSE connection status tracking
+        const sseContainer = document.getElementById('sse-container');
+        if (sseContainer) {{
+            // HTMX fires these events for SSE connections
+            sseContainer.addEventListener('htmx:sseOpen', function() {{
+                const dot = document.getElementById('sse-status-dot');
+                const txt = document.getElementById('sse-status-text');
+                if (dot) {{ dot.className = 'connected ml-2'; dot.title = 'SSE: connected'; }}
+                if (txt) {{ txt.textContent = 'live'; txt.className = 'text-xs text-green-600'; }}
+            }});
+            sseContainer.addEventListener('htmx:sseError', function() {{
+                const dot = document.getElementById('sse-status-dot');
+                const txt = document.getElementById('sse-status-text');
+                if (dot) {{ dot.className = 'disconnected ml-2'; dot.title = 'SSE: disconnected'; }}
+                if (txt) {{ txt.textContent = 'reconnecting...'; txt.className = 'text-xs text-red-600'; }}
+            }});
+            sseContainer.addEventListener('htmx:sseClose', function() {{
+                const dot = document.getElementById('sse-status-dot');
+                const txt = document.getElementById('sse-status-text');
+                if (dot) {{ dot.className = 'disconnected ml-2'; dot.title = 'SSE: closed'; }}
+                if (txt) {{ txt.textContent = 'disconnected'; txt.className = 'text-xs text-red-600'; }}
+            }});
+        }}
+
+        // Listen for SSE events via the native EventSource (backup for custom processing)
+        // HTMX handles the actual SSE connection; we use custom event listeners for
+        // processing JSON payloads into DOM updates.
+        document.body.addEventListener('htmx:sseMessage', function(evt) {{
+            const eventName = evt.detail.type || '';
+            const data = evt.detail.data || '';
+
+            // --- Focus update: refresh summary bar + flash cards ---
+            if (eventName === 'focus-update') {{
+                try {{
+                    const focus = JSON.parse(data);
+                    // Update summary counts
+                    const countEl = document.getElementById('focus-count');
+                    if (countEl) {{
+                        const tradeable = focus.tradeable_assets || 0;
+                        const total = focus.total_assets || 0;
+                        countEl.textContent = tradeable + '/' + total + ' tradeable';
+                    }}
+                    // Update timestamp
+                    const updEl = document.getElementById('focus-updated');
+                    if (updEl) {{
+                        const ts = focus.computed_at || '';
+                        if (ts) {{
+                            const d = new Date(ts);
+                            updEl.textContent = 'Updated: ' + d.toLocaleTimeString('en-US', {{
+                                timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true
+                            }}) + ' ET';
+                        }}
+                    }}
+                    // Update last-update indicator
+                    const lastUpd = document.getElementById('sse-last-update');
+                    if (lastUpd) {{
+                        lastUpd.textContent = 'Last focus: ' + new Date().toLocaleTimeString();
+                    }}
+                    // Trigger HTMX refresh of focus grid to pick up new HTML
+                    htmx.trigger('#focus-grid', 'htmx:load');
+                    htmx.ajax('GET', '/api/focus/html', {{target: '#focus-grid', swap: 'innerHTML'}});
+                }} catch(e) {{ /* ignore parse errors */ }}
+            }}
+
+            // --- Heartbeat: update heartbeat display ---
+            if (eventName === 'heartbeat') {{
+                try {{
+                    const hb = JSON.parse(data);
+                    const hbEl = document.getElementById('sse-heartbeat');
+                    if (hbEl) {{
+                        hbEl.innerHTML = '<span class="text-green-500">●</span> Connected — ' + (hb.time_et || '');
+                    }}
+                }} catch(e) {{}}
+            }}
+
+            // --- Session change: update badge ---
+            if (eventName === 'session-change') {{
+                try {{
+                    const sc = JSON.parse(data);
+                    const badge = document.getElementById('session-badge');
+                    if (badge && sc.emoji && sc.session) {{
+                        const label = sc.session.replace('_', '-').toUpperCase();
+                        badge.innerHTML = sc.emoji + ' ' + label;
+                    }}
+                }} catch(e) {{}}
+            }}
+
+            // --- No-trade alert: show banner ---
+            if (eventName === 'no-trade-alert') {{
+                try {{
+                    const nt = JSON.parse(data);
+                    if (nt.no_trade) {{
+                        // Fetch rendered banner HTML from server
+                        htmx.ajax('GET', '/api/no-trade', {{target: '#no-trade-container', swap: 'innerHTML'}});
+                    }}
+                }} catch(e) {{}}
+            }}
+
+            // --- Positions update: refresh panel ---
+            if (eventName === 'positions-update') {{
+                htmx.ajax('GET', '/api/positions/html', {{target: '#positions-panel', swap: 'innerHTML'}});
+            }}
+
+            // --- Per-asset updates: flash the specific card ---
+            if (eventName.endsWith('-update') && eventName !== 'focus-update' && eventName !== 'positions-update') {{
+                const symbol = eventName.replace('-update', '').replace(' ', '_').replace('&', '');
+                const card = document.getElementById('asset-card-' + symbol);
+                if (card) {{
+                    // Fetch updated card HTML from server
+                    htmx.ajax('GET', '/api/focus/' + encodeURIComponent(symbol), {{target: card, swap: 'outerHTML'}});
+                    // Flash animation
+                    setTimeout(function() {{
+                        const updated = document.getElementById('asset-card-' + symbol);
+                        if (updated) {{
+                            updated.classList.add('sse-updated');
+                            setTimeout(function() {{ updated.classList.remove('sse-updated'); }}, 1500);
+                        }}
+                    }}, 100);
+                }}
+            }}
+        }});
     </script>
 </body>
 </html>"""

@@ -105,6 +105,7 @@ from api.health import router as health_router  # noqa: E402
 from api.journal import router as journal_router  # noqa: E402
 from api.market_data import router as market_data_router  # noqa: E402
 from api.positions import router as positions_router  # noqa: E402
+from api.sse import router as sse_router  # noqa: E402
 from api.trades import router as trades_router  # noqa: E402
 
 from models import init_db  # noqa: E402
@@ -327,6 +328,10 @@ app.add_middleware(
 # dashboard and /api/focus, /api/focus/html etc. are top-level paths.
 app.include_router(dashboard_router, tags=["Dashboard"])
 
+# SSE: /sse/dashboard (live event stream), /sse/health
+# NOTE: sse_router is mounted WITHOUT a prefix so /sse/dashboard is top-level.
+app.include_router(sse_router, tags=["SSE"])
+
 # Analysis: /analysis/latest, /analysis/latest/{ticker}, /analysis/status, etc.
 app.include_router(analysis_router, prefix="/analysis", tags=["Analysis"])
 
@@ -366,6 +371,8 @@ def api_info():
             "dashboard": "/",
             "focus_json": "/api/focus",
             "focus_html": "/api/focus/html",
+            "sse_dashboard": "/sse/dashboard",
+            "sse_health": "/sse/health",
             "analysis": "/analysis/latest",
             "status": "/analysis/status",
             "force_refresh": "/actions/force_refresh",
