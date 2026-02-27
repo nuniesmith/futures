@@ -99,6 +99,7 @@ from api.actions import router as actions_router  # noqa: E402
 from api.actions import set_engine as actions_set_engine  # noqa: E402
 from api.analysis import router as analysis_router  # noqa: E402
 from api.analysis import set_engine as analysis_set_engine  # noqa: E402
+from api.audit import router as audit_router  # noqa: E402
 from api.auth import require_api_key  # noqa: E402
 from api.dashboard import router as dashboard_router  # noqa: E402
 from api.health import router as health_router  # noqa: E402
@@ -356,6 +357,9 @@ app.include_router(trades_router, prefix="", tags=["Trades"])
 
 # Risk: /risk/status, /risk/check, /risk/history  (risk engine API)
 app.include_router(risk_router, prefix="/risk", tags=["Risk"])
+
+# Audit: /audit/risk, /audit/orb, /audit/summary  (persistent event history)
+app.include_router(audit_router, prefix="/audit", tags=["Audit"])
 
 # Journal: /journal/save, /journal/entries, /journal/stats, /journal/today
 app.include_router(journal_router, prefix="/journal", tags=["Journal"])

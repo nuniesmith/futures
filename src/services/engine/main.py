@@ -278,7 +278,8 @@ def _handle_check_risk_rules(engine, account_size: int = 50_000) -> None:
     """Check risk rules using the RiskManager (TASK-502).
 
     Syncs positions from NT8 bridge cache, evaluates all risk rules,
-    publishes status to Redis, and logs any warnings.
+    publishes status to Redis, logs any warnings, and persists notable
+    events to the database for permanent audit trail.
     """
     logger.debug("▶ Risk rules check...")
     try:
@@ -307,6 +308,14 @@ def _handle_check_risk_rules(engine, account_size: int = 50_000) -> None:
         has_overnight, overnight_msg = rm.check_overnight_risk()
         if has_overnight:
             logger.warning(overnight_msg)
+            # Persist overnight warning to audit trail
+            _persist_risk_event(
+                "warning",
+                reason=overnight_msg,
+                daily_pnl=rm.daily_pnl,
+                open_trades=rm.open_trade_count,
+                account_size=account_size,
+            )
 
         # Publish risk status to Redis
         rm.publish_to_redis()
@@ -317,6 +326,15 @@ def _handle_check_risk_rules(engine, account_size: int = 50_000) -> None:
                 "⚠️ Risk block active: %s (daily P&L: $%.2f)",
                 status["block_reason"],
                 status["daily_pnl"],
+            )
+            # Persist risk block to audit trail
+            _persist_risk_event(
+                "block",
+                reason=status["block_reason"],
+                daily_pnl=status.get("daily_pnl", 0.0),
+                open_trades=status.get("open_trade_count", 0),
+                account_size=account_size,
+                risk_pct=status.get("risk_pct_of_account", 0.0),
             )
         else:
             logger.debug(
@@ -331,11 +349,44 @@ def _handle_check_risk_rules(engine, account_size: int = 50_000) -> None:
         logger.debug("Risk rules check error (non-fatal): %s", exc)
 
 
+def _persist_risk_event(
+    event_type: str,
+    symbol: str = "",
+    side: str = "",
+    reason: str = "",
+    daily_pnl: float = 0.0,
+    open_trades: int = 0,
+    account_size: int = 0,
+    risk_pct: float = 0.0,
+) -> None:
+    """Persist a risk event to the database audit trail (best-effort)."""
+    try:
+        from scheduler import ScheduleManager
+
+        from models import record_risk_event
+
+        session = ScheduleManager().get_session_mode().value
+        record_risk_event(
+            event_type=event_type,
+            symbol=symbol,
+            side=side,
+            reason=reason,
+            daily_pnl=daily_pnl,
+            open_trades=open_trades,
+            account_size=account_size,
+            risk_pct=risk_pct,
+            session=session,
+        )
+    except Exception as exc:
+        logger.debug("Failed to persist risk event (non-fatal): %s", exc)
+
+
 def _handle_check_orb(engine) -> None:
     """Check for Opening Range Breakout patterns (TASK-801).
 
     Runs ORB detection across all focus assets using 1-minute bar data.
-    Publishes breakout alerts to Redis when detected.
+    Publishes breakout alerts to Redis when detected, and persists every
+    evaluation result to the database for permanent audit trail.
     """
     logger.debug("▶ Opening Range Breakout check...")
     try:
@@ -390,6 +441,9 @@ def _handle_check_orb(engine) -> None:
 
                 result = detect_opening_range_breakout(bars_1m, symbol=symbol)
 
+                # Persist every ORB evaluation to the audit trail
+                _persist_orb_event(result)
+
                 if result.breakout_detected:
                     breakouts_found += 1
                     publish_orb_alert(result)
@@ -432,6 +486,32 @@ def _handle_check_orb(engine) -> None:
 
     except Exception as exc:
         logger.debug("ORB check error (non-fatal): %s", exc)
+
+
+def _persist_orb_event(result) -> None:
+    """Persist an ORB evaluation result to the database audit trail (best-effort)."""
+    try:
+        from scheduler import ScheduleManager
+
+        from models import record_orb_event
+
+        session = ScheduleManager().get_session_mode().value
+        record_orb_event(
+            symbol=result.symbol,
+            or_high=result.or_high,
+            or_low=result.or_low,
+            or_range=result.or_range,
+            atr_value=result.atr_value,
+            breakout_detected=result.breakout_detected,
+            direction=result.direction,
+            trigger_price=result.trigger_price,
+            long_trigger=result.long_trigger,
+            short_trigger=result.short_trigger,
+            bar_count=getattr(result, "bar_count", 0),
+            session=session,
+        )
+    except Exception as exc:
+        logger.debug("Failed to persist ORB event (non-fatal): %s", exc)
 
 
 def _handle_historical_backfill(engine) -> None:

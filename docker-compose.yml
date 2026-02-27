@@ -137,7 +137,59 @@ services:
     # See src/services/web/app.py for the archived Streamlit code.
     # -------------------------------------------------------------------------
 
+    # -------------------------------------------------------------------------
+    # Prometheus — Metrics collection & alerting
+    # Scrapes /metrics/prometheus from data-service every 10s.
+    # UI at http://localhost:9090
+    # -------------------------------------------------------------------------
+    prometheus:
+        image: prom/prometheus:v2.53.0
+        restart: unless-stopped
+        ports:
+            - "9090:9090"
+        volumes:
+            - ./docker/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+            - prometheus_data:/prometheus
+        command:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=30d"
+            - "--web.console.libraries=/etc/prometheus/console_libraries"
+            - "--web.console.templates=/etc/prometheus/consoles"
+            - "--web.enable-lifecycle"
+        depends_on:
+            data:
+                condition: service_healthy
+        profiles:
+            - monitoring
+
+    # -------------------------------------------------------------------------
+    # Grafana — Dashboards & visualization
+    # Pre-provisioned with Prometheus datasource and Futures Co-Pilot dashboard.
+    # UI at http://localhost:3000  (admin / admin on first login)
+    # -------------------------------------------------------------------------
+    grafana:
+        image: grafana/grafana:11.1.0
+        restart: unless-stopped
+        ports:
+            - "3000:3000"
+        environment:
+            - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+            - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+            - GF_USERS_ALLOW_SIGN_UP=false
+        volumes:
+            - grafana_data:/var/lib/grafana
+            - ./docker/monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+            - ./docker/monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+            - ./docker/monitoring/grafana-dashboard.json:/var/lib/grafana/dashboards/futures-copilot.json:ro
+        depends_on:
+            - prometheus
+        profiles:
+            - monitoring
+
 volumes:
     postgres_data:
     redis_data:
     app_data:
+    prometheus_data:
+    grafana_data:
