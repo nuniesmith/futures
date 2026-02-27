@@ -13,6 +13,7 @@ The active backend is chosen automatically at module load time:
 All CRUD functions use the same interface regardless of backend.
 """
 
+import json
 import logging
 import os
 import sqlite3
@@ -71,6 +72,95 @@ CREATE TABLE IF NOT EXISTS daily_journal (
     created_at      TEXT    NOT NULL
 );
 """
+
+# ---------------------------------------------------------------------------
+# Audit event tables — persistent storage for risk blocks & ORB detections
+# ---------------------------------------------------------------------------
+
+_SCHEMA_RISK_EVENTS_SQLITE = """
+CREATE TABLE IF NOT EXISTS risk_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp       TEXT    NOT NULL,
+    event_type      TEXT    NOT NULL,
+    symbol          TEXT    NOT NULL DEFAULT '',
+    side            TEXT    NOT NULL DEFAULT '',
+    reason          TEXT    NOT NULL DEFAULT '',
+    daily_pnl       REAL    NOT NULL DEFAULT 0.0,
+    open_trades     INTEGER NOT NULL DEFAULT 0,
+    account_size    INTEGER NOT NULL DEFAULT 0,
+    risk_pct        REAL    NOT NULL DEFAULT 0.0,
+    session         TEXT    NOT NULL DEFAULT '',
+    metadata_json   TEXT    NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_re_timestamp ON risk_events (timestamp);
+CREATE INDEX IF NOT EXISTS idx_re_event_type ON risk_events (event_type, timestamp);
+CREATE INDEX IF NOT EXISTS idx_re_symbol ON risk_events (symbol, timestamp);
+"""
+
+_SCHEMA_RISK_EVENTS_PG = """
+CREATE TABLE IF NOT EXISTS risk_events (
+    id              SERIAL PRIMARY KEY,
+    timestamp       TEXT    NOT NULL,
+    event_type      TEXT    NOT NULL,
+    symbol          TEXT    NOT NULL DEFAULT '',
+    side            TEXT    NOT NULL DEFAULT '',
+    reason          TEXT    NOT NULL DEFAULT '',
+    daily_pnl       DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    open_trades     INTEGER NOT NULL DEFAULT 0,
+    account_size    INTEGER NOT NULL DEFAULT 0,
+    risk_pct        DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    session         TEXT    NOT NULL DEFAULT '',
+    metadata_json   TEXT    NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_re_timestamp ON risk_events (timestamp);
+CREATE INDEX IF NOT EXISTS idx_re_event_type ON risk_events (event_type, timestamp);
+CREATE INDEX IF NOT EXISTS idx_re_symbol ON risk_events (symbol, timestamp);
+"""
+
+_SCHEMA_ORB_EVENTS_SQLITE = """
+CREATE TABLE IF NOT EXISTS orb_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp       TEXT    NOT NULL,
+    symbol          TEXT    NOT NULL,
+    or_high         REAL    NOT NULL DEFAULT 0.0,
+    or_low          REAL    NOT NULL DEFAULT 0.0,
+    or_range        REAL    NOT NULL DEFAULT 0.0,
+    atr_value       REAL    NOT NULL DEFAULT 0.0,
+    breakout_detected INTEGER NOT NULL DEFAULT 0,
+    direction       TEXT    NOT NULL DEFAULT '',
+    trigger_price   REAL    NOT NULL DEFAULT 0.0,
+    long_trigger    REAL    NOT NULL DEFAULT 0.0,
+    short_trigger   REAL    NOT NULL DEFAULT 0.0,
+    bar_count       INTEGER NOT NULL DEFAULT 0,
+    session         TEXT    NOT NULL DEFAULT '',
+    metadata_json   TEXT    NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_orb_timestamp ON orb_events (timestamp);
+CREATE INDEX IF NOT EXISTS idx_orb_symbol ON orb_events (symbol, timestamp);
+"""
+
+_SCHEMA_ORB_EVENTS_PG = """
+CREATE TABLE IF NOT EXISTS orb_events (
+    id              SERIAL PRIMARY KEY,
+    timestamp       TEXT    NOT NULL,
+    symbol          TEXT    NOT NULL,
+    or_high         DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    or_low          DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    or_range        DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    atr_value       DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    breakout_detected INTEGER NOT NULL DEFAULT 0,
+    direction       TEXT    NOT NULL DEFAULT '',
+    trigger_price   DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    long_trigger    DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    short_trigger   DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    bar_count       INTEGER NOT NULL DEFAULT 0,
+    session         TEXT    NOT NULL DEFAULT '',
+    metadata_json   TEXT    NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_orb_timestamp ON orb_events (timestamp);
+CREATE INDEX IF NOT EXISTS idx_orb_symbol ON orb_events (symbol, timestamp);
+"""
+
 
 # ---------------------------------------------------------------------------
 # Contract mode: "micro" (default) or "full"
@@ -533,8 +623,31 @@ FROM trades;
 # ---------------------------------------------------------------------------
 
 
+def _init_audit_tables(conn, use_postgres: bool) -> None:
+    """Create audit event tables (risk_events, orb_events) idempotently.
+
+    Called from init_db() after the core tables are created.
+    """
+    if use_postgres:
+        for schema in (_SCHEMA_RISK_EVENTS_PG, _SCHEMA_ORB_EVENTS_PG):
+            for stmt in schema.strip().split(";"):
+                stmt = stmt.strip()
+                if stmt:
+                    try:
+                        conn.execute(stmt)
+                    except Exception as exc:
+                        # Index may already exist — not fatal
+                        logger.debug("Audit table DDL (pg, non-fatal): %s", exc)
+        conn.commit()
+    else:
+        conn.executescript(_SCHEMA_RISK_EVENTS_SQLITE)
+        conn.executescript(_SCHEMA_ORB_EVENTS_SQLITE)
+
+    logger.info("Audit tables initialised (risk_events, orb_events)")
+
+
 def init_db() -> None:
-    """Initialise the trades_v2 and daily_journal tables.
+    """Initialise the trades_v2, daily_journal, and audit event tables.
 
     For SQLite: migrates from v1 schema if needed.
     For Postgres: creates tables idempotently (CREATE TABLE IF NOT EXISTS).
@@ -550,8 +663,18 @@ def init_db() -> None:
         except Exception as exc:
             logger.error("Postgres init_db failed: %s", exc)
             conn.rollback()
-        finally:
-            conn.close()
+
+        # Create audit tables (separate try so core tables aren't rolled back)
+        try:
+            _init_audit_tables(conn, use_postgres=True)
+        except Exception as exc:
+            logger.error("Audit table init failed (non-fatal): %s", exc)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        conn.close()
         return
 
     # --- SQLite path ---
@@ -560,8 +683,9 @@ def init_db() -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='trades_v2'"
     )
     if cur.fetchone() is not None:
-        # trades_v2 exists — just ensure daily_journal also exists
+        # trades_v2 exists — just ensure daily_journal + audit tables exist
         conn.executescript(_SCHEMA_DAILY_JOURNAL_SQLITE)
+        _init_audit_tables(conn, use_postgres=False)
         conn.close()
         return
 
@@ -570,6 +694,9 @@ def init_db() -> None:
 
     # Create daily journal schema
     conn.executescript(_SCHEMA_DAILY_JOURNAL_SQLITE)
+
+    # Create audit tables
+    _init_audit_tables(conn, use_postgres=False)
 
     # Migrate from v1 if it exists
     cur = conn.execute(
@@ -1102,6 +1229,370 @@ def get_journal_stats(account_size: Optional[int] = None) -> dict:
         "worst_day": round(worst_day, 2),
         "current_streak": streak,
     }
+
+
+# ---------------------------------------------------------------------------
+# SQLite → Postgres one-time migration helper
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Audit event CRUD — persistent storage for risk blocks & ORB detections
+# ---------------------------------------------------------------------------
+
+
+def record_risk_event(
+    event_type: str,
+    symbol: str = "",
+    side: str = "",
+    reason: str = "",
+    daily_pnl: float = 0.0,
+    open_trades: int = 0,
+    account_size: int = 0,
+    risk_pct: float = 0.0,
+    session: str = "",
+    metadata: Optional[dict] = None,
+) -> Optional[int]:
+    """Persist a risk event to the database for permanent audit trail.
+
+    Args:
+        event_type: "block", "warning", "clear", "circuit_breaker", etc.
+        symbol: Instrument symbol (e.g. "MGC", "MNQ")
+        side: "LONG" or "SHORT"
+        reason: Human-readable reason string
+        daily_pnl: Current daily P&L at the time of the event
+        open_trades: Number of open trades at the time
+        account_size: Account size at the time
+        risk_pct: Risk as percentage of account
+        session: Session mode ("pre_market", "active", "off_hours")
+        metadata: Optional extra data (serialised to JSON)
+
+    Returns:
+        The inserted row ID, or None on failure.
+    """
+    now_str = datetime.now(tz=_EST).isoformat()
+    meta_json = json.dumps(metadata or {})
+
+    try:
+        conn = _get_conn()
+        if _USE_POSTGRES:
+            cur = conn.execute(
+                "INSERT INTO risk_events "
+                "(timestamp, event_type, symbol, side, reason, daily_pnl, "
+                " open_trades, account_size, risk_pct, session, metadata_json) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "RETURNING id",
+                (
+                    now_str,
+                    event_type,
+                    symbol,
+                    side,
+                    reason,
+                    daily_pnl,
+                    open_trades,
+                    account_size,
+                    risk_pct,
+                    session,
+                    meta_json,
+                ),
+            )
+            row = cur.fetchone()
+            row_id = row["id"] if row else None
+        else:
+            cur = conn.execute(
+                "INSERT INTO risk_events "
+                "(timestamp, event_type, symbol, side, reason, daily_pnl, "
+                " open_trades, account_size, risk_pct, session, metadata_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    now_str,
+                    event_type,
+                    symbol,
+                    side,
+                    reason,
+                    daily_pnl,
+                    open_trades,
+                    account_size,
+                    risk_pct,
+                    session,
+                    meta_json,
+                ),
+            )
+            row_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return row_id
+    except Exception as exc:
+        logger.error("Failed to record risk event: %s", exc)
+        return None
+
+
+def get_risk_events(
+    limit: int = 100,
+    event_type: Optional[str] = None,
+    symbol: Optional[str] = None,
+    since: Optional[str] = None,
+) -> list[dict]:
+    """Query risk events from the database.
+
+    Args:
+        limit: Maximum number of events to return.
+        event_type: Filter by event type (e.g. "block").
+        symbol: Filter by symbol.
+        since: ISO timestamp — only return events after this time.
+
+    Returns:
+        List of event dicts, most recent first.
+    """
+    ph = "%s" if _USE_POSTGRES else "?"
+    conditions = []
+    params = []
+
+    if event_type:
+        conditions.append(f"event_type = {ph}")
+        params.append(event_type)
+    if symbol:
+        conditions.append(f"symbol = {ph}")
+        params.append(symbol)
+    if since:
+        conditions.append(f"timestamp >= {ph}")
+        params.append(since)
+
+    where = ""
+    if conditions:
+        where = "WHERE " + " AND ".join(conditions)
+
+    sql = f"SELECT * FROM risk_events {where} ORDER BY timestamp DESC LIMIT {ph}"
+    params.append(limit)
+
+    try:
+        conn = _get_conn()
+        cur = conn.execute(sql, tuple(params))
+        rows = cur.fetchall()
+        conn.close()
+        return [_row_to_dict(r) for r in rows]
+    except Exception as exc:
+        logger.error("Failed to query risk events: %s", exc)
+        return []
+
+
+def record_orb_event(
+    symbol: str,
+    or_high: float = 0.0,
+    or_low: float = 0.0,
+    or_range: float = 0.0,
+    atr_value: float = 0.0,
+    breakout_detected: bool = False,
+    direction: str = "",
+    trigger_price: float = 0.0,
+    long_trigger: float = 0.0,
+    short_trigger: float = 0.0,
+    bar_count: int = 0,
+    session: str = "",
+    metadata: Optional[dict] = None,
+) -> Optional[int]:
+    """Persist an ORB evaluation result to the database.
+
+    Args:
+        symbol: Instrument symbol.
+        or_high: Opening range high price.
+        or_low: Opening range low price.
+        or_range: OR high − OR low.
+        atr_value: ATR value used for breakout threshold.
+        breakout_detected: True if a breakout was detected.
+        direction: "LONG", "SHORT", or "".
+        trigger_price: Price that triggered the breakout.
+        long_trigger: Upper breakout level.
+        short_trigger: Lower breakout level.
+        bar_count: Number of bars in the opening range.
+        session: Session mode.
+        metadata: Optional extra data (serialised to JSON).
+
+    Returns:
+        The inserted row ID, or None on failure.
+    """
+    now_str = datetime.now(tz=_EST).isoformat()
+    meta_json = json.dumps(metadata or {})
+    bd_int = 1 if breakout_detected else 0
+
+    try:
+        conn = _get_conn()
+        if _USE_POSTGRES:
+            cur = conn.execute(
+                "INSERT INTO orb_events "
+                "(timestamp, symbol, or_high, or_low, or_range, atr_value, "
+                " breakout_detected, direction, trigger_price, long_trigger, "
+                " short_trigger, bar_count, session, metadata_json) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "RETURNING id",
+                (
+                    now_str,
+                    symbol,
+                    or_high,
+                    or_low,
+                    or_range,
+                    atr_value,
+                    bd_int,
+                    direction,
+                    trigger_price,
+                    long_trigger,
+                    short_trigger,
+                    bar_count,
+                    session,
+                    meta_json,
+                ),
+            )
+            row = cur.fetchone()
+            row_id = row["id"] if row else None
+        else:
+            cur = conn.execute(
+                "INSERT INTO orb_events "
+                "(timestamp, symbol, or_high, or_low, or_range, atr_value, "
+                " breakout_detected, direction, trigger_price, long_trigger, "
+                " short_trigger, bar_count, session, metadata_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    now_str,
+                    symbol,
+                    or_high,
+                    or_low,
+                    or_range,
+                    atr_value,
+                    bd_int,
+                    direction,
+                    trigger_price,
+                    long_trigger,
+                    short_trigger,
+                    bar_count,
+                    session,
+                    meta_json,
+                ),
+            )
+            row_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return row_id
+    except Exception as exc:
+        logger.error("Failed to record ORB event: %s", exc)
+        return None
+
+
+def get_orb_events(
+    limit: int = 100,
+    symbol: Optional[str] = None,
+    breakout_only: bool = False,
+    since: Optional[str] = None,
+) -> list[dict]:
+    """Query ORB events from the database.
+
+    Args:
+        limit: Maximum number of events to return.
+        symbol: Filter by symbol.
+        breakout_only: If True, only return events where breakout was detected.
+        since: ISO timestamp — only return events after this time.
+
+    Returns:
+        List of event dicts, most recent first.
+    """
+    ph = "%s" if _USE_POSTGRES else "?"
+    conditions = []
+    params = []
+
+    if symbol:
+        conditions.append(f"symbol = {ph}")
+        params.append(symbol)
+    if breakout_only:
+        conditions.append("breakout_detected = 1")
+    if since:
+        conditions.append(f"timestamp >= {ph}")
+        params.append(since)
+
+    where = ""
+    if conditions:
+        where = "WHERE " + " AND ".join(conditions)
+
+    sql = f"SELECT * FROM orb_events {where} ORDER BY timestamp DESC LIMIT {ph}"
+    params.append(limit)
+
+    try:
+        conn = _get_conn()
+        cur = conn.execute(sql, tuple(params))
+        rows = cur.fetchall()
+        conn.close()
+        return [_row_to_dict(r) for r in rows]
+    except Exception as exc:
+        logger.error("Failed to query ORB events: %s", exc)
+        return []
+
+
+def get_audit_summary(days_back: int = 7) -> dict:
+    """Get a summary of audit events for the last N days.
+
+    Returns:
+        Dict with counts and breakdowns for risk and ORB events.
+    """
+    from datetime import timedelta
+
+    cutoff = (datetime.now(tz=_EST) - timedelta(days=days_back)).isoformat()
+    ph = "%s" if _USE_POSTGRES else "?"
+
+    summary = {
+        "days_back": days_back,
+        "cutoff": cutoff,
+        "risk_events": {"total": 0, "blocks": 0, "warnings": 0, "by_symbol": {}},
+        "orb_events": {"total": 0, "breakouts": 0, "by_symbol": {}},
+    }
+
+    try:
+        conn = _get_conn()
+
+        # Risk events summary
+        cur = conn.execute(
+            f"SELECT event_type, symbol, COUNT(*) as cnt "
+            f"FROM risk_events WHERE timestamp >= {ph} "
+            f"GROUP BY event_type, symbol ORDER BY cnt DESC",
+            (cutoff,),
+        )
+        for row in cur.fetchall():
+            d = _row_to_dict(row)
+            cnt = d.get("cnt", 0)
+            summary["risk_events"]["total"] += cnt
+            et = d.get("event_type", "")
+            sym = d.get("symbol", "")
+            if et == "block":
+                summary["risk_events"]["blocks"] += cnt
+            elif et == "warning":
+                summary["risk_events"]["warnings"] += cnt
+            if sym:
+                summary["risk_events"]["by_symbol"][sym] = (
+                    summary["risk_events"]["by_symbol"].get(sym, 0) + cnt
+                )
+
+        # ORB events summary
+        cur = conn.execute(
+            f"SELECT symbol, breakout_detected, COUNT(*) as cnt "
+            f"FROM orb_events WHERE timestamp >= {ph} "
+            f"GROUP BY symbol, breakout_detected ORDER BY cnt DESC",
+            (cutoff,),
+        )
+        for row in cur.fetchall():
+            d = _row_to_dict(row)
+            cnt = d.get("cnt", 0)
+            summary["orb_events"]["total"] += cnt
+            if d.get("breakout_detected", 0) == 1:
+                summary["orb_events"]["breakouts"] += cnt
+            sym = d.get("symbol", "")
+            if sym:
+                summary["orb_events"]["by_symbol"][sym] = (
+                    summary["orb_events"]["by_symbol"].get(sym, 0) + cnt
+                )
+
+        conn.close()
+    except Exception as exc:
+        logger.error("Failed to build audit summary: %s", exc)
+        summary["error"] = str(exc)
+
+    return summary
 
 
 # ---------------------------------------------------------------------------
