@@ -1,13 +1,15 @@
 # =============================================================================
-# Futures Trading Co-Pilot — Docker Compose (5-Service Architecture)
+# Futures Trading Co-Pilot — Docker Compose (4-Service Architecture)
 # =============================================================================
 #
 # Services:
 #   postgres       — durable storage (journal, historical opts, alerts)
 #   redis          — hot cache (latest FKS metrics, live positions, 1m bars)
-#   data-service   — FastAPI API layer (reads from Redis, serves to UI)
+#   data-service   — FastAPI API layer + HTMX dashboard (reads from Redis)
 #   engine         — background computation (FKS, optimization, backtesting)
-#   streamlit-app  — pure UI client (reads from data-service + Redis)
+#
+# The Streamlit UI has been retired (TASK-304). The HTMX dashboard served
+# by data-service at localhost:8000 is now the primary UI.
 #
 # Usage:
 #   docker compose up -d --build
@@ -130,44 +132,10 @@ services:
                 condition: service_healthy
 
     # -------------------------------------------------------------------------
-    # Streamlit App — pure UI client (fast reloads)
-    # Calls data-service API + reads Redis directly for ultra-low latency
+    # Streamlit App — RETIRED (TASK-304)
+    # The HTMX dashboard served by data-service replaces Streamlit.
+    # See src/services/web/app.py for the archived Streamlit code.
     # -------------------------------------------------------------------------
-    app:
-        build:
-            context: .
-            dockerfile: docker/web/Dockerfile
-        restart: unless-stopped
-        ports:
-            - "8501:8501"
-        env_file:
-            - .env
-        environment:
-            - REDIS_URL=redis://redis:6379/0
-            - DATA_SERVICE_URL=http://data:8000
-            - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD:-futures_dev_pass}@postgres:5432/${POSTGRES_DB:-futures_db}
-            - DB_PATH=/app/data/futures_journal.db
-            - PYTHONPATH=/app/src:/app
-            - PYTHONUNBUFFERED=1
-        volumes:
-            - app_data:/app/data
-        depends_on:
-            redis:
-                condition: service_healthy
-            data:
-                condition: service_healthy
-        healthcheck:
-            test:
-                [
-                    "CMD",
-                    "python",
-                    "-c",
-                    "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')",
-                ]
-            interval: 15s
-            timeout: 5s
-            start_period: 15s
-            retries: 3
 
 volumes:
     postgres_data:

@@ -3,4 +3,4 @@ __pycache__/
 *.pyo
 .env
 .venv
-archive/
+archive/futures_journal.db

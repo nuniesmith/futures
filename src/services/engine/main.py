@@ -331,10 +331,157 @@ def _handle_check_risk_rules(engine, account_size: int = 50_000) -> None:
         logger.debug("Risk rules check error (non-fatal): %s", exc)
 
 
+def _handle_check_orb(engine) -> None:
+    """Check for Opening Range Breakout patterns (TASK-801).
+
+    Runs ORB detection across all focus assets using 1-minute bar data.
+    Publishes breakout alerts to Redis when detected.
+    """
+    logger.debug("▶ Opening Range Breakout check...")
+    try:
+        from orb import detect_opening_range_breakout, publish_orb_alert
+
+        # Get 1-minute bars from cache for each focus asset
+        try:
+            from cache import cache_get
+
+            raw_focus = cache_get("engine:daily_focus")
+            if not raw_focus:
+                logger.debug("No daily focus data — skipping ORB check")
+                return
+
+            focus_data = json.loads(raw_focus)
+            assets = focus_data.get("assets", [])
+        except Exception as exc:
+            logger.debug("Could not read focus for ORB: %s", exc)
+            return
+
+        breakouts_found = 0
+        for asset in assets:
+            symbol = asset.get("symbol", "")
+            ticker = asset.get("ticker", "")
+            if not symbol:
+                continue
+
+            try:
+                # Try to get 1-minute bars from the engine's data
+                bars_1m = None
+
+                # Attempt via cache (engine publishes bars)
+                bars_key = f"engine:bars_1m:{ticker or symbol}"
+                raw_bars = cache_get(bars_key)
+                if raw_bars:
+                    import pandas as pd
+
+                    bars_1m = pd.read_json(raw_bars)
+
+                # Attempt via engine's fetch method
+                if bars_1m is None or bars_1m.empty:
+                    try:
+                        bars_1m = engine._fetch_tf_safe(
+                            ticker or symbol, interval="1m", period="1d"
+                        )
+                    except Exception:
+                        pass
+
+                if bars_1m is None or bars_1m.empty:
+                    logger.debug("No 1m bars for %s — skipping ORB", symbol)
+                    continue
+
+                result = detect_opening_range_breakout(bars_1m, symbol=symbol)
+
+                if result.breakout_detected:
+                    breakouts_found += 1
+                    publish_orb_alert(result)
+                    logger.info(
+                        "🔔 ORB BREAKOUT: %s %s @ %.4f (OR %.4f–%.4f)",
+                        result.direction,
+                        symbol,
+                        result.trigger_price,
+                        result.or_low,
+                        result.or_high,
+                    )
+
+                    # Send alert
+                    try:
+                        from alerts import send_signal
+
+                        send_signal(
+                            signal_key=f"orb_{symbol}_{result.direction}",
+                            title=f"📊 ORB {result.direction}: {symbol}",
+                            message=(
+                                f"Opening Range Breakout detected!\n"
+                                f"Direction: {result.direction}\n"
+                                f"Trigger: {result.trigger_price:,.4f}\n"
+                                f"OR Range: {result.or_low:,.4f} – {result.or_high:,.4f}\n"
+                                f"ATR: {result.atr_value:,.4f}"
+                            ),
+                            asset=symbol,
+                            direction=result.direction,
+                        )
+                    except Exception:
+                        pass
+
+            except Exception as exc:
+                logger.debug("ORB check failed for %s: %s", symbol, exc)
+
+        if breakouts_found:
+            logger.info("✅ ORB check complete: %d breakout(s) found", breakouts_found)
+        else:
+            logger.debug("✅ ORB check complete: no breakouts")
+
+    except Exception as exc:
+        logger.debug("ORB check error (non-fatal): %s", exc)
+
+
 def _handle_historical_backfill(engine) -> None:
-    """Backfill historical 1-min bars to Postgres (off-hours)."""
-    logger.info("▶ Historical backfill — placeholder (TASK-204)")
-    # This will be implemented in TASK-204
+    """Backfill historical 1-min bars to Postgres/SQLite (off-hours).
+
+    Calls the backfill module which:
+      1. Determines which symbols need data
+      2. Finds gaps in existing stored bars
+      3. Fetches missing chunks from Massive (primary) or yfinance (fallback)
+      4. Stores bars idempotently via UPSERT
+      5. Publishes summary to Redis for dashboard visibility
+    """
+    logger.info("▶ Historical backfill starting (TASK-204)")
+
+    try:
+        from backfill import run_backfill
+
+        summary = run_backfill()
+
+        status = summary.get("status", "unknown")
+        total_bars = summary.get("total_bars_added", 0)
+        duration = summary.get("total_duration_seconds", 0)
+        errors = summary.get("errors", [])
+
+        if status == "complete":
+            logger.info(
+                "✅ Historical backfill complete: +%d bars in %.1fs",
+                total_bars,
+                duration,
+            )
+        elif status == "partial":
+            logger.warning(
+                "⚠️ Historical backfill partial: +%d bars in %.1fs (%d errors)",
+                total_bars,
+                duration,
+                len(errors),
+            )
+            for err in errors[:5]:
+                logger.warning("  Backfill error: %s", err)
+        else:
+            logger.error(
+                "❌ Historical backfill failed in %.1fs: %s",
+                duration,
+                "; ".join(errors[:3]) if errors else "unknown error",
+            )
+
+    except ImportError as exc:
+        logger.warning("Backfill module not available: %s", exc)
+    except Exception as exc:
+        logger.error("Historical backfill error: %s", exc)
 
 
 def _handle_run_optimization(engine) -> None:
@@ -482,6 +629,7 @@ def main():
             engine, account_size
         ),
         ActionType.CHECK_NO_TRADE: lambda: _handle_check_no_trade(engine, account_size),
+        ActionType.CHECK_ORB: lambda: _handle_check_orb(engine),
         ActionType.HISTORICAL_BACKFILL: lambda: _handle_historical_backfill(engine),
         ActionType.RUN_OPTIMIZATION: lambda: _handle_run_optimization(engine),
         ActionType.RUN_BACKTEST: lambda: _handle_run_backtest(engine),

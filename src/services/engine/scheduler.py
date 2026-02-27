@@ -59,6 +59,7 @@ class ActionType(str, Enum):
     GROK_LIVE_UPDATE = "grok_live_update"
     CHECK_RISK_RULES = "check_risk_rules"
     CHECK_NO_TRADE = "check_no_trade"
+    CHECK_ORB = "check_orb"
 
     # Off-hours actions (run once per session)
     HISTORICAL_BACKFILL = "historical_backfill"
@@ -101,6 +102,7 @@ class ScheduleManager:
     GROK_INTERVAL = 15 * 60  # 15 minutes during active
     RISK_CHECK_INTERVAL = 60  # 1 minute during active
     NO_TRADE_INTERVAL = 2 * 60  # 2 minutes during active
+    ORB_CHECK_INTERVAL = 2 * 60  # 2 minutes during active (09:30–11:00 window)
     FOCUS_PUBLISH_INTERVAL = 30  # 30 seconds during active (throttled downstream)
     STATUS_PUBLISH_INTERVAL = 10  # 10 seconds always
 
@@ -405,6 +407,24 @@ class ScheduleManager:
                     description="Run Grok 15-minute live market update",
                 )
             )
+
+        # Opening Range Breakout check — every 2 minutes during 09:30–11:00 ET
+        now_time = now.time()
+        from datetime import time as _dt_time
+
+        _orb_start = _dt_time(9, 30)
+        _orb_end = _dt_time(11, 0)
+        if _orb_start <= now_time <= _orb_end:
+            if self._interval_elapsed(
+                ActionType.CHECK_ORB, ts, self.ORB_CHECK_INTERVAL
+            ):
+                actions.append(
+                    ScheduledAction(
+                        action=ActionType.CHECK_ORB,
+                        priority=6,
+                        description="Check Opening Range Breakout (09:30–10:00 OR)",
+                    )
+                )
 
         return actions
 

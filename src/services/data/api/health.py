@@ -1,14 +1,17 @@
 """
-Health check and metrics API router.
+Health check, metrics, and backfill status API router.
 
 Provides:
-    GET /health   — Service health check (Redis, engine, live feed)
-    GET /metrics  — Lightweight operational metrics
+    GET /health              — Service health check (Redis, engine, live feed)
+    GET /metrics             — Lightweight operational metrics
+    GET /backfill/status     — Historical data backfill status (bar counts, date ranges)
+    GET /backfill/gaps/{sym} — Gap analysis for a specific symbol's stored bars
 """
 
 import logging
 import os
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter
@@ -138,3 +141,81 @@ def metrics():
         result["redis_cached_keys"] = -1
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Backfill status endpoints (TASK-204)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/backfill/status")
+def backfill_status():
+    """Return the current historical data backfill status.
+
+    Shows per-symbol bar counts, date ranges, and total stored bars.
+    Useful for monitoring whether backfill is running and how much
+    data is available for optimization and backtesting.
+    """
+    try:
+        from services.engine.backfill import get_backfill_status
+
+        status = get_backfill_status()
+        return {
+            "status": "ok",
+            "timestamp": datetime.now(tz=_EST).isoformat(),
+            **status,
+        }
+    except ImportError:
+        return {
+            "status": "unavailable",
+            "timestamp": datetime.now(tz=_EST).isoformat(),
+            "message": "Backfill module not available",
+            "symbols": [],
+            "total_bars": 0,
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "timestamp": datetime.now(tz=_EST).isoformat(),
+            "error": str(exc),
+            "symbols": [],
+            "total_bars": 0,
+        }
+
+
+@router.get("/backfill/gaps/{symbol}")
+def backfill_gaps(symbol: str, days_back: int = 30):
+    """Analyse gaps in stored historical data for a specific symbol.
+
+    Args:
+        symbol: Ticker symbol (e.g. ``MGC=F``). URL-encode the ``=`` as ``%3D``.
+        days_back: Number of calendar days to analyse (default 30).
+
+    Returns:
+        Gap report with total bars, expected bars, coverage percentage,
+        and a list of significant gaps (>30 minutes).
+    """
+    try:
+        from services.engine.backfill import get_gap_report
+
+        report = get_gap_report(symbol, days_back=days_back)
+        return {
+            "status": "ok",
+            "timestamp": datetime.now(tz=_EST).isoformat(),
+            **report,
+        }
+    except ImportError:
+        return {
+            "status": "unavailable",
+            "timestamp": datetime.now(tz=_EST).isoformat(),
+            "message": "Backfill module not available",
+            "symbol": symbol,
+            "total_bars": 0,
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "timestamp": datetime.now(tz=_EST).isoformat(),
+            "symbol": symbol,
+            "error": str(exc),
+        }

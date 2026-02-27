@@ -130,6 +130,21 @@ def _get_risk_status() -> Optional[dict[str, Any]]:
     return None
 
 
+def _get_orb_data() -> Optional[dict[str, Any]]:
+    """Read the latest ORB (Opening Range Breakout) result from cache (TASK-801)."""
+    try:
+        from cache import cache_get
+
+        raw = cache_get("engine:orb")
+        if raw:
+            data = raw.decode() if isinstance(raw, bytes) else str(raw)
+            if data:
+                return json.loads(data)
+    except Exception:
+        pass
+    return None
+
+
 def _get_grok_update() -> Optional[dict[str, Any]]:
     """Read latest Grok compact update from Redis."""
     try:
@@ -562,6 +577,107 @@ def _render_grok_panel(grok_data: Optional[dict[str, Any]]) -> str:
     """
 
 
+def _render_orb_panel(orb_data: Optional[dict[str, Any]]) -> str:
+    """Render the Opening Range Breakout panel as HTML fragment (TASK-801)."""
+    if not orb_data:
+        return """
+        <div id="orb-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+             hx-swap-oob="true">
+            <h3 class="text-sm font-semibold text-zinc-400 mb-2">📊 OPENING RANGE</h3>
+            <div class="text-zinc-500 text-sm">Waiting for 09:30 ET opening range...</div>
+        </div>
+        """
+
+    or_high = orb_data.get("or_high", 0)
+    or_low = orb_data.get("or_low", 0)
+    or_range = orb_data.get("or_range", 0)
+    atr_value = orb_data.get("atr_value", 0)
+    long_trigger = orb_data.get("long_trigger", 0)
+    short_trigger = orb_data.get("short_trigger", 0)
+    breakout = orb_data.get("breakout_detected", False)
+    direction = orb_data.get("direction", "")
+    trigger_price = orb_data.get("trigger_price", 0)
+    symbol = orb_data.get("symbol", "")
+    or_complete = orb_data.get("or_complete", False)
+    evaluated_at = orb_data.get("evaluated_at", "")
+    error = orb_data.get("error", "")
+
+    if error:
+        return f"""
+        <div id="orb-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+             hx-swap-oob="true">
+            <h3 class="text-sm font-semibold text-zinc-400 mb-2">📊 OPENING RANGE</h3>
+            <div class="text-zinc-500 text-sm">{error}</div>
+        </div>
+        """
+
+    # Status indicators
+    if breakout:
+        if direction == "LONG":
+            status_emoji = "🟢"
+            status_text = f"LONG BREAKOUT — {symbol}"
+            status_color = "text-green-400"
+            border_color = "border-green-500"
+        else:
+            status_emoji = "🔴"
+            status_text = f"SHORT BREAKOUT — {symbol}"
+            status_color = "text-red-400"
+            border_color = "border-red-500"
+    elif or_complete:
+        status_emoji = "⏳"
+        status_text = "OR Set — Watching for breakout"
+        status_color = "text-yellow-400"
+        border_color = "border-zinc-700"
+    else:
+        status_emoji = "🔄"
+        status_text = "Opening range forming..."
+        status_color = "text-zinc-400"
+        border_color = "border-zinc-700"
+
+    # Time display
+    time_str = ""
+    if evaluated_at and "T" in evaluated_at:
+        try:
+            dt = datetime.fromisoformat(evaluated_at)
+            time_str = dt.strftime("%I:%M %p")
+        except Exception:
+            time_str = evaluated_at
+
+    breakout_html = ""
+    if breakout:
+        breakout_html = f"""
+        <div class="bg-{"green" if direction == "LONG" else "red"}-900/40 border border-{"green" if direction == "LONG" else "red"}-600 rounded px-3 py-2 mb-2 text-center animate-pulse">
+            <span class="{status_color} text-sm font-bold">
+                {status_emoji} {direction} BREAKOUT @ {trigger_price:,.2f}
+            </span>
+        </div>
+        """
+
+    return f"""
+    <div id="orb-panel" class="bg-zinc-900/60 border {border_color} rounded-lg p-4"
+         hx-swap-oob="true">
+        <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold text-zinc-400">📊 OPENING RANGE</h3>
+            <span class="{status_color} text-xs font-bold">{status_emoji} {status_text}</span>
+        </div>
+
+        {breakout_html}
+
+        <div class="space-y-2 text-xs">
+            <div class="grid grid-cols-2 gap-2">
+                <div class="text-zinc-400">OR High: <span class="text-green-300 font-mono">{or_high:,.2f}</span></div>
+                <div class="text-zinc-400">OR Low: <span class="text-red-300 font-mono">{or_low:,.2f}</span></div>
+                <div class="text-zinc-400">OR Range: <span class="text-zinc-200 font-mono">{or_range:,.2f}</span></div>
+                <div class="text-zinc-400">ATR(14): <span class="text-zinc-200 font-mono">{atr_value:,.2f}</span></div>
+                <div class="text-zinc-400">Long Trigger: <span class="text-green-400 font-mono">{long_trigger:,.2f}</span></div>
+                <div class="text-zinc-400">Short Trigger: <span class="text-red-400 font-mono">{short_trigger:,.2f}</span></div>
+            </div>
+        </div>
+        <div class="text-right text-zinc-600 text-xs mt-1">{time_str}</div>
+    </div>
+    """
+
+
 def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
     """Render the complete dashboard HTML page."""
     # Asset cards grid
@@ -596,6 +712,10 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
     # Grok compact update panel (TASK-601)
     grok_data = _get_grok_update()
     grok_html = _render_grok_panel(grok_data)
+
+    # Opening Range Breakout panel (TASK-801)
+    orb_data = _get_orb_data()
+    orb_html = _render_orb_panel(orb_data)
 
     # Focus summary
     total = focus_data.get("total_assets", 0) if focus_data else 0
@@ -753,6 +873,14 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
                      hx-trigger="every 60s"
                      hx-swap="innerHTML">
                     {grok_html}
+                </div>
+
+                <!-- Opening Range Breakout Panel (TASK-801) -->
+                <div id="orb-container"
+                     hx-get="/api/orb/html"
+                     hx-trigger="every 30s"
+                     hx-swap="innerHTML">
+                    {orb_html}
                 </div>
 
                 <!-- Alerts Panel -->
@@ -947,11 +1075,41 @@ def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
 
             // --- Positions update: refresh panel ---
             if (eventName === 'positions-update') {{
-                htmx.ajax('GET', '/api/positions/html', {{target: '#positions-panel', swap: 'innerHTML'}});
+                htmx.ajax('GET', '/api/positions/html', {{target: '#positions-container', swap: 'innerHTML'}});
+            }}
+
+            // --- Grok compact update: refresh panel (TASK-602) ---
+            if (eventName === 'grok-update') {{
+                htmx.ajax('GET', '/api/grok/html', {{target: '#grok-container', swap: 'innerHTML'}});
+                const lastUpd = document.getElementById('sse-last-update');
+                if (lastUpd) {{
+                    lastUpd.textContent = 'Last Grok: ' + new Date().toLocaleTimeString();
+                }}
+            }}
+
+            // --- Risk status update: refresh panel ---
+            if (eventName === 'risk-update') {{
+                htmx.ajax('GET', '/api/risk/html', {{target: '#risk-container', swap: 'innerHTML'}});
+            }}
+
+            // --- ORB update: refresh Opening Range Breakout panel (TASK-801) ---
+            if (eventName === 'orb-update') {{
+                htmx.ajax('GET', '/api/orb/html', {{target: '#orb-container', swap: 'innerHTML'}});
+                // Flash the ORB container on breakout
+                try {{
+                    const orbData = JSON.parse(data);
+                    if (orbData.breakout_detected) {{
+                        const orbPanel = document.getElementById('orb-container');
+                        if (orbPanel) {{
+                            orbPanel.classList.add('sse-updated');
+                            setTimeout(function() {{ orbPanel.classList.remove('sse-updated'); }}, 2000);
+                        }}
+                    }}
+                }} catch(e) {{}}
             }}
 
             // --- Per-asset updates: flash the specific card ---
-            if (eventName.endsWith('-update') && eventName !== 'focus-update' && eventName !== 'positions-update') {{
+            if (eventName.endsWith('-update') && eventName !== 'focus-update' && eventName !== 'positions-update' && eventName !== 'grok-update' && eventName !== 'risk-update' && eventName !== 'orb-update') {{
                 const symbol = eventName.replace('-update', '').replace(' ', '_').replace('&', '');
                 const card = document.getElementById('asset-card-' + symbol);
                 if (card) {{
@@ -1065,6 +1223,13 @@ def get_grok_html():
     """Return Grok compact update panel as HTML fragment (TASK-601)."""
     grok_data = _get_grok_update()
     return HTMLResponse(content=_render_grok_panel(grok_data))
+
+
+@router.get("/api/orb/html")
+def get_orb_html():
+    """Return Opening Range Breakout panel as HTML fragment (TASK-801)."""
+    orb_data = _get_orb_data()
+    return HTMLResponse(content=_render_orb_panel(orb_data))
 
 
 @router.get("/api/alerts/html", response_class=HTMLResponse)

@@ -547,6 +547,19 @@ class TestPublishFocusToRedis:
     runs its lazy import.
     """
 
+    _original_cache_module = None
+
+    def setup_method(self):
+        """Save the real cache module before each test."""
+        self._original_cache_module = sys.modules.get("cache", None)
+
+    def teardown_method(self):
+        """Restore the real cache module after each test."""
+        if self._original_cache_module is not None:
+            sys.modules["cache"] = self._original_cache_module
+        else:
+            sys.modules.pop("cache", None)
+
     def _ensure_mock_cache(self):
         """Install (or refresh) a mock cache module in sys.modules.
 

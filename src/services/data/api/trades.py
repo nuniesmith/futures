@@ -5,13 +5,21 @@ Provides endpoints for creating, closing, cancelling, and listing trades.
 Includes a legacy /log_trade endpoint for backwards compatibility with
 older NinjaTrader scripts.
 
+Risk enforcement:
+  - POST /trades runs a pre-flight risk check via the local RiskManager
+    before creating the trade.  If the risk check fails, the response
+    includes ``risk_blocked=True`` and the ``risk_reason`` string.
+    By default the trade is still created (the system is advisory), but
+    callers can set ``enforce_risk=True`` in the request body to get a
+    403 rejection instead.
+
 Position management (NinjaTrader live bridge) is handled by positions.py.
 Asset/account info endpoints are handled by analysis.py.
 """
 
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
@@ -53,6 +61,13 @@ class CreateTradeRequest(BaseModel):
     contracts: int = Field(1, ge=1, description="Number of contracts")
     strategy: str = Field("", description="Strategy name")
     notes: str = Field("", description="Trade notes")
+    enforce_risk: bool = Field(
+        False,
+        description=(
+            "If True, the trade is rejected (HTTP 403) when risk rules block it. "
+            "If False (default), the trade is created with a risk warning in the response."
+        ),
+    )
 
 
 class CloseTradeRequest(BaseModel):
@@ -89,6 +104,15 @@ class TradeResponse(BaseModel):
     rr: Optional[float] = None
     notes: str = ""
     strategy: str = ""
+    # Risk fields (populated on create only)
+    risk_checked: bool = Field(False, description="Whether a risk check was performed")
+    risk_blocked: bool = Field(
+        False, description="True if risk rules would block this trade"
+    )
+    risk_reason: str = Field("", description="Risk block reason (empty if allowed)")
+    risk_details: Optional[Dict[str, Any]] = Field(
+        None, description="Full risk check details"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +136,70 @@ def _get_trade_by_id(trade_id: int) -> dict:
 
 @router.post("/trades", response_model=TradeResponse, status_code=201)
 def api_create_trade(req: CreateTradeRequest):
-    """Open a new trade."""
+    """Open a new trade.
+
+    Performs a pre-flight risk check before creating the trade.
+    If ``enforce_risk`` is True and the check fails, returns HTTP 403.
+    Otherwise the trade is created with risk warning fields in the response.
+    """
+    # --- Pre-flight risk check ---
+    risk_checked = False
+    risk_blocked = False
+    risk_reason = ""
+    risk_details: Optional[Dict[str, Any]] = None
+
+    try:
+        from api.risk import check_trade_entry_risk
+
+        # Compute per-contract risk if stop loss is provided
+        risk_per_contract = 0.0
+        if req.sl and req.sl > 0 and req.entry > 0:
+            try:
+                from models import CONTRACT_SPECS
+
+                spec = CONTRACT_SPECS.get(req.asset)
+                point_value = spec["point"] if spec else 1.0
+                risk_per_contract = abs(req.entry - req.sl) * point_value
+            except Exception:
+                pass
+
+        allowed, reason, details = check_trade_entry_risk(
+            symbol=req.asset,
+            side=req.direction.upper(),
+            size=req.contracts,
+            risk_per_contract=risk_per_contract,
+        )
+
+        risk_checked = True
+        risk_blocked = not allowed
+        risk_reason = reason
+        risk_details = details
+
+        if not allowed:
+            logger.warning(
+                "Risk check BLOCKED trade: %s %s %dx %s — %s",
+                req.direction,
+                req.asset,
+                req.contracts,
+                req.strategy,
+                reason,
+            )
+
+            if req.enforce_risk:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Trade blocked by risk rules",
+                        "reason": reason,
+                        "risk_details": details,
+                    },
+                )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.debug("Risk check unavailable (non-fatal): %s", exc)
+
+    # --- Create the trade ---
     trade_id = create_trade(
         account_size=req.account_size,
         asset=req.asset,
@@ -125,7 +212,14 @@ def api_create_trade(req: CreateTradeRequest):
         notes=req.notes,
     )
     trade = _get_trade_by_id(trade_id)
-    return TradeResponse(**trade)
+
+    return TradeResponse(
+        **trade,
+        risk_checked=risk_checked,
+        risk_blocked=risk_blocked,
+        risk_reason=risk_reason,
+        risk_details=risk_details,
+    )
 
 
 @router.post("/trades/{trade_id}/close", response_model=TradeResponse)
