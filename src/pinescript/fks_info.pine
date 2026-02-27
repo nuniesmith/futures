@@ -1,6 +1,7 @@
 //  FKS Information Dashboard
 //  © nuniesmith
 
+// FKS Info Dashboard
 //@version=6
 indicator("FKS Info Dashboard", overlay=true, max_labels_count=500)
 
