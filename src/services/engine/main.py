@@ -435,9 +435,53 @@ def _handle_check_orb(engine) -> None:
 
 
 def _handle_historical_backfill(engine) -> None:
-    """Backfill historical 1-min bars to Postgres (off-hours)."""
-    logger.info("▶ Historical backfill — placeholder (TASK-204)")
-    # This will be implemented in TASK-204
+    """Backfill historical 1-min bars to Postgres/SQLite (off-hours).
+
+    Calls the backfill module which:
+      1. Determines which symbols need data
+      2. Finds gaps in existing stored bars
+      3. Fetches missing chunks from Massive (primary) or yfinance (fallback)
+      4. Stores bars idempotently via UPSERT
+      5. Publishes summary to Redis for dashboard visibility
+    """
+    logger.info("▶ Historical backfill starting (TASK-204)")
+
+    try:
+        from backfill import run_backfill
+
+        summary = run_backfill()
+
+        status = summary.get("status", "unknown")
+        total_bars = summary.get("total_bars_added", 0)
+        duration = summary.get("total_duration_seconds", 0)
+        errors = summary.get("errors", [])
+
+        if status == "complete":
+            logger.info(
+                "✅ Historical backfill complete: +%d bars in %.1fs",
+                total_bars,
+                duration,
+            )
+        elif status == "partial":
+            logger.warning(
+                "⚠️ Historical backfill partial: +%d bars in %.1fs (%d errors)",
+                total_bars,
+                duration,
+                len(errors),
+            )
+            for err in errors[:5]:
+                logger.warning("  Backfill error: %s", err)
+        else:
+            logger.error(
+                "❌ Historical backfill failed in %.1fs: %s",
+                duration,
+                "; ".join(errors[:3]) if errors else "unknown error",
+            )
+
+    except ImportError as exc:
+        logger.warning("Backfill module not available: %s", exc)
+    except Exception as exc:
+        logger.error("Historical backfill error: %s", exc)
 
 
 def _handle_run_optimization(engine) -> None:

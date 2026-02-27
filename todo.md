@@ -123,19 +123,25 @@ Tasks are ordered by priority within each workstream. Cross-workstream dependenc
   - [ ] Add API endpoint `GET /api/focus` in data-service that reads from Redis
 - **Dependencies:** TASK-201, TASK-202
 
-### TASK-204: Historical Data Backfill (Off-Hours)
+### TASK-204: Historical Data Backfill (Off-Hours) ✅ DONE
 - **Priority:** 🟢 P2 — Improves optimization quality but not blocking for live week
 - **Context:** During off-hours (12:00–00:00 ET), engine should fetch and store up to 1 year of historical 1-minute bars for active contracts (MGC, MNQ, MES, MCL, SIL, HG) into Postgres. Use Massive API if available, or fallback sources.
 - **Files:**
-  - `src/services/engine/backfill.py` — `fetch_historical_bars(symbol, days_back)`
-  - `src/models.py` — add `historical_bars` table if not exists
-  - `src/massive_client.py` — add historical data fetch method
+  - `src/services/engine/backfill.py` — `run_backfill()`, `backfill_symbol()`, `get_stored_bars()`, `get_backfill_status()`, `get_gap_report()`, `init_backfill_table()`, chunked fetching with Massive/yfinance fallback
+  - `src/services/engine/main.py` — `_handle_historical_backfill()` wired to call `run_backfill()` (replaces placeholder)
+  - `src/services/data/api/health.py` — `GET /backfill/status`, `GET /backfill/gaps/{symbol}` API endpoints
+  - `tests/test_backfill.py` — 72 tests covering table management, symbol resolution, SQL helpers, storage, date range computation, chunk generation, data fetching, single-symbol backfill, full orchestration, query interface, status, gap reports, publishing, engine handler integration, API endpoints, and edge cases
 - **Acceptance Criteria:**
-  - [ ] Stores 1-min OHLCV bars in Postgres with symbol, timestamp, open, high, low, close, volume
-  - [ ] Idempotent: skips already-stored bars, only fetches gaps
-  - [ ] Runs only during off-hours (12:00–00:00 ET)
-  - [ ] Logs progress: "MGC: backfilled 45,000 bars (2025-03-01 to 2026-02-26)"
-  - [ ] Engine optimization and backtesting jobs can query this table
+  - [x] Stores 1-min OHLCV bars in Postgres/SQLite with symbol, timestamp, open, high, low, close, volume (historical_bars table with UNIQUE constraint)
+  - [x] Idempotent: uses INSERT OR IGNORE / ON CONFLICT DO NOTHING, skips already-stored bars, only fetches gaps from latest stored timestamp
+  - [x] Runs only during off-hours (12:00–00:00 ET) via HISTORICAL_BACKFILL scheduler action
+  - [x] Logs progress: per-symbol chunk-by-chunk logging with emoji indicators (📊 start, ✅ complete, ❌ error)
+  - [x] Engine optimization and backtesting jobs can query via `get_stored_bars(symbol, days_back)` → DataFrame
+  - [x] Gap analysis via `get_gap_report(symbol)` — coverage %, significant gaps, expected vs actual bar counts
+  - [x] Backfill status published to Redis (`engine:backfill_status`) for dashboard visibility
+  - [x] API endpoints: GET /backfill/status, GET /backfill/gaps/{symbol}
+  - [x] Configurable via env vars: BACKFILL_DAYS_BACK, BACKFILL_CHUNK_DAYS, BACKFILL_SYMBOLS, BACKFILL_INSERT_BATCH
+  - [x] Dual data source: Massive.com REST API (primary) with yfinance fallback (limited to ~7 days for 1-min)
 - **Dependencies:** TASK-201
 
 ---
@@ -617,8 +623,11 @@ Tasks are ordered by priority within each workstream. Cross-workstream dependenc
 30. ✅ TASK-802 — "Should Not Trade" detector (7 conditions, NO TRADE banner, SSE no-trade-alert, scheduler integration)
 31. 121 new tests (1,080 total passing, 0 failures)
 
+### Day 8: Historical Data Backfill ✅
+32. ✅ TASK-204 — Historical data backfill (backfill module, chunked Massive/yfinance fetching, idempotent UPSERT storage, gap analysis, API endpoints, engine handler wired)
+33. 72 new tests (1,152 total passing, 0 failures)
+
 ### Backlog (Next Week+)
-- TASK-204 — Historical data backfill
 - TASK-403 — Dynamic volume analysis in NT8
 - TASK-701 — Docker first boot verification (full checklist)
 - TASK-702 — SQLite → Postgres migration
