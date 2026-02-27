@@ -353,22 +353,31 @@ fi
 if $QUICK; then
     skip_check "SSE stream test" "skipped in --quick mode"
 else
-    # Connect to SSE, read for up to 5 seconds, look for "event:" lines
-    SSE_OUTPUT=$(curl -sf -m 5 -N "${DATA_SERVICE_URL}/sse/dashboard" 2>/dev/null) || SSE_OUTPUT=""
+    # Connect to SSE, read for up to 8 seconds, capture both headers and body.
+    # NOTE: curl exits with code 28 on timeout, which is expected for SSE streams
+    # that never close.  We write body to a tmpfile so the `|| true` doesn't
+    # swallow the captured output (command substitution + || resets $()).
+    SSE_HDRFILE=$(mktemp)
+    SSE_BODYFILE=$(mktemp)
+    curl -s -m 8 -N -D "$SSE_HDRFILE" -o "$SSE_BODYFILE" "${DATA_SERVICE_URL}/sse/dashboard" 2>/dev/null || true
+    SSE_OUTPUT=$(cat "$SSE_BODYFILE" 2>/dev/null) || SSE_OUTPUT=""
+    SSE_HEADERS=$(cat "$SSE_HDRFILE" 2>/dev/null) || SSE_HEADERS=""
+    rm -f "$SSE_HDRFILE" "$SSE_BODYFILE"
+
     if echo "$SSE_OUTPUT" | grep -q "event:"; then
         # Count distinct event types received
         EVENT_TYPES=$(echo "$SSE_OUTPUT" | grep "^event:" | sort -u | wc -l)
-        pass_check "SSE stream delivers events" "${EVENT_TYPES} event type(s) in 5s"
+        pass_check "SSE stream delivers events" "${EVENT_TYPES} event type(s) in 8s"
     else
-        fail_check "SSE stream" "no 'event:' lines received in 5 seconds"
+        fail_check "SSE stream" "no 'event:' lines received in 8 seconds"
     fi
 
-    # Check that SSE returns correct Content-Type header
-    SSE_CONTENT_TYPE=$(curl -sf -m 5 -N -D - -o /dev/null "${DATA_SERVICE_URL}/sse/dashboard" 2>/dev/null | grep -i "content-type" | head -1) || SSE_CONTENT_TYPE=""
-    if echo "$SSE_CONTENT_TYPE" | grep -qi "text/event-stream"; then
+    # Check that SSE returns correct Content-Type header (from captured headers)
+    if echo "$SSE_HEADERS" | grep -qi "text/event-stream"; then
         pass_check "SSE Content-Type is text/event-stream"
     else
-        fail_check "SSE Content-Type" "expected text/event-stream, got: $SSE_CONTENT_TYPE"
+        SSE_CT_VALUE=$(echo "$SSE_HEADERS" | grep -i "content-type" | head -1 | tr -d '\r')
+        fail_check "SSE Content-Type" "expected text/event-stream, got: ${SSE_CT_VALUE:-<empty>}"
     fi
 fi
 
@@ -392,7 +401,10 @@ else
 fi
 
 # Check engine container logs for errors (last 50 lines)
-ENGINE_ERRORS=$(docker logs --tail 50 "$ENGINE_CONTAINER" 2>&1 | grep -ci "error\|exception\|traceback" || true)
+# Filter out false positives like "Errors: 0", "0 errors", summary lines
+ENGINE_ERRORS=$(docker logs --tail 50 "$ENGINE_CONTAINER" 2>&1 \
+    | grep -i "error\|exception\|traceback" \
+    | grep -icv "errors\?: *0\|0 *errors\?\|exc_info=\|error-like\|no.error" || true)
 if [ "$ENGINE_ERRORS" -lt 3 ]; then
     pass_check "Engine logs (low error count)" "${ENGINE_ERRORS} error-like lines in last 50"
 else
@@ -402,7 +414,9 @@ fi
 # ===========================================================================
 # CHECK 16: Data-service container logs
 # ===========================================================================
-DATA_ERRORS=$(docker logs --tail 50 "$DATA_CONTAINER" 2>&1 | grep -ci "error\|exception\|traceback" || true)
+DATA_ERRORS=$(docker logs --tail 50 "$DATA_CONTAINER" 2>&1 \
+    | grep -i "error\|exception\|traceback" \
+    | grep -icv "errors\?: *0\|0 *errors\?\|exc_info=\|error-like\|no.error" || true)
 if [ "$DATA_ERRORS" -lt 3 ]; then
     pass_check "Data-service logs (low error count)" "${DATA_ERRORS} error-like lines in last 50"
 else

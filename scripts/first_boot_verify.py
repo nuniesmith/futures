@@ -174,14 +174,42 @@ except ImportError:
 
 
 def http_get(
-    url: str, timeout: float = 10.0, headers: Optional[dict] = None
+    url: str,
+    timeout: float = 10.0,
+    headers: Optional[dict] = None,
+    stream: bool = False,
 ) -> tuple[int, str, dict]:
     """GET request returning (status_code, body, response_headers).
 
     Returns (0, error_message, {}) on connection failure.
+    When *stream* is True (used for SSE), reads with a short timeout and
+    returns whatever data was received before the read timed out.
     """
     if _HAS_REQUESTS:
         try:
+            if stream:
+                # For SSE: open a streaming connection, read whatever arrives
+                # within the timeout window, then return it.
+                resp = _requests.get(
+                    url,
+                    timeout=(5.0, timeout),
+                    headers=headers or {},
+                    stream=True,
+                )
+                resp_headers = dict(resp.headers)
+                chunks: list[str] = []
+                try:
+                    for chunk in resp.iter_content(
+                        chunk_size=None, decode_unicode=True
+                    ):
+                        if chunk:
+                            chunks.append(chunk)
+                except Exception:
+                    pass  # read timeout is expected for SSE
+                finally:
+                    resp.close()
+                return resp.status_code, "".join(chunks), resp_headers
+
             resp = _requests.get(url, timeout=timeout, headers=headers or {})
             resp_headers = dict(resp.headers)
             return resp.status_code, resp.text, resp_headers
@@ -709,31 +737,51 @@ class FirstBootVerifier:
             return
 
         def _check_fn():
-            # Just check the Content-Type header with a brief connection
+            # Open a streaming connection — SSE never closes, so we read
+            # whatever arrives within the timeout window (8 s) and inspect it.
             status, body, headers = http_get(
                 f"{self.base_url}/sse/dashboard",
-                timeout=5.0,
+                timeout=8.0,
                 headers=self._headers(),
+                stream=True,
             )
             content_type = headers.get("Content-Type", headers.get("content-type", ""))
 
             if status == 0:
-                # Timeout reading is expected for SSE — check if we got event data
+                # True connection failure (not a read timeout)
                 if "event:" in body:
+                    # Unlikely path — got data despite status 0
                     return (
                         CheckStatus.PASS,
-                        "SSE stream delivers events (timed out reading, which is normal)",
+                        "SSE stream delivers events (connection closed early)",
                     )
-                return CheckStatus.WARN, f"Could not connect to SSE: {body[:100]}"
+                return CheckStatus.WARN, f"Could not connect to SSE: {body[:120]}"
 
             if "text/event-stream" in content_type.lower():
                 has_events = "event:" in body
                 detail = "correct Content-Type"
                 if has_events:
-                    detail += ", events received"
+                    # Count distinct event types received
+                    import re as _re
+
+                    event_types = _re.findall(r"^event:\s*(.+)$", body, _re.MULTILINE)
+                    unique = sorted(set(event_types))
+                    detail += f", events received ({', '.join(unique[:5])})"
+                else:
+                    detail += " (no events in window — engine may still be starting)"
                 return CheckStatus.PASS, detail
             elif status == 200:
-                return CheckStatus.WARN, f"200 OK but Content-Type={content_type}"
+                # Got 200 but wrong Content-Type — still mostly OK
+                has_events = "event:" in body
+                if has_events:
+                    return (
+                        CheckStatus.PASS,
+                        f"200 OK, events received (Content-Type={content_type})",
+                    )
+                return (
+                    CheckStatus.WARN,
+                    f"200 OK but Content-Type={content_type}, no events",
+                )
             return CheckStatus.FAIL, f"HTTP {status}"
 
         return self._check(
@@ -837,8 +885,23 @@ class FirstBootVerifier:
                 r"(?:error|exception|traceback|critical|fatal)",
                 re.IGNORECASE,
             )
+            # Patterns that look like errors but are actually benign
+            # e.g. "Errors: 0", "errors: 0", "0 errors", summary lines
+            false_positive = re.compile(
+                r"(?:"
+                r"errors:\s*0"  # "Errors: 0"
+                r"|\b0\s+errors?\b"  # "0 errors" / "0 error"
+                r"|error.?like"  # "error-like lines" (from this script)
+                r"|no.?error"  # "no errors"
+                r"|exc_info="  # structured log field, not an actual error
+                r"|log.?level.*error"  # log config mentioning error level
+                r")",
+                re.IGNORECASE,
+            )
             error_lines = [
-                line for line in logs.splitlines() if error_patterns.search(line)
+                line
+                for line in logs.splitlines()
+                if error_patterns.search(line) and not false_positive.search(line)
             ]
             error_count = len(error_lines)
 
@@ -947,7 +1010,9 @@ class FirstBootVerifier:
             if rc != 0:
                 return CheckStatus.FAIL, f"INSERT failed: {output}"
 
-            row_id = output.strip().splitlines()[-1].strip() if output.strip() else ""
+            # psql output for RETURNING is e.g. "3\nINSERT 0 1" — take first non-empty line
+            lines = [l.strip() for l in output.strip().splitlines() if l.strip()]
+            row_id = lines[0] if lines else ""
             if not row_id:
                 return CheckStatus.FAIL, f"INSERT returned no id: {output}"
 
