@@ -13,25 +13,27 @@ Covers:
 
 import asyncio
 import json
-import os
 import sys
 import time
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
-
 import pytest
 
-# ---------------------------------------------------------------------------
-# Path setup — mirrors the data-service PYTHONPATH so bare imports resolve
-# ---------------------------------------------------------------------------
-_this_dir = os.path.dirname(os.path.abspath(__file__))
-_src_dir = os.path.abspath(os.path.join(_this_dir, "..", "src"))
-_data_dir = os.path.abspath(os.path.join(_src_dir, "services", "data"))
-
-for _p in (_src_dir, _data_dir):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+from src.futures_lib.services.data.api.sse import (
+    _CATCHUP_COUNT,
+    _HEARTBEAT_INTERVAL,
+    _THROTTLE_SECONDS,
+    _format_sse,
+    _get_catchup_messages,
+    _get_engine_status,
+    _get_focus_from_cache,
+    _get_positions_from_cache,
+    _get_redis,
+    _last_sent,
+    _make_heartbeat_event,
+    _make_session_event,
+    _should_throttle,
+)
 
 # We need to mock cache before importing sse module since it tries to connect to Redis
 # Build a mock cache module that the lazy `from cache import ...` calls will resolve to.
@@ -51,22 +53,6 @@ _mock_cache.get_data_source = MagicMock(return_value="mock")
 _mock_cache.flush_all = MagicMock()
 
 sys.modules["cache"] = _mock_cache
-
-from api.sse import (
-    _CATCHUP_COUNT,
-    _HEARTBEAT_INTERVAL,
-    _THROTTLE_SECONDS,
-    _format_sse,
-    _get_catchup_messages,
-    _get_engine_status,
-    _get_focus_from_cache,
-    _get_positions_from_cache,
-    _get_redis,
-    _last_sent,
-    _make_heartbeat_event,
-    _make_session_event,
-    _should_throttle,
-)
 
 # Immediately restore the real cache module after importing SSE symbols.
 # The mock was only needed so that `api.sse` could be imported without a
@@ -472,7 +458,7 @@ class TestSSEHealthEndpoint:
     @pytest.fixture
     def client(self):
         """Create a test client with just the SSE router."""
-        from api.sse import router
+        from src.futures_lib.services.data.api.sse import router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
@@ -557,7 +543,7 @@ class TestSSEDashboardEndpoint:
 
     @pytest.fixture
     def client(self):
-        from api.sse import router
+        from src.futures_lib.services.data.api.sse import router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 

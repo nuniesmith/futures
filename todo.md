@@ -276,15 +276,15 @@ Tasks are ordered by priority within each workstream. Cross-workstream dependenc
   - [ ] Position data still pushes correctly to dashboard API
 - **Dependencies:** TASK-102 (same pattern)
 
-### TASK-403: Add Dynamic Volume Analysis to FKS_Core
+### TASK-403: Add Dynamic Volume Analysis to FKS_Core ✅ DONE
 - **Priority:** 🟢 P2 — Enhancement for TP/SL decisions
 - **Context:** Beyond coloring, add logic that suggests actions based on volume patterns: volume spike at BB band → move SL to breakeven; volume spike with trend → add to position; volume drying up → take profit. Display as text annotations or a separate panel.
 - **Files:** `src/ninjatrader/FKS_Core.cs` (extend)
 - **Acceptance Criteria:**
-  - [ ] When volume > 1.8× avg AND price at upper BB: show "TP/BE" label
-  - [ ] When volume > 1.8× avg AND price trending (above dynEMA + AO bullish): show "ADD" label
-  - [ ] When volume < 0.5× avg for 3+ bars: show "LOW VOL" warning
-  - [ ] Labels positioned clearly, not overlapping price action
+  - [x] When volume > 1.8× avg AND price at upper BB: show "TP/BE" label
+  - [x] When volume > 1.8× avg AND price trending (above dynEMA + AO bullish): show "ADD" label
+  - [x] When volume < 0.5× avg for 3+ bars: show "LOW VOL" warning
+  - [x] Labels positioned clearly, not overlapping price action — TP/BE at band side (±6 ticks), ADD on trend side (±6 ticks), LOW VOL below (−4 ticks)
 - **Dependencies:** TASK-401
 
 ---
@@ -388,16 +388,16 @@ Tasks are ordered by priority within each workstream. Cross-workstream dependenc
   - [x] No error spam in any container logs
 - **Dependencies:** All WS-1 tasks, TASK-201
 
-### TASK-702: SQLite → Postgres Migration
+### TASK-702: SQLite → Postgres Migration ✅ DONE
 - **Priority:** 🟢 P2 — Needed for production persistence
 - **Context:** `scripts/migrate_to_postgres.py` and `src/models.py` `migrate_sqlite_to_postgres()` are already written. Need to actually run and verify.
 - **Files:** `scripts/migrate_to_postgres.py`, `data/futures_journal.db`
 - **Acceptance Criteria:**
-  - [ ] Run migration script: `python scripts/migrate_to_postgres.py`
-  - [ ] All journal entries transferred (count matches)
-  - [ ] All trade records transferred
-  - [ ] Data-service confirmed reading from Postgres (check `DATABASE_URL` env var)
-  - [ ] SQLite file kept as backup but no longer used
+  - [x] Run migration script: `python scripts/migrate_to_postgres.py`
+  - [x] All journal entries transferred (count matches) — SQLite had 0 rows; Postgres has 2 journal, 2 trades, 74 risk_events, 1 orb_event, 10074 historical_bars
+  - [x] All trade records transferred
+  - [x] Data-service confirmed reading from Postgres (`DATABASE_URL=postgresql+psycopg://...` set in docker-compose.yml)
+  - [x] SQLite file kept as backup but no longer used (`/app/data/futures_journal.db` retained in Docker volume, 0 active rows)
 - **Dependencies:** TASK-701
 
 ### TASK-703: Add Rate Limiting to Data Service ✅ DONE
@@ -683,5 +683,4 @@ Tasks are ordered by priority within each workstream. Cross-workstream dependenc
 38. 169 new tests (1,321 total passing, 0 failures)
 
 ### Backlog (Next Week+)
-- TASK-403 — Dynamic volume analysis in NT8
-- TASK-702 — SQLite → Postgres migration (run and verify)
+- (empty — all tasks complete! 🎉)

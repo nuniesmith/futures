@@ -23,27 +23,16 @@ Covers:
 
 import asyncio
 import os
-import sys
 import threading
-import time
-from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 import pytest
 
-# ---------------------------------------------------------------------------
-# Ensure src/ is importable
-# ---------------------------------------------------------------------------
-_SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src")
-if _SRC_DIR not in sys.path:
-    sys.path.insert(0, _SRC_DIR)
-
-from massive_client import (
-    INTERVAL_MULTIPLIER,
+from src.futures_lib.integrations.massive_client import (
     INTERVAL_TO_RESOLUTION,
     MASSIVE_PRODUCT_TO_YAHOO,
     PERIOD_TO_DAYS,
@@ -100,14 +89,14 @@ def _make_provider_with_mock(mock_client):
 
 
 def _make_futures_agg(
-    open_=100.0,
-    high=105.0,
-    low=99.0,
-    close=103.0,
-    volume=1000,
-    window_start="2025-01-06T08:00:00-05:00",
-    ticker="ESZ5",
-):
+    open_: float = 100.0,
+    high: float = 105.0,
+    low: float = 99.0,
+    close: float = 103.0,
+    volume: int = 1000,
+    window_start: str | int = "2025-01-06T08:00:00-05:00",
+    ticker: str = "ESZ5",
+) -> SimpleNamespace:
     """Create a mock FuturesAgg object."""
     agg = SimpleNamespace(
         open=open_,
@@ -126,13 +115,13 @@ def _make_futures_agg(
 
 
 def _make_futures_contract(
-    ticker="ESZ5",
-    product_code="ES",
-    active=True,
-    first_trade_date="2025-06-01",
-    last_trade_date="2025-12-19",
-    name="E-mini S&P 500 Dec 2025",
-):
+    ticker: str | None = "ESZ5",
+    product_code: str = "ES",
+    active: bool = True,
+    first_trade_date: str = "2025-06-01",
+    last_trade_date: str = "2025-12-19",
+    name: str = "E-mini S&P 500 Dec 2025",
+) -> SimpleNamespace:
     """Create a mock FuturesContract object."""
     return SimpleNamespace(
         ticker=ticker,
@@ -295,7 +284,7 @@ class TestProviderInit:
 
     def test_api_key_from_env(self):
         with patch.dict(os.environ, {"MASSIVE_API_KEY": "env_key_123"}):
-            with patch("massive.RESTClient") as mock_cls:
+            with patch("massive.RESTClient"):
                 provider = MassiveDataProvider()
                 assert provider.api_key == "env_key_123"
 
@@ -866,8 +855,8 @@ class TestTimestampParsing:
         )
         result = _parse_timestamp_index(df)
         # Index should be in Eastern time
-        assert result.index.tz is not None
-        tz_name = str(result.index.tz)
+        assert getattr(result.index, "tz", None) is not None
+        tz_name = str(getattr(result.index, "tz", ""))
         assert (
             "Eastern" in tz_name
             or "US/Eastern" in tz_name
@@ -1698,7 +1687,7 @@ class TestSingletonAndConvenience:
         mock_provider.is_available = True
         mock_provider.get_aggs.return_value = pd.DataFrame({"Close": [100]})
         with patch("massive_client.MassiveDataProvider", return_value=mock_provider):
-            df = get_massive_aggs("ES=F", "5m", "5d")
+            _df = get_massive_aggs("ES=F", "5m", "5d")  # noqa: F841
             mock_provider.get_aggs.assert_called_once_with("ES=F", "5m", "5d")
 
     def test_get_massive_daily_delegates(self):
@@ -1706,15 +1695,15 @@ class TestSingletonAndConvenience:
         mock_provider.is_available = True
         mock_provider.get_daily.return_value = pd.DataFrame({"Close": [100]})
         with patch("massive_client.MassiveDataProvider", return_value=mock_provider):
-            df = get_massive_daily("ES=F", "10d")
+            _df = get_massive_daily("ES=F", "10d")  # noqa: F841
             mock_provider.get_daily.assert_called_once_with("ES=F", "10d")
 
     def test_get_massive_snapshot_delegates(self):
         mock_provider = MagicMock()
         mock_provider.is_available = True
-        mock_provider.get_snapshot.return_value = {"last_price": 5500.0}
+        mock_provider.get_snapshot.return_value = {"last_price": 5500}
         with patch("massive_client.MassiveDataProvider", return_value=mock_provider):
-            result = get_massive_snapshot("ES=F")
+            _result = get_massive_snapshot("ES=F")  # noqa: F841
             mock_provider.get_snapshot.assert_called_once_with(yahoo_ticker="ES=F")
 
 
@@ -1728,8 +1717,8 @@ class TestCacheIntegration:
 
     def test_get_data_source_yfinance_default(self):
         """Without Massive API key, data source should be yfinance."""
-        import cache
-        from cache import get_data_source
+        import src.futures_lib.core.cache as cache
+        from src.futures_lib.core.cache import get_data_source
 
         # Directly inject a mock provider that reports unavailable
         mock_provider = MagicMock()
@@ -1745,8 +1734,8 @@ class TestCacheIntegration:
         cache._massive_provider = None
 
     def test_get_data_source_massive_when_available(self):
-        import cache
-        from cache import get_data_source
+        import src.futures_lib.core.cache as cache
+        from src.futures_lib.core.cache import get_data_source
 
         # Directly inject a mock provider that reports available
         mock_provider = MagicMock()

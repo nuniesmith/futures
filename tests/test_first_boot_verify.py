@@ -14,9 +14,8 @@ import json
 import os
 import subprocess
 import sys
-import time
-from datetime import datetime
-from unittest.mock import MagicMock, call, patch
+import time  # noqa: F401 — used by @patch("time.time") and @patch("time.monotonic")
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -32,11 +31,13 @@ if _scripts_dir not in sys.path:
 
 # Import the module under test (it's a script, so we import by manipulating
 # the path rather than using importlib)
-import importlib.util
+import importlib.util  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "first_boot_verify", os.path.join(_scripts_dir, "first_boot_verify.py")
 )
+assert _spec is not None, "Could not find first_boot_verify.py"
+assert _spec.loader is not None, "Spec has no loader"
 fbv = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(fbv)
 

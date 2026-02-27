@@ -10,9 +10,6 @@ import sys
 
 # Path setup
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_src = os.path.join(_root, "src")
-if _src not in sys.path:
-    sys.path.insert(0, _src)
 
 os.environ.setdefault("DISABLE_REDIS", "1")
 
@@ -29,7 +26,7 @@ def test_gold_price_no_scaling():
     NinjaTrader MGC chart exactly.  Using GC=F (full-size) can cause
     a price mismatch due to different front-month contract months.
     """
-    from models import ASSETS, CONTRACT_SPECS, MICRO_CONTRACT_SPECS
+    from src.futures_lib.core.models import ASSETS, CONTRACT_SPECS, MICRO_CONTRACT_SPECS
 
     # Gold micro spec must use MGC=F as data_ticker
     gold_micro = MICRO_CONTRACT_SPECS["Gold"]
@@ -47,7 +44,7 @@ def test_gold_price_no_scaling():
 
 def test_gold_point_value_is_micro():
     """Gold micro contract point value must be $10/point, not $100/point."""
-    from models import CONTRACT_SPECS, MICRO_CONTRACT_SPECS
+    from src.futures_lib.core.models import CONTRACT_SPECS, MICRO_CONTRACT_SPECS
 
     gold_micro = MICRO_CONTRACT_SPECS["Gold"]
     assert gold_micro["point"] == 10, (
@@ -58,7 +55,7 @@ def test_gold_point_value_is_micro():
 
 def test_gold_massive_product_mapping():
     """Massive client must map MGC=F to the MGC product code."""
-    from massive_client import YAHOO_TO_MASSIVE_PRODUCT
+    from src.futures_lib.integrations.massive_client import YAHOO_TO_MASSIVE_PRODUCT
 
     assert YAHOO_TO_MASSIVE_PRODUCT.get("MGC=F") == "MGC", (
         "MGC=F must map to MGC product code in Massive client"
@@ -72,7 +69,7 @@ def test_gold_price_passthrough_no_multiplier():
     The cache/display layer should show the same raw values — no multiplication
     by contract point values ($10 micro or $100 full-size).
     """
-    from models import CONTRACT_SPECS
+    from src.futures_lib.core.models import CONTRACT_SPECS
 
     gold_spec = CONTRACT_SPECS.get("Gold", {})
     point_value = gold_spec.get("point", 10)
@@ -94,7 +91,7 @@ def test_gold_risk_calculation_uses_point_value_correctly():
     This converts a price-distance into dollars, which is correct.
     The point value must NOT be applied to the entry/stop prices themselves.
     """
-    from models import calc_max_contracts
+    from src.futures_lib.core.models import calc_max_contracts
 
     entry = 5212.30
     stop = 5200.00

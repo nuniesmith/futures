@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "futures-lib"
+version = "0.1.0"
+description = "Futures Trading Co-Pilot — shared library"
+requires-python = ">=3.11"
+
+# Runtime dependencies are managed via requirements.txt for Docker builds.
+# This file exists purely to make `pip install -e .` work so that
+# `from src.futures_lib.core.cache import ...` resolves everywhere without
+# PYTHONPATH hacks or sys.path.insert gymnastics.
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/futures_lib"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

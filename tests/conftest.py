@@ -7,7 +7,6 @@ without hitting the network.
 """
 
 import os
-import sys
 
 # ---------------------------------------------------------------------------
 # Disable Redis connections during tests so alert/cache tests don't hang
@@ -23,9 +22,6 @@ import pytest
 # Make sure the `src/` package is importable from tests regardless of how
 # pytest is invoked (repo root, tests/ dir, or via CI).
 # ---------------------------------------------------------------------------
-_SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src")
-if _SRC_DIR not in sys.path:
-    sys.path.insert(0, _SRC_DIR)
 
 
 # ---------------------------------------------------------------------------

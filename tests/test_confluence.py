@@ -12,26 +12,12 @@ Tests cover:
   - Edge cases: empty DataFrames, tiny DataFrames, constant prices
 """
 
-import os
-import sys
-
 import numpy as np
 import pandas as pd
 import pytest
+from conftest import _random_walk_ohlcv, _trending_ohlcv
 
-# Ensure src/ is importable
-_SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src")
-if _SRC_DIR not in sys.path:
-    sys.path.insert(0, _SRC_DIR)
-
-# Ensure tests/ is importable so conftest helpers can be imported directly
-_TESTS_DIR = os.path.dirname(__file__)
-if _TESTS_DIR not in sys.path:
-    sys.path.insert(0, _TESTS_DIR)
-
-from conftest import _random_walk_ohlcv, _trending_ohlcv  # noqa: E402
-
-from src.confluence import (  # noqa: E402
+from src.futures_lib.analysis.confluence import (
     DEFAULT_EMA_FAST,
     DEFAULT_EMA_MID,
     DEFAULT_EMA_SLOW,

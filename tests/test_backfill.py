@@ -93,15 +93,10 @@ import pytest
 # ---------------------------------------------------------------------------
 # Path setup
 # ---------------------------------------------------------------------------
-_this_dir = os.path.dirname(os.path.abspath(__file__))
 _root = os.path.dirname(_this_dir)
-_src = os.path.join(_root, "src")
 _engine_dir = os.path.join(_src, "services", "engine")
 _data_svc = os.path.join(_src, "services", "data")
 
-for _p in (_src, _engine_dir, _data_svc):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
 os.environ.setdefault("DISABLE_REDIS", "1")
 
@@ -161,7 +156,7 @@ def _use_sqlite_tempdb(tmp_path, monkeypatch):
 
     # Also reset models if imported
     try:
-        import models
+        from src.futures_lib.core import models
 
         models.DB_PATH = db_file
         models.DATABASE_URL = ""
@@ -179,7 +174,7 @@ def backfill_db(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "")
 
     try:
-        import models
+        from src.futures_lib.core import models
 
         models.DB_PATH = db_file
         models.DATABASE_URL = ""
@@ -188,7 +183,7 @@ def backfill_db(tmp_path, monkeypatch):
     except ImportError:
         pass
 
-    from services.engine.backfill import init_backfill_table
+    from src.futures_lib.services.engine.backfill import init_backfill_table
 
     init_backfill_table()
     return db_file
@@ -213,7 +208,7 @@ class TestInitBackfillTable:
         monkeypatch.setenv("DB_PATH", db_file)
         monkeypatch.setenv("DATABASE_URL", "")
         try:
-            import models
+            from src.futures_lib.core import models
 
             models.DB_PATH = db_file
             models.DATABASE_URL = ""
@@ -221,7 +216,7 @@ class TestInitBackfillTable:
         except ImportError:
             pass
 
-        from services.engine.backfill import init_backfill_table
+        from src.futures_lib.services.engine.backfill import init_backfill_table
 
         init_backfill_table()
 
@@ -237,7 +232,7 @@ class TestInitBackfillTable:
         monkeypatch.setenv("DB_PATH", db_file)
         monkeypatch.setenv("DATABASE_URL", "")
         try:
-            import models
+            from src.futures_lib.core import models
 
             models.DB_PATH = db_file
             models.DATABASE_URL = ""
@@ -245,7 +240,7 @@ class TestInitBackfillTable:
         except ImportError:
             pass
 
-        from services.engine.backfill import init_backfill_table
+        from src.futures_lib.services.engine.backfill import init_backfill_table
 
         init_backfill_table()
         init_backfill_table()  # Should not raise
@@ -263,7 +258,7 @@ class TestInitBackfillTable:
         monkeypatch.setenv("DB_PATH", db_file)
         monkeypatch.setenv("DATABASE_URL", "")
         try:
-            import models
+            from src.futures_lib.core import models
 
             models.DB_PATH = db_file
             models.DATABASE_URL = ""
@@ -271,7 +266,7 @@ class TestInitBackfillTable:
         except ImportError:
             pass
 
-        from services.engine.backfill import init_backfill_table
+        from src.futures_lib.services.engine.backfill import init_backfill_table
 
         init_backfill_table()
 
@@ -320,7 +315,7 @@ class TestSymbolResolution:
         bf._SYMBOLS_OVERRIDE = ""
 
     def test_symbol_display_name_known(self):
-        from services.engine.backfill import _symbol_display_name
+        from src.futures_lib.services.engine.backfill import _symbol_display_name
 
         # MGC=F should map to "Gold" via models.TICKER_TO_NAME
         name = _symbol_display_name("MGC=F")
@@ -328,7 +323,7 @@ class TestSymbolResolution:
         assert len(name) > 0
 
     def test_symbol_display_name_unknown(self):
-        from services.engine.backfill import _symbol_display_name
+        from src.futures_lib.services.engine.backfill import _symbol_display_name
 
         name = _symbol_display_name("UNKNOWN_TICKER")
         assert name == "UNKNOWN_TICKER"
@@ -343,14 +338,14 @@ class TestSQLHelpers:
     """Test SQL placeholder and formatting utilities."""
 
     def test_placeholder_sqlite(self):
-        from services.engine.backfill import _placeholder
+        from src.futures_lib.services.engine.backfill import _placeholder
 
         # In test env, we're using SQLite
         ph = _placeholder()
         assert ph == "?"
 
     def test_format_sql_replaces_placeholders(self):
-        from services.engine.backfill import _format_sql
+        from src.futures_lib.services.engine.backfill import _format_sql
 
         template = "SELECT * FROM t WHERE a = {ph} AND b = {ph}"
         result = _format_sql(template)
@@ -358,7 +353,7 @@ class TestSQLHelpers:
         assert "?" in result or "%s" in result
 
     def test_format_sql_no_placeholders(self):
-        from services.engine.backfill import _format_sql
+        from src.futures_lib.services.engine.backfill import _format_sql
 
         template = "SELECT COUNT(*) FROM t"
         result = _format_sql(template)
@@ -374,7 +369,7 @@ class TestStoreBars:
     """Test bar storage and retrieval from SQLite."""
 
     def test_store_bars_inserts_rows(self, backfill_db, sample_bars):
-        from services.engine.backfill import _get_bar_count, _get_conn, _store_bars
+        from src.futures_lib.services.engine.backfill import _get_bar_count, _get_conn, _store_bars
 
         conn = _get_conn()
         new_count = _store_bars(conn, "MGC=F", sample_bars, "1m")
@@ -384,7 +379,7 @@ class TestStoreBars:
         conn.close()
 
     def test_store_bars_idempotent(self, backfill_db, sample_bars):
-        from services.engine.backfill import _get_bar_count, _get_conn, _store_bars
+        from src.futures_lib.services.engine.backfill import _get_bar_count, _get_conn, _store_bars
 
         conn = _get_conn()
         first = _store_bars(conn, "MGC=F", sample_bars, "1m")
@@ -399,7 +394,7 @@ class TestStoreBars:
         conn.close()
 
     def test_store_bars_empty_df(self, backfill_db):
-        from services.engine.backfill import _get_conn, _store_bars
+        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars
 
         conn = _get_conn()
         result = _store_bars(conn, "MGC=F", pd.DataFrame(), "1m")
@@ -407,7 +402,7 @@ class TestStoreBars:
         conn.close()
 
     def test_store_bars_skips_zero_ohlc(self, backfill_db):
-        from services.engine.backfill import _get_bar_count, _get_conn, _store_bars
+        from src.futures_lib.services.engine.backfill import _get_bar_count, _get_conn, _store_bars
 
         idx = pd.date_range("2026-01-01 09:30", periods=5, freq="1min", tz="UTC")
         df = pd.DataFrame(
@@ -427,7 +422,7 @@ class TestStoreBars:
         conn.close()
 
     def test_get_latest_stored_timestamp(self, backfill_db, sample_bars):
-        from services.engine.backfill import (
+        from src.futures_lib.services.engine.backfill import (
             _get_conn,
             _get_latest_stored_timestamp,
             _store_bars,
@@ -448,7 +443,7 @@ class TestStoreBars:
         conn.close()
 
     def test_get_bar_count_empty(self, backfill_db):
-        from services.engine.backfill import _get_bar_count, _get_conn
+        from src.futures_lib.services.engine.backfill import _get_bar_count, _get_conn
 
         conn = _get_conn()
         count = _get_bar_count(conn, "NONEXISTENT", "1m")
@@ -456,7 +451,7 @@ class TestStoreBars:
         conn.close()
 
     def test_store_multiple_symbols(self, backfill_db):
-        from services.engine.backfill import _get_bar_count, _get_conn, _store_bars
+        from src.futures_lib.services.engine.backfill import _get_bar_count, _get_conn, _store_bars
 
         bars1 = _make_bars_df(n=50, start_price=2700.0)
         bars2 = _make_bars_df(n=30, start_price=15000.0, seed=99)
@@ -479,7 +474,7 @@ class TestComputeDateRange:
     """Test date range calculation for gap-aware fetching."""
 
     def test_no_existing_data_goes_back_default(self, backfill_db):
-        from services.engine.backfill import _compute_date_range, _get_conn
+        from src.futures_lib.services.engine.backfill import _compute_date_range, _get_conn
 
         conn = _get_conn()
         start_dt, end_dt = _compute_date_range("MGC=F", conn, days_back=30)
@@ -490,7 +485,7 @@ class TestComputeDateRange:
         assert 29 <= diff <= 31
 
     def test_existing_data_starts_after_latest(self, backfill_db, sample_bars):
-        from services.engine.backfill import (
+        from src.futures_lib.services.engine.backfill import (
             _compute_date_range,
             _get_conn,
             _store_bars,
@@ -506,7 +501,7 @@ class TestComputeDateRange:
         assert start_dt.year >= 2026
 
     def test_up_to_date_returns_equal_dates(self, backfill_db):
-        from services.engine.backfill import (
+        from src.futures_lib.services.engine.backfill import (
             _compute_date_range,
             _get_conn,
             _store_bars,
@@ -549,7 +544,7 @@ class TestGenerateChunks:
     """Test date range chunking."""
 
     def test_basic_chunking(self):
-        from services.engine.backfill import _generate_chunks
+        from src.futures_lib.services.engine.backfill import _generate_chunks
 
         start = datetime(2026, 1, 1, tzinfo=_UTC)
         end = datetime(2026, 1, 16, tzinfo=_UTC)
@@ -560,7 +555,7 @@ class TestGenerateChunks:
         assert chunks[-1][1] == end
 
     def test_single_chunk(self):
-        from services.engine.backfill import _generate_chunks
+        from src.futures_lib.services.engine.backfill import _generate_chunks
 
         start = datetime(2026, 1, 1, tzinfo=_UTC)
         end = datetime(2026, 1, 3, tzinfo=_UTC)
@@ -570,7 +565,7 @@ class TestGenerateChunks:
         assert chunks[0] == (start, end)
 
     def test_exact_multiple(self):
-        from services.engine.backfill import _generate_chunks
+        from src.futures_lib.services.engine.backfill import _generate_chunks
 
         start = datetime(2026, 1, 1, tzinfo=_UTC)
         end = datetime(2026, 1, 11, tzinfo=_UTC)
@@ -581,7 +576,7 @@ class TestGenerateChunks:
         assert chunks[1][1] == end
 
     def test_empty_range(self):
-        from services.engine.backfill import _generate_chunks
+        from src.futures_lib.services.engine.backfill import _generate_chunks
 
         start = datetime(2026, 1, 5, tzinfo=_UTC)
         end = datetime(2026, 1, 5, tzinfo=_UTC)
@@ -590,7 +585,7 @@ class TestGenerateChunks:
         assert len(chunks) == 0
 
     def test_chunk_boundaries_continuous(self):
-        from services.engine.backfill import _generate_chunks
+        from src.futures_lib.services.engine.backfill import _generate_chunks
 
         start = datetime(2026, 1, 1, tzinfo=_UTC)
         end = datetime(2026, 2, 1, tzinfo=_UTC)
@@ -671,7 +666,7 @@ class TestFetchChunkMassive:
     """Test Massive-specific fetching."""
 
     def test_returns_empty_when_unavailable(self):
-        from services.engine.backfill import _fetch_chunk_massive
+        from src.futures_lib.services.engine.backfill import _fetch_chunk_massive
 
         # _get_massive_provider is imported from cache inside the function
         with patch("cache._get_massive_provider", return_value=None):
@@ -683,7 +678,7 @@ class TestFetchChunkMassive:
             assert result.empty
 
     def test_returns_empty_on_exception(self):
-        from services.engine.backfill import _fetch_chunk_massive
+        from src.futures_lib.services.engine.backfill import _fetch_chunk_massive
 
         mock_provider = MagicMock()
         mock_provider.is_available = True
@@ -703,7 +698,7 @@ class TestFetchChunkYfinance:
     """Test yfinance-specific fetching."""
 
     def test_skips_old_chunks(self):
-        from services.engine.backfill import _fetch_chunk_yfinance
+        from src.futures_lib.services.engine.backfill import _fetch_chunk_yfinance
 
         # Chunk from 30 days ago should be skipped (yfinance 1m limit is ~7 days)
         old_start = datetime.now(tz=_UTC) - timedelta(days=30)
@@ -713,7 +708,7 @@ class TestFetchChunkYfinance:
         assert result.empty
 
     def test_handles_exception(self):
-        from services.engine.backfill import _fetch_chunk_yfinance
+        from src.futures_lib.services.engine.backfill import _fetch_chunk_yfinance
 
         recent_start = datetime.now(tz=_UTC) - timedelta(days=2)
         recent_end = datetime.now(tz=_UTC)
@@ -791,7 +786,7 @@ class TestBackfillSymbol:
         assert result["error"] == ""  # Empty chunks aren't errors
 
     def test_error_captured_in_result(self, backfill_db):
-        from services.engine.backfill import backfill_symbol
+        from src.futures_lib.services.engine.backfill import backfill_symbol
 
         with patch(
             "services.engine.backfill._get_conn",
@@ -963,7 +958,7 @@ class TestGetStoredBars:
     """Test the get_stored_bars query function."""
 
     def test_returns_dataframe_with_ohlcv(self, backfill_db):
-        from services.engine.backfill import _get_conn, _store_bars, get_stored_bars
+        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_stored_bars
 
         # Use recent timestamps so they fall within the days_back window
         now = datetime.now(tz=_UTC)
@@ -980,13 +975,13 @@ class TestGetStoredBars:
             assert col in df.columns
 
     def test_returns_empty_when_no_data(self, backfill_db):
-        from services.engine.backfill import get_stored_bars
+        from src.futures_lib.services.engine.backfill import get_stored_bars
 
         df = get_stored_bars("NONEXISTENT", days_back=30)
         assert df.empty
 
     def test_respects_days_back(self, backfill_db):
-        from services.engine.backfill import _get_conn, _store_bars, get_stored_bars
+        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_stored_bars
 
         # Store bars with recent timestamps
         now = datetime.now(tz=_UTC)
@@ -1007,7 +1002,7 @@ class TestGetStoredBars:
         assert isinstance(df_zero, pd.DataFrame)
 
     def test_returns_sorted_by_timestamp(self, backfill_db):
-        from services.engine.backfill import _get_conn, _store_bars, get_stored_bars
+        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_stored_bars
 
         now = datetime.now(tz=_UTC)
         recent_start = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
@@ -1031,7 +1026,7 @@ class TestGetBackfillStatus:
     """Test get_backfill_status summary query."""
 
     def test_returns_empty_when_no_data(self, backfill_db):
-        from services.engine.backfill import get_backfill_status
+        from src.futures_lib.services.engine.backfill import get_backfill_status
 
         status = get_backfill_status()
         assert isinstance(status, dict)
@@ -1039,7 +1034,7 @@ class TestGetBackfillStatus:
         assert len(status["symbols"]) == 0
 
     def test_returns_per_symbol_counts(self, backfill_db):
-        from services.engine.backfill import _get_conn, _store_bars, get_backfill_status
+        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_backfill_status
 
         bars1 = _make_bars_df(n=120)
         bars2 = _make_bars_df(n=30, seed=99)
@@ -1060,7 +1055,7 @@ class TestGetBackfillStatus:
         assert syms["MNQ=F"]["bar_count"] == 30
 
     def test_includes_date_ranges(self, backfill_db):
-        from services.engine.backfill import _get_conn, _store_bars, get_backfill_status
+        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_backfill_status
 
         bars = _make_bars_df(n=120)
         conn = _get_conn()
@@ -1083,7 +1078,7 @@ class TestGetGapReport:
     """Test gap analysis."""
 
     def test_empty_data(self, backfill_db):
-        from services.engine.backfill import get_gap_report
+        from src.futures_lib.services.engine.backfill import get_gap_report
 
         report = get_gap_report("NONEXISTENT", days_back=30)
         assert report["total_bars"] == 0
@@ -1091,7 +1086,7 @@ class TestGetGapReport:
         assert len(report["gaps"]) == 0
 
     def test_continuous_data_no_gaps(self, backfill_db):
-        from services.engine.backfill import _get_conn, _store_bars, get_gap_report
+        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_gap_report
 
         # Create continuous 1-min bars with recent timestamps
         now = datetime.now(tz=_UTC)
@@ -1106,7 +1101,7 @@ class TestGetGapReport:
         assert report["coverage_pct"] > 0
 
     def test_data_with_gap(self, backfill_db):
-        from services.engine.backfill import _get_conn, _store_bars, get_gap_report
+        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_gap_report
 
         # Create bars with a 2-hour gap in the middle using recent timestamps
         now = datetime.now(tz=_UTC)
@@ -1126,7 +1121,7 @@ class TestGetGapReport:
         assert len(report["gaps"]) >= 1
 
     def test_coverage_percentage_reasonable(self, backfill_db):
-        from services.engine.backfill import _get_conn, _store_bars, get_gap_report
+        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_gap_report
 
         now = datetime.now(tz=_UTC)
         recent_start = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
@@ -1140,7 +1135,7 @@ class TestGetGapReport:
         assert 0 <= report["coverage_pct"] <= 100
 
     def test_report_has_expected_keys(self, backfill_db):
-        from services.engine.backfill import get_gap_report
+        from src.futures_lib.services.engine.backfill import get_gap_report
 
         report = get_gap_report("MGC=F", days_back=30)
         assert "symbol" in report
@@ -1159,7 +1154,7 @@ class TestFullRoundTrip:
     """Integration tests: store → query → verify."""
 
     def test_store_and_retrieve(self, backfill_db):
-        from services.engine.backfill import _get_conn, _store_bars, get_stored_bars
+        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_stored_bars
 
         # Create bars with known values using recent timestamps
         now = datetime.now(tz=_EST)
@@ -1191,7 +1186,7 @@ class TestFullRoundTrip:
         assert "Close" in result.columns
 
     def test_idempotent_full_cycle(self, backfill_db):
-        from services.engine.backfill import (
+        from src.futures_lib.services.engine.backfill import (
             _get_conn,
             _store_bars,
             get_backfill_status,
@@ -1213,7 +1208,7 @@ class TestFullRoundTrip:
         assert status["total_bars"] == 50  # Still 50, not 100
 
     def test_multiple_intervals(self, backfill_db):
-        from services.engine.backfill import (
+        from src.futures_lib.services.engine.backfill import (
             _get_bar_count,
             _get_conn,
             _store_bars,
@@ -1243,7 +1238,7 @@ class TestPublishBackfillStatus:
     """Test Redis publishing of backfill results."""
 
     def test_publish_does_not_crash_without_redis(self):
-        from services.engine.backfill import _publish_backfill_status
+        from src.futures_lib.services.engine.backfill import _publish_backfill_status
 
         summary = {
             "symbols": [],
@@ -1256,7 +1251,7 @@ class TestPublishBackfillStatus:
         _publish_backfill_status(summary)
 
     def test_publish_serializes_summary(self):
-        from services.engine.backfill import _publish_backfill_status
+        from src.futures_lib.services.engine.backfill import _publish_backfill_status
 
         summary = {
             "symbols": [{"symbol": "MGC=F", "bars_added": 100, "error": ""}],
@@ -1284,7 +1279,7 @@ class TestEngineHandlerIntegration:
     """Test that _handle_historical_backfill calls backfill correctly."""
 
     def test_handler_calls_run_backfill(self):
-        from services.engine.main import _handle_historical_backfill
+        from src.futures_lib.services.engine.main import _handle_historical_backfill
 
         mock_engine = MagicMock()
         mock_summary = {
@@ -1300,7 +1295,7 @@ class TestEngineHandlerIntegration:
             mock_run.assert_called_once()
 
     def test_handler_handles_import_error(self):
-        from services.engine.main import _handle_historical_backfill
+        from src.futures_lib.services.engine.main import _handle_historical_backfill
 
         mock_engine = MagicMock()
 
@@ -1312,7 +1307,7 @@ class TestEngineHandlerIntegration:
             _handle_historical_backfill(mock_engine)
 
     def test_handler_handles_runtime_error(self):
-        from services.engine.main import _handle_historical_backfill
+        from src.futures_lib.services.engine.main import _handle_historical_backfill
 
         mock_engine = MagicMock()
 
@@ -1335,7 +1330,7 @@ class TestBackfillAPIEndpoints:
     @pytest.fixture()
     def client(self, backfill_db):
         """Build a minimal FastAPI app with health router."""
-        from api.health import router as health_router
+        from src.futures_lib.services.data.api.health import router as health_router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
@@ -1379,7 +1374,7 @@ class TestEdgeCases:
     """Edge cases and error handling."""
 
     def test_store_bars_with_nan_values(self, backfill_db):
-        from services.engine.backfill import _get_bar_count, _get_conn, _store_bars
+        from src.futures_lib.services.engine.backfill import _get_bar_count, _get_conn, _store_bars
 
         idx = pd.date_range("2026-01-01 09:30", periods=5, freq="1min", tz="UTC")
         df = pd.DataFrame(
@@ -1402,7 +1397,7 @@ class TestEdgeCases:
         conn.close()
 
     def test_store_bars_with_negative_volume(self, backfill_db):
-        from services.engine.backfill import _get_conn, _store_bars
+        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars
 
         idx = pd.date_range("2026-01-01 09:30", periods=3, freq="1min", tz="UTC")
         df = pd.DataFrame(
@@ -1428,7 +1423,7 @@ class TestEdgeCases:
         monkeypatch.setenv("DB_PATH", db_file)
         monkeypatch.setenv("DATABASE_URL", "")
         try:
-            import models
+            from src.futures_lib.core import models
 
             models.DB_PATH = db_file
             models.DATABASE_URL = ""
@@ -1437,7 +1432,7 @@ class TestEdgeCases:
         except ImportError:
             pass
 
-        from services.engine.backfill import get_backfill_status
+        from src.futures_lib.services.engine.backfill import get_backfill_status
 
         # Create the DB but don't create the table
         conn = sqlite3.connect(db_file)
@@ -1448,14 +1443,14 @@ class TestEdgeCases:
         assert isinstance(status, dict)
 
     def test_run_backfill_empty_symbols_list(self, backfill_db):
-        from services.engine.backfill import run_backfill
+        from src.futures_lib.services.engine.backfill import run_backfill
 
         summary = run_backfill(symbols=[])
         assert summary["status"] == "failed"  # No symbols = nothing to do
         assert summary["total_bars_added"] == 0
 
     def test_chunk_days_larger_than_range(self):
-        from services.engine.backfill import _generate_chunks
+        from src.futures_lib.services.engine.backfill import _generate_chunks
 
         start = datetime(2026, 1, 1, tzinfo=_UTC)
         end = datetime(2026, 1, 2, tzinfo=_UTC)

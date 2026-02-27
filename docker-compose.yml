@@ -82,7 +82,7 @@ services:
             - DATA_SERVICE_HOST=0.0.0.0
             - DATA_SERVICE_PORT=8000
             - ENGINE_MODE=remote
-            - PYTHONPATH=/app/src:/app/src/services/data:/app
+            - PYTHONPATH=/app/src
             - PYTHONUNBUFFERED=1
         volumes:
             - app_data:/app/data
@@ -121,7 +121,7 @@ services:
             - REDIS_URL=redis://redis:6379/0
             - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD:-futures_dev_pass}@postgres:5432/${POSTGRES_DB:-futures_db}
             - DB_PATH=/app/data/futures_journal.db
-            - PYTHONPATH=/app/src:/app/src/services/engine:/app
+            - PYTHONPATH=/app/src
             - PYTHONUNBUFFERED=1
         volumes:
             - app_data:/app/data

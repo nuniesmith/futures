@@ -28,9 +28,9 @@ RUN mkdir -p /app/data
 # PYTHONPATH setup:
 #   1. /app/src                     — so bare imports like `from cache import ...`,
 #      `from engine import ...`, etc. resolve correctly (single source of truth)
-#   2. /app/src/services/data       — so `from api.X import ...` in main.py resolves
+#   2. /app/src/services/data       — so `from src.futures_lib.services.data.api.X import ...` in main.py resolves
 #   3. /app                         — so `src.services.data.main` style imports work
-ENV PYTHONPATH="/app/src:/app/src/services/data:/app"
+ENV PYTHONPATH="/app/src"
 
 # Environment defaults
 ENV DATA_SERVICE_HOST=0.0.0.0
@@ -42,4 +42,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-CMD ["uvicorn", "src.services.data.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]
+CMD ["uvicorn", "futures_lib.services.data.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]

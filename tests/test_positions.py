@@ -16,10 +16,6 @@ import sys
 from unittest.mock import MagicMock
 
 import pytest
-
-# Ensure src/ is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
 from fastapi.testclient import TestClient
 
 # ---------------------------------------------------------------------------
@@ -30,7 +26,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture(autouse=True)
 def _clear_position_cache():
     """Clear the position cache before and after each test."""
-    from cache import _mem_cache
+    from src.futures_lib.core.cache import _mem_cache
 
     # Save original state
     original = dict(_mem_cache)
@@ -44,7 +40,7 @@ def _clear_position_cache():
 @pytest.fixture()
 def client():
     """FastAPI test client for the trade API."""
-    from api_server import app
+    from src.futures_lib.api_server import app
 
     return TestClient(app)
 
@@ -143,7 +139,7 @@ class TestUpdatePositions:
 
     def test_post_updates_cache(self, client, sample_payload):
         """Verify that POST actually writes to the cache."""
-        from api_server import get_live_positions
+        from src.futures_lib.api_server import get_live_positions
 
         # Before: no positions
         before = get_live_positions()
@@ -162,7 +158,7 @@ class TestUpdatePositions:
         self, client, sample_payload, single_position_payload
     ):
         """A new POST replaces the previous positions snapshot."""
-        from api_server import get_live_positions
+        from src.futures_lib.api_server import get_live_positions
 
         # First push: 2 positions
         client.post("/update_positions", json=sample_payload)
@@ -374,7 +370,7 @@ class TestClearPositions:
 
     def test_clear_removes_data(self, client, sample_payload):
         """DELETE removes cached positions."""
-        from api_server import get_live_positions
+        from src.futures_lib.api_server import get_live_positions
 
         client.post("/update_positions", json=sample_payload)
         assert get_live_positions()["has_positions"] is True
@@ -403,7 +399,7 @@ class TestGetLivePositionsHelper:
 
     def test_no_data(self):
         """Returns empty dict structure when cache is empty."""
-        from api_server import get_live_positions
+        from src.futures_lib.api_server import get_live_positions
 
         result = get_live_positions()
         assert result["has_positions"] is False
@@ -415,7 +411,7 @@ class TestGetLivePositionsHelper:
 
     def test_after_push(self, client, sample_payload):
         """Returns correct data after a push."""
-        from api_server import get_live_positions
+        from src.futures_lib.api_server import get_live_positions
 
         client.post("/update_positions", json=sample_payload)
 
@@ -427,7 +423,7 @@ class TestGetLivePositionsHelper:
 
     def test_pnl_calculation(self, client):
         """Total unrealized PnL is computed correctly across positions."""
-        from api_server import get_live_positions
+        from src.futures_lib.api_server import get_live_positions
 
         payload = {
             "account": "Test",
@@ -462,8 +458,8 @@ class TestGetLivePositionsHelper:
 
     def test_corrupt_cache_data(self):
         """Handles corrupt cache data gracefully."""
-        from api_server import _POSITIONS_CACHE_KEY, get_live_positions
-        from cache import cache_set
+        from src.futures_lib.api_server import _POSITIONS_CACHE_KEY, get_live_positions
+        from src.futures_lib.core.cache import cache_set
 
         cache_set(_POSITIONS_CACHE_KEY, b"not valid json{{{", 60)
 
@@ -473,8 +469,8 @@ class TestGetLivePositionsHelper:
 
     def test_partial_cache_data(self):
         """Handles cache data with missing fields gracefully."""
-        from api_server import _POSITIONS_CACHE_KEY, get_live_positions
-        from cache import cache_set
+        from src.futures_lib.api_server import _POSITIONS_CACHE_KEY, get_live_positions
+        from src.futures_lib.core.cache import cache_set
 
         data = json.dumps({"account": "Test"}).encode()  # missing positions key
         cache_set(_POSITIONS_CACHE_KEY, data, 60)
@@ -524,7 +520,7 @@ class TestGrokContextIntegration:
 
     def test_context_without_positions(self):
         """Market context without positions shows 'No live positions'."""
-        from grok_helper import format_market_context
+        from src.futures_lib.integrations.grok_helper import format_market_context
 
         engine_mock = MagicMock()
         engine_mock.get_backtest_results.return_value = []
@@ -543,7 +539,7 @@ class TestGrokContextIntegration:
 
     def test_context_with_positions(self):
         """Market context includes position details when available."""
-        from grok_helper import format_market_context
+        from src.futures_lib.integrations.grok_helper import format_market_context
 
         engine_mock = MagicMock()
         engine_mock.get_backtest_results.return_value = []
@@ -581,7 +577,7 @@ class TestGrokContextIntegration:
 
     def test_context_with_negative_pnl(self):
         """Market context formats negative PnL correctly."""
-        from grok_helper import format_market_context
+        from src.futures_lib.integrations.grok_helper import format_market_context
 
         engine_mock = MagicMock()
         engine_mock.get_backtest_results.return_value = []
@@ -617,7 +613,7 @@ class TestGrokContextIntegration:
 
     def test_context_with_empty_positions(self):
         """Empty positions list means no positions flag."""
-        from grok_helper import format_market_context
+        from src.futures_lib.integrations.grok_helper import format_market_context
 
         engine_mock = MagicMock()
         engine_mock.get_backtest_results.return_value = []
@@ -644,7 +640,7 @@ class TestGrokContextIntegration:
 
     def test_context_positions_none(self):
         """Passing None for live_positions is handled gracefully."""
-        from grok_helper import format_market_context
+        from src.futures_lib.integrations.grok_helper import format_market_context
 
         engine_mock = MagicMock()
         engine_mock.get_backtest_results.return_value = []
@@ -672,7 +668,7 @@ class TestModelValidation:
 
     def test_nt_position_model(self):
         """NTPosition model accepts valid data."""
-        from api_server import NTPosition
+        from src.futures_lib.api_server import NTPosition
 
         pos = NTPosition(
             symbol="MESZ5",
@@ -689,7 +685,7 @@ class TestModelValidation:
 
     def test_nt_position_defaults(self):
         """NTPosition model defaults for optional fields."""
-        from api_server import NTPosition
+        from src.futures_lib.api_server import NTPosition
 
         pos = NTPosition(
             symbol="MESZ5",
@@ -702,7 +698,7 @@ class TestModelValidation:
 
     def test_nt_payload_model(self):
         """NTPositionsPayload model validates correctly."""
-        from api_server import NTPosition, NTPositionsPayload
+        from src.futures_lib.api_server import NTPosition, NTPositionsPayload
 
         payload = NTPositionsPayload(
             account="Sim101",
@@ -721,7 +717,7 @@ class TestModelValidation:
 
     def test_nt_payload_empty_positions(self):
         """Payload with empty positions list is valid."""
-        from api_server import NTPositionsPayload
+        from src.futures_lib.api_server import NTPositionsPayload
 
         payload = NTPositionsPayload(
             account="Sim101",
@@ -732,7 +728,7 @@ class TestModelValidation:
 
     def test_nt_response_model(self):
         """NTPositionsResponse model works with defaults."""
-        from api_server import NTPositionsResponse
+        from src.futures_lib.api_server import NTPositionsResponse
 
         resp = NTPositionsResponse()
         assert resp.account == ""
@@ -784,7 +780,7 @@ class TestRapidUpdates:
 
     def test_rapid_position_updates(self, client):
         """Multiple rapid POSTs don't corrupt data."""
-        from api_server import get_live_positions
+        from src.futures_lib.api_server import get_live_positions
 
         for i in range(10):
             payload = {
@@ -810,7 +806,7 @@ class TestRapidUpdates:
 
     def test_position_lifecycle(self, client):
         """Simulate: no positions → open → update PnL → close → clear."""
-        from api_server import get_live_positions
+        from src.futures_lib.api_server import get_live_positions
 
         # 1. No positions initially
         assert get_live_positions()["has_positions"] is False

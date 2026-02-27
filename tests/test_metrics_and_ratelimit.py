@@ -31,27 +31,12 @@ Covers:
 
 import json
 import os
-import sys
 import time
 from datetime import datetime
-from typing import Any
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Path setup
-# ---------------------------------------------------------------------------
-_this_dir = os.path.dirname(os.path.abspath(__file__))
-_root = os.path.dirname(_this_dir)
-_src = os.path.join(_root, "src")
-_data_svc = os.path.join(_src, "services", "data")
-_engine_dir = os.path.join(_src, "services", "engine")
-
-for _p in (_src, _data_svc, _engine_dir):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
 os.environ.setdefault("DISABLE_REDIS", "1")
 # Disable rate limiting for most tests unless explicitly testing it
@@ -69,81 +54,81 @@ class TestMetricDefinitions:
     """Verify all expected metrics are registered."""
 
     def test_registry_exists(self):
-        from api.metrics import get_registry
+        from src.futures_lib.services.data.api.metrics import get_registry
 
         registry = get_registry()
         assert registry is not None
 
     def test_http_requests_total_registered(self):
-        from api.metrics import HTTP_REQUESTS_TOTAL
+        from src.futures_lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
         assert HTTP_REQUESTS_TOTAL is not None
         # prometheus_client strips _total suffix from Counter._name
         assert "http_requests" in HTTP_REQUESTS_TOTAL._name
 
     def test_http_request_duration_registered(self):
-        from api.metrics import HTTP_REQUEST_DURATION
+        from src.futures_lib.services.data.api.metrics import HTTP_REQUEST_DURATION
 
         assert HTTP_REQUEST_DURATION is not None
         # prometheus_client may strip _seconds suffix from Histogram._name
         assert "http_request_duration" in HTTP_REQUEST_DURATION._name
 
     def test_sse_connections_active_registered(self):
-        from api.metrics import SSE_CONNECTIONS_ACTIVE
+        from src.futures_lib.services.data.api.metrics import SSE_CONNECTIONS_ACTIVE
 
         assert SSE_CONNECTIONS_ACTIVE is not None
         assert "sse_connections_active" in SSE_CONNECTIONS_ACTIVE._name
 
     def test_sse_events_total_registered(self):
-        from api.metrics import SSE_EVENTS_TOTAL
+        from src.futures_lib.services.data.api.metrics import SSE_EVENTS_TOTAL
 
         assert SSE_EVENTS_TOTAL is not None
         assert "sse_events" in SSE_EVENTS_TOTAL._name
 
     def test_engine_last_refresh_epoch_registered(self):
-        from api.metrics import ENGINE_LAST_REFRESH_EPOCH
+        from src.futures_lib.services.data.api.metrics import ENGINE_LAST_REFRESH_EPOCH
 
         assert ENGINE_LAST_REFRESH_EPOCH is not None
         assert "engine_last_refresh_epoch" in ENGINE_LAST_REFRESH_EPOCH._name
 
     def test_engine_cycle_duration_registered(self):
-        from api.metrics import ENGINE_CYCLE_DURATION
+        from src.futures_lib.services.data.api.metrics import ENGINE_CYCLE_DURATION
 
         assert ENGINE_CYCLE_DURATION is not None
         assert "engine_cycle_duration" in ENGINE_CYCLE_DURATION._name
 
     def test_risk_checks_total_registered(self):
-        from api.metrics import RISK_CHECKS_TOTAL
+        from src.futures_lib.services.data.api.metrics import RISK_CHECKS_TOTAL
 
         assert RISK_CHECKS_TOTAL is not None
         assert "risk_checks" in RISK_CHECKS_TOTAL._name
 
     def test_orb_detections_total_registered(self):
-        from api.metrics import ORB_DETECTIONS_TOTAL
+        from src.futures_lib.services.data.api.metrics import ORB_DETECTIONS_TOTAL
 
         assert ORB_DETECTIONS_TOTAL is not None
         assert "orb_detections" in ORB_DETECTIONS_TOTAL._name
 
     def test_no_trade_alerts_total_registered(self):
-        from api.metrics import NO_TRADE_ALERTS_TOTAL
+        from src.futures_lib.services.data.api.metrics import NO_TRADE_ALERTS_TOTAL
 
         assert NO_TRADE_ALERTS_TOTAL is not None
         assert "no_trade_alerts" in NO_TRADE_ALERTS_TOTAL._name
 
     def test_focus_quality_gauge_registered(self):
-        from api.metrics import FOCUS_QUALITY_GAUGE
+        from src.futures_lib.services.data.api.metrics import FOCUS_QUALITY_GAUGE
 
         assert FOCUS_QUALITY_GAUGE is not None
         assert "focus_quality_gauge" in FOCUS_QUALITY_GAUGE._name
 
     def test_positions_open_count_registered(self):
-        from api.metrics import POSITIONS_OPEN_COUNT
+        from src.futures_lib.services.data.api.metrics import POSITIONS_OPEN_COUNT
 
         assert POSITIONS_OPEN_COUNT is not None
         assert "positions_open_count" in POSITIONS_OPEN_COUNT._name
 
     def test_redis_connected_registered(self):
-        from api.metrics import REDIS_CONNECTED
+        from src.futures_lib.services.data.api.metrics import REDIS_CONNECTED
 
         assert REDIS_CONNECTED is not None
         assert "redis_connected" in REDIS_CONNECTED._name
@@ -153,7 +138,10 @@ class TestMetricRecordHelpers:
     """Test the helper functions that record metric values."""
 
     def test_record_sse_connect_increments(self):
-        from api.metrics import SSE_CONNECTIONS_ACTIVE, record_sse_connect
+        from src.futures_lib.services.data.api.metrics import (
+            SSE_CONNECTIONS_ACTIVE,
+            record_sse_connect,
+        )
 
         before = SSE_CONNECTIONS_ACTIVE._value.get()
         record_sse_connect()
@@ -161,7 +149,10 @@ class TestMetricRecordHelpers:
         assert after == before + 1
 
     def test_record_sse_disconnect_decrements(self):
-        from api.metrics import SSE_CONNECTIONS_ACTIVE, record_sse_disconnect
+        from src.futures_lib.services.data.api.metrics import (
+            SSE_CONNECTIONS_ACTIVE,
+            record_sse_disconnect,
+        )
 
         # Ensure gauge is at least 1 so decrement doesn't go below zero
         SSE_CONNECTIONS_ACTIVE.set(5)
@@ -171,7 +162,10 @@ class TestMetricRecordHelpers:
         assert after == before - 1
 
     def test_record_sse_event_increments_counter(self):
-        from api.metrics import SSE_EVENTS_TOTAL, record_sse_event
+        from src.futures_lib.services.data.api.metrics import (
+            SSE_EVENTS_TOTAL,
+            record_sse_event,
+        )
 
         # Get initial value
         initial = SSE_EVENTS_TOTAL.labels(event_type="focus-update")._value.get()
@@ -180,7 +174,10 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_sse_event_multiple_types(self):
-        from api.metrics import SSE_EVENTS_TOTAL, record_sse_event
+        from src.futures_lib.services.data.api.metrics import (
+            SSE_EVENTS_TOTAL,
+            record_sse_event,
+        )
 
         record_sse_event("heartbeat")
         record_sse_event("heartbeat")
@@ -192,7 +189,10 @@ class TestMetricRecordHelpers:
         assert pos >= 1
 
     def test_record_risk_check_allowed(self):
-        from api.metrics import RISK_CHECKS_TOTAL, record_risk_check
+        from src.futures_lib.services.data.api.metrics import (
+            RISK_CHECKS_TOTAL,
+            record_risk_check,
+        )
 
         initial = RISK_CHECKS_TOTAL.labels(result="allowed")._value.get()
         record_risk_check("allowed")
@@ -200,7 +200,10 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_risk_check_blocked(self):
-        from api.metrics import RISK_CHECKS_TOTAL, record_risk_check
+        from src.futures_lib.services.data.api.metrics import (
+            RISK_CHECKS_TOTAL,
+            record_risk_check,
+        )
 
         initial = RISK_CHECKS_TOTAL.labels(result="blocked")._value.get()
         record_risk_check("blocked")
@@ -208,7 +211,10 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_risk_check_advisory(self):
-        from api.metrics import RISK_CHECKS_TOTAL, record_risk_check
+        from src.futures_lib.services.data.api.metrics import (
+            RISK_CHECKS_TOTAL,
+            record_risk_check,
+        )
 
         initial = RISK_CHECKS_TOTAL.labels(result="advisory")._value.get()
         record_risk_check("advisory")
@@ -216,7 +222,10 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_orb_detection_long(self):
-        from api.metrics import ORB_DETECTIONS_TOTAL, record_orb_detection
+        from src.futures_lib.services.data.api.metrics import (
+            ORB_DETECTIONS_TOTAL,
+            record_orb_detection,
+        )
 
         initial = ORB_DETECTIONS_TOTAL.labels(direction="LONG")._value.get()
         record_orb_detection("LONG")
@@ -224,7 +233,10 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_orb_detection_short(self):
-        from api.metrics import ORB_DETECTIONS_TOTAL, record_orb_detection
+        from src.futures_lib.services.data.api.metrics import (
+            ORB_DETECTIONS_TOTAL,
+            record_orb_detection,
+        )
 
         initial = ORB_DETECTIONS_TOTAL.labels(direction="SHORT")._value.get()
         record_orb_detection("SHORT")
@@ -232,7 +244,10 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_orb_detection_none(self):
-        from api.metrics import ORB_DETECTIONS_TOTAL, record_orb_detection
+        from src.futures_lib.services.data.api.metrics import (
+            ORB_DETECTIONS_TOTAL,
+            record_orb_detection,
+        )
 
         initial = ORB_DETECTIONS_TOTAL.labels(direction="none")._value.get()
         record_orb_detection("none")
@@ -240,7 +255,10 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_no_trade_alert(self):
-        from api.metrics import NO_TRADE_ALERTS_TOTAL, record_no_trade_alert
+        from src.futures_lib.services.data.api.metrics import (
+            NO_TRADE_ALERTS_TOTAL,
+            record_no_trade_alert,
+        )
 
         initial = NO_TRADE_ALERTS_TOTAL.labels(condition="all_low_quality")._value.get()
         record_no_trade_alert("all_low_quality")
@@ -248,7 +266,10 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_no_trade_alert_multiple_conditions(self):
-        from api.metrics import NO_TRADE_ALERTS_TOTAL, record_no_trade_alert
+        from src.futures_lib.services.data.api.metrics import (
+            NO_TRADE_ALERTS_TOTAL,
+            record_no_trade_alert,
+        )
 
         record_no_trade_alert("extreme_volatility")
         record_no_trade_alert("daily_loss_exceeded")
@@ -266,7 +287,10 @@ class TestMetricRecordHelpers:
         assert streak >= 1
 
     def test_record_engine_refresh_sets_timestamp(self):
-        from api.metrics import ENGINE_LAST_REFRESH_EPOCH, record_engine_refresh
+        from src.futures_lib.services.data.api.metrics import (
+            ENGINE_LAST_REFRESH_EPOCH,
+            record_engine_refresh,
+        )
 
         before = time.time()
         record_engine_refresh()
@@ -275,7 +299,10 @@ class TestMetricRecordHelpers:
         assert before <= value <= after
 
     def test_record_engine_cycle_observes_duration(self):
-        from api.metrics import ENGINE_CYCLE_DURATION, record_engine_cycle
+        from src.futures_lib.services.data.api.metrics import (
+            ENGINE_CYCLE_DURATION,
+            record_engine_cycle,
+        )
 
         # Observe a couple of values
         record_engine_cycle(0.5)
@@ -288,14 +315,20 @@ class TestMetricRecordHelpers:
         assert sample_sum >= 4.7  # 0.5 + 1.2 + 3.0
 
     def test_update_focus_quality(self):
-        from api.metrics import FOCUS_QUALITY_GAUGE, update_focus_quality
+        from src.futures_lib.services.data.api.metrics import (
+            FOCUS_QUALITY_GAUGE,
+            update_focus_quality,
+        )
 
         update_focus_quality("Gold", 0.78)
         val = FOCUS_QUALITY_GAUGE.labels(symbol="Gold")._value.get()
         assert val == pytest.approx(0.78)
 
     def test_update_focus_quality_multiple_assets(self):
-        from api.metrics import FOCUS_QUALITY_GAUGE, update_focus_quality
+        from src.futures_lib.services.data.api.metrics import (
+            FOCUS_QUALITY_GAUGE,
+            update_focus_quality,
+        )
 
         update_focus_quality("MGC", 0.72)
         update_focus_quality("MNQ", 0.85)
@@ -312,7 +345,10 @@ class TestMetricRecordHelpers:
         )
 
     def test_update_positions_count(self):
-        from api.metrics import POSITIONS_OPEN_COUNT, update_positions_count
+        from src.futures_lib.services.data.api.metrics import (
+            POSITIONS_OPEN_COUNT,
+            update_positions_count,
+        )
 
         update_positions_count(3)
         assert POSITIONS_OPEN_COUNT._value.get() == 3
@@ -321,13 +357,19 @@ class TestMetricRecordHelpers:
         assert POSITIONS_OPEN_COUNT._value.get() == 0
 
     def test_update_redis_status_connected(self):
-        from api.metrics import REDIS_CONNECTED, update_redis_status
+        from src.futures_lib.services.data.api.metrics import (
+            REDIS_CONNECTED,
+            update_redis_status,
+        )
 
         update_redis_status(True)
         assert REDIS_CONNECTED._value.get() == 1
 
     def test_update_redis_status_disconnected(self):
-        from api.metrics import REDIS_CONNECTED, update_redis_status
+        from src.futures_lib.services.data.api.metrics import (
+            REDIS_CONNECTED,
+            update_redis_status,
+        )
 
         update_redis_status(False)
         assert REDIS_CONNECTED._value.get() == 0
@@ -337,64 +379,64 @@ class TestPathNormalization:
     """Test _normalize_path for metric cardinality reduction."""
 
     def test_empty_path(self):
-        from api.metrics import _normalize_path
+        from src.futures_lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("") == "/"
 
     def test_root_path(self):
-        from api.metrics import _normalize_path
+        from src.futures_lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/") == "/"
 
     def test_health_unchanged(self):
-        from api.metrics import _normalize_path
+        from src.futures_lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/health") == "/health"
 
     def test_sse_dashboard_unchanged(self):
-        from api.metrics import _normalize_path
+        from src.futures_lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/sse/dashboard") == "/sse/dashboard"
 
     def test_focus_symbol_normalized(self):
-        from api.metrics import _normalize_path
+        from src.futures_lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/api/focus/mgc") == "/api/focus/{id}"
         assert _normalize_path("/api/focus/mnq") == "/api/focus/{id}"
 
     def test_trades_id_normalized(self):
-        from api.metrics import _normalize_path
+        from src.futures_lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/trades/123") == "/trades/{id}"
         assert _normalize_path("/trades/456/close") == "/trades/{id}/close"
 
     def test_positions_path_normalized(self):
-        from api.metrics import _normalize_path
+        from src.futures_lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/positions/abc") == "/positions/{id}"
 
     def test_journal_path_normalized(self):
-        from api.metrics import _normalize_path
+        from src.futures_lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/journal/entries") == "/journal/{id}"
 
     def test_analysis_latest_symbol_normalized(self):
-        from api.metrics import _normalize_path
+        from src.futures_lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/analysis/latest/Gold") == "/analysis/latest/{id}"
 
     def test_data_ohlcv_normalized(self):
-        from api.metrics import _normalize_path
+        from src.futures_lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/data/ohlcv/MGC=F") == "/data/ohlcv/{id}"
 
     def test_data_daily_normalized(self):
-        from api.metrics import _normalize_path
+        from src.futures_lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/data/daily/MGC=F") == "/data/daily/{id}"
 
     def test_non_matching_path_unchanged(self):
-        from api.metrics import _normalize_path
+        from src.futures_lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/risk/status") == "/risk/status"
         assert _normalize_path("/risk/check") == "/risk/check"
@@ -405,15 +447,17 @@ class TestPrometheusOutput:
     """Test that generate_latest produces valid Prometheus text format."""
 
     def test_generate_latest_returns_bytes(self):
-        from api.metrics import get_registry
         from prometheus_client import generate_latest
+
+        from src.futures_lib.services.data.api.metrics import get_registry
 
         output = generate_latest(get_registry())
         assert isinstance(output, bytes)
 
     def test_generate_latest_contains_help_lines(self):
-        from api.metrics import get_registry
         from prometheus_client import generate_latest
+
+        from src.futures_lib.services.data.api.metrics import get_registry
 
         output = generate_latest(get_registry()).decode("utf-8")
         assert "# HELP http_requests_total" in output
@@ -421,8 +465,9 @@ class TestPrometheusOutput:
         assert "# HELP risk_checks_total" in output
 
     def test_generate_latest_contains_type_lines(self):
-        from api.metrics import get_registry
         from prometheus_client import generate_latest
+
+        from src.futures_lib.services.data.api.metrics import get_registry
 
         output = generate_latest(get_registry()).decode("utf-8")
         assert "# TYPE http_requests_total counter" in output
@@ -430,16 +475,21 @@ class TestPrometheusOutput:
         assert "# TYPE sse_connections_active gauge" in output
 
     def test_output_has_metric_values(self):
-        from api.metrics import get_registry, record_sse_event
         from prometheus_client import generate_latest
+
+        from src.futures_lib.services.data.api.metrics import (
+            get_registry,
+            record_sse_event,
+        )
 
         record_sse_event("test-event")
         output = generate_latest(get_registry()).decode("utf-8")
         assert "sse_events_total" in output
 
     def test_output_contains_all_metric_families(self):
-        from api.metrics import get_registry
         from prometheus_client import generate_latest
+
+        from src.futures_lib.services.data.api.metrics import get_registry
 
         output = generate_latest(get_registry()).decode("utf-8")
         expected_metrics = [
@@ -465,7 +515,7 @@ class TestCollectLiveGauges:
 
     def test_collect_with_no_cache_data(self):
         """Should not crash when cache returns None for everything."""
-        from api.metrics import _collect_live_gauges
+        from src.futures_lib.services.data.api.metrics import _collect_live_gauges
 
         with patch("api.metrics.update_redis_status") as mock_redis:
             _collect_live_gauges()
@@ -473,7 +523,10 @@ class TestCollectLiveGauges:
             mock_redis.assert_called()
 
     def test_collect_focus_updates_gauges(self):
-        from api.metrics import FOCUS_QUALITY_GAUGE, _collect_live_gauges
+        from src.futures_lib.services.data.api.metrics import (
+            FOCUS_QUALITY_GAUGE,
+            _collect_live_gauges,
+        )
 
         focus_data = json.dumps(
             {
@@ -494,18 +547,12 @@ class TestCollectLiveGauges:
             )._value.get() == pytest.approx(0.67)
 
     def test_collect_positions_updates_gauge(self):
-        from api.metrics import POSITIONS_OPEN_COUNT, _collect_live_gauges
-
-        positions_data = json.dumps(
-            [
-                {"symbol": "MGC", "side": "LONG", "quantity": 2},
-                {"symbol": "MNQ", "side": "SHORT", "quantity": 1},
-            ]
-        ).encode()
-
         # We test update_positions_count directly since _collect_live_gauges
         # reads from the real cache which may not be available
-        from api.metrics import update_positions_count
+        from src.futures_lib.services.data.api.metrics import (
+            POSITIONS_OPEN_COUNT,
+            update_positions_count,
+        )
 
         update_positions_count(2)
         assert POSITIONS_OPEN_COUNT._value.get() == 2
@@ -514,14 +561,14 @@ class TestCollectLiveGauges:
 def _can_patch_cache_get():
     """Check if we can patch cache_get in the metrics module."""
     try:
-        from cache import cache_get
+        import src.futures_lib.core.cache  # noqa: F401
 
         return True
     except ImportError:
         return False
 
 
-from contextlib import nullcontext
+from contextlib import nullcontext  # noqa: E402
 
 
 def _mock_cache_for_collect(data):
@@ -540,9 +587,10 @@ class TestPrometheusMiddleware:
     @pytest.fixture()
     def app_with_middleware(self):
         """Build a minimal FastAPI app with PrometheusMiddleware."""
-        from api.metrics import PrometheusMiddleware
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
+        from src.futures_lib.services.data.api.metrics import PrometheusMiddleware
 
         app = FastAPI()
         app.add_middleware(PrometheusMiddleware)
@@ -565,7 +613,7 @@ class TestPrometheusMiddleware:
         return TestClient(app, raise_server_exceptions=False)
 
     def test_middleware_records_successful_request(self, app_with_middleware):
-        from api.metrics import HTTP_REQUESTS_TOTAL
+        from src.futures_lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
         initial = HTTP_REQUESTS_TOTAL.labels(
             method="GET", path="/test/hello", status="200"
@@ -580,7 +628,7 @@ class TestPrometheusMiddleware:
         assert after == initial + 1
 
     def test_middleware_records_404(self, app_with_middleware):
-        from api.metrics import HTTP_REQUESTS_TOTAL
+        from src.futures_lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
         initial = HTTP_REQUESTS_TOTAL.labels(
             method="GET", path="/test/nonexistent", status="404"
@@ -595,7 +643,7 @@ class TestPrometheusMiddleware:
         assert after == initial + 1
 
     def test_middleware_records_duration(self, app_with_middleware):
-        from api.metrics import HTTP_REQUEST_DURATION
+        from src.futures_lib.services.data.api.metrics import HTTP_REQUEST_DURATION
 
         # Record initial sum
         initial_sum = HTTP_REQUEST_DURATION.labels(
@@ -612,7 +660,7 @@ class TestPrometheusMiddleware:
         assert after_sum > initial_sum
 
     def test_middleware_records_500_on_error(self, app_with_middleware):
-        from api.metrics import HTTP_REQUESTS_TOTAL
+        from src.futures_lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
         initial = HTTP_REQUESTS_TOTAL.labels(
             method="GET", path="/test/error", status="500"
@@ -637,10 +685,11 @@ class TestPrometheusEndpoint:
 
     @pytest.fixture()
     def client(self):
-        from api.metrics import PrometheusMiddleware
-        from api.metrics import router as metrics_router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
+        from src.futures_lib.services.data.api.metrics import PrometheusMiddleware
+        from src.futures_lib.services.data.api.metrics import router as metrics_router
 
         app = FastAPI()
         app.add_middleware(PrometheusMiddleware)
@@ -700,7 +749,7 @@ class TestClientKeyFunction:
         return req
 
     def test_api_key_takes_priority(self):
-        from api.rate_limit import _client_key_func
+        from src.futures_lib.services.data.api.rate_limit import _client_key_func
 
         req = self._make_request(
             headers={"x-api-key": "my-secret-key-12345"},
@@ -711,14 +760,14 @@ class TestClientKeyFunction:
         assert "my-secre" in key  # first 8 chars
 
     def test_api_key_short_key(self):
-        from api.rate_limit import _client_key_func
+        from src.futures_lib.services.data.api.rate_limit import _client_key_func
 
         req = self._make_request(headers={"x-api-key": "abc"})
         key = _client_key_func(req)
         assert key == "apikey:abc"
 
     def test_forwarded_for_used_when_no_api_key(self):
-        from api.rate_limit import _client_key_func
+        from src.futures_lib.services.data.api.rate_limit import _client_key_func
 
         req = self._make_request(
             headers={"x-forwarded-for": "10.0.0.1, 10.0.0.2"},
@@ -728,14 +777,14 @@ class TestClientKeyFunction:
         assert key == "ip:10.0.0.1"
 
     def test_forwarded_for_single_ip(self):
-        from api.rate_limit import _client_key_func
+        from src.futures_lib.services.data.api.rate_limit import _client_key_func
 
         req = self._make_request(headers={"x-forwarded-for": "203.0.113.50"})
         key = _client_key_func(req)
         assert key == "ip:203.0.113.50"
 
     def test_remote_address_fallback(self):
-        from api.rate_limit import _client_key_func
+        from src.futures_lib.services.data.api.rate_limit import _client_key_func
 
         req = self._make_request(headers={}, client_host="192.168.1.100")
         # get_remote_address from slowapi reads request.client.host
@@ -747,65 +796,101 @@ class TestPathLimitMapping:
     """Test get_limit_for_path returns correct limits."""
 
     def test_health_gets_public_limit(self):
-        from api.rate_limit import PUBLIC_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            PUBLIC_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/health") == PUBLIC_LIMIT
 
     def test_docs_gets_public_limit(self):
-        from api.rate_limit import PUBLIC_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            PUBLIC_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/docs") == PUBLIC_LIMIT
 
     def test_metrics_gets_public_limit(self):
-        from api.rate_limit import PUBLIC_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            PUBLIC_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/metrics") == PUBLIC_LIMIT
         assert get_limit_for_path("/metrics/prometheus") == PUBLIC_LIMIT
 
     def test_sse_gets_sse_limit(self):
-        from api.rate_limit import SSE_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            SSE_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/sse/dashboard") == SSE_LIMIT
         assert get_limit_for_path("/sse/health") == SSE_LIMIT
 
     def test_trades_gets_mutations_limit(self):
-        from api.rate_limit import MUTATIONS_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            MUTATIONS_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/trades") == MUTATIONS_LIMIT
         assert get_limit_for_path("/trades/123/close") == MUTATIONS_LIMIT
 
     def test_log_trade_gets_mutations_limit(self):
-        from api.rate_limit import MUTATIONS_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            MUTATIONS_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/log_trade") == MUTATIONS_LIMIT
 
     def test_positions_update_gets_mutations_limit(self):
-        from api.rate_limit import MUTATIONS_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            MUTATIONS_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/positions/update") == MUTATIONS_LIMIT
 
     def test_risk_check_gets_mutations_limit(self):
-        from api.rate_limit import MUTATIONS_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            MUTATIONS_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/risk/check") == MUTATIONS_LIMIT
 
     def test_force_refresh_gets_heavy_limit(self):
-        from api.rate_limit import HEAVY_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            HEAVY_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/actions/force_refresh") == HEAVY_LIMIT
 
     def test_optimize_now_gets_heavy_limit(self):
-        from api.rate_limit import HEAVY_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            HEAVY_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/actions/optimize_now") == HEAVY_LIMIT
 
     def test_run_backtest_gets_heavy_limit(self):
-        from api.rate_limit import HEAVY_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            HEAVY_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/actions/run_backtest") == HEAVY_LIMIT
 
     def test_unknown_path_gets_default_limit(self):
-        from api.rate_limit import DEFAULT_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            DEFAULT_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/some/random/path") == DEFAULT_LIMIT
         assert get_limit_for_path("/api/focus") == DEFAULT_LIMIT
@@ -815,14 +900,20 @@ class TestLimiterSingleton:
     """Test limiter creation and lifecycle."""
 
     def test_get_limiter_returns_limiter(self):
-        from api.rate_limit import get_limiter, reset_limiter
+        from src.futures_lib.services.data.api.rate_limit import (
+            get_limiter,
+            reset_limiter,
+        )
 
         reset_limiter()
         limiter = get_limiter()
         assert limiter is not None
 
     def test_get_limiter_returns_same_instance(self):
-        from api.rate_limit import get_limiter, reset_limiter
+        from src.futures_lib.services.data.api.rate_limit import (
+            get_limiter,
+            reset_limiter,
+        )
 
         reset_limiter()
         limiter1 = get_limiter()
@@ -830,9 +921,12 @@ class TestLimiterSingleton:
         assert limiter1 is limiter2
 
     def test_reset_limiter_clears_singleton(self):
-        from api.rate_limit import get_limiter, reset_limiter
+        from src.futures_lib.services.data.api.rate_limit import (
+            get_limiter,
+            reset_limiter,
+        )
 
-        limiter1 = get_limiter()
+        _limiter1 = get_limiter()  # noqa: F841
         reset_limiter()
         limiter2 = get_limiter()
         # After reset, a new instance should be created
@@ -846,7 +940,9 @@ class TestRateLimitEnabled:
 
     def test_is_rate_limiting_enabled_when_disabled(self):
         # Our test env sets RATE_LIMIT_ENABLED=0
-        from api.rate_limit import is_rate_limiting_enabled
+        from src.futures_lib.services.data.api.rate_limit import (
+            is_rate_limiting_enabled,
+        )
 
         # The module reads env at import time, so we need to check
         # the current state
@@ -855,7 +951,10 @@ class TestRateLimitEnabled:
         assert isinstance(result, bool)
 
     def test_effective_limit_when_disabled(self):
-        from api.rate_limit import _DISABLED_LIMIT, _get_effective_limit
+        from src.futures_lib.services.data.api.rate_limit import (
+            _DISABLED_LIMIT,
+            _get_effective_limit,
+        )
 
         # When RATE_LIMIT_ENABLED is "0", should return the disabled limit
         # This depends on the module-level _ENABLED var
@@ -877,7 +976,7 @@ class TestRateLimitHandler:
         return RateLimitExceeded(mock_limit)
 
     def test_handler_returns_429(self):
-        from api.rate_limit import _rate_limit_handler
+        from src.futures_lib.services.data.api.rate_limit import _rate_limit_handler
 
         req = MagicMock()
         req.method = "POST"
@@ -892,7 +991,7 @@ class TestRateLimitHandler:
         assert resp.status_code == 429
 
     def test_handler_returns_json_body(self):
-        from api.rate_limit import _rate_limit_handler
+        from src.futures_lib.services.data.api.rate_limit import _rate_limit_handler
 
         req = MagicMock()
         req.method = "GET"
@@ -905,13 +1004,13 @@ class TestRateLimitHandler:
         exc = self._make_rate_limit_exc("30/minute")
         resp = _rate_limit_handler(req, exc)
 
-        body = json.loads(resp.body.decode())
+        body = json.loads(resp.body.decode())  # type: ignore[union-attr]
         assert body["error"] == "rate_limit_exceeded"
         assert "detail" in body
         assert "retry_after" in body
 
     def test_handler_includes_retry_after_header(self):
-        from api.rate_limit import _rate_limit_handler
+        from src.futures_lib.services.data.api.rate_limit import _rate_limit_handler
 
         req = MagicMock()
         req.method = "GET"
@@ -931,8 +1030,12 @@ class TestSetupRateLimiting:
     """Test setup_rate_limiting installs correctly on a FastAPI app."""
 
     def test_setup_installs_limiter_on_app_state(self):
-        from api.rate_limit import reset_limiter, setup_rate_limiting
         from fastapi import FastAPI
+
+        from src.futures_lib.services.data.api.rate_limit import (
+            reset_limiter,
+            setup_rate_limiting,
+        )
 
         reset_limiter()
         app = FastAPI()
@@ -942,8 +1045,12 @@ class TestSetupRateLimiting:
         assert app.state.limiter is limiter
 
     def test_setup_returns_limiter_instance(self):
-        from api.rate_limit import reset_limiter, setup_rate_limiting
         from fastapi import FastAPI
+
+        from src.futures_lib.services.data.api.rate_limit import (
+            reset_limiter,
+            setup_rate_limiting,
+        )
 
         reset_limiter()
         app = FastAPI()
@@ -953,8 +1060,12 @@ class TestSetupRateLimiting:
 
     def test_setup_idempotent(self):
         """Calling setup multiple times should not crash."""
-        from api.rate_limit import reset_limiter, setup_rate_limiting
         from fastapi import FastAPI
+
+        from src.futures_lib.services.data.api.rate_limit import (
+            reset_limiter,
+            setup_rate_limiting,
+        )
 
         reset_limiter()
         app = FastAPI()
@@ -967,7 +1078,7 @@ class TestStorageUri:
     """Test storage backend URI resolution."""
 
     def test_default_is_memory(self):
-        from api.rate_limit import _get_storage_uri
+        from src.futures_lib.services.data.api.rate_limit import _get_storage_uri
 
         uri = _get_storage_uri()
         assert "memory" in uri or uri.startswith("redis")
@@ -984,12 +1095,13 @@ class TestRateLimitIntegration:
     @pytest.fixture()
     def limited_client(self):
         """Build a FastAPI app with an extremely low rate limit for testing."""
-        from api.rate_limit import _rate_limit_handler
         from fastapi import FastAPI, Request
         from fastapi.testclient import TestClient
         from slowapi import Limiter
         from slowapi.errors import RateLimitExceeded
         from slowapi.util import get_remote_address
+
+        from src.futures_lib.services.data.api.rate_limit import _rate_limit_handler
 
         # Create a fresh limiter with a very tight limit
         limiter = Limiter(
@@ -1000,7 +1112,7 @@ class TestRateLimitIntegration:
 
         app = FastAPI()
         app.state.limiter = limiter
-        app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+        app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)  # type: ignore[arg-type]
 
         @app.get("/test/limited")
         @limiter.limit("3/minute")
@@ -1060,14 +1172,15 @@ class TestCombinedIntegration:
     @pytest.fixture()
     def full_client(self):
         """Build an app with both Prometheus middleware and rate limiting."""
-        from api.metrics import PrometheusMiddleware
-        from api.metrics import router as metrics_router
-        from api.rate_limit import _rate_limit_handler
         from fastapi import FastAPI, Request
         from fastapi.testclient import TestClient
         from slowapi import Limiter
         from slowapi.errors import RateLimitExceeded
         from slowapi.util import get_remote_address
+
+        from src.futures_lib.services.data.api.metrics import PrometheusMiddleware
+        from src.futures_lib.services.data.api.metrics import router as metrics_router
+        from src.futures_lib.services.data.api.rate_limit import _rate_limit_handler
 
         limiter = Limiter(
             key_func=get_remote_address,
@@ -1078,7 +1191,7 @@ class TestCombinedIntegration:
         app = FastAPI()
         app.add_middleware(PrometheusMiddleware)
         app.state.limiter = limiter
-        app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+        app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)  # type: ignore[arg-type]
         app.include_router(metrics_router)
 
         @app.get("/test/data")
@@ -1097,7 +1210,7 @@ class TestCombinedIntegration:
         assert resp.status_code == 200
 
     def test_metrics_track_normal_requests(self, full_client):
-        from api.metrics import HTTP_REQUESTS_TOTAL
+        from src.futures_lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
         initial = HTTP_REQUESTS_TOTAL.labels(
             method="GET", path="/test/data", status="200"
@@ -1111,7 +1224,7 @@ class TestCombinedIntegration:
         assert after == initial + 1
 
     def test_metrics_track_429_responses(self, full_client):
-        from api.metrics import HTTP_REQUESTS_TOTAL
+        from src.futures_lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
         # Exhaust the limit
         full_client.post("/test/action")
@@ -1157,7 +1270,7 @@ class TestMetricsEdgeCases:
 
     def test_sse_connect_disconnect_balance(self):
         """SSE gauge should track connects and disconnects accurately."""
-        from api.metrics import (
+        from src.futures_lib.services.data.api.metrics import (
             SSE_CONNECTIONS_ACTIVE,
             record_sse_connect,
             record_sse_disconnect,
@@ -1178,7 +1291,10 @@ class TestMetricsEdgeCases:
 
     def test_update_focus_quality_overwrites(self):
         """Focus quality gauge should reflect the latest value."""
-        from api.metrics import FOCUS_QUALITY_GAUGE, update_focus_quality
+        from src.futures_lib.services.data.api.metrics import (
+            FOCUS_QUALITY_GAUGE,
+            update_focus_quality,
+        )
 
         update_focus_quality("TestAsset", 0.50)
         assert FOCUS_QUALITY_GAUGE.labels(symbol="TestAsset")._value.get() == 0.50
@@ -1190,21 +1306,21 @@ class TestMetricsEdgeCases:
 
     def test_record_engine_cycle_zero_duration(self):
         """Zero-duration cycle should be observable."""
-        from api.metrics import record_engine_cycle
+        from src.futures_lib.services.data.api.metrics import record_engine_cycle
 
         record_engine_cycle(0.0)
         # No crash
 
     def test_record_engine_cycle_large_duration(self):
         """Large duration should be observable."""
-        from api.metrics import record_engine_cycle
+        from src.futures_lib.services.data.api.metrics import record_engine_cycle
 
         record_engine_cycle(120.0)
         # No crash
 
     def test_many_different_sse_event_types(self):
         """Many different event types should not crash."""
-        from api.metrics import record_sse_event
+        from src.futures_lib.services.data.api.metrics import record_sse_event
 
         event_types = [
             "focus-update",
@@ -1228,7 +1344,7 @@ class TestRateLimitEdgeCases:
     """Edge cases for rate limiting."""
 
     def test_client_key_with_empty_headers(self):
-        from api.rate_limit import _client_key_func
+        from src.futures_lib.services.data.api.rate_limit import _client_key_func
 
         req = MagicMock()
         req.headers = {}
@@ -1238,7 +1354,7 @@ class TestRateLimitEdgeCases:
         assert key.startswith("ip:")
 
     def test_client_key_with_none_forwarded_for(self):
-        from api.rate_limit import _client_key_func
+        from src.futures_lib.services.data.api.rate_limit import _client_key_func
 
         req = MagicMock()
         req.headers = {"x-forwarded-for": ""}
@@ -1249,19 +1365,26 @@ class TestRateLimitEdgeCases:
         assert key.startswith("ip:")
 
     def test_get_limit_for_path_empty(self):
-        from api.rate_limit import DEFAULT_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            DEFAULT_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("") == DEFAULT_LIMIT
 
     def test_get_limit_for_path_root(self):
-        from api.rate_limit import DEFAULT_LIMIT, get_limit_for_path
+        from src.futures_lib.services.data.api.rate_limit import (
+            DEFAULT_LIMIT,
+            get_limit_for_path,
+        )
 
         assert get_limit_for_path("/") == DEFAULT_LIMIT
 
     def test_handler_with_low_limit(self):
         """Handler should work with a very low limit."""
-        from api.rate_limit import _rate_limit_handler
         from slowapi.errors import RateLimitExceeded
+
+        from src.futures_lib.services.data.api.rate_limit import _rate_limit_handler
 
         req = MagicMock()
         req.method = "GET"
@@ -1302,19 +1425,19 @@ class TestShouldNotTradePatterns:
         }
 
     def test_evaluate_no_trade_exists(self):
-        from services.engine.patterns import evaluate_no_trade
+        from src.futures_lib.services.engine.patterns import evaluate_no_trade
 
         assert callable(evaluate_no_trade)
 
     def test_no_assets_triggers_no_trade(self):
-        from services.engine.patterns import evaluate_no_trade
+        from src.futures_lib.services.engine.patterns import evaluate_no_trade
 
         result = evaluate_no_trade([])
         assert result.should_skip is True
         assert len(result.reasons) > 0
 
     def test_all_low_quality_triggers(self):
-        from services.engine.patterns import evaluate_no_trade
+        from src.futures_lib.services.engine.patterns import evaluate_no_trade
 
         assets = [
             self._make_asset("MGC", quality=0.30),
@@ -1325,7 +1448,7 @@ class TestShouldNotTradePatterns:
         assert any("quality" in r.lower() for r in result.reasons)
 
     def test_extreme_vol_triggers(self):
-        from services.engine.patterns import evaluate_no_trade
+        from src.futures_lib.services.engine.patterns import evaluate_no_trade
 
         assets = [
             self._make_asset("MGC", quality=0.80, vol_percentile=0.92),
@@ -1335,7 +1458,7 @@ class TestShouldNotTradePatterns:
         assert any("vol" in r.lower() for r in result.reasons)
 
     def test_daily_loss_triggers(self):
-        from services.engine.patterns import evaluate_no_trade
+        from src.futures_lib.services.engine.patterns import evaluate_no_trade
 
         assets = [self._make_asset("MGC", quality=0.80)]
         risk_status = {"daily_pnl": -300.0, "consecutive_losses": 0}
@@ -1344,7 +1467,7 @@ class TestShouldNotTradePatterns:
         assert any("loss" in r.lower() for r in result.reasons)
 
     def test_consecutive_losses_triggers(self):
-        from services.engine.patterns import evaluate_no_trade
+        from src.futures_lib.services.engine.patterns import evaluate_no_trade
 
         assets = [self._make_asset("MGC", quality=0.80)]
         risk_status = {"daily_pnl": -50.0, "consecutive_losses": 3}
@@ -1355,7 +1478,7 @@ class TestShouldNotTradePatterns:
         )
 
     def test_good_conditions_allow_trading(self):
-        from services.engine.patterns import evaluate_no_trade
+        from src.futures_lib.services.engine.patterns import evaluate_no_trade
 
         assets = [
             self._make_asset("MGC", quality=0.75, vol_percentile=0.40),
@@ -1368,14 +1491,14 @@ class TestShouldNotTradePatterns:
         assert len(result.reasons) == 0
 
     def test_result_has_severity(self):
-        from services.engine.patterns import evaluate_no_trade
+        from src.futures_lib.services.engine.patterns import evaluate_no_trade
 
         assets = [self._make_asset("MGC", quality=0.30)]
         result = evaluate_no_trade(assets)
         assert result.severity in ("info", "warning", "critical")
 
     def test_result_to_dict(self):
-        from services.engine.patterns import evaluate_no_trade
+        from src.futures_lib.services.engine.patterns import evaluate_no_trade
 
         assets = [self._make_asset("MGC", quality=0.30)]
         result = evaluate_no_trade(assets)
@@ -1388,7 +1511,7 @@ class TestShouldNotTradePatterns:
         assert "checked_at" in d
 
     def test_publish_and_clear_no_trade_alert(self):
-        from services.engine.patterns import (
+        from src.futures_lib.services.engine.patterns import (
             clear_no_trade_alert,
             evaluate_no_trade,
             publish_no_trade_alert,
@@ -1407,7 +1530,7 @@ class TestShouldNotTradePatterns:
         assert isinstance(cleared, bool)
 
     def test_session_ended_check(self):
-        from services.engine.patterns import evaluate_no_trade
+        from src.futures_lib.services.engine.patterns import evaluate_no_trade
 
         assets = [self._make_asset("MGC", quality=0.80)]
         # 2 PM ET — session has ended
@@ -1419,7 +1542,7 @@ class TestShouldNotTradePatterns:
         )
 
     def test_no_trade_conditions_enum(self):
-        from services.engine.patterns import NoTradeCondition
+        from src.futures_lib.services.engine.patterns import NoTradeCondition
 
         assert hasattr(NoTradeCondition, "ALL_LOW_QUALITY")
         assert hasattr(NoTradeCondition, "EXTREME_VOLATILITY")

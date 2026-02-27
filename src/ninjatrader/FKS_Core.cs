@@ -33,6 +33,10 @@ using NinjaTrader.NinjaScript.Indicators;
 //   9. Volume bar coloring — green/lime(spike) bullish, red/orange(spike) bearish
 //  10. Top-right info box — wave ratio, quality %, AO value
 //  11. Candle outline heatmap — lime above dynEMA, red below
+//  12. Dynamic Volume Analysis (TASK-403):
+//        TP/BE  — volume spike at Bollinger Band → protect/take profit
+//        ADD    — volume spike with trend (dynEMA + AO) → add to position
+//        LOW VOL — volume < 0.5× avg for 3+ bars → thin market warning
 //
 // Installation:
 //   1. NinjaTrader 8 → New → NinjaScript Editor → Indicators
@@ -42,7 +46,7 @@ using NinjaTrader.NinjaScript.Indicators;
 // Parameters exposed via Properties panel:
 //   SR_Lookback, AO_Fast, AO_Slow, WaveLookback, MinWaveRatio,
 //   ShowLabels, HeatSensitivity, SignalCooldownMinutes,
-//   VolumeSpikeMult, VolumeLowMult
+//   VolumeSpikeMult, VolumeLowMult, ShowVolumeLabels, LowVolStreakBars
 // =============================================================================
 
 namespace NinjaTrader.NinjaScript.Indicators
@@ -61,6 +65,9 @@ namespace NinjaTrader.NinjaScript.Indicators
         private double currentWaveRatio;
         private double signalQuality;
         private bool inBullPhase;
+
+        // ----- Volume analysis state (TASK-403) -----
+        private int lowVolStreak;
 
         // ----- Signal cooldown -----
         private DateTime lastBuySignalTime = DateTime.MinValue;
@@ -127,6 +134,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                 SignalCooldownMinutes = 5;
                 VolumeSpikeMult = 1.8;
                 VolumeLowMult = 0.5;
+                ShowVolumeLabels = true;
+                LowVolStreakBars = 3;
             }
             else if (State == State.DataLoaded)
             {
@@ -146,6 +155,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 dynEMA = 0;
                 trendSpeed = 0;
                 inBullPhase = true;
+                lowVolStreak = 0;
             }
             else if (State == State.Terminated)
             {
@@ -217,6 +227,17 @@ namespace NinjaTrader.NinjaScript.Indicators
         [Display(Name = "Low Volume Multiplier", Description = "Volume < avg × this = low volume",
             GroupName = "3. Volume", Order = 2)]
         public double VolumeLowMult { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show Volume Labels", Description = "Show TP/BE, ADD, LOW VOL action labels based on volume patterns",
+            GroupName = "3. Volume", Order = 3)]
+        public bool ShowVolumeLabels { get; set; }
+
+        [NinjaScriptProperty]
+        [Range(2, 10)]
+        [Display(Name = "Low Vol Streak Bars", Description = "Consecutive low-volume bars required to show LOW VOL warning",
+            GroupName = "3. Volume", Order = 4)]
+        public int LowVolStreakBars { get; set; }
 
         #endregion
 
@@ -480,6 +501,72 @@ namespace NinjaTrader.NinjaScript.Indicators
             }
 
             // ==================================================================
+            // 7b. Dynamic Volume Analysis Labels (TASK-403)
+            // ==================================================================
+            // TP/BE:   volume spike at upper BB → likely exhaustion, protect profits
+            // ADD:     volume spike with trend confirmation → momentum, add to position
+            // LOW VOL: volume dried up for N+ bars → caution, thin market
+            // ==================================================================
+            if (ShowVolumeLabels && volAvg > 0)
+            {
+                // Track consecutive low-volume bars
+                if (volLow)
+                    lowVolStreak++;
+                else
+                    lowVolStreak = 0;
+
+                // Proximity threshold for "at Bollinger Band" (within 0.15% of band)
+                double bbProximity = (bb.Upper[0] - bb.Lower[0]) * 0.05;
+
+                bool atUpperBB = High[0] >= bb.Upper[0] - bbProximity;
+                bool atLowerBB = Low[0] <= bb.Lower[0] + bbProximity;
+                bool trendingUp = Close[0] > dynEMA && aoBullish;
+                bool trendingDown = Close[0] < dynEMA && aoBearish;
+
+                if (volSpike && (atUpperBB || atLowerBB))
+                {
+                    // Volume spike at a Bollinger Band → exhaustion signal
+                    // Place label on the opposite side of the band being touched
+                    if (atUpperBB)
+                    {
+                        Draw.Text(this, "VolTP" + CurrentBar, "TP/BE",
+                            0, High[0] + TickSize * 6,
+                            Brushes.Yellow);
+                    }
+                    else // atLowerBB
+                    {
+                        Draw.Text(this, "VolTP" + CurrentBar, "TP/BE",
+                            0, Low[0] - TickSize * 6,
+                            Brushes.Yellow);
+                    }
+                }
+                else if (volSpike && (trendingUp || trendingDown))
+                {
+                    // Volume spike with trend confirmation → add to position
+                    if (trendingUp)
+                    {
+                        Draw.Text(this, "VolADD" + CurrentBar, "ADD",
+                            0, Low[0] - TickSize * 6,
+                            Brushes.Cyan);
+                    }
+                    else // trendingDown
+                    {
+                        Draw.Text(this, "VolADD" + CurrentBar, "ADD",
+                            0, High[0] + TickSize * 6,
+                            Brushes.Cyan);
+                    }
+                }
+
+                // Low volume streak warning
+                if (lowVolStreak >= LowVolStreakBars)
+                {
+                    Draw.Text(this, "VolLow" + CurrentBar, "LOW VOL",
+                        0, Low[0] - TickSize * 4,
+                        Brushes.Gray);
+                }
+            }
+
+            // ==================================================================
             // 8. Candle Outline Heatmap
             // ==================================================================
             // Colour the candle outline based on position relative to dynEMA.
@@ -555,6 +642,19 @@ namespace NinjaTrader.NinjaScript.Indicators
                 bullWaves != null ? bullWaves.Count : 0,
                 bearWaves != null ? bearWaves.Count : 0
             );
+
+            // Volume status line (TASK-403)
+            string volStatus;
+            if (volSMA != null && volSMA[0] > 0 && Volume[0] > volSMA[0] * VolumeSpikeMult)
+                volStatus = "SPIKE ▲▲";
+            else if (lowVolStreak >= LowVolStreakBars)
+                volStatus = string.Format("LOW ×{0} bars", lowVolStreak);
+            else if (volSMA != null && volSMA[0] > 0 && Volume[0] < volSMA[0] * VolumeLowMult)
+                volStatus = "THIN";
+            else
+                volStatus = "NORMAL";
+
+            infoText += string.Format("\nVolume:        {0}", volStatus);
 
             Draw.TextFixed(this, "fks_core_info",
                 infoText,

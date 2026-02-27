@@ -28,11 +28,7 @@ import pytest
 # Path setup — make sure src/ and src/services/data/ are importable
 # ---------------------------------------------------------------------------
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_src = os.path.join(_root, "src")
 _data_svc = os.path.join(_src, "services", "data")
-for _p in (_src, _data_svc):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
 # Disable Redis before importing anything that touches it
 os.environ.setdefault("DISABLE_REDIS", "1")
@@ -41,7 +37,7 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from src.services.data.main import SafeJSONResponse  # noqa: E402
+from src.futures_lib.services.data.main import SafeJSONResponse  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -126,7 +122,7 @@ def _use_sqlite_tempdb(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", db_file)
     monkeypatch.setenv("DATABASE_URL", "")
     # Re-init models to pick up new DB_PATH
-    import models
+    from src.futures_lib.core import models
 
     models.DB_PATH = db_file
     models.DATABASE_URL = ""
@@ -148,14 +144,14 @@ def _build_test_app(mock_engine):
     background threads.  The mock engine is injected directly into the
     routers that need it.
     """
-    from api.actions import router as actions_router
-    from api.actions import set_engine as actions_set_engine
-    from api.analysis import router as analysis_router
-    from api.analysis import set_engine as analysis_set_engine
-    from api.health import router as health_router
-    from api.journal import router as journal_router
-    from api.positions import router as positions_router
-    from api.trades import router as trades_router
+    from src.futures_lib.services.data.api.actions import router as actions_router
+    from src.futures_lib.services.data.api.actions import set_engine as actions_set_engine
+    from src.futures_lib.services.data.api.analysis import router as analysis_router
+    from src.futures_lib.services.data.api.analysis import set_engine as analysis_set_engine
+    from src.futures_lib.services.data.api.health import router as health_router
+    from src.futures_lib.services.data.api.journal import router as journal_router
+    from src.futures_lib.services.data.api.positions import router as positions_router
+    from src.futures_lib.services.data.api.trades import router as trades_router
 
     # Inject the mock engine into routers that need it
     analysis_set_engine(mock_engine)
@@ -218,8 +214,8 @@ def client(mock_engine):
         yield c
 
     # Clean up
-    from api.actions import set_engine as actions_set_engine
-    from api.analysis import set_engine as analysis_set_engine
+    from src.futures_lib.services.data.api.actions import set_engine as actions_set_engine
+    from src.futures_lib.services.data.api.analysis import set_engine as analysis_set_engine
 
     analysis_set_engine(None)
     actions_set_engine(None)
@@ -1015,8 +1011,8 @@ class TestEngineNotReady:
             yield c
 
         # Restore
-        from api.actions import set_engine as actions_set_engine
-        from api.analysis import set_engine as analysis_set_engine
+        from src.futures_lib.services.data.api.actions import set_engine as actions_set_engine
+        from src.futures_lib.services.data.api.analysis import set_engine as analysis_set_engine
 
         analysis_set_engine(None)
         actions_set_engine(None)

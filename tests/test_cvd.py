@@ -10,29 +10,16 @@ Tests cover:
   - Indicator helpers: _cvd_indicator, _delta_indicator, _cvd_ema_indicator
 """
 
-import os
-import sys
-
 import numpy as np
 import pandas as pd
 import pytest
 
-# Ensure src/ is importable
-_SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src")
-if _SRC_DIR not in sys.path:
-    sys.path.insert(0, _SRC_DIR)
-
-# Ensure tests/ is importable so conftest helpers can be imported directly
-_TESTS_DIR = os.path.dirname(__file__)
-if _TESTS_DIR not in sys.path:
-    sys.path.insert(0, _TESTS_DIR)
-
 # ---------------------------------------------------------------------------
 # Fixtures (local helpers reusing conftest generators)
 # ---------------------------------------------------------------------------
-from conftest import _random_walk_ohlcv, _trending_ohlcv  # noqa: E402
+from conftest import _random_walk_ohlcv, _trending_ohlcv
 
-from src.cvd import (  # noqa: E402
+from src.futures_lib.analysis.cvd import (
     _estimate_buy_volume,
     compute_cvd,
     cvd_confirms_trend,

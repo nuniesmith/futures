@@ -28,10 +28,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-# Ensure src/ is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-from volume_profile import (
+from src.futures_lib.analysis.volume_profile import (
     _compute_value_area,
     _empty_profile,
     _find_volume_nodes,
@@ -709,18 +706,18 @@ class TestVolumeProfileStrategy:
     """Smoke tests for the VolumeProfileStrategy backtesting class."""
 
     def test_strategy_class_exists(self):
-        from volume_profile import VolumeProfileStrategy
+        from src.futures_lib.analysis.volume_profile import VolumeProfileStrategy
 
         assert VolumeProfileStrategy is not None
 
     def test_strategy_has_init_and_next(self):
-        from volume_profile import VolumeProfileStrategy
+        from src.futures_lib.analysis.volume_profile import VolumeProfileStrategy
 
         assert hasattr(VolumeProfileStrategy, "init")
         assert hasattr(VolumeProfileStrategy, "next")
 
     def test_suggest_params_returns_dict(self):
-        from volume_profile import suggest_volume_profile_params
+        from src.futures_lib.analysis.volume_profile import suggest_volume_profile_params
 
         class FakeTrial:
             def suggest_int(self, name, low, high, step=1):

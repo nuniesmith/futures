@@ -15,27 +15,11 @@ Covers:
 
 import json
 import os
-import sys
 from datetime import datetime
-from datetime import time as dt_time
-from typing import Any
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
-import pytest
-
-# ---------------------------------------------------------------------------
-# Path setup — mirror what engine/risk.py does so bare imports resolve
-# ---------------------------------------------------------------------------
-_this_dir = os.path.dirname(os.path.abspath(__file__))
-_src_dir = os.path.abspath(os.path.join(_this_dir, "..", "src"))
-_engine_dir = os.path.join(_src_dir, "services", "engine")
-
-for _p in (_src_dir, _engine_dir):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-from services.engine.risk import (
+from src.futures_lib.services.engine.risk import (
     DEFAULT_ACCOUNT_SIZE,
     DEFAULT_MAX_DAILY_LOSS,
     DEFAULT_MAX_OPEN_TRADES,

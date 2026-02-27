@@ -20,11 +20,8 @@ import sys
 import time
 
 # Ensure src/ is importable
-_SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src")
-if _SRC_DIR not in sys.path:
-    sys.path.insert(0, _SRC_DIR)
 
-from src.alerts import (  # noqa: E402
+from src.futures_lib.core.alerts import (  # noqa: E402
     AlertDispatcher,
     _AlertStore,
     get_dispatcher,

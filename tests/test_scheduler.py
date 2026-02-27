@@ -11,28 +11,10 @@ Covers:
   - sleep_interval varies by session
   - time_until_next_session calculations
 """
-
-import os
-import sys
-import time
-from datetime import date, datetime
-from unittest.mock import patch
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import pytest
-
-# ---------------------------------------------------------------------------
-# Path setup
-# ---------------------------------------------------------------------------
-_this_dir = os.path.dirname(os.path.abspath(__file__))
-_src_dir = os.path.abspath(os.path.join(_this_dir, "..", "src"))
-_engine_dir = os.path.join(_src_dir, "services", "engine")
-
-for _p in (_src_dir, _engine_dir):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-from services.engine.scheduler import (
+from src.futures_lib.services.engine.scheduler import (
     ActionType,
     ScheduledAction,
     ScheduleManager,

@@ -26,15 +26,10 @@ import pytest
 # ---------------------------------------------------------------------------
 # Path setup — mirror what engine/patterns.py does so bare imports resolve
 # ---------------------------------------------------------------------------
-_this_dir = os.path.dirname(os.path.abspath(__file__))
-_src_dir = os.path.abspath(os.path.join(_this_dir, "..", "src"))
 _engine_dir = os.path.join(_src_dir, "services", "engine")
 
-for _p in (_src_dir, _engine_dir):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
-from services.engine.patterns import (
+from src.futures_lib.services.engine.patterns import (
     DEFAULT_EXTREME_VOL,
     DEFAULT_LATE_SESSION_HOUR,
     DEFAULT_MAX_CONSECUTIVE_LOSSES,

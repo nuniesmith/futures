@@ -25,15 +25,10 @@ import pytest
 # ---------------------------------------------------------------------------
 # Path setup — mirror what engine/focus.py does so bare imports resolve
 # ---------------------------------------------------------------------------
-_this_dir = os.path.dirname(os.path.abspath(__file__))
-_src_dir = os.path.abspath(os.path.join(_this_dir, "..", "src"))
 _engine_dir = os.path.join(_src_dir, "services", "engine")
 
-for _p in (_src_dir, _engine_dir):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
-from services.engine.focus import (
+from src.futures_lib.services.engine.focus import (
     DEFAULT_RISK_PCT,
     EXTREME_VOL_THRESHOLD,
     MIN_QUALITY_THRESHOLD,
@@ -395,7 +390,7 @@ class TestComputeDailyFocusPayload:
     @patch("services.engine.focus.compute_asset_focus")
     def test_payload_structure(self, mock_asset_focus):
         """Verify the top-level focus payload has all required fields."""
-        from services.engine.focus import compute_daily_focus
+        from src.futures_lib.services.engine.focus import compute_daily_focus
 
         mock_asset_focus.return_value = {
             "symbol": "Gold",
@@ -444,7 +439,7 @@ class TestComputeDailyFocusPayload:
     @patch("services.engine.focus.compute_asset_focus")
     def test_sorts_by_quality_desc(self, mock_asset_focus):
         """Assets should be sorted by quality (best first)."""
-        from services.engine.focus import compute_daily_focus
+        from src.futures_lib.services.engine.focus import compute_daily_focus
 
         def side_effect(name, account_size=50_000):
             qualities = {"Gold": 0.8, "Nasdaq": 0.6, "S&P": 0.9}
@@ -494,7 +489,7 @@ class TestComputeDailyFocusPayload:
     @patch("services.engine.focus.compute_asset_focus")
     def test_no_trade_when_all_low_quality(self, mock_asset_focus):
         """Should flag no_trade when all assets are below quality threshold."""
-        from services.engine.focus import compute_daily_focus
+        from src.futures_lib.services.engine.focus import compute_daily_focus
 
         mock_asset_focus.return_value = {
             "symbol": "Gold",
@@ -577,7 +572,7 @@ class TestPublishFocusToRedis:
         """Should write focus payload to engine:daily_focus key."""
         mock_cache = self._ensure_mock_cache()
 
-        from services.engine.focus import publish_focus_to_redis
+        from src.futures_lib.services.engine.focus import publish_focus_to_redis
 
         data = {
             "assets": [],
@@ -599,7 +594,7 @@ class TestPublishFocusToRedis:
         """Should handle data that can't be JSON-serialized."""
         self._ensure_mock_cache()
 
-        from services.engine.focus import publish_focus_to_redis
+        from src.futures_lib.services.engine.focus import publish_focus_to_redis
 
         # datetime objects are handled via default=str
         data = {
