@@ -16,7 +16,7 @@ FastAPI server for receiving trade data from NinjaTrader and external tools.
 
     This file will be removed once tests are migrated to the new service.
 
-Run alongside the Streamlit dashboard:
+Run the server:
     python api_server.py
 
 Listens on port 8000. Supports:
@@ -354,7 +354,7 @@ def api_update_positions(payload: NTPositionsPayload):
 
     The NinjaTrader indicator POSTs here on every position change (open,
     close, partial fill, PnL tick).  The payload is stored in the cache
-    so the Streamlit dashboard can read it instantly.
+    so the dashboard can read it instantly.
 
     Payload example (from NT indicator):
         {

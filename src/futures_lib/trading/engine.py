@@ -16,8 +16,8 @@ Usage:
     # engine auto-starts a daemon thread on first call
 
 The engine is a singleton — repeated calls return the same instance.
-All results are stored in the Redis/memory cache layer so the Streamlit
-UI simply reads from cache without blocking on heavy computation.
+All results are stored in the Redis/memory cache layer so the dashboard
+simply reads from cache without blocking on heavy computation.
 """
 
 import json
@@ -1382,7 +1382,7 @@ class DashboardEngine:
 
 
 # ---------------------------------------------------------------------------
-# Singleton accessor (used by Streamlit via st.cache_resource)
+# Singleton accessor
 # ---------------------------------------------------------------------------
 
 _engine_instance: DashboardEngine | None = None

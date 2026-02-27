@@ -8,8 +8,6 @@
 #   data-service   — FastAPI API layer + HTMX dashboard (reads from Redis)
 #   engine         — background computation (FKS, optimization, backtesting)
 #
-# The Streamlit UI has been retired (TASK-304). The HTMX dashboard served
-# by data-service at localhost:8000 is now the primary UI.
 #
 # Usage:
 #   docker compose up -d --build
@@ -130,12 +128,6 @@ services:
                 condition: service_healthy
             postgres:
                 condition: service_healthy
-
-    # -------------------------------------------------------------------------
-    # Streamlit App — RETIRED (TASK-304)
-    # The HTMX dashboard served by data-service replaces Streamlit.
-    # See src/services/web/app.py for the archived Streamlit code.
-    # -------------------------------------------------------------------------
 
     # -------------------------------------------------------------------------
     # Prometheus — Metrics collection & alerting

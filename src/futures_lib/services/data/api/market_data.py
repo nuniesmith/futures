@@ -1,11 +1,10 @@
 """
 Market Data API router — proxies ALL Massive.com futures data endpoints
-so the Streamlit UI never needs to initialise its own Massive client
-or call yfinance directly.
+so clients never need to initialise their own Massive client or call
+yfinance directly.
 
 All data fetching flows through the data-service's existing cache layer
-and MassiveDataProvider. The Streamlit app becomes a true thin client
-that only talks to these endpoints.
+and MassiveDataProvider.
 
 Endpoints:
     ── Aggregate Bars (OHLC) ──
@@ -160,7 +159,7 @@ def get_ohlcv(
 def get_ohlcv_bulk(request: OHLCVBulkRequest):
     """Fetch OHLCV bars for multiple tickers in a single call.
 
-    Avoids N sequential HTTP round-trips from the Streamlit UI.
+    Avoids N sequential HTTP round-trips from the client.
     Returns a dict keyed by ticker.
     """
     results = {}

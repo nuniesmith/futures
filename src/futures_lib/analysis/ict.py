@@ -22,7 +22,7 @@ Implements four core institutional price-action concepts:
    a powerful reversal zone because trapped traders need to exit.
 
 All detectors return lists of plain dicts so they are easy to serialise,
-cache, display in Streamlit, and overlay on Plotly charts.
+cache, display in the dashboard, and overlay on Plotly charts.
 
 Usage:
     from src.futures_lib.ict import (
@@ -806,7 +806,7 @@ def ict_summary(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# DATAFRAME CONVERTERS (for Streamlit display)
+# DATAFRAME CONVERTERS
 # ═══════════════════════════════════════════════════════════════════════════
 
 

@@ -44,14 +44,6 @@ DEFAULT_MAX_TOKENS_LIVE_COMPACT = 350
 DEFAULT_TEMPERATURE = 0.3
 
 
-def _escape_dollars(text: str) -> str:
-    """Escape bare $ signs so Streamlit doesn't render them as LaTeX."""
-    text = text.replace("$$", "\x00DBL\x00")
-    text = re.sub(r"\$([0-9,.\-+])", r"\\$\1", text)
-    text = re.sub(r"(?<!\\)\$", r"\\$", text)
-    text = text.replace("\x00DBL\x00", "$$")
-    return text
-
 
 def _call_grok(
     prompt: str,
@@ -733,7 +725,7 @@ class GrokSession:
     """Manages Grok analysis state across a trading session.
 
     Tracks timing, stores briefings/updates, and handles the 15-minute
-    interval logic so the Streamlit app stays simple.
+    interval logic so the dashboard stays simple.
     """
 
     LIVE_INTERVAL_SEC = 900  # 15 minutes

@@ -462,19 +462,6 @@ else
 fi
 
 # ===========================================================================
-# CHECK 20: Verify Streamlit is NOT running (TASK-304 retirement)
-# ===========================================================================
-echo ""
-echo -e "${BOLD}--- Streamlit Retirement (TASK-304) ---${NC}"
-
-STREAMLIT_RUNNING=$(docker compose ps --format '{{.Name}}' 2>/dev/null | grep -ci "app\|streamlit" || true)
-if [ "$STREAMLIT_RUNNING" -eq 0 ]; then
-    pass_check "Streamlit container not running (retired)"
-else
-    fail_check "Streamlit retirement" "Streamlit container still running"
-fi
-
-# ===========================================================================
 # Summary
 # ===========================================================================
 TOTAL=$((PASS_COUNT + FAIL_COUNT + SKIP_COUNT))

@@ -619,7 +619,7 @@ def score_instruments(
 
 
 # ---------------------------------------------------------------------------
-# DataFrame formatters for Streamlit display
+# DataFrame formatters for display
 # ---------------------------------------------------------------------------
 
 

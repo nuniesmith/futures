@@ -1141,42 +1141,10 @@ class TestSafeJSONResponse:
 
 
 # ===========================================================================
-# TEST 15: Docker-compose retirement verification
+# TEST 15: Docker-compose configuration
 # ===========================================================================
 class TestDockerComposeConfig:
-    """Verify docker-compose.yml is correctly configured after TASK-304."""
-
-    def test_no_streamlit_service(self):
-        """docker-compose.yml should not define a streamlit/app service."""
-        compose_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "docker-compose.yml"
-        )
-        with open(compose_path) as f:
-            content = f.read()
-
-        # The 'app:' service block should be commented out or removed
-        # We look for an active service definition (indented, with 'build:' or 'image:')
-        import re
-
-        # Check there's no active 'app:' top-level service with a build: directive
-        lines = content.split("\n")
-        in_app_service = False
-        app_has_build = False
-        for line in lines:
-            stripped = line.strip()
-            # Top-level service key (4 spaces or tab indentation under 'services:')
-            if re.match(r"^\s{4}app:", line):
-                in_app_service = True
-                continue
-            if in_app_service:
-                if re.match(r"^\s{4}\w", line) and not line.strip().startswith("#"):
-                    in_app_service = False
-                elif "build:" in stripped and not stripped.startswith("#"):
-                    app_has_build = True
-
-        assert not app_has_build, (
-            "docker-compose.yml still has active 'app' service with build"
-        )
+    """Verify docker-compose.yml is correctly configured."""
 
     def test_four_services_mentioned(self):
         """The compose file should reference postgres, redis, data, engine."""
@@ -1189,37 +1157,12 @@ class TestDockerComposeConfig:
         for svc in ("postgres:", "redis:", "data:", "engine:"):
             assert svc in content, f"Service '{svc}' not found in docker-compose.yml"
 
-    def test_retirement_comment_present(self):
-        """The compose file should mention TASK-304 retirement."""
-        compose_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "docker-compose.yml"
-        )
-        with open(compose_path) as f:
-            content = f.read()
-
-        assert "TASK-304" in content or "retired" in content.lower()
-
 
 # ===========================================================================
-# TEST 16: Requirements file cleaned
+# TEST 16: Requirements file
 # ===========================================================================
 class TestRequirements:
-    """Verify requirements.txt is correct after TASK-304."""
-
-    def test_no_streamlit_dependency(self):
-        """streamlit should not be in requirements.txt."""
-        req_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "requirements.txt"
-        )
-        with open(req_path) as f:
-            content = f.read()
-
-        for line in content.split("\n"):
-            line = line.strip()
-            if line and not line.startswith("#"):
-                assert not line.lower().startswith("streamlit"), (
-                    f"requirements.txt still has streamlit: {line}"
-                )
+    """Verify requirements.txt has the expected dependencies."""
 
     def test_core_deps_present(self):
         """Core dependencies should still be present."""

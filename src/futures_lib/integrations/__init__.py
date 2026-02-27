@@ -8,7 +8,6 @@ Re-exports the public API from each sub-module so callers can do:
 
 from src.futures_lib.integrations.grok_helper import (
     GrokSession,
-    _escape_dollars,
     format_market_context,
     run_live_analysis,
     run_morning_briefing,
@@ -22,7 +21,6 @@ from src.futures_lib.integrations.massive_client import (
 __all__ = [
     # grok_helper
     "GrokSession",
-    "_escape_dollars",
     "format_market_context",
     "run_live_analysis",
     "run_morning_briefing",
