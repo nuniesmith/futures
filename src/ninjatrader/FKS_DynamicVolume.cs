@@ -25,38 +25,24 @@ using NinjaTrader.NinjaScript.Indicators;
 //
 // Components:
 //   1. Intraday VWAP — daily-resetting volume-weighted average price (overlay)
-//   2. VWAP Standard Deviation Bands — ±1σ and ±2σ envelopes around VWAP
+//   2. VWAP Standard Deviation Bands — +/-1 and +/-2 sigma (OFF by default)
 //   3. Rolling Volume Profile — POC / VAH / VAL computed over a lookback window
 //   4. Session POC Tracking — prior-session POC levels drawn as horizontal rays
 //      ("Naked POCs") that persist until price trades through them
 //   5. CVD Approximation — Cumulative Volume Delta from OHLCV heuristic
-//      (buy_vol = vol × (close−low)/(high−low), delta = buy − sell)
-//   6. CVD EMA — smoothed CVD for cleaner divergence spotting
-//   7. Volume Delta Bars — per-bar delta histogram colored by sign
-//   8. Volume Spike / Absorption Detection — highlights bars where volume
-//      exceeds N× average (spike) or body is tiny relative to range on
-//      high volume (absorption)
-//   9. On-chart info box — POC, VAH, VAL, VWAP, CVD slope, delta
+//   6. Volume Spike / Absorption Detection — diamonds on absorption candles
+//   7. On-chart info box — POC, VAH, VAL, VWAP, CVD slope, delta
 //
-// Architecture:
-//   - Panel 1 (overlay, IsOverlay=true):  VWAP + bands, POC/VAH/VAL lines,
-//     session POC rays, absorption markers
-//   - Panel 2 (sub-panel):  CVD line + CVD EMA, volume delta histogram
+// Visibility defaults (clean chart — only key levels shown):
+//   - VWAP line: ON
+//   - VWAP bands (+/-1, +/-2 sigma): OFF by default
+//   - POC: ON
+//   - VAH/VAL lines: OFF by default (values still shown in info box)
+//   - Naked POCs: ON
+//   - Absorption diamonds: ON
+//   - Bar coloring: OFF (defers to FKS_Core heatmap when both loaded)
 //
-// Installation:
-//   1. NinjaTrader 8 → New → NinjaScript Editor → Indicators
-//   2. Paste this file → Compile (F5)
-//   3. Drag FKS_DynamicVolume onto any chart (MGC, MES, MNQ, MCL, etc.)
-//   4. The indicator adds a sub-panel for CVD/delta; overlay plots appear
-//      on the price panel.
-//
-// Parameters exposed via Properties panel:
-//   VP_Lookback, VP_Bins, ValueAreaPct, SessionPOC_MaxDays,
-//   NakedPOC_Enabled, VWAP_ShowBands, CVD_AnchorDaily,
-//   AbsorptionBodyRatio, AbsorptionVolMult, VolSpikeMultiplier,
-//   VolumeAvgPeriod
-//
-// Companion indicator: FKS_Core.cs (wave/trend analysis)
+// Companion indicator: FKS_Core.cs (wave/trend analysis + heatmap bars)
 // Python equivalents: volume_profile.py, cvd.py
 // =============================================================================
 
@@ -67,15 +53,15 @@ namespace NinjaTrader.NinjaScript.Indicators
         // =====================================================================
         // Internal state — VWAP
         // =====================================================================
-        private double cumTypicalVol;      // Σ(typical × volume) for current session
-        private double cumVolume;          // Σ(volume) for current session
-        private double cumTypicalVolSq;    // Σ(typical² × volume) for variance bands
+        private double cumTypicalVol;
+        private double cumVolume;
+        private double cumTypicalVolSq;
         private DateTime lastSessionDate;
 
         // =====================================================================
         // Internal state — Rolling Volume Profile
         // =====================================================================
-        private double[] vpBinVolumes;     // volume per price bin (rolling window)
+        private double[] vpBinVolumes;
         private double vpPriceMin;
         private double vpPriceMax;
         private double currentPOC;
@@ -89,8 +75,8 @@ namespace NinjaTrader.NinjaScript.Indicators
         {
             public double Price;
             public DateTime Date;
-            public bool IsNaked;        // true until price trades through it
-            public string Tag;          // drawing object tag
+            public bool IsNaked;
+            public string Tag;
         }
         private List<SessionPOCInfo> sessionPOCs;
         private double prevSessionPOC;
@@ -114,7 +100,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         {
             if (State == State.SetDefaults)
             {
-                Description = "FKS Dynamic Volume — VWAP, Volume Profile (POC/VAH/VAL), CVD, Delta Bars, Absorption Detection";
+                Description = "FKS Dynamic Volume — VWAP, Volume Profile (POC/VAH/VAL), CVD, Absorption Detection";
                 Name = "FKS_DynamicVolume";
                 Calculate = Calculate.OnBarClose;
                 IsOverlay = true;
@@ -131,37 +117,39 @@ namespace NinjaTrader.NinjaScript.Indicators
                 // 0: VWAP
                 AddPlot(new Stroke(Brushes.Gold, DashStyleHelper.Solid, 2),
                     PlotStyle.Line, "VWAP");
-                // 1: VWAP +1σ
+                // 1: VWAP +1 sigma — hidden by default
                 AddPlot(new Stroke(Brushes.Gold, DashStyleHelper.Dot, 1),
                     PlotStyle.Line, "VWAP_Upper1");
-                // 2: VWAP −1σ
+                // 2: VWAP -1 sigma — hidden by default
                 AddPlot(new Stroke(Brushes.Gold, DashStyleHelper.Dot, 1),
                     PlotStyle.Line, "VWAP_Lower1");
-                // 3: VWAP +2σ
+                // 3: VWAP +2 sigma — hidden by default
                 AddPlot(new Stroke(Brushes.DarkGoldenrod, DashStyleHelper.Dash, 1),
                     PlotStyle.Line, "VWAP_Upper2");
-                // 4: VWAP −2σ
+                // 4: VWAP -2 sigma — hidden by default
                 AddPlot(new Stroke(Brushes.DarkGoldenrod, DashStyleHelper.Dash, 1),
                     PlotStyle.Line, "VWAP_Lower2");
                 // 5: Rolling POC
                 AddPlot(new Stroke(Brushes.Cyan, DashStyleHelper.Solid, 2),
                     PlotStyle.Line, "POC");
-                // 6: Value Area High
+                // 6: Value Area High — hidden by default
                 AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dash, 1),
                     PlotStyle.Line, "VAH");
-                // 7: Value Area Low
+                // 7: Value Area Low — hidden by default
                 AddPlot(new Stroke(Brushes.DodgerBlue, DashStyleHelper.Dash, 1),
                     PlotStyle.Line, "VAL");
 
                 // ----------------------------------------------------------
-                // Default parameter values
+                // Default parameter values (clean chart defaults)
                 // ----------------------------------------------------------
                 VP_Lookback = 100;
                 VP_Bins = 40;
                 ValueAreaPct = 70;
                 SessionPOC_MaxDays = 5;
                 NakedPOC_Enabled = true;
-                VWAP_ShowBands = true;
+                VWAP_ShowBands = false;       // OFF by default — reduces clutter
+                ShowValueArea = false;        // OFF by default — VAH/VAL hidden
+                ShowDeltaOutline = false;     // OFF by default — let FKS_Core own bar visuals
                 CVD_AnchorDaily = true;
                 AbsorptionBodyRatio = 30;
                 AbsorptionVolMult = 150;
@@ -192,6 +180,20 @@ namespace NinjaTrader.NinjaScript.Indicators
                 // Initialize CVD
                 cvdAccumulator = 0;
                 cvdAnchorDate = DateTime.MinValue;
+
+                // Hide plots that are off by default
+                if (!VWAP_ShowBands)
+                {
+                    Plots[1].Brush = Brushes.Transparent;  // VWAP_Upper1
+                    Plots[2].Brush = Brushes.Transparent;  // VWAP_Lower1
+                    Plots[3].Brush = Brushes.Transparent;  // VWAP_Upper2
+                    Plots[4].Brush = Brushes.Transparent;  // VWAP_Lower2
+                }
+                if (!ShowValueArea)
+                {
+                    Plots[6].Brush = Brushes.Transparent;  // VAH
+                    Plots[7].Brush = Brushes.Transparent;  // VAL
+                }
             }
             else if (State == State.Terminated)
             {
@@ -238,9 +240,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         // --- VWAP ---
         [NinjaScriptProperty]
-        [Display(Name = "Show VWAP Bands", Description = "Show ±1σ and ±2σ standard deviation bands around VWAP",
+        [Display(Name = "Show VWAP Bands", Description = "Show +/-1 and +/-2 sigma bands around VWAP (OFF by default to reduce clutter)",
             GroupName = "3. VWAP", Order = 1)]
         public bool VWAP_ShowBands { get; set; }
+
+        // --- Visibility ---
+        [NinjaScriptProperty]
+        [Display(Name = "Show Value Area Lines", Description = "Show VAH/VAL lines on chart (OFF by default; values still in info box)",
+            GroupName = "3. VWAP", Order = 2)]
+        public bool ShowValueArea { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show Delta Outline", Description = "Color candle outline by volume delta (OFF by default to not conflict with FKS_Core)",
+            GroupName = "3. VWAP", Order = 3)]
+        public bool ShowDeltaOutline { get; set; }
 
         // --- CVD ---
         [NinjaScriptProperty]
@@ -257,13 +270,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         [NinjaScriptProperty]
         [Range(100, 500)]
-        [Display(Name = "Absorption Vol Mult %", Description = "Min volume as % of average for absorption (e.g. 150 = 1.5×)",
+        [Display(Name = "Absorption Vol Mult %", Description = "Min volume as % of average for absorption (e.g. 150 = 1.5x)",
             GroupName = "5. Volume Detection", Order = 2)]
         public int AbsorptionVolMult { get; set; }
 
         [NinjaScriptProperty]
         [Range(100, 500)]
-        [Display(Name = "Volume Spike Mult %", Description = "Volume > avg × this% = spike highlight (e.g. 180 = 1.8×)",
+        [Display(Name = "Volume Spike Mult %", Description = "Volume > avg x this% = spike highlight (e.g. 180 = 1.8x)",
             GroupName = "5. Volume Detection", Order = 3)]
         public int VolSpikeMultiplier { get; set; }
 
@@ -327,10 +340,8 @@ namespace NinjaTrader.NinjaScript.Indicators
             // ==================================================================
             DateTime barDate = Time[0].Date;
 
-            // Detect new session (date change) → reset accumulators
             if (barDate != lastSessionDate)
             {
-                // Before resetting, save prior session's POC for naked tracking
                 if (lastSessionDate != DateTime.MinValue && currentPOC > 0)
                 {
                     SaveSessionPOC(lastSessionDate, currentPOC);
@@ -341,7 +352,6 @@ namespace NinjaTrader.NinjaScript.Indicators
                 cumTypicalVolSq = 0;
                 lastSessionDate = barDate;
 
-                // CVD daily anchor reset
                 if (CVD_AnchorDaily)
                 {
                     cvdAccumulator = 0;
@@ -362,10 +372,9 @@ namespace NinjaTrader.NinjaScript.Indicators
             double vwap = cumVolume > 0 ? cumTypicalVol / cumVolume : Close[0];
             VWAP_Line[0] = vwap;
 
-            // VWAP standard deviation bands
-            if (VWAP_ShowBands && cumVolume > 0)
+            // VWAP standard deviation bands (computed even if hidden, for data access)
+            if (cumVolume > 0)
             {
-                // Variance = Σ(tp² × vol) / Σ(vol) − vwap²
                 double variance = (cumTypicalVolSq / cumVolume) - (vwap * vwap);
                 double stddev = variance > 0 ? Math.Sqrt(variance) : 0;
 
@@ -395,7 +404,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             VAL_Line[0] = currentVAL > 0 ? currentVAL : Close[0];
 
             // ==================================================================
-            // 3. Naked POC management — invalidate when price trades through
+            // 3. Naked POC management
             // ==================================================================
             if (NakedPOC_Enabled && sessionPOCs != null)
             {
@@ -404,10 +413,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 
             // ==================================================================
             // 4. CVD — Cumulative Volume Delta (OHLCV heuristic)
-            // ==================================================================
-            //   buy_volume  = volume × (close − low) / (high − low)
-            //   sell_volume = volume − buy_volume
-            //   delta       = buy_volume − sell_volume = 2 × buy_volume − volume
             // ==================================================================
             double barRange = High[0] - Low[0];
             double delta = 0;
@@ -432,16 +437,6 @@ namespace NinjaTrader.NinjaScript.Indicators
                 double absorptionVolThreshold = volAvg * (AbsorptionVolMult / 100.0);
 
                 bool isSpike = vol > spikeThreshold && volAvg > 0;
-                bool bullishBar = Close[0] >= Open[0];
-
-                // Volume spike coloring
-                if (isSpike)
-                {
-                    if (bullishBar)
-                        BarBrush = Brushes.Lime;
-                    else
-                        BarBrush = Brushes.OrangeRed;
-                }
 
                 // Absorption candle detection:
                 //   high volume + small body relative to range
@@ -453,11 +448,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                 if (isAbsorption)
                 {
-                    // Draw a diamond marker for absorption candles
                     Brush absBrush;
                     double absY;
 
-                    // Determine likely direction: if close is in upper half → buying absorption
                     double midBar = (High[0] + Low[0]) / 2.0;
                     if (Close[0] >= midBar)
                     {
@@ -475,12 +468,9 @@ namespace NinjaTrader.NinjaScript.Indicators
             }
 
             // ==================================================================
-            // 6. Volume Delta Bar Coloring (candle outline)
+            // 6. Volume Delta Bar Coloring (candle outline) — optional
             // ==================================================================
-            // Positive delta (net buying) = cyan outline
-            // Negative delta (net selling) = magenta outline
-            // Strong delta (> 60% of volume) = thicker outline
-            if (barRange > 0 && vol > 0)
+            if (ShowDeltaOutline && barRange > 0 && vol > 0)
             {
                 double deltaPct = Math.Abs(delta) / vol;
                 if (delta > 0)
@@ -499,7 +489,6 @@ namespace NinjaTrader.NinjaScript.Indicators
         // =====================================================================
         private void ComputeRollingVolumeProfile()
         {
-            // Determine price range over the lookback window
             double pMin = double.MaxValue;
             double pMax = double.MinValue;
 
@@ -520,14 +509,12 @@ namespace NinjaTrader.NinjaScript.Indicators
                 return;
             }
 
-            // Add small padding
             double padding = (pMax - pMin) * 0.001;
             pMin -= padding;
             pMax += padding;
 
             int nBins = VP_Bins;
 
-            // Re-allocate if bin count changed
             if (vpBinVolumes == null || vpBinVolumes.Length != nBins)
                 vpBinVolumes = new double[nBins];
             else
@@ -540,8 +527,6 @@ namespace NinjaTrader.NinjaScript.Indicators
                 return;
             }
 
-            // Distribute each bar's volume across overlapping bins
-            // (mirrors Python volume_profile.compute_volume_profile logic)
             for (int i = 0; i < VP_Lookback; i++)
             {
                 if (i >= CurrentBar) break;
@@ -559,7 +544,6 @@ namespace NinjaTrader.NinjaScript.Indicators
                     double binLo = pMin + j * binWidth;
                     double binHi = binLo + binWidth;
 
-                    // Overlap between bar range and bin
                     double overlapLo = Math.Max(barLow, binLo);
                     double overlapHi = Math.Min(barHigh, binHi);
 
@@ -571,7 +555,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 }
             }
 
-            // --- POC: bin with maximum volume ---
+            // POC: bin with maximum volume
             int pocIdx = 0;
             double maxVol = 0;
             double totalVol = 0;
@@ -588,7 +572,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
             currentPOC = pMin + (pocIdx + 0.5) * binWidth;
 
-            // --- Value Area: expand outward from POC ---
+            // Value Area: expand outward from POC
             if (totalVol > 0)
             {
                 double targetVol = totalVol * (ValueAreaPct / 100.0);
@@ -642,7 +626,6 @@ namespace NinjaTrader.NinjaScript.Indicators
         {
             if (sessionPOCs == null) return;
 
-            // Check we haven't already saved this session
             foreach (var sp in sessionPOCs)
             {
                 if (sp.Date == sessionDate)
@@ -659,10 +642,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                 Tag = tag,
             });
 
-            // Prune old sessions beyond the max days
             while (sessionPOCs.Count > SessionPOC_MaxDays)
             {
-                // Remove the drawing for the oldest session
                 var oldest = sessionPOCs[0];
                 RemoveDrawObject(oldest.Tag);
                 sessionPOCs.RemoveAt(0);
@@ -679,21 +660,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                 if (!sp.IsNaked) continue;
 
-                // Check if current bar traded through the session POC
                 if (Low[0] <= sp.Price && High[0] >= sp.Price)
                 {
-                    // POC has been filled — no longer naked
                     var updated = sp;
                     updated.IsNaked = false;
                     sessionPOCs[i] = updated;
-
-                    // Remove the drawing
                     RemoveDrawObject(sp.Tag);
                     continue;
                 }
 
-                // Draw/update the naked POC ray
-                // Use a horizontal line that extends from the session date to current bar
                 Brush pocBrush = Brushes.Yellow;
                 Draw.HorizontalLine(this, sp.Tag, sp.Price, pocBrush, DashStyleHelper.Dot, 1);
             }
@@ -708,11 +683,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
             if (CurrentBar < 50) return;
 
-            // Current bar delta
             double barRange = High[0] - Low[0];
             double vol = Volume[0];
             double delta = 0;
-            string deltaDir = "—";
+            string deltaDir = "---";
 
             if (barRange > 0 && vol > 0)
             {
@@ -721,32 +695,27 @@ namespace NinjaTrader.NinjaScript.Indicators
                 deltaDir = delta > 0 ? "▲ BUY" : "▼ SELL";
             }
 
-            // CVD slope (compare current CVD to 5 bars ago)
-            string cvdSlopeStr = "—";
-            // We don't store historical CVD in a series, so approximate from
-            // the last few bars' cumulative effect
+            string cvdSlopeStr;
             if (delta > 0)
                 cvdSlopeStr = "Rising ▲";
             else if (delta < 0)
                 cvdSlopeStr = "Falling ▼";
             else
-                cvdSlopeStr = "Flat —";
+                cvdSlopeStr = "Flat ---";
 
-            // Volume status
             double volAvg = (CurrentBar >= VolumeAvgPeriod && volSMA != null) ? volSMA[0] : 0;
             string volStatus = "Normal";
             if (volAvg > 0)
             {
                 double volRatio = vol / volAvg;
                 if (volRatio > VolSpikeMultiplier / 100.0)
-                    volStatus = string.Format("SPIKE ({0:0.0}×)", volRatio);
+                    volStatus = string.Format("SPIKE ({0:0.0}x)", volRatio);
                 else if (volRatio < 0.5)
-                    volStatus = string.Format("LOW ({0:0.0}×)", volRatio);
+                    volStatus = string.Format("LOW ({0:0.0}x)", volRatio);
                 else
-                    volStatus = string.Format("{0:0.0}×", volRatio);
+                    volStatus = string.Format("{0:0.0}x", volRatio);
             }
 
-            // Naked POC count
             int nakedCount = 0;
             if (sessionPOCs != null)
             {
@@ -754,7 +723,6 @@ namespace NinjaTrader.NinjaScript.Indicators
                     if (sp.IsNaked) nakedCount++;
             }
 
-            // Price position relative to value area
             string vaPosition;
             double price = Close[0];
             if (currentVAH > 0 && currentVAL > 0 && currentVAH != currentVAL)
@@ -768,7 +736,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             }
             else
             {
-                vaPosition = "—";
+                vaPosition = "---";
             }
 
             string infoText = string.Format(
