@@ -1,15 +1,15 @@
 """
 API key authentication for inter-service communication.
 
-Protects data-service endpoints with a shared secret so that only the
-Streamlit app (and other trusted clients) can call them.
+Protects data-service endpoints with a shared secret so that only
+trusted clients can call them.
 
 Configuration:
     Set ``API_KEY`` in the environment (or ``.env``).  When the variable is
     **not set or empty**, authentication is disabled (open access) so that
     local development and tests work without ceremony.
 
-    The Streamlit client must send the same key via the ``X-API-Key`` header
+    Clients must send the key via the ``X-API-Key`` header
     (or the ``api_key`` query parameter as a fallback).
 
 Usage in ``main.py``::

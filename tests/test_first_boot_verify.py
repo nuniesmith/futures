@@ -926,32 +926,6 @@ class TestFirstBootVerifierChecks:
 
         assert v.report.results[0].status == fbv.CheckStatus.WARN
 
-    # --- Streamlit retired ---
-
-    @patch("subprocess.run")
-    def test_check_streamlit_retired_pass(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout="futures-postgres-1\nfutures-redis-1\nfutures-data-1\nfutures-engine-1\n",
-            stderr="",
-        )
-        v = self._make_verifier()
-        v.check_streamlit_retired()
-
-        assert v.report.results[0].status == fbv.CheckStatus.PASS
-
-    @patch("subprocess.run")
-    def test_check_streamlit_retired_still_running(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout="futures-postgres-1\nfutures-redis-1\nfutures-data-1\nfutures-engine-1\nfutures-streamlit-1\n",
-            stderr="",
-        )
-        v = self._make_verifier()
-        v.check_streamlit_retired()
-
-        assert v.report.results[0].status == fbv.CheckStatus.FAIL
-
     # --- DB write round-trip ---
 
     @patch("time.time", return_value=1700000000)
@@ -1154,13 +1128,6 @@ class TestFullRun:
 
         # HTTP POST
         mock_http_post.return_value = (200, '{"allowed": true}', {})
-
-        # subprocess for streamlit check
-        mock_subprocess.return_value = MagicMock(
-            returncode=0,
-            stdout="futures-postgres-1\nfutures-redis-1\nfutures-data-1\nfutures-engine-1\n",
-            stderr="",
-        )
 
         v = fbv.FirstBootVerifier(quick=False)
         report = v.run()

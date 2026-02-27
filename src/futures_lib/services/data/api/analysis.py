@@ -1,5 +1,5 @@
 """
-Analysis API router — exposes cached FKS analysis data to the Streamlit UI.
+Analysis API router — exposes cached FKS analysis data.
 
 Endpoints:
     GET  /latest/{ticker}  — Full FKS analysis dict (wave + vol + sq + regime + ict + cvd)
@@ -126,10 +126,7 @@ def get_all_latest(
     interval: str = Query("5m", description="Primary interval"),
     period: str = Query("5d", description="Lookback period"),
 ):
-    """Return cached FKS analysis for ALL tracked assets in one call.
-
-    This avoids N sequential HTTP calls from the Streamlit UI.
-    """
+    """Return cached FKS analysis for ALL tracked assets in one call."""
     results = {}
     for name, ticker in ASSETS.items():
         try:

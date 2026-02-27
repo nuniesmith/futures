@@ -542,7 +542,7 @@ def _pbo_message(pbo: float, interpretation: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# DataFrame formatters for Streamlit display
+# DataFrame formatters for display
 # ---------------------------------------------------------------------------
 
 

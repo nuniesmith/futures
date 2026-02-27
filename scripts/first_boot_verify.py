@@ -27,8 +27,7 @@ Checks:
   17. Data-service container logs have low error count
   18. No-trade endpoint /api/no-trade returns 200
   19. Backfill status /backfill/status returns 200
-  20. Streamlit is NOT running (TASK-304 retirement confirmed)
-  21. Database write round-trip (insert + read + delete a test row)
+  20. Database write round-trip (insert + read + delete a test row)
   22. Redis write round-trip (SET + GET + DEL a test key)
   23. Cross-service: engine writes to Redis → data-service reads it
 
@@ -954,35 +953,6 @@ class FirstBootVerifier:
 
         return self._check("GET /backfill/status", CheckSeverity.ADVISORY, _check_fn)
 
-    def check_streamlit_retired(self):
-        """Confirm Streamlit container is NOT running (TASK-304)."""
-
-        def _check_fn():
-            try:
-                result = subprocess.run(
-                    ["docker", "compose", "ps", "--format", "{{.Name}}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                names = result.stdout.strip().lower()
-                if "streamlit" in names or "app" in names:
-                    # Check more carefully — "app" might be a substring of other names
-                    for line in result.stdout.strip().splitlines():
-                        name = line.strip().lower()
-                        if name.endswith("-app-1") or "streamlit" in name:
-                            return (
-                                CheckStatus.FAIL,
-                                f"Streamlit container still running: {line.strip()}",
-                            )
-                return CheckStatus.PASS, "no Streamlit/app container found (retired)"
-            except Exception as e:
-                return CheckStatus.WARN, f"could not check: {e}"
-
-        return self._check(
-            "Streamlit retired (TASK-304)", CheckSeverity.ADVISORY, _check_fn
-        )
-
     def check_db_write_roundtrip(self):
         """Verify database write round-trip via the data-service API."""
         container = self.containers.get("postgres", "futures-postgres-1")
@@ -1249,10 +1219,6 @@ class FirstBootVerifier:
         print("\n\033[1m--- Cross-Service Integration ---\033[0m")
         self.check_cross_service_redis()
         self.check_risk_preflight()
-
-        # Phase 8: Retirement checks
-        print("\n\033[1m--- Retirement Checks ---\033[0m")
-        self.check_streamlit_retired()
 
         # Finish
         self.report.finished_at = datetime.now(UTC).isoformat()

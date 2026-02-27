@@ -703,7 +703,7 @@ def suggest_volume_profile_params(trial) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Dashboard helpers — for display in the Streamlit UI
+# Dashboard helpers
 # ---------------------------------------------------------------------------
 
 

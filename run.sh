@@ -65,11 +65,10 @@ EOF
 
     echo ""
     echo "Dashboard is running:"
-    echo "  Streamlit:  http://localhost:8501"
-    echo "  Trade API:  http://localhost:8000"
+    echo "  Dashboard:  http://localhost:8000"
     echo "  Redis:      localhost:6379"
     echo ""
-    echo "Logs: docker compose logs -f app"
+    echo "Logs: docker compose logs -f data"
     echo "Stop: ./run.sh --down"
 }
 
@@ -93,9 +92,12 @@ run_local() {
     pip install --upgrade pip -q
     pip install -r requirements.txt -q
 
-    # Launch the Streamlit app
-    echo "Starting Streamlit ..."
-    streamlit run src/app.py --server.port 8501 --server.address 0.0.0.0
+    # Install editable package so imports resolve
+    pip install -e . -q
+
+    # Launch the data service (HTMX dashboard)
+    echo "Starting data service ..."
+    PYTHONPATH=src uvicorn futures_lib.services.data.main:app --host 0.0.0.0 --port 8000
 }
 
 # ---------------------------------------------------------------------------

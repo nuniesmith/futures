@@ -5,10 +5,7 @@ Dedicated microservice that runs all heavy computation:
   - Massive WebSocket listener (real-time 1m bars)
   - DashboardEngine (5m refresh, optimization, backtesting)
   - FKS modules (volatility, wave, signal quality, regime, CVD, ICT)
-  - REST API for the Streamlit UI to consume
-
-The Streamlit app becomes a pure thin client that reads from this
-service's API + Redis cache for ultra-low latency.
+  - REST API + HTMX dashboard
 
 Usage (from project root):
     PYTHONPATH=src uvicorn futures_lib.services.data.main:app --host 0.0.0.0 --port 8000
@@ -317,7 +314,7 @@ app = FastAPI(
     description=(
         "Background data service for the Futures Trading Co-Pilot. "
         "Runs the DashboardEngine, Massive WS listener, and all FKS "
-        "computation modules. Exposes REST endpoints for the Streamlit UI."
+        "computation modules. Exposes REST endpoints and an HTMX dashboard."
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -325,16 +322,12 @@ app = FastAPI(
     dependencies=[Depends(require_api_key)],
 )
 
-# CORS — allow Streamlit (typically on port 8501) and local dev
+# CORS — allow local dev origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-        "http://localhost:8501",
-        "http://streamlit-app:8501",
-        "http://127.0.0.1:8501",
-        "http://app:8501",
     ],
     allow_credentials=True,
     allow_methods=["*"],

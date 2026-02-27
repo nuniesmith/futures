@@ -2,7 +2,7 @@
 Structured logging configuration for the Futures Trading Co-Pilot.
 
 Provides a unified logging setup using ``structlog`` across all services
-(data-service, streamlit-app, background tasks).  Call ``setup_logging()``
+(data-service, engine, background tasks).  Call ``setup_logging()``
 once at process startup — every subsequent ``structlog.get_logger()`` or
 ``logging.getLogger()`` call will emit structured, key-value log lines.
 
@@ -43,7 +43,7 @@ def setup_logging(
     ----------
     service:
         Name bound to every log event (e.g. ``"data-service"``,
-        ``"streamlit-app"``, ``"background-tasks"``).
+        ``"engine"``, ``"background-tasks"``).
     level:
         Root log level.  Falls back to the ``LOG_LEVEL`` env var, then
         ``"INFO"``.
