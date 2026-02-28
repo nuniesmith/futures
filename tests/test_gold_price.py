@@ -6,16 +6,12 @@ and no contract multiplier is applied to raw price data.
 """
 
 import os
-import sys
 
 # Path setup
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 os.environ.setdefault("DISABLE_REDIS", "1")
 
-import numpy as np
-import pandas as pd
-import pytest
 
 
 def test_gold_price_no_scaling():
@@ -26,7 +22,7 @@ def test_gold_price_no_scaling():
     NinjaTrader MGC chart exactly.  Using GC=F (full-size) can cause
     a price mismatch due to different front-month contract months.
     """
-    from src.futures_lib.core.models import ASSETS, CONTRACT_SPECS, MICRO_CONTRACT_SPECS
+    from src.futures_lib.core.models import ASSETS, MICRO_CONTRACT_SPECS
 
     # Gold micro spec must use MGC=F as data_ticker
     gold_micro = MICRO_CONTRACT_SPECS["Gold"]
@@ -44,7 +40,7 @@ def test_gold_price_no_scaling():
 
 def test_gold_point_value_is_micro():
     """Gold micro contract point value must be $10/point, not $100/point."""
-    from src.futures_lib.core.models import CONTRACT_SPECS, MICRO_CONTRACT_SPECS
+    from src.futures_lib.core.models import MICRO_CONTRACT_SPECS
 
     gold_micro = MICRO_CONTRACT_SPECS["Gold"]
     assert gold_micro["point"] == 10, (

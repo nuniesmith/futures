@@ -652,7 +652,7 @@ def is_premium_setup(
 
 def signal_quality_summary(result: dict[str, Any]) -> str:
     """One-line summary suitable for Grok prompts or dashboard captions."""
-    score = result.get("score", 0)
+    _score = result.get("score", 0)
     pct = result.get("quality_pct", 0)
     ctx = result.get("market_context", "?")
     direction = result.get("trend_direction", "?")

@@ -12,7 +12,6 @@ Endpoints:
 
 import json
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -20,7 +19,6 @@ from src.futures_lib.core.cache import (
     _cache_key,
     cache_get,
     flush_all,
-    get_cached_indicator,
     get_cached_optimization,
     get_data_source,
 )

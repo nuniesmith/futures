@@ -43,7 +43,7 @@ logger = logging.getLogger("api.metrics")
 # We use a custom CollectorRegistry so tests can create isolated instances
 # without polluting the global default.
 # ---------------------------------------------------------------------------
-from prometheus_client import (
+from prometheus_client import (  # noqa: E402
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
     Counter,

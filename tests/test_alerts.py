@@ -15,8 +15,6 @@ All tests use _disable_redis=True to ensure in-memory-only stores and
 complete isolation between tests (no shared Redis state).
 """
 
-import os
-import sys
 import time
 
 # Ensure src/ is importable

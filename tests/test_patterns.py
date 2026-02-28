@@ -12,22 +12,12 @@ Covers:
 """
 
 import json
-import math
-import os
-import sys
 from datetime import datetime
-from datetime import time as dt_time
 from typing import Any
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Path setup — mirror what engine/patterns.py does so bare imports resolve
-# ---------------------------------------------------------------------------
-_engine_dir = os.path.join(_src_dir, "services", "engine")
-
 
 from src.futures_lib.services.engine.patterns import (
     DEFAULT_EXTREME_VOL,
@@ -917,7 +907,7 @@ class TestPublishNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = False
         cache_mod._r = None
 
-        with patch.dict("sys.modules", {"cache": cache_mod}):
+        with patch.dict("sys.modules", {"src.futures_lib.core.cache": cache_mod}):
             ok = publish_no_trade_alert(result)
 
         assert ok is True
@@ -942,7 +932,7 @@ class TestPublishNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = True
         cache_mod._r = mock_redis
 
-        with patch.dict("sys.modules", {"cache": cache_mod}):
+        with patch.dict("sys.modules", {"src.futures_lib.core.cache": cache_mod}):
             ok = publish_no_trade_alert(result)
 
         assert ok is True
@@ -958,7 +948,7 @@ class TestPublishNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = False
         cache_mod._r = None
 
-        with patch.dict("sys.modules", {"cache": cache_mod}):
+        with patch.dict("sys.modules", {"src.futures_lib.core.cache": cache_mod}):
             ok = publish_no_trade_alert(result)
 
         assert ok is True
@@ -982,7 +972,7 @@ class TestClearNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = False
         cache_mod._r = None
 
-        with patch.dict("sys.modules", {"cache": cache_mod}):
+        with patch.dict("sys.modules", {"src.futures_lib.core.cache": cache_mod}):
             ok = clear_no_trade_alert()
 
         assert ok is True
@@ -997,7 +987,7 @@ class TestClearNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = True
         cache_mod._r = mock_redis
 
-        with patch.dict("sys.modules", {"cache": cache_mod}):
+        with patch.dict("sys.modules", {"src.futures_lib.core.cache": cache_mod}):
             ok = clear_no_trade_alert()
 
         assert ok is True

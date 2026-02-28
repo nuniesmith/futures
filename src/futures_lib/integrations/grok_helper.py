@@ -23,7 +23,6 @@ Usage:
 """
 
 import logging
-import re
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo

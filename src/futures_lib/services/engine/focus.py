@@ -30,8 +30,6 @@ Usage:
 import json
 import logging
 import math
-import os
-import sys
 from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -192,7 +190,11 @@ def compute_asset_focus(
         from src.futures_lib.analysis.volatility import kmeans_volatility_clusters
         from src.futures_lib.analysis.wave_analysis import calculate_wave_analysis
         from src.futures_lib.core.cache import get_data
-        from src.futures_lib.core.models import ASSETS, CONTRACT_SPECS, MICRO_CONTRACT_SPECS
+        from src.futures_lib.core.models import (  # noqa: F401
+            ASSETS,
+            CONTRACT_SPECS,
+            MICRO_CONTRACT_SPECS,
+        )
     except ImportError as exc:
         logger.error("Failed to import required modules: %s", exc)
         return None

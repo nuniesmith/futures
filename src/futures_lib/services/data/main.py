@@ -86,46 +86,46 @@ logger = get_logger("data_service")
 # Bare imports like `from cache import ...` resolve via PYTHONPATH (/app/src).
 # ---------------------------------------------------------------------------
 from src.futures_lib.core.models import init_db  # noqa: E402
-from src.futures_lib.services.data.api.actions import (
-    router as actions_router,  # noqa: E402
+from src.futures_lib.services.data.api.actions import (  # noqa: E402
+    router as actions_router,
 )
-from src.futures_lib.services.data.api.actions import (
-    set_engine as actions_set_engine,  # noqa: E402
+from src.futures_lib.services.data.api.actions import (  # noqa: E402
+    set_engine as actions_set_engine,
 )
-from src.futures_lib.services.data.api.analysis import (
-    router as analysis_router,  # noqa: E402
+from src.futures_lib.services.data.api.analysis import (  # noqa: E402
+    router as analysis_router,
 )
-from src.futures_lib.services.data.api.analysis import (
-    set_engine as analysis_set_engine,  # noqa: E402
+from src.futures_lib.services.data.api.analysis import (  # noqa: E402
+    set_engine as analysis_set_engine,
 )
 from src.futures_lib.services.data.api.audit import router as audit_router  # noqa: E402
 from src.futures_lib.services.data.api.auth import require_api_key  # noqa: E402
-from src.futures_lib.services.data.api.dashboard import (
-    router as dashboard_router,  # noqa: E402
+from src.futures_lib.services.data.api.dashboard import (  # noqa: E402
+    router as dashboard_router,
 )
-from src.futures_lib.services.data.api.health import (
-    router as health_router,  # noqa: E402
+from src.futures_lib.services.data.api.health import (  # noqa: E402
+    router as health_router,
 )
-from src.futures_lib.services.data.api.journal import (
-    router as journal_router,  # noqa: E402
+from src.futures_lib.services.data.api.journal import (  # noqa: E402
+    router as journal_router,
 )
-from src.futures_lib.services.data.api.market_data import (
-    router as market_data_router,  # noqa: E402
+from src.futures_lib.services.data.api.market_data import (  # noqa: E402
+    router as market_data_router,
 )
 from src.futures_lib.services.data.api.metrics import PrometheusMiddleware  # noqa: E402
-from src.futures_lib.services.data.api.metrics import (
-    router as metrics_router,  # noqa: E402
+from src.futures_lib.services.data.api.metrics import (  # noqa: E402
+    router as metrics_router,
 )
-from src.futures_lib.services.data.api.positions import (
-    router as positions_router,  # noqa: E402
+from src.futures_lib.services.data.api.positions import (  # noqa: E402
+    router as positions_router,
 )
-from src.futures_lib.services.data.api.rate_limit import (
-    setup_rate_limiting,  # noqa: E402
+from src.futures_lib.services.data.api.rate_limit import (  # noqa: E402
+    setup_rate_limiting,
 )
 from src.futures_lib.services.data.api.risk import router as risk_router  # noqa: E402
 from src.futures_lib.services.data.api.sse import router as sse_router  # noqa: E402
-from src.futures_lib.services.data.api.trades import (
-    router as trades_router,  # noqa: E402
+from src.futures_lib.services.data.api.trades import (  # noqa: E402
+    router as trades_router,
 )
 
 # ---------------------------------------------------------------------------

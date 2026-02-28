@@ -76,27 +76,15 @@ Covers:
 """
 
 import json
-import math
 import os
 import sqlite3
-import sys
-import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 import pytest
-
-# ---------------------------------------------------------------------------
-# Path setup
-# ---------------------------------------------------------------------------
-_root = os.path.dirname(_this_dir)
-_engine_dir = os.path.join(_src, "services", "engine")
-_data_svc = os.path.join(_src, "services", "data")
-
 
 os.environ.setdefault("DISABLE_REDIS", "1")
 
@@ -291,9 +279,8 @@ class TestSymbolResolution:
     def test_get_backfill_symbols_from_models(self, monkeypatch):
         monkeypatch.setenv("BACKFILL_SYMBOLS", "")
         # Force re-import to pick up env change
-        import importlib
 
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         bf._SYMBOLS_OVERRIDE = ""
         symbols = bf._get_backfill_symbols()
@@ -307,7 +294,7 @@ class TestSymbolResolution:
         )
 
     def test_get_backfill_symbols_from_env(self, monkeypatch):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         bf._SYMBOLS_OVERRIDE = "MGC=F,MNQ=F"
         symbols = bf._get_backfill_symbols()
@@ -369,7 +356,11 @@ class TestStoreBars:
     """Test bar storage and retrieval from SQLite."""
 
     def test_store_bars_inserts_rows(self, backfill_db, sample_bars):
-        from src.futures_lib.services.engine.backfill import _get_bar_count, _get_conn, _store_bars
+        from src.futures_lib.services.engine.backfill import (
+            _get_bar_count,
+            _get_conn,
+            _store_bars,
+        )
 
         conn = _get_conn()
         new_count = _store_bars(conn, "MGC=F", sample_bars, "1m")
@@ -379,7 +370,11 @@ class TestStoreBars:
         conn.close()
 
     def test_store_bars_idempotent(self, backfill_db, sample_bars):
-        from src.futures_lib.services.engine.backfill import _get_bar_count, _get_conn, _store_bars
+        from src.futures_lib.services.engine.backfill import (
+            _get_bar_count,
+            _get_conn,
+            _store_bars,
+        )
 
         conn = _get_conn()
         first = _store_bars(conn, "MGC=F", sample_bars, "1m")
@@ -402,7 +397,10 @@ class TestStoreBars:
         conn.close()
 
     def test_store_bars_skips_zero_ohlc(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _get_bar_count, _get_conn, _store_bars
+        from src.futures_lib.services.engine.backfill import (
+            _get_conn,
+            _store_bars,
+        )
 
         idx = pd.date_range("2026-01-01 09:30", periods=5, freq="1min", tz="UTC")
         df = pd.DataFrame(
@@ -451,7 +449,11 @@ class TestStoreBars:
         conn.close()
 
     def test_store_multiple_symbols(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _get_bar_count, _get_conn, _store_bars
+        from src.futures_lib.services.engine.backfill import (
+            _get_bar_count,
+            _get_conn,
+            _store_bars,
+        )
 
         bars1 = _make_bars_df(n=50, start_price=2700.0)
         bars2 = _make_bars_df(n=30, start_price=15000.0, seed=99)
@@ -474,7 +476,10 @@ class TestComputeDateRange:
     """Test date range calculation for gap-aware fetching."""
 
     def test_no_existing_data_goes_back_default(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _compute_date_range, _get_conn
+        from src.futures_lib.services.engine.backfill import (
+            _compute_date_range,
+            _get_conn,
+        )
 
         conn = _get_conn()
         start_dt, end_dt = _compute_date_range("MGC=F", conn, days_back=30)
@@ -607,7 +612,7 @@ class TestFetchBarsChunk:
     """Test the fetch_bars_chunk function with mocks."""
 
     def test_returns_massive_data_when_available(self):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         mock_df = _make_bars_df(n=10)
 
@@ -624,7 +629,7 @@ class TestFetchBarsChunk:
             bf._fetch_chunk_massive = original
 
     def test_falls_back_to_yfinance(self):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         mock_df = _make_bars_df(n=20)
 
@@ -644,7 +649,7 @@ class TestFetchBarsChunk:
             bf._fetch_chunk_yfinance = orig_yf
 
     def test_returns_empty_when_both_fail(self):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         orig_massive = bf._fetch_chunk_massive
         orig_yf = bf._fetch_chunk_yfinance
@@ -669,7 +674,7 @@ class TestFetchChunkMassive:
         from src.futures_lib.services.engine.backfill import _fetch_chunk_massive
 
         # _get_massive_provider is imported from cache inside the function
-        with patch("cache._get_massive_provider", return_value=None):
+        with patch("src.futures_lib.core.cache._get_massive_provider", return_value=None):
             result = _fetch_chunk_massive(
                 "MGC=F",
                 datetime(2026, 1, 1),
@@ -685,7 +690,7 @@ class TestFetchChunkMassive:
         mock_provider.resolve_from_yahoo.side_effect = Exception("API error")
 
         # _get_massive_provider is imported from cache inside the function
-        with patch("cache._get_massive_provider", return_value=mock_provider):
+        with patch("src.futures_lib.core.cache._get_massive_provider", return_value=mock_provider):
             result = _fetch_chunk_massive(
                 "MGC=F",
                 datetime(2026, 1, 1),
@@ -728,7 +733,7 @@ class TestBackfillSymbol:
     """Test backfill_symbol function."""
 
     def test_returns_summary_dict(self, backfill_db):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         mock_df = _make_bars_df(n=50)
 
@@ -756,7 +761,7 @@ class TestBackfillSymbol:
         assert expected_keys.issubset(set(result.keys()))
 
     def test_counts_new_bars(self, backfill_db):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         mock_df = _make_bars_df(n=60)
 
@@ -773,7 +778,7 @@ class TestBackfillSymbol:
         assert result["error"] == ""
 
     def test_handles_fetch_failure(self, backfill_db):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         original = bf.fetch_bars_chunk
         bf.fetch_bars_chunk = lambda *a, **kw: pd.DataFrame()
@@ -789,7 +794,7 @@ class TestBackfillSymbol:
         from src.futures_lib.services.engine.backfill import backfill_symbol
 
         with patch(
-            "services.engine.backfill._get_conn",
+            "src.futures_lib.services.engine.backfill._get_conn",
             side_effect=Exception("DB connection failed"),
         ):
             result = backfill_symbol("MGC=F", days_back=5)
@@ -798,7 +803,7 @@ class TestBackfillSymbol:
         assert "DB connection failed" in result["error"]
 
     def test_duration_recorded(self, backfill_db):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         original = bf.fetch_bars_chunk
         bf.fetch_bars_chunk = lambda *a, **kw: pd.DataFrame()
@@ -819,7 +824,7 @@ class TestRunBackfill:
     """Test the main run_backfill orchestrator."""
 
     def test_processes_specified_symbols(self, backfill_db):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         original = bf.fetch_bars_chunk
         bf.fetch_bars_chunk = lambda *a, **kw: _make_bars_df(n=10)
@@ -836,7 +841,7 @@ class TestRunBackfill:
         assert "MNQ=F" in symbols_processed
 
     def test_status_complete_on_success(self, backfill_db):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         original = bf.fetch_bars_chunk
         bf.fetch_bars_chunk = lambda *a, **kw: _make_bars_df(n=10)
@@ -849,7 +854,7 @@ class TestRunBackfill:
         assert len(summary["errors"]) == 0
 
     def test_status_partial_on_some_errors(self, backfill_db):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         def mock_backfill_symbol(symbol, **kwargs):
             if symbol == "BAD=F":
@@ -891,7 +896,7 @@ class TestRunBackfill:
         assert len(summary["errors"]) == 1
 
     def test_status_failed_on_table_init_error(self, tmp_path, monkeypatch):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         original = bf.init_backfill_table
         bf.init_backfill_table = MagicMock(side_effect=Exception("Permission denied"))
@@ -904,7 +909,7 @@ class TestRunBackfill:
         assert len(summary["errors"]) > 0
 
     def test_total_bars_added_is_sum(self, backfill_db):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         bars1 = _make_bars_df(n=20, seed=1)
         bars2 = _make_bars_df(n=30, seed=2)
@@ -930,7 +935,7 @@ class TestRunBackfill:
         assert summary["total_duration_seconds"] >= 0
 
     def test_publishes_status_to_redis(self, backfill_db):
-        import services.engine.backfill as bf
+        import src.futures_lib.services.engine.backfill as bf
 
         publish_calls = []
         orig_fetch = bf.fetch_bars_chunk
@@ -958,7 +963,11 @@ class TestGetStoredBars:
     """Test the get_stored_bars query function."""
 
     def test_returns_dataframe_with_ohlcv(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_stored_bars
+        from src.futures_lib.services.engine.backfill import (
+            _get_conn,
+            _store_bars,
+            get_stored_bars,
+        )
 
         # Use recent timestamps so they fall within the days_back window
         now = datetime.now(tz=_UTC)
@@ -981,7 +990,11 @@ class TestGetStoredBars:
         assert df.empty
 
     def test_respects_days_back(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_stored_bars
+        from src.futures_lib.services.engine.backfill import (
+            _get_conn,
+            _store_bars,
+            get_stored_bars,
+        )
 
         # Store bars with recent timestamps
         now = datetime.now(tz=_UTC)
@@ -1002,7 +1015,11 @@ class TestGetStoredBars:
         assert isinstance(df_zero, pd.DataFrame)
 
     def test_returns_sorted_by_timestamp(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_stored_bars
+        from src.futures_lib.services.engine.backfill import (
+            _get_conn,
+            _store_bars,
+            get_stored_bars,
+        )
 
         now = datetime.now(tz=_UTC)
         recent_start = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
@@ -1034,7 +1051,11 @@ class TestGetBackfillStatus:
         assert len(status["symbols"]) == 0
 
     def test_returns_per_symbol_counts(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_backfill_status
+        from src.futures_lib.services.engine.backfill import (
+            _get_conn,
+            _store_bars,
+            get_backfill_status,
+        )
 
         bars1 = _make_bars_df(n=120)
         bars2 = _make_bars_df(n=30, seed=99)
@@ -1055,7 +1076,11 @@ class TestGetBackfillStatus:
         assert syms["MNQ=F"]["bar_count"] == 30
 
     def test_includes_date_ranges(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_backfill_status
+        from src.futures_lib.services.engine.backfill import (
+            _get_conn,
+            _store_bars,
+            get_backfill_status,
+        )
 
         bars = _make_bars_df(n=120)
         conn = _get_conn()
@@ -1086,7 +1111,11 @@ class TestGetGapReport:
         assert len(report["gaps"]) == 0
 
     def test_continuous_data_no_gaps(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_gap_report
+        from src.futures_lib.services.engine.backfill import (
+            _get_conn,
+            _store_bars,
+            get_gap_report,
+        )
 
         # Create continuous 1-min bars with recent timestamps
         now = datetime.now(tz=_UTC)
@@ -1101,7 +1130,11 @@ class TestGetGapReport:
         assert report["coverage_pct"] > 0
 
     def test_data_with_gap(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_gap_report
+        from src.futures_lib.services.engine.backfill import (
+            _get_conn,
+            _store_bars,
+            get_gap_report,
+        )
 
         # Create bars with a 2-hour gap in the middle using recent timestamps
         now = datetime.now(tz=_UTC)
@@ -1121,7 +1154,11 @@ class TestGetGapReport:
         assert len(report["gaps"]) >= 1
 
     def test_coverage_percentage_reasonable(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_gap_report
+        from src.futures_lib.services.engine.backfill import (
+            _get_conn,
+            _store_bars,
+            get_gap_report,
+        )
 
         now = datetime.now(tz=_UTC)
         recent_start = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
@@ -1154,7 +1191,11 @@ class TestFullRoundTrip:
     """Integration tests: store → query → verify."""
 
     def test_store_and_retrieve(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _get_conn, _store_bars, get_stored_bars
+        from src.futures_lib.services.engine.backfill import (
+            _get_conn,
+            _store_bars,
+            get_stored_bars,
+        )
 
         # Create bars with known values using recent timestamps
         now = datetime.now(tz=_EST)
@@ -1261,7 +1302,7 @@ class TestPublishBackfillStatus:
             "status": "complete",
         }
 
-        with patch("cache.cache_set") as mock_set:
+        with patch("src.futures_lib.core.cache.cache_set") as mock_set:
             _publish_backfill_status(summary)
             if mock_set.called:
                 args = mock_set.call_args[0]
@@ -1290,7 +1331,7 @@ class TestEngineHandlerIntegration:
             "symbols": [],
         }
 
-        with patch("backfill.run_backfill", return_value=mock_summary) as mock_run:
+        with patch("src.futures_lib.services.engine.backfill.run_backfill", return_value=mock_summary) as mock_run:
             _handle_historical_backfill(mock_engine)
             mock_run.assert_called_once()
 
@@ -1300,7 +1341,7 @@ class TestEngineHandlerIntegration:
         mock_engine = MagicMock()
 
         with patch(
-            "backfill.run_backfill",
+            "src.futures_lib.services.engine.backfill.run_backfill",
             side_effect=ImportError("No module named 'backfill'"),
         ):
             # Should not raise
@@ -1312,7 +1353,7 @@ class TestEngineHandlerIntegration:
         mock_engine = MagicMock()
 
         with patch(
-            "backfill.run_backfill",
+            "src.futures_lib.services.engine.backfill.run_backfill",
             side_effect=RuntimeError("Connection refused"),
         ):
             # Should not raise
@@ -1330,9 +1371,10 @@ class TestBackfillAPIEndpoints:
     @pytest.fixture()
     def client(self, backfill_db):
         """Build a minimal FastAPI app with health router."""
-        from src.futures_lib.services.data.api.health import router as health_router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
+        from src.futures_lib.services.data.api.health import router as health_router
 
         app = FastAPI()
         app.include_router(health_router)
@@ -1374,7 +1416,10 @@ class TestEdgeCases:
     """Edge cases and error handling."""
 
     def test_store_bars_with_nan_values(self, backfill_db):
-        from src.futures_lib.services.engine.backfill import _get_bar_count, _get_conn, _store_bars
+        from src.futures_lib.services.engine.backfill import (
+            _get_conn,
+            _store_bars,
+        )
 
         idx = pd.date_range("2026-01-01 09:30", periods=5, freq="1min", tz="UTC")
         df = pd.DataFrame(

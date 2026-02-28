@@ -16,7 +16,6 @@ from zoneinfo import ZoneInfo
 
 from src.futures_lib.services.engine.scheduler import (
     ActionType,
-    ScheduledAction,
     ScheduleManager,
     SessionMode,
 )

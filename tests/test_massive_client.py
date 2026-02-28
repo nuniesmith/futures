@@ -1621,7 +1621,7 @@ class TestFeedManager:
         )
         feed._resolve_tickers()
 
-        with patch("cache.cache_set") as mock_cache:
+        with patch("src.futures_lib.core.cache.cache_set") as mock_cache:
             feed._push_bar_to_cache(
                 "ESZ5",
                 {
@@ -1651,7 +1651,7 @@ class TestSingletonAndConvenience:
     """Test singleton provider and convenience functions."""
 
     def test_singleton_returns_same_instance(self):
-        with patch("massive_client.MassiveDataProvider") as mock_cls:
+        with patch("src.futures_lib.integrations.massive_client.MassiveDataProvider") as mock_cls:
             mock_cls.return_value = MagicMock(is_available=False, api_key="")
             p1 = get_massive_provider()
             p2 = get_massive_provider()
@@ -1659,7 +1659,7 @@ class TestSingletonAndConvenience:
             assert mock_cls.call_count == 1
 
     def test_reset_provider_clears_singleton(self):
-        with patch("massive_client.MassiveDataProvider") as mock_cls:
+        with patch("src.futures_lib.integrations.massive_client.MassiveDataProvider") as mock_cls:
             mock_cls.side_effect = [
                 MagicMock(is_available=False, api_key=""),
                 MagicMock(is_available=False, api_key=""),
@@ -1671,13 +1671,13 @@ class TestSingletonAndConvenience:
             assert mock_cls.call_count == 2
 
     def test_is_massive_available_false(self):
-        with patch("massive_client.MassiveDataProvider") as mock_cls:
+        with patch("src.futures_lib.integrations.massive_client.MassiveDataProvider") as mock_cls:
             mock_cls.return_value = MagicMock(is_available=False, api_key="")
             result = is_massive_available()
             assert result is False
 
     def test_is_massive_available_true(self):
-        with patch("massive_client.MassiveDataProvider") as mock_cls:
+        with patch("src.futures_lib.integrations.massive_client.MassiveDataProvider") as mock_cls:
             mock_cls.return_value = MagicMock(is_available=True, api_key="test")
             result = is_massive_available()
             assert result is True
@@ -1686,7 +1686,7 @@ class TestSingletonAndConvenience:
         mock_provider = MagicMock()
         mock_provider.is_available = True
         mock_provider.get_aggs.return_value = pd.DataFrame({"Close": [100]})
-        with patch("massive_client.MassiveDataProvider", return_value=mock_provider):
+        with patch("src.futures_lib.integrations.massive_client.MassiveDataProvider", return_value=mock_provider):
             _df = get_massive_aggs("ES=F", "5m", "5d")  # noqa: F841
             mock_provider.get_aggs.assert_called_once_with("ES=F", "5m", "5d")
 
@@ -1694,7 +1694,7 @@ class TestSingletonAndConvenience:
         mock_provider = MagicMock()
         mock_provider.is_available = True
         mock_provider.get_daily.return_value = pd.DataFrame({"Close": [100]})
-        with patch("massive_client.MassiveDataProvider", return_value=mock_provider):
+        with patch("src.futures_lib.integrations.massive_client.MassiveDataProvider", return_value=mock_provider):
             _df = get_massive_daily("ES=F", "10d")  # noqa: F841
             mock_provider.get_daily.assert_called_once_with("ES=F", "10d")
 
@@ -1702,7 +1702,7 @@ class TestSingletonAndConvenience:
         mock_provider = MagicMock()
         mock_provider.is_available = True
         mock_provider.get_snapshot.return_value = {"last_price": 5500}
-        with patch("massive_client.MassiveDataProvider", return_value=mock_provider):
+        with patch("src.futures_lib.integrations.massive_client.MassiveDataProvider", return_value=mock_provider):
             _result = get_massive_snapshot("ES=F")  # noqa: F841
             mock_provider.get_snapshot.assert_called_once_with(yahoo_ticker="ES=F")
 

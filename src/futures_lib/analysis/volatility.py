@@ -388,7 +388,6 @@ def kmeans_volatility_clusters(
             "MEDIUM": round(float(sorted_centroids[1]), 6),
             "HIGH": round(float(sorted_centroids[2]), 6),
         },
-        "raw_atr": round(float(current_atr), 6),
         "strategy_hint": strategy_hint,
     }
 

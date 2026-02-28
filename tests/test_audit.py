@@ -11,23 +11,13 @@ Covers:
 """
 
 import json
-import os
 import sqlite3
-import sys
 import time
-from datetime import datetime, timedelta
-from typing import Any
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Path setup — ensure bare imports resolve from src/
-# ---------------------------------------------------------------------------
-_engine_dir = os.path.join(_src_dir, "services", "engine")
-_data_dir = os.path.join(_src_dir, "services", "data")
-
 
 _EST = ZoneInfo("America/New_York")
 
@@ -887,17 +877,16 @@ class TestEngineAuditPersistence:
         mock_scheduler.return_value.get_session_mode.return_value = mock_session
 
         with patch.dict("sys.modules", {}):  # clear cache if needed
-            from src.futures_lib.services.engine.main import _persist_risk_event
-
             with patch(
-                "services.engine.main.ScheduleManager",
+                "src.futures_lib.services.engine.main.ScheduleManager",
                 mock_scheduler,
                 create=True,
             ):
                 # We need to mock both imports that happen inside _persist_risk_event
                 with patch(
-                    "services.engine.main.record_risk_event", create=True
-                ) as mock_rec:
+                    "src.futures_lib.services.engine.main.record_risk_event",
+                    create=True,
+                ) as _mock_rec:
                     # The function does a lazy import, so we test the real path
                     pass
 

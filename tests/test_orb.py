@@ -534,7 +534,7 @@ class TestORBPublishing:
         mock_cache._r = None
         mock_cache.cache_set = MagicMock()
 
-        with patch.dict(sys.modules, {"cache": mock_cache}):
+        with patch.dict(sys.modules, {"src.futures_lib.core.cache": mock_cache}):
             success = publish_orb_alert(result)
             assert success is True
             assert mock_cache.cache_set.call_count >= 1
@@ -550,7 +550,7 @@ class TestORBPublishing:
 
         result = ORBResult(symbol="MGC", breakout_detected=True, direction="LONG")
 
-        with patch.dict(sys.modules, {"cache": mock_cache}):
+        with patch.dict(sys.modules, {"src.futures_lib.core.cache": mock_cache}):
             success = publish_orb_alert(result)
             assert success is True
             mock_r.publish.assert_called_once()
@@ -561,7 +561,7 @@ class TestORBPublishing:
         mock_cache = MagicMock()
         mock_cache.cache_set = MagicMock()
 
-        with patch.dict(sys.modules, {"cache": mock_cache}):
+        with patch.dict(sys.modules, {"src.futures_lib.core.cache": mock_cache}):
             success = clear_orb_alert()
             assert success is True
 
@@ -582,7 +582,10 @@ class TestSchedulerORB:
 
     def test_orb_scheduled_during_or_window(self):
         """CHECK_ORB should be scheduled between 09:30 and 11:00 ET."""
-        from src.futures_lib.services.engine.scheduler import ActionType, ScheduleManager
+        from src.futures_lib.services.engine.scheduler import (
+            ActionType,
+            ScheduleManager,
+        )
 
         sm = ScheduleManager()
 
@@ -594,7 +597,10 @@ class TestSchedulerORB:
 
     def test_orb_not_scheduled_outside_window(self):
         """CHECK_ORB should NOT be scheduled before 09:30 or after 11:00 ET."""
-        from src.futures_lib.services.engine.scheduler import ActionType, ScheduleManager
+        from src.futures_lib.services.engine.scheduler import (
+            ActionType,
+            ScheduleManager,
+        )
 
         sm = ScheduleManager()
 
@@ -606,7 +612,10 @@ class TestSchedulerORB:
 
     def test_orb_not_scheduled_in_off_hours(self):
         """CHECK_ORB should not appear during off-hours session."""
-        from src.futures_lib.services.engine.scheduler import ActionType, ScheduleManager
+        from src.futures_lib.services.engine.scheduler import (
+            ActionType,
+            ScheduleManager,
+        )
 
         sm = ScheduleManager()
 
@@ -624,7 +633,10 @@ class TestSchedulerORB:
         """
         import time as _time
 
-        from src.futures_lib.services.engine.scheduler import ActionType, ScheduleManager
+        from src.futures_lib.services.engine.scheduler import (
+            ActionType,
+            ScheduleManager,
+        )
 
         sm = ScheduleManager()
         fake_mono = [100.0]  # mutable container so the lambda can read it
@@ -667,7 +679,10 @@ class TestRiskHelpers:
         from src.futures_lib.services.data.api.risk import evaluate_position_risk
 
         # Patch the getter to return None
-        with patch("api.risk._get_local_risk_manager", return_value=None):
+        with patch(
+            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            return_value=None,
+        ):
             result = evaluate_position_risk([])
             assert result["can_trade"] is True
             assert result["block_reason"] == ""
@@ -676,11 +691,13 @@ class TestRiskHelpers:
     def test_evaluate_position_risk_with_positions(self):
         """Should sync positions and return risk evaluation."""
         from src.futures_lib.services.data.api.risk import evaluate_position_risk
-
         from src.futures_lib.services.engine.risk import RiskManager
 
         rm = RiskManager(account_size=50_000)
-        with patch("api.risk._get_local_risk_manager", return_value=rm):
+        with patch(
+            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            return_value=rm,
+        ):
             positions = [
                 {
                     "symbol": "MGC",
@@ -698,14 +715,16 @@ class TestRiskHelpers:
     def test_check_trade_entry_risk_no_manager(self):
         from src.futures_lib.services.data.api.risk import check_trade_entry_risk
 
-        with patch("api.risk._get_local_risk_manager", return_value=None):
+        with patch(
+            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            return_value=None,
+        ):
             allowed, reason, details = check_trade_entry_risk("MGC", "LONG")
             assert allowed is True
             assert details.get("risk_available") is False
 
     def test_check_trade_entry_risk_allowed(self):
         from src.futures_lib.services.data.api.risk import check_trade_entry_risk
-
         from src.futures_lib.services.engine.risk import RiskManager
 
         # RiskManager with generous limits
@@ -714,8 +733,13 @@ class TestRiskHelpers:
             now_fn=lambda: datetime(2026, 2, 27, 8, 0, 0, tzinfo=_EST),
         )
 
-        with patch("api.risk._get_local_risk_manager", return_value=rm):
-            with patch("api.risk._sync_local_risk_manager"):
+        with patch(
+            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            return_value=rm,
+        ):
+            with patch(
+                "src.futures_lib.services.data.api.risk._sync_local_risk_manager"
+            ):
                 allowed, reason, details = check_trade_entry_risk("MGC", "LONG", size=1)
                 assert allowed is True
                 assert reason == ""
@@ -723,7 +747,6 @@ class TestRiskHelpers:
 
     def test_check_trade_entry_risk_blocked_by_daily_loss(self):
         from src.futures_lib.services.data.api.risk import check_trade_entry_risk
-
         from src.futures_lib.services.engine.risk import RiskManager
 
         rm = RiskManager(
@@ -734,8 +757,13 @@ class TestRiskHelpers:
         # Simulate daily loss
         rm._daily_pnl = -600.0
 
-        with patch("api.risk._get_local_risk_manager", return_value=rm):
-            with patch("api.risk._sync_local_risk_manager"):
+        with patch(
+            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            return_value=rm,
+        ):
+            with patch(
+                "src.futures_lib.services.data.api.risk._sync_local_risk_manager"
+            ):
                 allowed, reason, details = check_trade_entry_risk("MGC", "LONG", size=1)
                 assert allowed is False
                 assert "Daily loss limit" in reason
@@ -745,7 +773,10 @@ class TestRiskEventRecording:
     """Test the in-memory risk event audit trail."""
 
     def test_record_event(self):
-        from src.futures_lib.services.data.api.risk import _record_risk_event, _risk_events
+        from src.futures_lib.services.data.api.risk import (
+            _record_risk_event,
+            _risk_events,
+        )
 
         initial_count = len(_risk_events)
         _record_risk_event(
@@ -760,7 +791,11 @@ class TestRiskEventRecording:
         assert last["symbol"] == "MGC"
 
     def test_event_limit(self):
-        from src.futures_lib.services.data.api.risk import _MAX_RISK_EVENTS, _record_risk_event, _risk_events
+        from src.futures_lib.services.data.api.risk import (
+            _MAX_RISK_EVENTS,
+            _record_risk_event,
+            _risk_events,
+        )
 
         # Fill up events
         for i in range(_MAX_RISK_EVENTS + 10):
@@ -780,9 +815,10 @@ class TestRiskStatusEndpoint:
     @pytest.fixture()
     def client(self):
         """Create a test client with the risk router mounted."""
-        from src.futures_lib.services.data.api.risk import router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
+        from src.futures_lib.services.data.api.risk import router
 
         app = FastAPI()
         app.include_router(router, prefix="/risk")
@@ -812,9 +848,10 @@ class TestRiskCheckEndpoint:
 
     @pytest.fixture()
     def client(self):
-        from src.futures_lib.services.data.api.risk import router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
+        from src.futures_lib.services.data.api.risk import router
 
         app = FastAPI()
         app.include_router(router, prefix="/risk")
@@ -856,9 +893,10 @@ class TestRiskHistoryEndpoint:
 
     @pytest.fixture()
     def client(self):
-        from src.futures_lib.services.data.api.risk import router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
+        from src.futures_lib.services.data.api.risk import router
 
         app = FastAPI()
         app.include_router(router, prefix="/risk")
@@ -906,9 +944,10 @@ class TestTradesRiskEnforcement:
 
     @pytest.fixture()
     def client(self):
-        from src.futures_lib.services.data.api.trades import router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
+        from src.futures_lib.services.data.api.trades import router
 
         app = FastAPI()
         app.include_router(router, prefix="")
@@ -958,8 +997,13 @@ class TestTradesRiskEnforcement:
         )
         rm._daily_pnl = -600.0
 
-        with patch("api.risk._get_local_risk_manager", return_value=rm):
-            with patch("api.risk._sync_local_risk_manager"):
+        with patch(
+            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            return_value=rm,
+        ):
+            with patch(
+                "src.futures_lib.services.data.api.risk._sync_local_risk_manager"
+            ):
                 result = client.post(
                     "/trades",
                     json={
@@ -1014,9 +1058,10 @@ class TestPositionsRiskEvaluation:
 
     @pytest.fixture()
     def client(self):
-        from src.futures_lib.services.data.api.positions import router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
+        from src.futures_lib.services.data.api.positions import router
 
         app = FastAPI()
         app.include_router(router, prefix="/positions")
@@ -1085,7 +1130,10 @@ class TestPositionsRiskEvaluation:
             },
         }
 
-        with patch("api.risk._get_local_risk_manager", return_value=rm):
+        with patch(
+            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            return_value=rm,
+        ):
             result = client.post(
                 "/positions/update",
                 json={
@@ -1186,9 +1234,10 @@ class TestDashboardORBEndpoint:
 
     @pytest.fixture()
     def client(self):
-        from src.futures_lib.services.data.api.dashboard import router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
+
+        from src.futures_lib.services.data.api.dashboard import router
 
         app = FastAPI()
         app.include_router(router)
@@ -1211,7 +1260,7 @@ class TestSSEORBCache:
     _original_cache = None
 
     def setup_method(self):
-        self._original_cache = sys.modules.get("cache", None)
+        self._original_cache = sys.modules.get("src.futures_lib.core.cache", None)
         # Install mock cache for SSE module
         mock_cache = MagicMock()
         mock_cache.REDIS_AVAILABLE = False
@@ -1222,14 +1271,14 @@ class TestSSEORBCache:
             side_effect=lambda *parts: "futures:mock:" + ":".join(str(p) for p in parts)
         )
         mock_cache.get_data_source = MagicMock(return_value="mock")
-        sys.modules["cache"] = mock_cache
+        sys.modules["src.futures_lib.core.cache"] = mock_cache
         self._mock_cache = mock_cache
 
     def teardown_method(self):
         if self._original_cache is not None:
-            sys.modules["cache"] = self._original_cache
+            sys.modules["src.futures_lib.core.cache"] = self._original_cache
         else:
-            sys.modules.pop("cache", None)
+            sys.modules.pop("src.futures_lib.core.cache", None)
 
     def test_get_orb_from_cache_none(self):
         from src.futures_lib.services.data.api.sse import _get_orb_from_cache
@@ -1335,7 +1384,7 @@ class TestORBRiskIntegration:
         bars = _make_breakout_bars(
             direction="LONG", or_price=2700.0, breakout_magnitude=20.0
         )
-        orb_result = detect_opening_range_breakout(bars, symbol="MGC")
+        _orb_result = detect_opening_range_breakout(bars, symbol="MGC")
 
         rm = RiskManager(
             account_size=50_000,

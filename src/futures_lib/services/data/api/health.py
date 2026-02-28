@@ -22,7 +22,7 @@ logger = logging.getLogger("api.health")
 router = APIRouter(tags=["health"])
 
 
-def _check_redis() -> dict:
+def _check_redis() -> dict[str, Any]:
     """Check Redis connectivity."""
     try:
         from src.futures_lib.core.cache import REDIS_AVAILABLE, _r

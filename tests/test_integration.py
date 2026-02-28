@@ -140,13 +140,13 @@ def redis_store():
 def mock_cache(redis_store):
     """Install a mock cache module into sys.modules and restore after test."""
     mock = _build_mock_cache_module(redis_store)
-    saved = sys.modules.get("cache")
-    sys.modules["cache"] = mock
+    saved = sys.modules.get("src.futures_lib.core.cache")
+    sys.modules["src.futures_lib.core.cache"] = mock
     yield mock
     if saved is not None:
-        sys.modules["cache"] = saved
+        sys.modules["src.futures_lib.core.cache"] = saved
     else:
-        sys.modules.pop("cache", None)
+        sys.modules.pop("src.futures_lib.core.cache", None)
 
 
 def _make_focus_asset(

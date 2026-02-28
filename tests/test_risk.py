@@ -14,21 +14,11 @@ Covers:
 """
 
 import json
-import os
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 from src.futures_lib.services.engine.risk import (
-    DEFAULT_ACCOUNT_SIZE,
-    DEFAULT_MAX_DAILY_LOSS,
-    DEFAULT_MAX_OPEN_TRADES,
-    DEFAULT_NO_ENTRY_AFTER,
-    DEFAULT_OVERNIGHT_WARNING,
-    DEFAULT_RISK_PCT_PER_TRADE,
-    DEFAULT_SESSION_END,
-    DEFAULT_STACK_MIN_R,
-    DEFAULT_STACK_MIN_WAVE,
     RiskManager,
     RiskState,
     TradeRecord,
@@ -637,22 +627,23 @@ class TestPublishToRedis:
         rm = _make_rm(hour=8)
 
         mock_cache_set = MagicMock()
-        mock_r = MagicMock()
+        _mock_r = MagicMock()
 
         with patch.dict("sys.modules", {}):
             with patch(
-                "services.engine.risk.RiskManager.publish_to_redis",
+                "src.futures_lib.services.engine.risk.RiskManager.publish_to_redis",
                 wraps=rm.publish_to_redis,
             ):
                 # Patch the cache module imports inside publish_to_redis
-                import importlib
 
                 cache_mod = MagicMock()
                 cache_mod.cache_set = mock_cache_set
                 cache_mod.REDIS_AVAILABLE = False
                 cache_mod._r = None
 
-                with patch.dict("sys.modules", {"cache": cache_mod}):
+                with patch.dict(
+                    "sys.modules", {"src.futures_lib.core.cache": cache_mod}
+                ):
                     result = rm.publish_to_redis()
 
                 assert result is True
@@ -679,7 +670,7 @@ class TestPublishToRedis:
         cache_mod.REDIS_AVAILABLE = False
         cache_mod._r = None
 
-        with patch.dict("sys.modules", {"cache": cache_mod}):
+        with patch.dict("sys.modules", {"src.futures_lib.core.cache": cache_mod}):
             rm.publish_to_redis()
 
         assert captured["key"] == "engine:risk_status"

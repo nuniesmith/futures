@@ -11,8 +11,6 @@ Covers:
 """
 
 import json
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -25,16 +23,30 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture(autouse=True)
 def _clear_position_cache():
-    """Clear the position cache before and after each test."""
-    from src.futures_lib.core.cache import _mem_cache
+    """Clear the position cache before and after each test.
+
+    Also temporarily disables Redis so that cache_get/cache_set use the
+    in-memory ``_mem_cache`` dict, which the test controls.
+    """
+    import src.futures_lib.core.cache as _cache_mod
 
     # Save original state
-    original = dict(_mem_cache)
-    _mem_cache.clear()
+    original_mem = dict(_cache_mod._mem_cache)
+    original_redis_available = _cache_mod.REDIS_AVAILABLE
+    original_r = _cache_mod._r
+
+    # Force in-memory mode
+    _cache_mod.REDIS_AVAILABLE = False
+    _cache_mod._r = None
+    _cache_mod._mem_cache.clear()
+
     yield
+
     # Restore
-    _mem_cache.clear()
-    _mem_cache.update(original)
+    _cache_mod._mem_cache.clear()
+    _cache_mod._mem_cache.update(original_mem)
+    _cache_mod.REDIS_AVAILABLE = original_redis_available
+    _cache_mod._r = original_r
 
 
 @pytest.fixture()

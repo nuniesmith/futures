@@ -14,21 +14,10 @@ Covers:
   - Journal endpoints (save, entries, stats, today)
 """
 
-import json
 import os
-import sys
-import time
-from datetime import datetime
-from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Path setup — make sure src/ and src/services/data/ are importable
-# ---------------------------------------------------------------------------
-_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_data_svc = os.path.join(_src, "services", "data")
 
 # Disable Redis before importing anything that touches it
 os.environ.setdefault("DISABLE_REDIS", "1")
@@ -145,9 +134,13 @@ def _build_test_app(mock_engine):
     routers that need it.
     """
     from src.futures_lib.services.data.api.actions import router as actions_router
-    from src.futures_lib.services.data.api.actions import set_engine as actions_set_engine
+    from src.futures_lib.services.data.api.actions import (
+        set_engine as actions_set_engine,
+    )
     from src.futures_lib.services.data.api.analysis import router as analysis_router
-    from src.futures_lib.services.data.api.analysis import set_engine as analysis_set_engine
+    from src.futures_lib.services.data.api.analysis import (
+        set_engine as analysis_set_engine,
+    )
     from src.futures_lib.services.data.api.health import router as health_router
     from src.futures_lib.services.data.api.journal import router as journal_router
     from src.futures_lib.services.data.api.positions import router as positions_router
@@ -203,7 +196,7 @@ def client(mock_engine):
     Builds a lightweight app copy (no lifespan) so the real
     DashboardEngine is never instantiated during tests.
     """
-    import api.health as _health_mod
+    import src.futures_lib.services.data.api.health as _health_mod
 
     _orig_get_engine_or_none = _health_mod._get_engine_or_none
     _health_mod._get_engine_or_none = lambda: mock_engine
@@ -214,8 +207,12 @@ def client(mock_engine):
         yield c
 
     # Clean up
-    from src.futures_lib.services.data.api.actions import set_engine as actions_set_engine
-    from src.futures_lib.services.data.api.analysis import set_engine as analysis_set_engine
+    from src.futures_lib.services.data.api.actions import (
+        set_engine as actions_set_engine,
+    )
+    from src.futures_lib.services.data.api.analysis import (
+        set_engine as analysis_set_engine,
+    )
 
     analysis_set_engine(None)
     actions_set_engine(None)
@@ -1000,7 +997,7 @@ class TestEngineNotReady:
 
     @pytest.fixture()
     def client_no_engine(self):
-        import api.health as _health_mod
+        import src.futures_lib.services.data.api.health as _health_mod
 
         _orig = _health_mod._get_engine_or_none
         _health_mod._get_engine_or_none = lambda: None
@@ -1011,8 +1008,12 @@ class TestEngineNotReady:
             yield c
 
         # Restore
-        from src.futures_lib.services.data.api.actions import set_engine as actions_set_engine
-        from src.futures_lib.services.data.api.analysis import set_engine as analysis_set_engine
+        from src.futures_lib.services.data.api.actions import (
+            set_engine as actions_set_engine,
+        )
+        from src.futures_lib.services.data.api.analysis import (
+            set_engine as analysis_set_engine,
+        )
 
         analysis_set_engine(None)
         actions_set_engine(None)

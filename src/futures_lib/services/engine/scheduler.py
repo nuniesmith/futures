@@ -28,7 +28,7 @@ Usage:
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
 from typing import Optional

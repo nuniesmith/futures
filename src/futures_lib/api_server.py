@@ -34,22 +34,20 @@ Listens on port 8000. Supports:
 
 import json
 import logging
-import os
 import sqlite3
-import sys
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 from zoneinfo import ZoneInfo
 
 _EST = ZoneInfo("America/New_York")
 
 # Ensure sibling modules are importable
 
-from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Query  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
 
-from src.futures_lib.core.cache import _cache_key, cache_get, cache_set
-from src.futures_lib.core.models import (
+from src.futures_lib.core.cache import _cache_key, cache_get, cache_set  # noqa: E402
+from src.futures_lib.core.models import (  # noqa: E402
     ACCOUNT_PROFILES,
     CONTRACT_SPECS,
     DB_PATH,
@@ -185,7 +183,7 @@ class NTPositionsResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _get_trade_by_id(trade_id: int) -> dict:
+def _get_trade_by_id(trade_id: int) -> dict[str, Any]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM trades_v2 WHERE id = ?", (trade_id,)).fetchone()
@@ -460,7 +458,7 @@ def api_clear_positions():
 # ---------------------------------------------------------------------------
 
 
-def get_live_positions() -> dict:
+def get_live_positions() -> dict[str, Any]:
     """Read the latest NinjaTrader positions from cache.
 
     Returns a dict with keys: account, positions (list of dicts),

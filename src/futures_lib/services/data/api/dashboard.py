@@ -164,7 +164,7 @@ def _get_grok_update() -> Optional[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _render_asset_card(asset: dict) -> str:
+def _render_asset_card(asset: dict[str, Any]) -> str:
     """Render a single asset focus card as an HTML fragment."""
     symbol = asset.get("symbol", "?")
     bias = asset.get("bias", "NEUTRAL")
@@ -677,7 +677,9 @@ def _render_orb_panel(orb_data: Optional[dict[str, Any]]) -> str:
     """
 
 
-def _render_full_dashboard(focus_data: Optional[dict], session: dict) -> str:
+def _render_full_dashboard(
+    focus_data: Optional[dict[str, Any]], session: dict[str, str]
+) -> str:
     """Render the complete dashboard HTML page."""
     # Asset cards grid
     cards_html = ""

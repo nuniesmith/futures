@@ -17,7 +17,6 @@ import json
 import logging
 import os
 import sqlite3
-from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -1644,7 +1643,7 @@ def migrate_sqlite_to_postgres(
             rows = src_conn.execute("SELECT * FROM trades_v2").fetchall()
             for row in rows:
                 d = dict(row)
-                trade_id = d.pop("id", None)
+                d.pop("id", None)
                 try:
                     cols = ", ".join(d.keys())
                     placeholders = ", ".join(f":{k}" for k in d.keys())

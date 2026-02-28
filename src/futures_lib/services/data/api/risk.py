@@ -341,7 +341,7 @@ def get_risk_history(limit: int = 50):
 
             if REDIS_AVAILABLE and _r is not None:
                 raw_list = _r.lrange("engine:risk_events", 0, limit - 1)  # type: ignore[union-attr]
-                if raw_list:
+                if raw_list and isinstance(raw_list, list):
                     events = [json.loads(item) for item in raw_list]
         except Exception:
             pass
@@ -359,7 +359,7 @@ def get_risk_history(limit: int = 50):
 # ---------------------------------------------------------------------------
 
 
-def evaluate_position_risk(positions: list[dict]) -> dict[str, Any]:
+def evaluate_position_risk(positions: list[dict[str, Any]]) -> dict[str, Any]:
     """Evaluate risk for a set of positions (called from positions router).
 
     Returns a dict with:

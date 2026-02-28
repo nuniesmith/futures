@@ -28,7 +28,7 @@ import json
 import logging
 import time
 from datetime import datetime
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request
@@ -135,7 +135,7 @@ def _get_redis():
     return None
 
 
-def _get_catchup_messages(count: int = _CATCHUP_COUNT) -> list[dict]:
+def _get_catchup_messages(count: int = _CATCHUP_COUNT) -> list[dict[str, str]]:
     """Read the last N messages from the Redis Stream for catch-up.
 
     Returns list of dicts with keys: id, data, ts.
@@ -150,8 +150,8 @@ def _get_catchup_messages(count: int = _CATCHUP_COUNT) -> list[dict]:
         if not raw:
             return []
 
-        messages = []
-        for msg_id, fields in reversed(raw):  # type: ignore[arg-type]
+        messages: list[dict[str, str]] = []
+        for msg_id, fields in reversed(list(raw)):
             # msg_id is bytes, fields is dict of bytes
             entry = {
                 "id": msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id),
@@ -196,7 +196,7 @@ def _get_positions_from_cache() -> Optional[str]:
     return None
 
 
-def _get_engine_status() -> Optional[dict]:
+def _get_engine_status() -> Optional[dict[str, Any]]:
     """Read engine status from Redis."""
     try:
         from src.futures_lib.core.cache import cache_get
@@ -384,12 +384,18 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                         ignore_subscribe_messages=True, timeout=0.1
                     )
                     if message and message["type"] in ("message", "pmessage"):
-                        channel = message.get("channel", b"")
-                        if isinstance(channel, bytes):
-                            channel = channel.decode()
-                        data = message.get("data", b"")
-                        if isinstance(data, bytes):
-                            data = data.decode()
+                        raw_channel = message.get("channel", b"")
+                        channel: str = (
+                            raw_channel.decode()
+                            if isinstance(raw_channel, bytes)
+                            else str(raw_channel or "")
+                        )
+                        raw_data = message.get("data", b"")
+                        data: str = (
+                            raw_data.decode()
+                            if isinstance(raw_data, bytes)
+                            else str(raw_data or "")
+                        )
 
                         if channel == "dashboard:live":
                             # Full focus update
@@ -647,11 +653,12 @@ async def sse_health():
     r = _get_redis()
     redis_ok = r is not None
 
-    stream_length = 0
+    stream_length: int = 0
     if redis_ok and r is not None:
         try:
             info = r.xinfo_stream("dashboard:stream:focus")  # type: ignore[union-attr]
-            stream_length = info.get(b"length", info.get("length", 0))  # type: ignore[union-attr]
+            if isinstance(info, dict):
+                stream_length = int(info.get(b"length", info.get("length", 0)))
         except Exception:
             pass
 

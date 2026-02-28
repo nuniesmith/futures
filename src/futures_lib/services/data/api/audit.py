@@ -26,10 +26,8 @@ Usage:
 
 import json
 import logging
-import os
-import sys
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query

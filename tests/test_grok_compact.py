@@ -11,11 +11,8 @@ Covers:
   - Output format validation: emoji, bias status, DO NOW line
 """
 
-import os
-import sys
-from datetime import datetime
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -315,7 +312,8 @@ class TestRunLiveAnalysisCompactRouting:
             "positions_text": "",
         }
         with patch(
-            "grok_helper._run_live_compact", return_value="COMPACT OUTPUT"
+            "src.futures_lib.integrations.grok_helper._run_live_compact",
+            return_value="COMPACT OUTPUT",
         ) as mock_compact:
             result = run_live_analysis(context, "fake-key", compact=True)
             mock_compact.assert_called_once()
@@ -338,7 +336,8 @@ class TestRunLiveAnalysisCompactRouting:
             "positions_text": "",
         }
         with patch(
-            "grok_helper._run_live_verbose", return_value="VERBOSE OUTPUT"
+            "src.futures_lib.integrations.grok_helper._run_live_verbose",
+            return_value="VERBOSE OUTPUT",
         ) as mock_verbose:
             result = run_live_analysis(context, "fake-key", compact=False)
             mock_verbose.assert_called_once()
@@ -360,8 +359,11 @@ class TestRunLiveAnalysisCompactRouting:
             "fks_sq_text": "N/A",
             "positions_text": "",
         }
-        with patch("grok_helper._run_live_compact", return_value="COMPACT") as mock:
-            result = run_live_analysis(context, "fake-key")
+        with patch(
+            "src.futures_lib.integrations.grok_helper._run_live_compact",
+            return_value="COMPACT",
+        ) as mock:
+            _result = run_live_analysis(context, "fake-key")
             mock.assert_called_once()
 
 
@@ -392,9 +394,10 @@ class TestGrokSessionCompact:
         }
 
         with patch(
-            "grok_helper.run_live_analysis", return_value="COMPACT RESULT"
+            "src.futures_lib.integrations.grok_helper.run_live_analysis",
+            return_value="COMPACT RESULT",
         ) as mock_rla:
-            result = session.run_update(context, "fake-key", compact=True)
+            _result = session.run_update(context, "fake-key", compact=True)
             mock_rla.assert_called_once()
             _, kwargs = mock_rla.call_args
             assert kwargs.get("compact") is True
@@ -420,9 +423,10 @@ class TestGrokSessionCompact:
         }
 
         with patch(
-            "grok_helper.run_live_analysis", return_value="VERBOSE RESULT"
+            "src.futures_lib.integrations.grok_helper.run_live_analysis",
+            return_value="VERBOSE RESULT",
         ) as mock_rla:
-            result = session.run_update(context, "fake-key", compact=False)
+            _result = session.run_update(context, "fake-key", compact=False)
             mock_rla.assert_called_once()
             _, kwargs = mock_rla.call_args
             assert kwargs.get("compact") is False
@@ -448,7 +452,8 @@ class TestGrokSessionCompact:
         }
 
         with patch(
-            "grok_helper.run_live_analysis", return_value="MGC 🟢 2712\n\nDO NOW: Hold."
+            "src.futures_lib.integrations.grok_helper.run_live_analysis",
+            return_value="MGC 🟢 2712\n\nDO NOW: Hold.",
         ):
             session.run_update(context, "fake-key", compact=True)
 
@@ -477,7 +482,10 @@ class TestGrokSessionCompact:
             "positions_text": "",
         }
 
-        with patch("grok_helper.run_live_analysis", return_value="compact output"):
+        with patch(
+            "src.futures_lib.integrations.grok_helper.run_live_analysis",
+            return_value="compact output",
+        ):
             session.run_update(context, "fake-key", compact=True)
 
         # Compact cost should be $0.005
@@ -520,7 +528,10 @@ class TestRunLiveCompactPrompt:
             captured_prompt["max_tokens"] = max_tokens
             return "MGC 🟢 2712 (+4) | Bias VALID | Watch 2725\n\nDO NOW: Hold."
 
-        with patch("grok_helper._call_grok", side_effect=fake_call_grok):
+        with patch(
+            "src.futures_lib.integrations.grok_helper._call_grok",
+            side_effect=fake_call_grok,
+        ):
             result = _run_live_compact(
                 context={
                     "time": "2025-01-15 08:00 EST",
@@ -549,7 +560,10 @@ class TestRunLiveCompactPrompt:
             captured["max_tokens"] = max_tokens
             return "DO NOW: Hold."
 
-        with patch("grok_helper._call_grok", side_effect=fake_call_grok):
+        with patch(
+            "src.futures_lib.integrations.grok_helper._call_grok",
+            side_effect=fake_call_grok,
+        ):
             _run_live_compact(
                 context={
                     "time": "now",
@@ -577,7 +591,10 @@ class TestRunLiveCompactPrompt:
             captured["prompt"] = prompt
             return "DO NOW: Hold."
 
-        with patch("grok_helper._call_grok", side_effect=fake_call_grok):
+        with patch(
+            "src.futures_lib.integrations.grok_helper._call_grok",
+            side_effect=fake_call_grok,
+        ):
             _run_live_compact(
                 context={
                     "time": "now",
@@ -605,7 +622,10 @@ class TestRunLiveCompactPrompt:
             captured["prompt"] = prompt
             return "DO NOW: Hold."
 
-        with patch("grok_helper._call_grok", side_effect=fake_call_grok):
+        with patch(
+            "src.futures_lib.integrations.grok_helper._call_grok",
+            side_effect=fake_call_grok,
+        ):
             _run_live_compact(
                 context={
                     "time": "now",
@@ -633,7 +653,10 @@ class TestRunLiveCompactPrompt:
             + ["", "DO NOW: Hold everything."]
         )
 
-        with patch("grok_helper._call_grok", return_value=verbose_response):
+        with patch(
+            "src.futures_lib.integrations.grok_helper._call_grok",
+            return_value=verbose_response,
+        ):
             result = _run_live_compact(
                 context={
                     "time": "now",
@@ -659,7 +682,9 @@ class TestRunLiveCompactPrompt:
         """If API returns None, result should be None."""
         from src.futures_lib.integrations.grok_helper import _run_live_compact
 
-        with patch("grok_helper._call_grok", return_value=None):
+        with patch(
+            "src.futures_lib.integrations.grok_helper._call_grok", return_value=None
+        ):
             result = _run_live_compact(
                 context={
                     "time": "now",
@@ -687,7 +712,10 @@ class TestRunLiveCompactPrompt:
             captured["prompt"] = prompt
             return "DO NOW: Hold."
 
-        with patch("grok_helper._call_grok", side_effect=fake_call_grok):
+        with patch(
+            "src.futures_lib.integrations.grok_helper._call_grok",
+            side_effect=fake_call_grok,
+        ):
             _run_live_compact(
                 context={
                     "time": "now",

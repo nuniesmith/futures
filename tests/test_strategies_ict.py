@@ -13,8 +13,6 @@ Covers:
   - Alert dispatcher cooldown runtime adjustment
 """
 
-import os
-import sys
 import time
 from unittest.mock import MagicMock, patch
 
@@ -671,7 +669,7 @@ class TestEngineAlertFlags:
         engine._alerts_regime_enabled = False
 
         # Should not raise and should not dispatch
-        with patch("src.engine.get_dispatcher") as mock_disp:
+        with patch("src.futures_lib.trading.engine.get_dispatcher") as mock_disp:
             engine._dispatch_regime_alert("Gold", "trending", "volatile", 0.9)
             mock_disp.assert_not_called()
 
@@ -685,7 +683,7 @@ class TestEngineAlertFlags:
         mock_dispatcher.has_channels = True
         mock_dispatcher.send_regime_change = MagicMock(return_value=True)
 
-        with patch("src.engine.get_dispatcher", return_value=mock_dispatcher):
+        with patch("src.futures_lib.trading.engine.get_dispatcher", return_value=mock_dispatcher):
             engine._dispatch_regime_alert("Gold", "trending", "volatile", 0.9)
             mock_dispatcher.send_regime_change.assert_called_once()
 
@@ -695,7 +693,7 @@ class TestEngineAlertFlags:
         engine = DashboardEngine(account_size=100_000)
         engine._alerts_confluence_enabled = False
 
-        with patch("src.engine.get_dispatcher") as mock_disp:
+        with patch("src.futures_lib.trading.engine.get_dispatcher") as mock_disp:
             engine._check_confluence_alerts()
             mock_disp.assert_not_called()
 
@@ -709,7 +707,7 @@ class TestEngineFetchTFSafe:
         engine = DashboardEngine(account_size=100_000)
         fake_df = _random_walk_ohlcv(n=100, seed=42)
 
-        with patch("src.engine.get_data", return_value=fake_df):
+        with patch("src.futures_lib.trading.engine.get_data", return_value=fake_df):
             result = engine._fetch_tf_safe("ES=F", "15m", "S&P", "HTF")
             assert isinstance(result, pd.DataFrame)
             assert not result.empty
@@ -719,7 +717,7 @@ class TestEngineFetchTFSafe:
 
         engine = DashboardEngine(account_size=100_000)
 
-        with patch("src.engine.get_data", side_effect=Exception("Network error")):
+        with patch("src.futures_lib.trading.engine.get_data", side_effect=Exception("Network error")):
             result = engine._fetch_tf_safe("ES=F", "15m", "S&P", "HTF")
             assert isinstance(result, pd.DataFrame)
             assert result.empty
@@ -742,7 +740,7 @@ class TestEngineFetchTFSafe:
                 # Fallback call (5m) returns data
                 return fake_df
 
-        with patch("src.engine.get_data", side_effect=mock_get_data):
+        with patch("src.futures_lib.trading.engine.get_data", side_effect=mock_get_data):
             result = engine._fetch_tf_safe("ES=F", "15m", "S&P", "HTF")
             # Should have fallen back to engine's default
             assert call_count[0] == 2
@@ -771,9 +769,9 @@ class TestEngineMultiTFConfluence:
         mock_dispatcher.send_confluence_alert = MagicMock(return_value=True)
 
         with (
-            patch("src.engine.get_data", side_effect=mock_get_data),
-            patch("src.engine.get_dispatcher", return_value=mock_dispatcher),
-            patch("src.engine.ASSETS", {"Gold": "GC=F"}),
+            patch("src.futures_lib.trading.engine.get_data", side_effect=mock_get_data),
+            patch("src.futures_lib.trading.engine.get_dispatcher", return_value=mock_dispatcher),
+            patch("src.futures_lib.trading.engine.ASSETS", {"Gold": "GC=F"}),
         ):
             engine._check_confluence_alerts()
             # Gold's recommended TFs are 1h/15m/5m

@@ -18,15 +18,10 @@ These tests mirror the logic implemented in the NT8 FKS_DynamicVolume.cs
 indicator (TASK-403) to ensure Python ↔ NinjaScript parity.
 """
 
-import math
-import os
-import sys
 from datetime import datetime, timedelta
-from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from src.futures_lib.analysis.volume_profile import (
     _compute_value_area,
@@ -470,8 +465,8 @@ class TestFindVolumeNodes:
             # At least one HVN should have higher volume than the lowest LVN
             for h in hvn:
                 h_idx = np.argmin(np.abs(centers - h))
-                for l in lvn:
-                    l_idx = np.argmin(np.abs(centers - l))
+                for lvn_val in lvn:
+                    l_idx = np.argmin(np.abs(centers - lvn_val))
                     assert volumes[h_idx] >= volumes[l_idx]
 
 
@@ -717,7 +712,9 @@ class TestVolumeProfileStrategy:
         assert hasattr(VolumeProfileStrategy, "next")
 
     def test_suggest_params_returns_dict(self):
-        from src.futures_lib.analysis.volume_profile import suggest_volume_profile_params
+        from src.futures_lib.analysis.volume_profile import (
+            suggest_volume_profile_params,
+        )
 
         class FakeTrial:
             def suggest_int(self, name, low, high, step=1):

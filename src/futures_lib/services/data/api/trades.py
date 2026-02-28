@@ -118,7 +118,7 @@ class TradeResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _get_trade_by_id(trade_id: int) -> dict:
+def _get_trade_by_id(trade_id: int) -> dict[str, Any]:
     """Look up a trade by ID from all trades, raise 404 if not found."""
     all_trades = get_all_trades()
     for t in all_trades:
@@ -156,7 +156,7 @@ def api_create_trade(req: CreateTradeRequest):
                 from src.futures_lib.core.models import CONTRACT_SPECS
 
                 spec = CONTRACT_SPECS.get(req.asset)
-                point_value = spec["point"] if spec else 1.0
+                point_value: float = float(spec["point"]) if spec else 1.0
                 risk_per_contract = abs(req.entry - req.sl) * point_value
             except Exception:
                 pass
@@ -203,8 +203,8 @@ def api_create_trade(req: CreateTradeRequest):
         asset=req.asset,
         direction=req.direction.upper(),
         entry=req.entry,
-        sl=req.sl,
-        tp=req.tp,
+        sl=req.sl or 0.0,
+        tp=req.tp or 0.0,
         contracts=req.contracts,
         strategy=req.strategy,
         notes=req.notes,
@@ -296,8 +296,8 @@ def log_trade(req: LegacyTradeRequest):
         asset=req.asset,
         direction=req.direction.upper(),
         entry=req.entry,
-        sl=None,
-        tp=None,
+        sl=0.0,
+        tp=0.0,
         contracts=req.contracts,
         strategy=req.strategy,
         notes=req.notes,
