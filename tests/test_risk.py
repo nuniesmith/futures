@@ -18,7 +18,7 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
-from src.futures_lib.services.engine.risk import (
+from src.lib.services.engine.risk import (
     RiskManager,
     RiskState,
     TradeRecord,
@@ -631,7 +631,7 @@ class TestPublishToRedis:
 
         with patch.dict("sys.modules", {}):
             with patch(
-                "src.futures_lib.services.engine.risk.RiskManager.publish_to_redis",
+                "src.lib.services.engine.risk.RiskManager.publish_to_redis",
                 wraps=rm.publish_to_redis,
             ):
                 # Patch the cache module imports inside publish_to_redis
@@ -642,7 +642,7 @@ class TestPublishToRedis:
                 cache_mod._r = None
 
                 with patch.dict(
-                    "sys.modules", {"src.futures_lib.core.cache": cache_mod}
+                    "sys.modules", {"src.lib.core.cache": cache_mod}
                 ):
                     result = rm.publish_to_redis()
 
@@ -670,7 +670,7 @@ class TestPublishToRedis:
         cache_mod.REDIS_AVAILABLE = False
         cache_mod._r = None
 
-        with patch.dict("sys.modules", {"src.futures_lib.core.cache": cache_mod}):
+        with patch.dict("sys.modules", {"src.lib.core.cache": cache_mod}):
             rm.publish_to_redis()
 
         assert captured["key"] == "engine:risk_status"

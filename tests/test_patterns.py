@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from src.futures_lib.services.engine.patterns import (
+from src.lib.services.engine.patterns import (
     DEFAULT_EXTREME_VOL,
     DEFAULT_LATE_SESSION_HOUR,
     DEFAULT_MAX_CONSECUTIVE_LOSSES,
@@ -907,7 +907,7 @@ class TestPublishNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = False
         cache_mod._r = None
 
-        with patch.dict("sys.modules", {"src.futures_lib.core.cache": cache_mod}):
+        with patch.dict("sys.modules", {"src.lib.core.cache": cache_mod}):
             ok = publish_no_trade_alert(result)
 
         assert ok is True
@@ -932,7 +932,7 @@ class TestPublishNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = True
         cache_mod._r = mock_redis
 
-        with patch.dict("sys.modules", {"src.futures_lib.core.cache": cache_mod}):
+        with patch.dict("sys.modules", {"src.lib.core.cache": cache_mod}):
             ok = publish_no_trade_alert(result)
 
         assert ok is True
@@ -948,7 +948,7 @@ class TestPublishNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = False
         cache_mod._r = None
 
-        with patch.dict("sys.modules", {"src.futures_lib.core.cache": cache_mod}):
+        with patch.dict("sys.modules", {"src.lib.core.cache": cache_mod}):
             ok = publish_no_trade_alert(result)
 
         assert ok is True
@@ -972,7 +972,7 @@ class TestClearNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = False
         cache_mod._r = None
 
-        with patch.dict("sys.modules", {"src.futures_lib.core.cache": cache_mod}):
+        with patch.dict("sys.modules", {"src.lib.core.cache": cache_mod}):
             ok = clear_no_trade_alert()
 
         assert ok is True
@@ -987,7 +987,7 @@ class TestClearNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = True
         cache_mod._r = mock_redis
 
-        with patch.dict("sys.modules", {"src.futures_lib.core.cache": cache_mod}):
+        with patch.dict("sys.modules", {"src.lib.core.cache": cache_mod}):
             ok = clear_no_trade_alert()
 
         assert ok is True

@@ -20,7 +20,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # Path setup
 # ---------------------------------------------------------------------------
-from src.futures_lib.integrations.grok_helper import (
+from src.lib.integrations.grok_helper import (
     DEFAULT_MAX_TOKENS_LIVE_COMPACT,
     GrokSession,
     _enforce_compact_limit,
@@ -312,7 +312,7 @@ class TestRunLiveAnalysisCompactRouting:
             "positions_text": "",
         }
         with patch(
-            "src.futures_lib.integrations.grok_helper._run_live_compact",
+            "src.lib.integrations.grok_helper._run_live_compact",
             return_value="COMPACT OUTPUT",
         ) as mock_compact:
             result = run_live_analysis(context, "fake-key", compact=True)
@@ -336,7 +336,7 @@ class TestRunLiveAnalysisCompactRouting:
             "positions_text": "",
         }
         with patch(
-            "src.futures_lib.integrations.grok_helper._run_live_verbose",
+            "src.lib.integrations.grok_helper._run_live_verbose",
             return_value="VERBOSE OUTPUT",
         ) as mock_verbose:
             result = run_live_analysis(context, "fake-key", compact=False)
@@ -360,7 +360,7 @@ class TestRunLiveAnalysisCompactRouting:
             "positions_text": "",
         }
         with patch(
-            "src.futures_lib.integrations.grok_helper._run_live_compact",
+            "src.lib.integrations.grok_helper._run_live_compact",
             return_value="COMPACT",
         ) as mock:
             _result = run_live_analysis(context, "fake-key")
@@ -394,7 +394,7 @@ class TestGrokSessionCompact:
         }
 
         with patch(
-            "src.futures_lib.integrations.grok_helper.run_live_analysis",
+            "src.lib.integrations.grok_helper.run_live_analysis",
             return_value="COMPACT RESULT",
         ) as mock_rla:
             _result = session.run_update(context, "fake-key", compact=True)
@@ -423,7 +423,7 @@ class TestGrokSessionCompact:
         }
 
         with patch(
-            "src.futures_lib.integrations.grok_helper.run_live_analysis",
+            "src.lib.integrations.grok_helper.run_live_analysis",
             return_value="VERBOSE RESULT",
         ) as mock_rla:
             _result = session.run_update(context, "fake-key", compact=False)
@@ -452,7 +452,7 @@ class TestGrokSessionCompact:
         }
 
         with patch(
-            "src.futures_lib.integrations.grok_helper.run_live_analysis",
+            "src.lib.integrations.grok_helper.run_live_analysis",
             return_value="MGC 🟢 2712\n\nDO NOW: Hold.",
         ):
             session.run_update(context, "fake-key", compact=True)
@@ -483,7 +483,7 @@ class TestGrokSessionCompact:
         }
 
         with patch(
-            "src.futures_lib.integrations.grok_helper.run_live_analysis",
+            "src.lib.integrations.grok_helper.run_live_analysis",
             return_value="compact output",
         ):
             session.run_update(context, "fake-key", compact=True)
@@ -518,7 +518,7 @@ class TestGrokSessionCompact:
 class TestRunLiveCompactPrompt:
     def test_compact_prompt_includes_scanner(self):
         """The compact prompt should include scanner text."""
-        from src.futures_lib.integrations.grok_helper import _run_live_compact
+        from src.lib.integrations.grok_helper import _run_live_compact
 
         captured_prompt = {}
 
@@ -529,7 +529,7 @@ class TestRunLiveCompactPrompt:
             return "MGC 🟢 2712 (+4) | Bias VALID | Watch 2725\n\nDO NOW: Hold."
 
         with patch(
-            "src.futures_lib.integrations.grok_helper._call_grok",
+            "src.lib.integrations.grok_helper._call_grok",
             side_effect=fake_call_grok,
         ):
             result = _run_live_compact(
@@ -552,7 +552,7 @@ class TestRunLiveCompactPrompt:
         assert result is not None
 
     def test_compact_prompt_uses_lower_max_tokens(self):
-        from src.futures_lib.integrations.grok_helper import _run_live_compact
+        from src.lib.integrations.grok_helper import _run_live_compact
 
         captured = {}
 
@@ -561,7 +561,7 @@ class TestRunLiveCompactPrompt:
             return "DO NOW: Hold."
 
         with patch(
-            "src.futures_lib.integrations.grok_helper._call_grok",
+            "src.lib.integrations.grok_helper._call_grok",
             side_effect=fake_call_grok,
         ):
             _run_live_compact(
@@ -583,7 +583,7 @@ class TestRunLiveCompactPrompt:
         assert captured["max_tokens"] == DEFAULT_MAX_TOKENS_LIVE_COMPACT
 
     def test_compact_prompt_includes_positions_when_present(self):
-        from src.futures_lib.integrations.grok_helper import _run_live_compact
+        from src.lib.integrations.grok_helper import _run_live_compact
 
         captured = {}
 
@@ -592,7 +592,7 @@ class TestRunLiveCompactPrompt:
             return "DO NOW: Hold."
 
         with patch(
-            "src.futures_lib.integrations.grok_helper._call_grok",
+            "src.lib.integrations.grok_helper._call_grok",
             side_effect=fake_call_grok,
         ):
             _run_live_compact(
@@ -614,7 +614,7 @@ class TestRunLiveCompactPrompt:
         assert "MGC: LONG x2 @ 2700" in captured["prompt"]
 
     def test_compact_prompt_omits_positions_when_absent(self):
-        from src.futures_lib.integrations.grok_helper import _run_live_compact
+        from src.lib.integrations.grok_helper import _run_live_compact
 
         captured = {}
 
@@ -623,7 +623,7 @@ class TestRunLiveCompactPrompt:
             return "DO NOW: Hold."
 
         with patch(
-            "src.futures_lib.integrations.grok_helper._call_grok",
+            "src.lib.integrations.grok_helper._call_grok",
             side_effect=fake_call_grok,
         ):
             _run_live_compact(
@@ -646,7 +646,7 @@ class TestRunLiveCompactPrompt:
 
     def test_compact_result_enforced(self):
         """Even if API returns >8 lines, _enforce_compact_limit trims it."""
-        from src.futures_lib.integrations.grok_helper import _run_live_compact
+        from src.lib.integrations.grok_helper import _run_live_compact
 
         verbose_response = "\n".join(
             [f"ASSET{i} 🟢 {1000 + i} | Bias VALID" for i in range(12)]
@@ -654,7 +654,7 @@ class TestRunLiveCompactPrompt:
         )
 
         with patch(
-            "src.futures_lib.integrations.grok_helper._call_grok",
+            "src.lib.integrations.grok_helper._call_grok",
             return_value=verbose_response,
         ):
             result = _run_live_compact(
@@ -680,10 +680,10 @@ class TestRunLiveCompactPrompt:
 
     def test_compact_api_returns_none(self):
         """If API returns None, result should be None."""
-        from src.futures_lib.integrations.grok_helper import _run_live_compact
+        from src.lib.integrations.grok_helper import _run_live_compact
 
         with patch(
-            "src.futures_lib.integrations.grok_helper._call_grok", return_value=None
+            "src.lib.integrations.grok_helper._call_grok", return_value=None
         ):
             result = _run_live_compact(
                 context={
@@ -704,7 +704,7 @@ class TestRunLiveCompactPrompt:
         assert result is None
 
     def test_compact_includes_morning_plan_ref(self):
-        from src.futures_lib.integrations.grok_helper import _run_live_compact
+        from src.lib.integrations.grok_helper import _run_live_compact
 
         captured = {}
 
@@ -713,7 +713,7 @@ class TestRunLiveCompactPrompt:
             return "DO NOW: Hold."
 
         with patch(
-            "src.futures_lib.integrations.grok_helper._call_grok",
+            "src.lib.integrations.grok_helper._call_grok",
             side_effect=fake_call_grok,
         ):
             _run_live_compact(
@@ -743,23 +743,23 @@ class TestRunLiveCompactPrompt:
 
 class TestCompactSystemPrompt:
     def test_system_prompt_mentions_line_limit(self):
-        from src.futures_lib.integrations.grok_helper import _COMPACT_SYSTEM
+        from src.lib.integrations.grok_helper import _COMPACT_SYSTEM
 
         assert "8 lines" in _COMPACT_SYSTEM.lower() or "8" in _COMPACT_SYSTEM
 
     def test_system_prompt_mentions_do_now(self):
-        from src.futures_lib.integrations.grok_helper import _COMPACT_SYSTEM
+        from src.lib.integrations.grok_helper import _COMPACT_SYSTEM
 
         assert "DO NOW" in _COMPACT_SYSTEM
 
     def test_system_prompt_mentions_emoji_rules(self):
-        from src.futures_lib.integrations.grok_helper import _COMPACT_SYSTEM
+        from src.lib.integrations.grok_helper import _COMPACT_SYSTEM
 
         assert "🟢" in _COMPACT_SYSTEM
         assert "🔴" in _COMPACT_SYSTEM
 
     def test_system_prompt_mentions_no_dollar_signs(self):
-        from src.futures_lib.integrations.grok_helper import _COMPACT_SYSTEM
+        from src.lib.integrations.grok_helper import _COMPACT_SYSTEM
 
         assert "USD" in _COMPACT_SYSTEM
 
@@ -771,7 +771,7 @@ class TestCompactSystemPrompt:
 
 class TestCompactTokenLimit:
     def test_compact_tokens_less_than_verbose(self):
-        from src.futures_lib.integrations.grok_helper import (
+        from src.lib.integrations.grok_helper import (
             DEFAULT_MAX_TOKENS_LIVE,
             DEFAULT_MAX_TOKENS_LIVE_COMPACT,
         )

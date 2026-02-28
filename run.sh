@@ -97,7 +97,7 @@ run_local() {
 
     # Launch the data service (HTMX dashboard)
     echo "Starting data service ..."
-    PYTHONPATH=src uvicorn futures_lib.services.data.main:app --host 0.0.0.0 --port 8000
+    PYTHONPATH=src uvicorn lib.services.data.main:app --host 0.0.0.0 --port 8000
 }
 
 # ---------------------------------------------------------------------------

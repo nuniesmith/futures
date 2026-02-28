@@ -128,7 +128,7 @@ class TestComputeATR:
     """Test the compute_atr function."""
 
     def test_basic_atr(self):
-        from src.futures_lib.services.engine.orb import compute_atr
+        from src.lib.services.engine.orb import compute_atr
 
         bars = _make_1m_bars(n=30, start_price=100.0, volatility=0.005)
         atr = compute_atr(
@@ -138,7 +138,7 @@ class TestComputeATR:
         assert isinstance(atr, float)
 
     def test_atr_with_small_data(self):
-        from src.futures_lib.services.engine.orb import compute_atr
+        from src.lib.services.engine.orb import compute_atr
 
         # Only 3 bars — less than period, should still return something
         bars = _make_1m_bars(n=3, start_price=100.0)
@@ -148,7 +148,7 @@ class TestComputeATR:
         assert atr >= 0
 
     def test_atr_single_bar(self):
-        from src.futures_lib.services.engine.orb import compute_atr
+        from src.lib.services.engine.orb import compute_atr
 
         bars = _make_1m_bars(n=1, start_price=100.0)
         atr = compute_atr(
@@ -159,7 +159,7 @@ class TestComputeATR:
 
     def test_atr_zero_range(self):
         """Flat bars should produce near-zero ATR."""
-        from src.futures_lib.services.engine.orb import compute_atr
+        from src.lib.services.engine.orb import compute_atr
 
         n = 20
         prices = np.full(n, 100.0)
@@ -167,7 +167,7 @@ class TestComputeATR:
         assert atr == 0.0
 
     def test_atr_increases_with_volatility(self):
-        from src.futures_lib.services.engine.orb import compute_atr
+        from src.lib.services.engine.orb import compute_atr
 
         low_vol = _make_1m_bars(n=30, start_price=100.0, volatility=0.001, seed=10)
         high_vol = _make_1m_bars(n=30, start_price=100.0, volatility=0.01, seed=10)
@@ -190,7 +190,7 @@ class TestComputeOpeningRange:
     """Test the compute_opening_range function."""
 
     def test_basic_opening_range(self):
-        from src.futures_lib.services.engine.orb import compute_opening_range
+        from src.lib.services.engine.orb import compute_opening_range
 
         bars = _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00")
         or_high, or_low, count, complete = compute_opening_range(bars)
@@ -201,7 +201,7 @@ class TestComputeOpeningRange:
         assert count > 0  # Should have bars in the 09:30–10:00 window
 
     def test_empty_dataframe(self):
-        from src.futures_lib.services.engine.orb import compute_opening_range
+        from src.lib.services.engine.orb import compute_opening_range
 
         empty = pd.DataFrame(columns=["High", "Low", "Close"])
         or_high, or_low, count, complete = compute_opening_range(empty)
@@ -211,14 +211,14 @@ class TestComputeOpeningRange:
         assert complete is False
 
     def test_none_input(self):
-        from src.futures_lib.services.engine.orb import compute_opening_range
+        from src.lib.services.engine.orb import compute_opening_range
 
         or_high, or_low, count, complete = compute_opening_range(None)
         assert count == 0
 
     def test_no_bars_in_or_window(self):
         """Bars outside 09:30–10:00 should produce empty OR."""
-        from src.futures_lib.services.engine.orb import compute_opening_range
+        from src.lib.services.engine.orb import compute_opening_range
 
         # Bars starting at 10:30 — all after OR window
         bars = _make_1m_bars(n=30, start_price=2700.0, start_time="2026-02-27 10:30:00")
@@ -227,7 +227,7 @@ class TestComputeOpeningRange:
 
     def test_or_complete_flag(self):
         """is_complete should be True only when bars exist past 10:00 ET."""
-        from src.futures_lib.services.engine.orb import compute_opening_range
+        from src.lib.services.engine.orb import compute_opening_range
 
         # Bars from 09:30 to 09:50 — OR not complete
         bars_early = _make_1m_bars(
@@ -245,7 +245,7 @@ class TestComputeOpeningRange:
 
     def test_or_bar_count(self):
         """Bar count should match the number of bars in 09:30–10:00 window."""
-        from src.futures_lib.services.engine.orb import compute_opening_range
+        from src.lib.services.engine.orb import compute_opening_range
 
         # 30 bars starting at 09:30 — all are in OR window
         bars = _make_1m_bars(n=30, start_price=2700.0, start_time="2026-02-27 09:30:00")
@@ -254,7 +254,7 @@ class TestComputeOpeningRange:
 
     def test_naive_index_assumed_eastern(self):
         """Bars with naive (no tz) index should be treated as Eastern."""
-        from src.futures_lib.services.engine.orb import compute_opening_range
+        from src.lib.services.engine.orb import compute_opening_range
 
         bars = _make_1m_bars(n=40, start_price=2700.0, start_time="2026-02-27 09:25:00")
         # Remove timezone
@@ -275,7 +275,7 @@ class TestDetectOpeningRangeBreakout:
 
     def test_no_breakout(self):
         """When post-OR bars stay within the range, no breakout should be detected."""
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.orb import detect_opening_range_breakout
 
         # Tight bars that stay within OR range
         bars = _make_1m_bars(
@@ -295,7 +295,7 @@ class TestDetectOpeningRangeBreakout:
 
     def test_long_breakout(self):
         """Clear upward breakout should be detected as LONG."""
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.orb import detect_opening_range_breakout
 
         bars = _make_breakout_bars(
             direction="LONG", or_price=2700.0, breakout_magnitude=20.0
@@ -315,7 +315,7 @@ class TestDetectOpeningRangeBreakout:
 
     def test_short_breakout(self):
         """Clear downward breakout should be detected as SHORT."""
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.orb import detect_opening_range_breakout
 
         bars = _make_breakout_bars(
             direction="SHORT", or_price=2700.0, breakout_magnitude=20.0
@@ -328,7 +328,7 @@ class TestDetectOpeningRangeBreakout:
             assert result.trigger_price < result.short_trigger
 
     def test_empty_bars(self):
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.orb import detect_opening_range_breakout
 
         empty = pd.DataFrame(columns=["High", "Low", "Close"])
         result = detect_opening_range_breakout(empty, symbol="TEST")
@@ -336,14 +336,14 @@ class TestDetectOpeningRangeBreakout:
         assert result.error != ""
 
     def test_none_bars(self):
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.orb import detect_opening_range_breakout
 
         result = detect_opening_range_breakout(None, symbol="TEST")
         assert result.breakout_detected is False
         assert "No bar data" in result.error
 
     def test_insufficient_bars(self):
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.orb import detect_opening_range_breakout
 
         bars = _make_1m_bars(n=3, start_price=2700.0, start_time="2026-02-27 09:30:00")
         result = detect_opening_range_breakout(bars, symbol="TEST")
@@ -353,7 +353,7 @@ class TestDetectOpeningRangeBreakout:
         )
 
     def test_missing_columns(self):
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.orb import detect_opening_range_breakout
 
         bars = pd.DataFrame({"Open": [1, 2, 3, 4, 5, 6], "Volume": [100] * 6})
         result = detect_opening_range_breakout(bars, symbol="TEST")
@@ -362,7 +362,7 @@ class TestDetectOpeningRangeBreakout:
 
     def test_or_not_complete_returns_levels_only(self):
         """If OR window hasn't finished, return levels but no breakout scan."""
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.orb import detect_opening_range_breakout
 
         # Only bars in the OR window, no post-OR bars
         bars = _make_1m_bars(n=25, start_price=2700.0, start_time="2026-02-27 09:30:00")
@@ -374,14 +374,14 @@ class TestDetectOpeningRangeBreakout:
         assert result.long_trigger > 0 or result.error != ""
 
     def test_custom_atr_period(self):
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.orb import detect_opening_range_breakout
 
         bars = _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00")
         result = detect_opening_range_breakout(bars, symbol="MGC", atr_period=5)
         assert result.atr_value > 0
 
     def test_custom_breakout_multiplier(self):
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.orb import detect_opening_range_breakout
 
         bars = _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00")
 
@@ -397,7 +397,7 @@ class TestDetectOpeningRangeBreakout:
         assert result_high.long_trigger > result_low.long_trigger
 
     def test_evaluated_at_timestamp(self):
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.orb import detect_opening_range_breakout
 
         fixed_time = datetime(2026, 2, 27, 10, 30, 0, tzinfo=_EST)
         bars = _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00")
@@ -416,7 +416,7 @@ class TestORBResult:
     """Test ORBResult data class and serialization."""
 
     def test_to_dict_structure(self):
-        from src.futures_lib.services.engine.orb import ORBResult
+        from src.lib.services.engine.orb import ORBResult
 
         result = ORBResult(
             symbol="MGC",
@@ -439,7 +439,7 @@ class TestORBResult:
         assert d["trigger_price"] == 2712.25
 
     def test_to_dict_json_serializable(self):
-        from src.futures_lib.services.engine.orb import ORBResult
+        from src.lib.services.engine.orb import ORBResult
 
         result = ORBResult(symbol="MNQ", or_high=20100.5, or_low=20050.0)
         d = result.to_dict()
@@ -449,7 +449,7 @@ class TestORBResult:
         assert parsed["symbol"] == "MNQ"
 
     def test_default_values(self):
-        from src.futures_lib.services.engine.orb import ORBResult
+        from src.lib.services.engine.orb import ORBResult
 
         result = ORBResult()
         assert result.symbol == ""
@@ -458,7 +458,7 @@ class TestORBResult:
         assert result.or_high == 0.0
 
     def test_to_dict_rounds_values(self):
-        from src.futures_lib.services.engine.orb import ORBResult
+        from src.lib.services.engine.orb import ORBResult
 
         result = ORBResult(or_high=2710.123456789, atr_value=3.987654321)
         d = result.to_dict()
@@ -475,7 +475,7 @@ class TestScanORBAllAssets:
     """Test the scan_orb_all_assets function."""
 
     def test_multiple_symbols(self):
-        from src.futures_lib.services.engine.orb import scan_orb_all_assets
+        from src.lib.services.engine.orb import scan_orb_all_assets
 
         bars_by_symbol = {
             "MGC": _make_1m_bars(
@@ -492,13 +492,13 @@ class TestScanORBAllAssets:
         assert "MNQ" in symbols
 
     def test_empty_dict(self):
-        from src.futures_lib.services.engine.orb import scan_orb_all_assets
+        from src.lib.services.engine.orb import scan_orb_all_assets
 
         results = scan_orb_all_assets({})
         assert results == []
 
     def test_handles_bad_data(self):
-        from src.futures_lib.services.engine.orb import scan_orb_all_assets
+        from src.lib.services.engine.orb import scan_orb_all_assets
 
         bars_by_symbol = {
             "MGC": _make_1m_bars(
@@ -519,7 +519,7 @@ class TestORBPublishing:
     """Test publish_orb_alert and clear_orb_alert."""
 
     def test_publish_success(self):
-        from src.futures_lib.services.engine.orb import ORBResult, publish_orb_alert
+        from src.lib.services.engine.orb import ORBResult, publish_orb_alert
 
         result = ORBResult(
             symbol="MGC",
@@ -534,13 +534,13 @@ class TestORBPublishing:
         mock_cache._r = None
         mock_cache.cache_set = MagicMock()
 
-        with patch.dict(sys.modules, {"src.futures_lib.core.cache": mock_cache}):
+        with patch.dict(sys.modules, {"src.lib.core.cache": mock_cache}):
             success = publish_orb_alert(result)
             assert success is True
             assert mock_cache.cache_set.call_count >= 1
 
     def test_publish_with_redis_pubsub(self):
-        from src.futures_lib.services.engine.orb import ORBResult, publish_orb_alert
+        from src.lib.services.engine.orb import ORBResult, publish_orb_alert
 
         mock_r = MagicMock()
         mock_cache = MagicMock()
@@ -550,18 +550,18 @@ class TestORBPublishing:
 
         result = ORBResult(symbol="MGC", breakout_detected=True, direction="LONG")
 
-        with patch.dict(sys.modules, {"src.futures_lib.core.cache": mock_cache}):
+        with patch.dict(sys.modules, {"src.lib.core.cache": mock_cache}):
             success = publish_orb_alert(result)
             assert success is True
             mock_r.publish.assert_called_once()
 
     def test_clear_orb_alert(self):
-        from src.futures_lib.services.engine.orb import clear_orb_alert
+        from src.lib.services.engine.orb import clear_orb_alert
 
         mock_cache = MagicMock()
         mock_cache.cache_set = MagicMock()
 
-        with patch.dict(sys.modules, {"src.futures_lib.core.cache": mock_cache}):
+        with patch.dict(sys.modules, {"src.lib.core.cache": mock_cache}):
             success = clear_orb_alert()
             assert success is True
 
@@ -575,14 +575,14 @@ class TestSchedulerORB:
     """Test that the scheduler correctly schedules CHECK_ORB actions."""
 
     def test_check_orb_action_type_exists(self):
-        from src.futures_lib.services.engine.scheduler import ActionType
+        from src.lib.services.engine.scheduler import ActionType
 
         assert hasattr(ActionType, "CHECK_ORB")
         assert ActionType.CHECK_ORB.value == "check_orb"
 
     def test_orb_scheduled_during_or_window(self):
         """CHECK_ORB should be scheduled between 09:30 and 11:00 ET."""
-        from src.futures_lib.services.engine.scheduler import (
+        from src.lib.services.engine.scheduler import (
             ActionType,
             ScheduleManager,
         )
@@ -597,7 +597,7 @@ class TestSchedulerORB:
 
     def test_orb_not_scheduled_outside_window(self):
         """CHECK_ORB should NOT be scheduled before 09:30 or after 11:00 ET."""
-        from src.futures_lib.services.engine.scheduler import (
+        from src.lib.services.engine.scheduler import (
             ActionType,
             ScheduleManager,
         )
@@ -612,7 +612,7 @@ class TestSchedulerORB:
 
     def test_orb_not_scheduled_in_off_hours(self):
         """CHECK_ORB should not appear during off-hours session."""
-        from src.futures_lib.services.engine.scheduler import (
+        from src.lib.services.engine.scheduler import (
             ActionType,
             ScheduleManager,
         )
@@ -633,7 +633,7 @@ class TestSchedulerORB:
         """
         import time as _time
 
-        from src.futures_lib.services.engine.scheduler import (
+        from src.lib.services.engine.scheduler import (
             ActionType,
             ScheduleManager,
         )
@@ -676,11 +676,11 @@ class TestRiskHelpers:
 
     def test_evaluate_position_risk_no_manager(self):
         """When RiskManager can't be imported, should return safe defaults."""
-        from src.futures_lib.services.data.api.risk import evaluate_position_risk
+        from src.lib.services.data.api.risk import evaluate_position_risk
 
         # Patch the getter to return None
         with patch(
-            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            "src.lib.services.data.api.risk._get_local_risk_manager",
             return_value=None,
         ):
             result = evaluate_position_risk([])
@@ -690,12 +690,12 @@ class TestRiskHelpers:
 
     def test_evaluate_position_risk_with_positions(self):
         """Should sync positions and return risk evaluation."""
-        from src.futures_lib.services.data.api.risk import evaluate_position_risk
-        from src.futures_lib.services.engine.risk import RiskManager
+        from src.lib.services.data.api.risk import evaluate_position_risk
+        from src.lib.services.engine.risk import RiskManager
 
         rm = RiskManager(account_size=50_000)
         with patch(
-            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            "src.lib.services.data.api.risk._get_local_risk_manager",
             return_value=rm,
         ):
             positions = [
@@ -713,10 +713,10 @@ class TestRiskHelpers:
             assert isinstance(result["warnings"], list)
 
     def test_check_trade_entry_risk_no_manager(self):
-        from src.futures_lib.services.data.api.risk import check_trade_entry_risk
+        from src.lib.services.data.api.risk import check_trade_entry_risk
 
         with patch(
-            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            "src.lib.services.data.api.risk._get_local_risk_manager",
             return_value=None,
         ):
             allowed, reason, details = check_trade_entry_risk("MGC", "LONG")
@@ -724,8 +724,8 @@ class TestRiskHelpers:
             assert details.get("risk_available") is False
 
     def test_check_trade_entry_risk_allowed(self):
-        from src.futures_lib.services.data.api.risk import check_trade_entry_risk
-        from src.futures_lib.services.engine.risk import RiskManager
+        from src.lib.services.data.api.risk import check_trade_entry_risk
+        from src.lib.services.engine.risk import RiskManager
 
         # RiskManager with generous limits
         rm = RiskManager(
@@ -734,11 +734,11 @@ class TestRiskHelpers:
         )
 
         with patch(
-            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            "src.lib.services.data.api.risk._get_local_risk_manager",
             return_value=rm,
         ):
             with patch(
-                "src.futures_lib.services.data.api.risk._sync_local_risk_manager"
+                "src.lib.services.data.api.risk._sync_local_risk_manager"
             ):
                 allowed, reason, details = check_trade_entry_risk("MGC", "LONG", size=1)
                 assert allowed is True
@@ -746,8 +746,8 @@ class TestRiskHelpers:
                 assert details["risk_available"] is True
 
     def test_check_trade_entry_risk_blocked_by_daily_loss(self):
-        from src.futures_lib.services.data.api.risk import check_trade_entry_risk
-        from src.futures_lib.services.engine.risk import RiskManager
+        from src.lib.services.data.api.risk import check_trade_entry_risk
+        from src.lib.services.engine.risk import RiskManager
 
         rm = RiskManager(
             account_size=50_000,
@@ -758,11 +758,11 @@ class TestRiskHelpers:
         rm._daily_pnl = -600.0
 
         with patch(
-            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            "src.lib.services.data.api.risk._get_local_risk_manager",
             return_value=rm,
         ):
             with patch(
-                "src.futures_lib.services.data.api.risk._sync_local_risk_manager"
+                "src.lib.services.data.api.risk._sync_local_risk_manager"
             ):
                 allowed, reason, details = check_trade_entry_risk("MGC", "LONG", size=1)
                 assert allowed is False
@@ -773,7 +773,7 @@ class TestRiskEventRecording:
     """Test the in-memory risk event audit trail."""
 
     def test_record_event(self):
-        from src.futures_lib.services.data.api.risk import (
+        from src.lib.services.data.api.risk import (
             _record_risk_event,
             _risk_events,
         )
@@ -791,7 +791,7 @@ class TestRiskEventRecording:
         assert last["symbol"] == "MGC"
 
     def test_event_limit(self):
-        from src.futures_lib.services.data.api.risk import (
+        from src.lib.services.data.api.risk import (
             _MAX_RISK_EVENTS,
             _record_risk_event,
             _risk_events,
@@ -818,7 +818,7 @@ class TestRiskStatusEndpoint:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from src.futures_lib.services.data.api.risk import router
+        from src.lib.services.data.api.risk import router
 
         app = FastAPI()
         app.include_router(router, prefix="/risk")
@@ -851,7 +851,7 @@ class TestRiskCheckEndpoint:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from src.futures_lib.services.data.api.risk import router
+        from src.lib.services.data.api.risk import router
 
         app = FastAPI()
         app.include_router(router, prefix="/risk")
@@ -896,7 +896,7 @@ class TestRiskHistoryEndpoint:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from src.futures_lib.services.data.api.risk import router
+        from src.lib.services.data.api.risk import router
 
         app = FastAPI()
         app.include_router(router, prefix="/risk")
@@ -937,7 +937,7 @@ class TestTradesRiskEnforcement:
         # Re-init models with new DB
         import importlib
 
-        from src.futures_lib.core import models
+        from src.lib.core import models
 
         importlib.reload(models)
         models.init_db()
@@ -947,7 +947,7 @@ class TestTradesRiskEnforcement:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from src.futures_lib.services.data.api.trades import router
+        from src.lib.services.data.api.trades import router
 
         app = FastAPI()
         app.include_router(router, prefix="")
@@ -987,7 +987,7 @@ class TestTradesRiskEnforcement:
 
     def test_create_trade_with_enforce_risk_true_blocked(self, client):
         """With enforce_risk=True and a risk block, should return 403."""
-        from src.futures_lib.services.engine.risk import RiskManager
+        from src.lib.services.engine.risk import RiskManager
 
         # Create a RM that blocks everything (daily loss exceeded)
         rm = RiskManager(
@@ -998,11 +998,11 @@ class TestTradesRiskEnforcement:
         rm._daily_pnl = -600.0
 
         with patch(
-            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            "src.lib.services.data.api.risk._get_local_risk_manager",
             return_value=rm,
         ):
             with patch(
-                "src.futures_lib.services.data.api.risk._sync_local_risk_manager"
+                "src.lib.services.data.api.risk._sync_local_risk_manager"
             ):
                 result = client.post(
                     "/trades",
@@ -1023,13 +1023,13 @@ class TestTradesEnforceRiskField:
     """Test the enforce_risk field on CreateTradeRequest."""
 
     def test_enforce_risk_default_false(self):
-        from src.futures_lib.services.data.api.trades import CreateTradeRequest
+        from src.lib.services.data.api.trades import CreateTradeRequest
 
         req = CreateTradeRequest(asset="Gold", direction="LONG", entry=2700.0)
         assert req.enforce_risk is False
 
     def test_enforce_risk_can_be_true(self):
-        from src.futures_lib.services.data.api.trades import CreateTradeRequest
+        from src.lib.services.data.api.trades import CreateTradeRequest
 
         req = CreateTradeRequest(
             asset="Gold", direction="LONG", entry=2700.0, enforce_risk=True
@@ -1048,7 +1048,7 @@ class TestPositionsRiskEvaluation:
     @pytest.fixture(autouse=True)
     def _clear_cache(self):
         """Clear position cache before each test."""
-        from src.futures_lib.core.cache import _mem_cache
+        from src.lib.core.cache import _mem_cache
 
         original = dict(_mem_cache)
         _mem_cache.clear()
@@ -1061,7 +1061,7 @@ class TestPositionsRiskEvaluation:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from src.futures_lib.services.data.api.positions import router
+        from src.lib.services.data.api.positions import router
 
         app = FastAPI()
         app.include_router(router, prefix="/positions")
@@ -1103,7 +1103,7 @@ class TestPositionsRiskEvaluation:
 
     def test_update_risk_warning_on_limit(self, client):
         """When risk limits are hit, response should include warnings."""
-        from src.futures_lib.services.engine.risk import RiskManager
+        from src.lib.services.engine.risk import RiskManager
 
         rm = RiskManager(
             account_size=50_000,
@@ -1131,7 +1131,7 @@ class TestPositionsRiskEvaluation:
         }
 
         with patch(
-            "src.futures_lib.services.data.api.risk._get_local_risk_manager",
+            "src.lib.services.data.api.risk._get_local_risk_manager",
             return_value=rm,
         ):
             result = client.post(
@@ -1170,14 +1170,14 @@ class TestDashboardORBPanel:
     """Test the ORB panel HTML rendering."""
 
     def test_render_orb_panel_none(self):
-        from src.futures_lib.services.data.api.dashboard import _render_orb_panel
+        from src.lib.services.data.api.dashboard import _render_orb_panel
 
         html = _render_orb_panel(None)
         assert "orb-panel" in html
         assert "Waiting for" in html
 
     def test_render_orb_panel_with_data(self):
-        from src.futures_lib.services.data.api.dashboard import _render_orb_panel
+        from src.lib.services.data.api.dashboard import _render_orb_panel
 
         data = {
             "or_high": 2710.5,
@@ -1200,7 +1200,7 @@ class TestDashboardORBPanel:
         assert "OPENING RANGE" in html
 
     def test_render_orb_panel_with_breakout(self):
-        from src.futures_lib.services.data.api.dashboard import _render_orb_panel
+        from src.lib.services.data.api.dashboard import _render_orb_panel
 
         data = {
             "or_high": 2710.0,
@@ -1222,7 +1222,7 @@ class TestDashboardORBPanel:
         assert "animate-pulse" in html
 
     def test_render_orb_panel_with_error(self):
-        from src.futures_lib.services.data.api.dashboard import _render_orb_panel
+        from src.lib.services.data.api.dashboard import _render_orb_panel
 
         data = {"error": "No bar data provided", "or_high": 0, "or_low": 0}
         html = _render_orb_panel(data)
@@ -1237,7 +1237,7 @@ class TestDashboardORBEndpoint:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from src.futures_lib.services.data.api.dashboard import router
+        from src.lib.services.data.api.dashboard import router
 
         app = FastAPI()
         app.include_router(router)
@@ -1260,7 +1260,7 @@ class TestSSEORBCache:
     _original_cache = None
 
     def setup_method(self):
-        self._original_cache = sys.modules.get("src.futures_lib.core.cache", None)
+        self._original_cache = sys.modules.get("src.lib.core.cache", None)
         # Install mock cache for SSE module
         mock_cache = MagicMock()
         mock_cache.REDIS_AVAILABLE = False
@@ -1271,24 +1271,24 @@ class TestSSEORBCache:
             side_effect=lambda *parts: "futures:mock:" + ":".join(str(p) for p in parts)
         )
         mock_cache.get_data_source = MagicMock(return_value="mock")
-        sys.modules["src.futures_lib.core.cache"] = mock_cache
+        sys.modules["src.lib.core.cache"] = mock_cache
         self._mock_cache = mock_cache
 
     def teardown_method(self):
         if self._original_cache is not None:
-            sys.modules["src.futures_lib.core.cache"] = self._original_cache
+            sys.modules["src.lib.core.cache"] = self._original_cache
         else:
-            sys.modules.pop("src.futures_lib.core.cache", None)
+            sys.modules.pop("src.lib.core.cache", None)
 
     def test_get_orb_from_cache_none(self):
-        from src.futures_lib.services.data.api.sse import _get_orb_from_cache
+        from src.lib.services.data.api.sse import _get_orb_from_cache
 
         self._mock_cache.cache_get.return_value = None
         result = _get_orb_from_cache()
         assert result is None
 
     def test_get_orb_from_cache_with_data(self):
-        from src.futures_lib.services.data.api.sse import _get_orb_from_cache
+        from src.lib.services.data.api.sse import _get_orb_from_cache
 
         orb_data = json.dumps(
             {"type": "ORB", "symbol": "MGC", "breakout_detected": True}
@@ -1309,7 +1309,7 @@ class TestRiskModels:
     """Test the Pydantic models for the risk API."""
 
     def test_risk_check_request_defaults(self):
-        from src.futures_lib.services.data.api.risk import RiskCheckRequest
+        from src.lib.services.data.api.risk import RiskCheckRequest
 
         req = RiskCheckRequest(symbol="MGC", side="LONG")
         assert req.size == 1
@@ -1317,7 +1317,7 @@ class TestRiskModels:
         assert req.is_stack is False
 
     def test_risk_check_response_structure(self):
-        from src.futures_lib.services.data.api.risk import RiskCheckResponse
+        from src.lib.services.data.api.risk import RiskCheckResponse
 
         resp = RiskCheckResponse(
             allowed=True,
@@ -1334,7 +1334,7 @@ class TestRiskModels:
         assert resp.total_risk == 100.0
 
     def test_risk_status_response_defaults(self):
-        from src.futures_lib.services.data.api.risk import RiskStatusResponse
+        from src.lib.services.data.api.risk import RiskStatusResponse
 
         resp = RiskStatusResponse()
         assert resp.can_trade is True
@@ -1352,8 +1352,8 @@ class TestORBRiskIntegration:
 
     def test_orb_breakout_with_risk_check(self):
         """After detecting an ORB breakout, a risk check should evaluate the trade."""
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
-        from src.futures_lib.services.engine.risk import RiskManager
+        from src.lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.risk import RiskManager
 
         bars = _make_breakout_bars(
             direction="LONG", or_price=2700.0, breakout_magnitude=20.0
@@ -1378,8 +1378,8 @@ class TestORBRiskIntegration:
 
     def test_orb_detection_then_position_update(self):
         """ORB detection followed by position update should track risk correctly."""
-        from src.futures_lib.services.engine.orb import detect_opening_range_breakout
-        from src.futures_lib.services.engine.risk import RiskManager
+        from src.lib.services.engine.orb import detect_opening_range_breakout
+        from src.lib.services.engine.risk import RiskManager
 
         bars = _make_breakout_bars(
             direction="LONG", or_price=2700.0, breakout_magnitude=20.0
@@ -1417,29 +1417,29 @@ class TestORBConstants:
     """Verify ORB constants are sensible."""
 
     def test_or_window(self):
-        from src.futures_lib.services.engine.orb import OR_END, OR_START
+        from src.lib.services.engine.orb import OR_END, OR_START
 
         assert OR_START == dt_time(9, 30)
         assert OR_END == dt_time(10, 0)
 
     def test_atr_period(self):
-        from src.futures_lib.services.engine.orb import ATR_PERIOD
+        from src.lib.services.engine.orb import ATR_PERIOD
 
         assert ATR_PERIOD > 0
         assert ATR_PERIOD <= 30
 
     def test_breakout_multiplier(self):
-        from src.futures_lib.services.engine.orb import BREAKOUT_ATR_MULTIPLIER
+        from src.lib.services.engine.orb import BREAKOUT_ATR_MULTIPLIER
 
         assert 0 < BREAKOUT_ATR_MULTIPLIER <= 2.0
 
     def test_min_or_bars(self):
-        from src.futures_lib.services.engine.orb import MIN_OR_BARS
+        from src.lib.services.engine.orb import MIN_OR_BARS
 
         assert MIN_OR_BARS >= 3
 
     def test_redis_keys(self):
-        from src.futures_lib.services.engine.orb import REDIS_KEY_ORB, REDIS_PUBSUB_ORB
+        from src.lib.services.engine.orb import REDIS_KEY_ORB, REDIS_PUBSUB_ORB
 
         assert "orb" in REDIS_KEY_ORB.lower()
         assert "orb" in REDIS_PUBSUB_ORB.lower()
@@ -1449,7 +1449,7 @@ class TestSchedulerORBConstants:
     """Verify scheduler ORB-related constants."""
 
     def test_orb_check_interval(self):
-        from src.futures_lib.services.engine.scheduler import ScheduleManager
+        from src.lib.services.engine.scheduler import ScheduleManager
 
         assert ScheduleManager.ORB_CHECK_INTERVAL > 0
         assert ScheduleManager.ORB_CHECK_INTERVAL <= 300  # max 5 min

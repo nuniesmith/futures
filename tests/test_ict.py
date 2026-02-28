@@ -23,7 +23,7 @@ import pandas as pd
 import pytest
 from conftest import _gappy_ohlcv, _random_walk_ohlcv, _trending_ohlcv
 
-from src.futures_lib.analysis.ict import (
+from src.lib.analysis.ict import (
     _swing_highs,
     _swing_lows,
     breakers_to_dataframe,

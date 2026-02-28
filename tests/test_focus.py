@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from src.futures_lib.services.engine.focus import (
+from src.lib.services.engine.focus import (
     MIN_QUALITY_THRESHOLD,
     _compute_entry_zone,
     _compute_position_size,
@@ -320,7 +320,7 @@ class TestShouldNotTrade:
         ]
         # Mock the time to be 10:30 AM ET
         mock_now = datetime(2026, 2, 27, 10, 30, 0, tzinfo=_EST)
-        with patch("src.futures_lib.services.engine.focus.datetime") as mock_dt:
+        with patch("src.lib.services.engine.focus.datetime") as mock_dt:
             mock_dt.now.return_value = mock_now
             mock_dt.fromisoformat = datetime.fromisoformat
             result, reason = should_not_trade(assets)
@@ -376,10 +376,10 @@ class TestEntryZoneEdgeCases:
 class TestComputeDailyFocusPayload:
     """Test that compute_daily_focus returns the expected payload shape."""
 
-    @patch("src.futures_lib.services.engine.focus.compute_asset_focus")
+    @patch("src.lib.services.engine.focus.compute_asset_focus")
     def test_payload_structure(self, mock_asset_focus):
         """Verify the top-level focus payload has all required fields."""
-        from src.futures_lib.services.engine.focus import compute_daily_focus
+        from src.lib.services.engine.focus import compute_daily_focus
 
         mock_asset_focus.return_value = {
             "symbol": "Gold",
@@ -425,10 +425,10 @@ class TestComputeDailyFocusPayload:
         assert result["total_assets"] == 1
         assert result["tradeable_assets"] == 1
 
-    @patch("src.futures_lib.services.engine.focus.compute_asset_focus")
+    @patch("src.lib.services.engine.focus.compute_asset_focus")
     def test_sorts_by_quality_desc(self, mock_asset_focus):
         """Assets should be sorted by quality (best first)."""
-        from src.futures_lib.services.engine.focus import compute_daily_focus
+        from src.lib.services.engine.focus import compute_daily_focus
 
         def side_effect(name, account_size=50_000):
             qualities = {"Gold": 0.8, "Nasdaq": 0.6, "S&P": 0.9}
@@ -475,10 +475,10 @@ class TestComputeDailyFocusPayload:
         assert symbols[1] == "Gold"
         assert symbols[2] == "Nasdaq"
 
-    @patch("src.futures_lib.services.engine.focus.compute_asset_focus")
+    @patch("src.lib.services.engine.focus.compute_asset_focus")
     def test_no_trade_when_all_low_quality(self, mock_asset_focus):
         """Should flag no_trade when all assets are below quality threshold."""
-        from src.futures_lib.services.engine.focus import compute_daily_focus
+        from src.lib.services.engine.focus import compute_daily_focus
 
         mock_asset_focus.return_value = {
             "symbol": "Gold",
@@ -527,7 +527,7 @@ class TestPublishFocusToRedis:
     publish_focus_to_redis does ``from cache import REDIS_AVAILABLE, _r, cache_set``
     inside the function body.  The real ``cache`` module imports ``yfinance`` at the
     top level, which may not be installed in the test venv.  To avoid that we
-    inject a lightweight mock into ``sys.modules["src.futures_lib.core.cache"]`` *before* the function
+    inject a lightweight mock into ``sys.modules["src.lib.core.cache"]`` *before* the function
     runs its lazy import.
     """
 
@@ -535,14 +535,14 @@ class TestPublishFocusToRedis:
 
     def setup_method(self):
         """Save the real cache module before each test."""
-        self._original_cache_module = sys.modules.get("src.futures_lib.core.cache", None)
+        self._original_cache_module = sys.modules.get("src.lib.core.cache", None)
 
     def teardown_method(self):
         """Restore the real cache module after each test."""
         if self._original_cache_module is not None:
-            sys.modules["src.futures_lib.core.cache"] = self._original_cache_module
+            sys.modules["src.lib.core.cache"] = self._original_cache_module
         else:
-            sys.modules.pop("src.futures_lib.core.cache", None)
+            sys.modules.pop("src.lib.core.cache", None)
 
     def _ensure_mock_cache(self):
         """Install (or refresh) a mock cache module in sys.modules.
@@ -554,14 +554,14 @@ class TestPublishFocusToRedis:
         mock_mod._r = None
         mock_mod.cache_set = MagicMock()
         mock_mod.cache_get = MagicMock(return_value=None)
-        sys.modules["src.futures_lib.core.cache"] = mock_mod
+        sys.modules["src.lib.core.cache"] = mock_mod
         return mock_mod
 
     def test_publishes_to_cache_key(self):
         """Should write focus payload to engine:daily_focus key."""
         mock_cache = self._ensure_mock_cache()
 
-        from src.futures_lib.services.engine.focus import publish_focus_to_redis
+        from src.lib.services.engine.focus import publish_focus_to_redis
 
         data = {
             "assets": [],
@@ -583,7 +583,7 @@ class TestPublishFocusToRedis:
         """Should handle data that can't be JSON-serialized."""
         self._ensure_mock_cache()
 
-        from src.futures_lib.services.engine.focus import publish_focus_to_redis
+        from src.lib.services.engine.focus import publish_focus_to_redis
 
         # datetime objects are handled via default=str
         data = {

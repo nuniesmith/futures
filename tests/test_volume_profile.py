@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from src.futures_lib.analysis.volume_profile import (
+from src.lib.analysis.volume_profile import (
     _compute_value_area,
     _empty_profile,
     _find_volume_nodes,
@@ -701,18 +701,18 @@ class TestVolumeProfileStrategy:
     """Smoke tests for the VolumeProfileStrategy backtesting class."""
 
     def test_strategy_class_exists(self):
-        from src.futures_lib.analysis.volume_profile import VolumeProfileStrategy
+        from src.lib.analysis.volume_profile import VolumeProfileStrategy
 
         assert VolumeProfileStrategy is not None
 
     def test_strategy_has_init_and_next(self):
-        from src.futures_lib.analysis.volume_profile import VolumeProfileStrategy
+        from src.lib.analysis.volume_profile import VolumeProfileStrategy
 
         assert hasattr(VolumeProfileStrategy, "init")
         assert hasattr(VolumeProfileStrategy, "next")
 
     def test_suggest_params_returns_dict(self):
-        from src.futures_lib.analysis.volume_profile import (
+        from src.lib.analysis.volume_profile import (
             suggest_volume_profile_params,
         )
 
