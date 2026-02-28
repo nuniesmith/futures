@@ -7,10 +7,12 @@
 #   redis          — hot cache (latest FKS metrics, live positions, 1m bars)
 #   data-service   — FastAPI API layer + HTMX dashboard (reads from Redis)
 #   engine         — background computation (FKS, optimization, backtesting)
-#
+#   prometheus     — metrics collection & alerting  (monitoring profile)
+#   grafana        — dashboards & visualization      (monitoring profile)
 #
 # Usage:
 #   docker compose up -d --build
+#   docker compose --profile monitoring up -d --build
 #   docker compose logs -f engine
 #   docker compose ps
 #
@@ -27,7 +29,7 @@ services:
             - "5432:5432"
         environment:
             POSTGRES_USER: ${POSTGRES_USER:-futures_user}
-            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-futures_dev_pass}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
             POSTGRES_DB: ${POSTGRES_DB:-futures_db}
         volumes:
             - postgres_data:/var/lib/postgresql/data
@@ -52,9 +54,18 @@ services:
             - "6379:6379"
         volumes:
             - redis_data:/data
-        command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+        command:
+            - redis-server
+            - --requirepass
+            - ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+            - --appendonly
+            - "yes"
+            - --maxmemory
+            - 256mb
+            - --maxmemory-policy
+            - allkeys-lru
         healthcheck:
-            test: ["CMD", "redis-cli", "ping"]
+            test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
             interval: 10s
             timeout: 3s
             retries: 3
@@ -74,8 +85,8 @@ services:
         env_file:
             - .env
         environment:
-            - REDIS_URL=redis://redis:6379/0
-            - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD:-futures_dev_pass}@postgres:5432/${POSTGRES_DB:-futures_db}
+            - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+            - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-futures_db}
             - DB_PATH=/app/data/futures_journal.db
             - DATA_SERVICE_HOST=0.0.0.0
             - DATA_SERVICE_PORT=8000
@@ -116,8 +127,8 @@ services:
         env_file:
             - .env
         environment:
-            - REDIS_URL=redis://redis:6379/0
-            - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD:-futures_dev_pass}@postgres:5432/${POSTGRES_DB:-futures_db}
+            - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+            - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-futures_db}
             - DB_PATH=/app/data/futures_journal.db
             - PYTHONPATH=/app/src
             - PYTHONUNBUFFERED=1
@@ -131,16 +142,18 @@ services:
 
     # -------------------------------------------------------------------------
     # Prometheus — Metrics collection & alerting
-    # Scrapes /metrics/prometheus from data-service every 10s.
+    # Config is baked into the image via docker/monitoring/prometheus/Dockerfile.
+    # No host volume mounts for config files.
     # UI at http://localhost:9090
     # -------------------------------------------------------------------------
     prometheus:
-        image: prom/prometheus:v2.53.0
+        build:
+            context: .
+            dockerfile: docker/monitoring/prometheus/Dockerfile
         restart: unless-stopped
         ports:
             - "9090:9090"
         volumes:
-            - ./docker/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
             - prometheus_data:/prometheus
         command:
             - "--config.file=/etc/prometheus/prometheus.yml"
@@ -157,11 +170,14 @@ services:
 
     # -------------------------------------------------------------------------
     # Grafana — Dashboards & visualization
-    # Pre-provisioned with Prometheus datasource and Futures Co-Pilot dashboard.
+    # Provisioning configs and dashboards are baked into the image via
+    # docker/monitoring/grafana/Dockerfile. No host volume mounts for config.
     # UI at http://localhost:3000  (admin / admin on first login)
     # -------------------------------------------------------------------------
     grafana:
-        image: grafana/grafana:11.1.0
+        build:
+            context: .
+            dockerfile: docker/monitoring/grafana/Dockerfile
         restart: unless-stopped
         ports:
             - "3000:3000"
@@ -171,9 +187,6 @@ services:
             - GF_USERS_ALLOW_SIGN_UP=false
         volumes:
             - grafana_data:/var/lib/grafana
-            - ./docker/monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
-            - ./docker/monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
-            - ./docker/monitoring/grafana-dashboard.json:/var/lib/grafana/dashboards/futures-copilot.json:ro
         depends_on:
             - prometheus
         profiles:

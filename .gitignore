@@ -1,6 +1,68 @@
+# =============================================================================
+# Futures Trading Co-Pilot — .gitignore
+# =============================================================================
+
+# --- Python ---
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+.eggs/
+
+# --- Virtual environments ---
+.venv/
+venv/
+ENV/
+
+# --- Environment & secrets ---
 .env
-.venv
-archive/futures_journal.db
+.env.*
+!.env.example
+
+# --- IDE / Editor ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Data & databases ---
+*.db
+*.sqlite
+*.sqlite3
+data/
+archive/
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Test / coverage artifacts ---
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+
+# --- Claude / AI ---
+.claude/
+
+# --- Docker volumes (local) ---
+postgres_data/
+redis_data/
+grafana_data/
+prometheus_data/
+
+# --- Analysis output ---
+codebase_summary.md

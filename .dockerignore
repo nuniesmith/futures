@@ -1,9 +1,52 @@
+# =============================================================================
+# Docker build context exclusions
+# =============================================================================
+
+# --- Version control ---
 .git
-.claude
+.gitignore
+
+# --- Python ---
 .venv
 __pycache__
 *.pyc
+*.pyo
+*.egg-info
+dist/
+build/
+
+# --- IDE / Editor ---
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# --- Claude / AI ---
+.claude
+
+# --- Environment & secrets ---
 .env
+.env.*
+
+# --- Documentation (not needed in images) ---
 docs/
 *.md
 LICENSE
+
+# --- Tests (not needed in production images) ---
+src/tests/
+
+# --- Scripts (host-only) ---
+scripts/
+run.sh
+
+# --- Data & logs ---
+*.db
+*.sqlite
+*.log
+data/
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db

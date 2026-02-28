@@ -1,125 +1,278 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resolve the directory where this script lives
+# =============================================================================
+# Futures Trading Co-Pilot — Run Script
+# =============================================================================
+#
+# Usage:
+#   ./run.sh              Build, test, lint, then start Docker Compose
+#   ./run.sh --local      Run locally with a Python virtual environment
+#   ./run.sh --down       Stop Docker Compose services
+#   ./run.sh --test       Run tests + lint only (no compose)
+#   ./run.sh --monitoring Include Prometheus + Grafana
+#   ./run.sh --help       Show this help message
+#
+# =============================================================================
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+VENV_DIR=".venv"
+ENV_FILE=".env"
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
 # ---------------------------------------------------------------------------
-# Usage
+# Helpers
 # ---------------------------------------------------------------------------
+
+log()  { echo -e "${CYAN}[run]${NC} $*"; }
+ok()   { echo -e "${GREEN}[  ✓ ]${NC} $*"; }
+warn() { echo -e "${YELLOW}[warn]${NC} $*"; }
+err()  { echo -e "${RED}[fail]${NC} $*"; }
+
+# Generate a cryptographically random string (URL-safe base64, no padding)
+gen_secret() {
+    python3 -c "import secrets; print(secrets.token_urlsafe(${1:-32}))"
+}
+
 usage() {
-    echo "Usage: ./run.sh [--docker | --down | --help]"
+    echo "Usage: ./run.sh [--local | --down | --test | --monitoring | --help]"
     echo ""
-    echo "  (no args)   Run locally with a Python virtual environment"
-    echo "  --docker    Build and start with Docker Compose (Redis + app)"
-    echo "  --down      Stop Docker Compose services"
-    echo "  --help      Show this help message"
+    echo "  (no args)       Build, test, lint, then start Docker Compose"
+    echo "  --local         Run locally with a Python virtual environment"
+    echo "  --down          Stop Docker Compose services"
+    echo "  --test          Run tests + lint only (skip Docker build)"
+    echo "  --monitoring    Include Prometheus + Grafana (monitoring profile)"
+    echo "  --help          Show this help message"
 }
 
 # ---------------------------------------------------------------------------
-# Docker mode
+# Virtual-environment management
 # ---------------------------------------------------------------------------
-run_docker() {
-    # Generate .env file if it doesn't exist
-    if [ ! -f .env ]; then
-        echo "No .env file found. Generating with placeholders..."
-        cat > .env <<'EOF'
-# xAI Grok API key for the AI Analyst tab
-# Get yours at https://console.x.ai
-XAI_API_KEY=your_xai_api_key_here
+
+ensure_venv() {
+    if [ ! -d "$VENV_DIR" ]; then
+        log "Creating virtual environment in ${VENV_DIR} ..."
+        python3 -m venv "$VENV_DIR"
+        ok "Virtual environment created"
+    fi
+
+    # shellcheck disable=SC1091
+    source "$VENV_DIR/bin/activate"
+
+    log "Updating pip ..."
+    pip install --upgrade pip -q
+
+    log "Installing project + dev dependencies from pyproject.toml ..."
+    pip install -e ".[dev]" -q
+    ok "Dependencies up to date"
+}
+
+# ---------------------------------------------------------------------------
+# .env generation
+# ---------------------------------------------------------------------------
+
+ensure_env() {
+    if [ -f "$ENV_FILE" ]; then
+        ok ".env file already exists"
+    else
+        log "No .env file found — generating with secure random secrets ..."
+
+        local pg_pass
+        local redis_pass
+        local secret_key
+        pg_pass="$(gen_secret 32)"
+        redis_pass="$(gen_secret 24)"
+        secret_key="$(gen_secret 48)"
+
+        cat > "$ENV_FILE" <<EOF
+# =============================================================================
+# Futures Trading Co-Pilot — Environment
+# Generated on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# =============================================================================
+
+# ---- Postgres ----
+POSTGRES_USER=futures_user
+POSTGRES_PASSWORD=${pg_pass}
+POSTGRES_DB=futures_db
+
+# ---- Redis ----
+REDIS_PASSWORD=${redis_pass}
+
+# ---- App Secret Key (sessions, CSRF, etc.) ----
+SECRET_KEY=${secret_key}
+
+# ---- Grafana (monitoring profile) ----
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=admin
+
+# ---- API Keys (you must fill these in) ----
 
 # Massive.com API key for real-time futures data (CME/CBOT/NYMEX/COMEX)
 # Sign up at https://massive.com/dashboard → API Keys
-# Enables: REST aggregates, WebSocket live bars & trades, snapshots
 # Without this key the app falls back to yfinance (delayed data)
 MASSIVE_API_KEY=your_massive_api_key_here
 
-# Redis URL (set automatically by docker-compose, only override for custom setups)
-# REDIS_URL=redis://redis:6379/0
-
-# SQLite journal path (inside the container)
-# DB_PATH=/app/data/futures_journal.db
+# xAI Grok API key for the AI Analyst tab
+# Get yours at https://console.x.ai
+XAI_API_KEY=your_xai_api_key_here
 EOF
-        echo ".env file created. Edit it to add your XAI_API_KEY, then re-run this script."
-        exit 0
-    fi
 
-    # Check if XAI_API_KEY is still the placeholder
-    if grep -q "your_xai_api_key_here" .env; then
-        echo "WARNING: XAI_API_KEY is still set to placeholder in .env"
-        echo "  The Grok AI Analyst tab will not work until you update it."
+        ok ".env generated with secure random secrets for Postgres, Redis, etc."
+        warn "You still need to set your API keys:"
+        warn "  • MASSIVE_API_KEY  — https://massive.com/dashboard"
+        warn "  • XAI_API_KEY      — https://console.x.ai"
         echo ""
     fi
 
-    # Check if MASSIVE_API_KEY is still the placeholder
-    if grep -q "your_massive_api_key_here" .env; then
-        echo "NOTE: MASSIVE_API_KEY is still set to placeholder in .env"
-        echo "  Real-time futures data (Massive.com) will be disabled."
-        echo "  The app will fall back to yfinance for market data."
-        echo ""
+    # Always warn about placeholder API keys
+    if grep -q "your_massive_api_key_here" "$ENV_FILE" 2>/dev/null; then
+        warn "MASSIVE_API_KEY is still a placeholder — real-time data disabled (yfinance fallback)"
     fi
-
-    echo "Starting Futures Dashboard (Docker)..."
-    docker compose up --build -d
-
-    echo ""
-    echo "Dashboard is running:"
-    echo "  Dashboard:  http://localhost:8000"
-    echo "  Redis:      localhost:6379"
-    echo ""
-    echo "Logs: docker compose logs -f data"
-    echo "Stop: ./run.sh --down"
+    if grep -q "your_xai_api_key_here" "$ENV_FILE" 2>/dev/null; then
+        warn "XAI_API_KEY is still a placeholder — Grok AI Analyst tab will not work"
+    fi
 }
 
 # ---------------------------------------------------------------------------
-# Local venv mode (default)
+# Tests
 # ---------------------------------------------------------------------------
-run_local() {
-    VENV_DIR=".venv"
 
-    # Create virtual environment if it doesn't exist
-    if [ ! -d "$VENV_DIR" ]; then
-        echo "Creating virtual environment in $VENV_DIR ..."
-        python3 -m venv "$VENV_DIR"
+run_tests() {
+    log "Running tests ..."
+    if python -m pytest src/tests/ -x -q --tb=short; then
+        ok "All tests passed"
+    else
+        err "Tests failed — aborting"
+        exit 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Lint
+# ---------------------------------------------------------------------------
+
+run_lint() {
+    log "Running ruff linter ..."
+    if python -m ruff check src/; then
+        ok "Linting passed"
+    else
+        err "Linting failed — aborting"
+        exit 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Docker Compose
+# ---------------------------------------------------------------------------
+
+run_docker() {
+    local profile_flag=""
+    if [ "${MONITORING:-false}" = "true" ]; then
+        profile_flag="--profile monitoring"
     fi
 
-    # Activate the virtual environment
-    source "$VENV_DIR/bin/activate"
+    log "Building and starting Docker Compose services ..."
+    # shellcheck disable=SC2086
+    docker compose $profile_flag up --build -d
 
-    # Install / update dependencies
-    echo "Installing requirements ..."
-    pip install --upgrade pip -q
-    pip install -r requirements.txt -q
+    echo ""
+    ok "Services are running:"
+    echo "    Dashboard:   http://localhost:8000"
+    echo "    Postgres:    localhost:5432"
+    echo "    Redis:       localhost:6379"
+    if [ "${MONITORING:-false}" = "true" ]; then
+        echo "    Prometheus:  http://localhost:9090"
+        echo "    Grafana:     http://localhost:3000"
+    fi
+    echo ""
+    echo "  Logs:  docker compose logs -f"
+    echo "  Stop:  ./run.sh --down"
+}
 
-    # Install editable package so imports resolve
-    pip install -e . -q
+# ---------------------------------------------------------------------------
+# Local mode
+# ---------------------------------------------------------------------------
 
-    # Launch the data service (HTMX dashboard)
-    echo "Starting data service ..."
-    PYTHONPATH=src uvicorn lib.services.data.main:app --host 0.0.0.0 --port 8000
+run_local() {
+    ensure_venv
+    ensure_env
+
+    log "Starting data service locally (http://localhost:8000) ..."
+    PYTHONPATH=src exec uvicorn lib.services.data.main:app \
+        --host 0.0.0.0 --port 8000 --reload
 }
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-case "${1:-}" in
-    --docker)
-        run_docker
-        ;;
-    --down)
-        echo "Stopping Docker Compose services..."
-        docker compose down
-        ;;
-    --help|-h)
-        usage
-        ;;
-    "")
+
+MONITORING="false"
+
+# Parse flags
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --monitoring)
+            MONITORING="true"
+            shift
+            ;;
+        --local)
+            POSITIONAL+=("local")
+            shift
+            ;;
+        --down)
+            POSITIONAL+=("down")
+            shift
+            ;;
+        --test)
+            POSITIONAL+=("test")
+            shift
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+# Default action is "docker"
+ACTION="${POSITIONAL[0]:-docker}"
+
+case "$ACTION" in
+    local)
         run_local
         ;;
-    *)
-        echo "Unknown option: $1"
-        usage
-        exit 1
+    down)
+        log "Stopping Docker Compose services ..."
+        docker compose --profile monitoring down
+        ok "All services stopped"
+        ;;
+    test)
+        ensure_venv
+        run_tests
+        run_lint
+        ok "All checks passed"
+        ;;
+    docker)
+        # Full pipeline: venv → env → test → lint → build → up
+        ensure_venv
+        ensure_env
+        echo ""
+        run_tests
+        echo ""
+        run_lint
+        echo ""
+        run_docker
         ;;
 esac

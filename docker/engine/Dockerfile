@@ -8,8 +8,10 @@ FROM python:3.13-slim AS deps
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy dependency metadata + minimal package stub so hatchling can resolve
+COPY pyproject.toml .
+RUN mkdir -p src/lib && touch src/lib/__init__.py
+RUN pip install --no-cache-dir .
 
 # Stage 2: Copy app code and run
 FROM python:3.13-slim AS runtime

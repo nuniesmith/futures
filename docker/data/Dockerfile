@@ -1,14 +1,16 @@
-# Dockerfile.data — Data Service (FastAPI + Background Engine)
-# All heavy computation runs here: Massive WS, optimization, backtesting,
-# wave analysis, volatility, signal quality, regime, CVD, ICT.
+# Dockerfile.data — Data Service (FastAPI + HTMX Dashboard)
+# Thin API layer: serves REST endpoints, reads computed results from Redis.
 
 # Stage 1: Install dependencies
 FROM python:3.13-slim AS deps
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy only dependency metadata first (cache-friendly layer)
+# Hatchling needs the package dir to exist for the build to succeed
+COPY pyproject.toml .
+COPY src/lib/__init__.py src/lib/__init__.py
+RUN pip install --no-cache-dir .
 
 # Stage 2: Copy app code and run
 FROM python:3.13-slim AS runtime
@@ -25,11 +27,7 @@ COPY src/ ./src/
 # Create data directory for SQLite journal
 RUN mkdir -p /app/data
 
-# PYTHONPATH setup:
-#   1. /app/src                     — so bare imports like `from cache import ...`,
-#      `from engine import ...`, etc. resolve correctly (single source of truth)
-#   2. /app/src/services/data       — so `from lib.services.data.api.X import ...` in main.py resolves
-#   3. /app                         — so `src.services.data.main` style imports work
+# PYTHONPATH: bare imports resolve from /app/src
 ENV PYTHONPATH="/app/src"
 
 # Environment defaults
