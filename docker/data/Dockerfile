@@ -28,7 +28,7 @@ RUN mkdir -p /app/data
 # PYTHONPATH setup:
 #   1. /app/src                     — so bare imports like `from cache import ...`,
 #      `from engine import ...`, etc. resolve correctly (single source of truth)
-#   2. /app/src/services/data       — so `from src.lib.services.data.api.X import ...` in main.py resolves
+#   2. /app/src/services/data       — so `from lib.services.data.api.X import ...` in main.py resolves
 #   3. /app                         — so `src.services.data.main` style imports work
 ENV PYTHONPATH="/app/src"
 

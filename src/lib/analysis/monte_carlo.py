@@ -16,7 +16,7 @@ Key features:
     compute fraction where best IS config underperforms median OOS
 
 Usage:
-    from src.lib.monte_carlo import (
+    from lib.monte_carlo import (
         run_monte_carlo,
         compute_confidence_cones,
         estimate_pbo,

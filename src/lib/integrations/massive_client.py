@@ -13,7 +13,7 @@ Features:
   - Thread-safe WebSocket feed manager for background streaming
 
 Usage:
-    from src.lib.massive_client import get_massive_provider, MassiveFeedManager
+    from lib.massive_client import get_massive_provider, MassiveFeedManager
 
     provider = get_massive_provider()
     if provider.is_available:
@@ -2007,7 +2007,7 @@ class MassiveFeedManager:
     def _push_bar_to_cache(self, massive_ticker: str, bar: dict) -> None:
         """Push a new bar into the Redis/memory cache for the dashboard to read."""
         try:
-            from src.lib.core.cache import (
+            from lib.core.cache import (
                 TTL_INTRADAY,
                 _cache_key,
                 _df_to_bytes,

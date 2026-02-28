@@ -400,7 +400,7 @@ def publish_orb_alert(result: ORBResult) -> bool:
     Returns True on success.
     """
     try:
-        from src.lib.core.cache import REDIS_AVAILABLE, _r, cache_set
+        from lib.core.cache import REDIS_AVAILABLE, _r, cache_set
     except ImportError:
         logger.error("Cannot import cache module for ORB publish")
         return False
@@ -443,7 +443,7 @@ def publish_orb_alert(result: ORBResult) -> bool:
 def clear_orb_alert() -> bool:
     """Clear any active ORB alert from Redis (e.g. end of day)."""
     try:
-        from src.lib.core.cache import cache_set
+        from lib.core.cache import cache_set
     except ImportError:
         return False
 

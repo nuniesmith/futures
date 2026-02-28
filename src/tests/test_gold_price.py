@@ -22,7 +22,7 @@ def test_gold_price_no_scaling():
     NinjaTrader MGC chart exactly.  Using GC=F (full-size) can cause
     a price mismatch due to different front-month contract months.
     """
-    from src.lib.core.models import ASSETS, MICRO_CONTRACT_SPECS
+    from lib.core.models import ASSETS, MICRO_CONTRACT_SPECS
 
     # Gold micro spec must use MGC=F as data_ticker
     gold_micro = MICRO_CONTRACT_SPECS["Gold"]
@@ -40,7 +40,7 @@ def test_gold_price_no_scaling():
 
 def test_gold_point_value_is_micro():
     """Gold micro contract point value must be $10/point, not $100/point."""
-    from src.lib.core.models import MICRO_CONTRACT_SPECS
+    from lib.core.models import MICRO_CONTRACT_SPECS
 
     gold_micro = MICRO_CONTRACT_SPECS["Gold"]
     assert gold_micro["point"] == 10, (
@@ -51,7 +51,7 @@ def test_gold_point_value_is_micro():
 
 def test_gold_massive_product_mapping():
     """Massive client must map MGC=F to the MGC product code."""
-    from src.lib.integrations.massive_client import YAHOO_TO_MASSIVE_PRODUCT
+    from lib.integrations.massive_client import YAHOO_TO_MASSIVE_PRODUCT
 
     assert YAHOO_TO_MASSIVE_PRODUCT.get("MGC=F") == "MGC", (
         "MGC=F must map to MGC product code in Massive client"
@@ -65,7 +65,7 @@ def test_gold_price_passthrough_no_multiplier():
     The cache/display layer should show the same raw values — no multiplication
     by contract point values ($10 micro or $100 full-size).
     """
-    from src.lib.core.models import CONTRACT_SPECS
+    from lib.core.models import CONTRACT_SPECS
 
     gold_spec = CONTRACT_SPECS.get("Gold", {})
     point_value = gold_spec.get("point", 10)
@@ -87,7 +87,7 @@ def test_gold_risk_calculation_uses_point_value_correctly():
     This converts a price-distance into dollars, which is correct.
     The point value must NOT be applied to the entry/stop prices themselves.
     """
-    from src.lib.core.models import calc_max_contracts
+    from lib.core.models import calc_max_contracts
 
     entry = 5212.30
     stop = 5200.00

@@ -16,7 +16,7 @@ Design decisions (per docs/todo.md blueprint):
   - Retrain at session open; update probabilities bar-by-bar during session
 
 Usage:
-    from src.lib.regime import RegimeDetector
+    from lib.regime import RegimeDetector
     detector = RegimeDetector()
     detector.fit(df)                    # fit on historical OHLCV
     info = detector.detect(df)          # get current regime + probabilities

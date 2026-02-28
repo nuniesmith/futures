@@ -21,7 +21,7 @@ Conservative all-in round-turn (commission + exchange + NFA + clearing + slippag
   GC  ~$30      MGC  ~$4.00
 
 Usage:
-    from src.lib.costs import get_cost_model, estimate_trade_costs, slippage_commission_rate
+    from lib.costs import get_cost_model, estimate_trade_costs, slippage_commission_rate
 
     # Get the cost model for an asset
     model = get_cost_model("Gold")

@@ -54,81 +54,81 @@ class TestMetricDefinitions:
     """Verify all expected metrics are registered."""
 
     def test_registry_exists(self):
-        from src.lib.services.data.api.metrics import get_registry
+        from lib.services.data.api.metrics import get_registry
 
         registry = get_registry()
         assert registry is not None
 
     def test_http_requests_total_registered(self):
-        from src.lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
+        from lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
         assert HTTP_REQUESTS_TOTAL is not None
         # prometheus_client strips _total suffix from Counter._name
         assert "http_requests" in HTTP_REQUESTS_TOTAL._name
 
     def test_http_request_duration_registered(self):
-        from src.lib.services.data.api.metrics import HTTP_REQUEST_DURATION
+        from lib.services.data.api.metrics import HTTP_REQUEST_DURATION
 
         assert HTTP_REQUEST_DURATION is not None
         # prometheus_client may strip _seconds suffix from Histogram._name
         assert "http_request_duration" in HTTP_REQUEST_DURATION._name
 
     def test_sse_connections_active_registered(self):
-        from src.lib.services.data.api.metrics import SSE_CONNECTIONS_ACTIVE
+        from lib.services.data.api.metrics import SSE_CONNECTIONS_ACTIVE
 
         assert SSE_CONNECTIONS_ACTIVE is not None
         assert "sse_connections_active" in SSE_CONNECTIONS_ACTIVE._name
 
     def test_sse_events_total_registered(self):
-        from src.lib.services.data.api.metrics import SSE_EVENTS_TOTAL
+        from lib.services.data.api.metrics import SSE_EVENTS_TOTAL
 
         assert SSE_EVENTS_TOTAL is not None
         assert "sse_events" in SSE_EVENTS_TOTAL._name
 
     def test_engine_last_refresh_epoch_registered(self):
-        from src.lib.services.data.api.metrics import ENGINE_LAST_REFRESH_EPOCH
+        from lib.services.data.api.metrics import ENGINE_LAST_REFRESH_EPOCH
 
         assert ENGINE_LAST_REFRESH_EPOCH is not None
         assert "engine_last_refresh_epoch" in ENGINE_LAST_REFRESH_EPOCH._name
 
     def test_engine_cycle_duration_registered(self):
-        from src.lib.services.data.api.metrics import ENGINE_CYCLE_DURATION
+        from lib.services.data.api.metrics import ENGINE_CYCLE_DURATION
 
         assert ENGINE_CYCLE_DURATION is not None
         assert "engine_cycle_duration" in ENGINE_CYCLE_DURATION._name
 
     def test_risk_checks_total_registered(self):
-        from src.lib.services.data.api.metrics import RISK_CHECKS_TOTAL
+        from lib.services.data.api.metrics import RISK_CHECKS_TOTAL
 
         assert RISK_CHECKS_TOTAL is not None
         assert "risk_checks" in RISK_CHECKS_TOTAL._name
 
     def test_orb_detections_total_registered(self):
-        from src.lib.services.data.api.metrics import ORB_DETECTIONS_TOTAL
+        from lib.services.data.api.metrics import ORB_DETECTIONS_TOTAL
 
         assert ORB_DETECTIONS_TOTAL is not None
         assert "orb_detections" in ORB_DETECTIONS_TOTAL._name
 
     def test_no_trade_alerts_total_registered(self):
-        from src.lib.services.data.api.metrics import NO_TRADE_ALERTS_TOTAL
+        from lib.services.data.api.metrics import NO_TRADE_ALERTS_TOTAL
 
         assert NO_TRADE_ALERTS_TOTAL is not None
         assert "no_trade_alerts" in NO_TRADE_ALERTS_TOTAL._name
 
     def test_focus_quality_gauge_registered(self):
-        from src.lib.services.data.api.metrics import FOCUS_QUALITY_GAUGE
+        from lib.services.data.api.metrics import FOCUS_QUALITY_GAUGE
 
         assert FOCUS_QUALITY_GAUGE is not None
         assert "focus_quality_gauge" in FOCUS_QUALITY_GAUGE._name
 
     def test_positions_open_count_registered(self):
-        from src.lib.services.data.api.metrics import POSITIONS_OPEN_COUNT
+        from lib.services.data.api.metrics import POSITIONS_OPEN_COUNT
 
         assert POSITIONS_OPEN_COUNT is not None
         assert "positions_open_count" in POSITIONS_OPEN_COUNT._name
 
     def test_redis_connected_registered(self):
-        from src.lib.services.data.api.metrics import REDIS_CONNECTED
+        from lib.services.data.api.metrics import REDIS_CONNECTED
 
         assert REDIS_CONNECTED is not None
         assert "redis_connected" in REDIS_CONNECTED._name
@@ -138,7 +138,7 @@ class TestMetricRecordHelpers:
     """Test the helper functions that record metric values."""
 
     def test_record_sse_connect_increments(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             SSE_CONNECTIONS_ACTIVE,
             record_sse_connect,
         )
@@ -149,7 +149,7 @@ class TestMetricRecordHelpers:
         assert after == before + 1
 
     def test_record_sse_disconnect_decrements(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             SSE_CONNECTIONS_ACTIVE,
             record_sse_disconnect,
         )
@@ -162,7 +162,7 @@ class TestMetricRecordHelpers:
         assert after == before - 1
 
     def test_record_sse_event_increments_counter(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             SSE_EVENTS_TOTAL,
             record_sse_event,
         )
@@ -174,7 +174,7 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_sse_event_multiple_types(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             SSE_EVENTS_TOTAL,
             record_sse_event,
         )
@@ -189,7 +189,7 @@ class TestMetricRecordHelpers:
         assert pos >= 1
 
     def test_record_risk_check_allowed(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             RISK_CHECKS_TOTAL,
             record_risk_check,
         )
@@ -200,7 +200,7 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_risk_check_blocked(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             RISK_CHECKS_TOTAL,
             record_risk_check,
         )
@@ -211,7 +211,7 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_risk_check_advisory(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             RISK_CHECKS_TOTAL,
             record_risk_check,
         )
@@ -222,7 +222,7 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_orb_detection_long(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             ORB_DETECTIONS_TOTAL,
             record_orb_detection,
         )
@@ -233,7 +233,7 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_orb_detection_short(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             ORB_DETECTIONS_TOTAL,
             record_orb_detection,
         )
@@ -244,7 +244,7 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_orb_detection_none(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             ORB_DETECTIONS_TOTAL,
             record_orb_detection,
         )
@@ -255,7 +255,7 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_no_trade_alert(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             NO_TRADE_ALERTS_TOTAL,
             record_no_trade_alert,
         )
@@ -266,7 +266,7 @@ class TestMetricRecordHelpers:
         assert after == initial + 1
 
     def test_record_no_trade_alert_multiple_conditions(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             NO_TRADE_ALERTS_TOTAL,
             record_no_trade_alert,
         )
@@ -287,7 +287,7 @@ class TestMetricRecordHelpers:
         assert streak >= 1
 
     def test_record_engine_refresh_sets_timestamp(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             ENGINE_LAST_REFRESH_EPOCH,
             record_engine_refresh,
         )
@@ -299,7 +299,7 @@ class TestMetricRecordHelpers:
         assert before <= value <= after
 
     def test_record_engine_cycle_observes_duration(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             ENGINE_CYCLE_DURATION,
             record_engine_cycle,
         )
@@ -315,7 +315,7 @@ class TestMetricRecordHelpers:
         assert sample_sum >= 4.7  # 0.5 + 1.2 + 3.0
 
     def test_update_focus_quality(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             FOCUS_QUALITY_GAUGE,
             update_focus_quality,
         )
@@ -325,7 +325,7 @@ class TestMetricRecordHelpers:
         assert val == pytest.approx(0.78)
 
     def test_update_focus_quality_multiple_assets(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             FOCUS_QUALITY_GAUGE,
             update_focus_quality,
         )
@@ -345,7 +345,7 @@ class TestMetricRecordHelpers:
         )
 
     def test_update_positions_count(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             POSITIONS_OPEN_COUNT,
             update_positions_count,
         )
@@ -357,7 +357,7 @@ class TestMetricRecordHelpers:
         assert POSITIONS_OPEN_COUNT._value.get() == 0
 
     def test_update_redis_status_connected(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             REDIS_CONNECTED,
             update_redis_status,
         )
@@ -366,7 +366,7 @@ class TestMetricRecordHelpers:
         assert REDIS_CONNECTED._value.get() == 1
 
     def test_update_redis_status_disconnected(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             REDIS_CONNECTED,
             update_redis_status,
         )
@@ -379,64 +379,64 @@ class TestPathNormalization:
     """Test _normalize_path for metric cardinality reduction."""
 
     def test_empty_path(self):
-        from src.lib.services.data.api.metrics import _normalize_path
+        from lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("") == "/"
 
     def test_root_path(self):
-        from src.lib.services.data.api.metrics import _normalize_path
+        from lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/") == "/"
 
     def test_health_unchanged(self):
-        from src.lib.services.data.api.metrics import _normalize_path
+        from lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/health") == "/health"
 
     def test_sse_dashboard_unchanged(self):
-        from src.lib.services.data.api.metrics import _normalize_path
+        from lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/sse/dashboard") == "/sse/dashboard"
 
     def test_focus_symbol_normalized(self):
-        from src.lib.services.data.api.metrics import _normalize_path
+        from lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/api/focus/mgc") == "/api/focus/{id}"
         assert _normalize_path("/api/focus/mnq") == "/api/focus/{id}"
 
     def test_trades_id_normalized(self):
-        from src.lib.services.data.api.metrics import _normalize_path
+        from lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/trades/123") == "/trades/{id}"
         assert _normalize_path("/trades/456/close") == "/trades/{id}/close"
 
     def test_positions_path_normalized(self):
-        from src.lib.services.data.api.metrics import _normalize_path
+        from lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/positions/abc") == "/positions/{id}"
 
     def test_journal_path_normalized(self):
-        from src.lib.services.data.api.metrics import _normalize_path
+        from lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/journal/entries") == "/journal/{id}"
 
     def test_analysis_latest_symbol_normalized(self):
-        from src.lib.services.data.api.metrics import _normalize_path
+        from lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/analysis/latest/Gold") == "/analysis/latest/{id}"
 
     def test_data_ohlcv_normalized(self):
-        from src.lib.services.data.api.metrics import _normalize_path
+        from lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/data/ohlcv/MGC=F") == "/data/ohlcv/{id}"
 
     def test_data_daily_normalized(self):
-        from src.lib.services.data.api.metrics import _normalize_path
+        from lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/data/daily/MGC=F") == "/data/daily/{id}"
 
     def test_non_matching_path_unchanged(self):
-        from src.lib.services.data.api.metrics import _normalize_path
+        from lib.services.data.api.metrics import _normalize_path
 
         assert _normalize_path("/risk/status") == "/risk/status"
         assert _normalize_path("/risk/check") == "/risk/check"
@@ -449,7 +449,7 @@ class TestPrometheusOutput:
     def test_generate_latest_returns_bytes(self):
         from prometheus_client import generate_latest
 
-        from src.lib.services.data.api.metrics import get_registry
+        from lib.services.data.api.metrics import get_registry
 
         output = generate_latest(get_registry())
         assert isinstance(output, bytes)
@@ -457,7 +457,7 @@ class TestPrometheusOutput:
     def test_generate_latest_contains_help_lines(self):
         from prometheus_client import generate_latest
 
-        from src.lib.services.data.api.metrics import get_registry
+        from lib.services.data.api.metrics import get_registry
 
         output = generate_latest(get_registry()).decode("utf-8")
         assert "# HELP http_requests_total" in output
@@ -467,7 +467,7 @@ class TestPrometheusOutput:
     def test_generate_latest_contains_type_lines(self):
         from prometheus_client import generate_latest
 
-        from src.lib.services.data.api.metrics import get_registry
+        from lib.services.data.api.metrics import get_registry
 
         output = generate_latest(get_registry()).decode("utf-8")
         assert "# TYPE http_requests_total counter" in output
@@ -477,7 +477,7 @@ class TestPrometheusOutput:
     def test_output_has_metric_values(self):
         from prometheus_client import generate_latest
 
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             get_registry,
             record_sse_event,
         )
@@ -489,7 +489,7 @@ class TestPrometheusOutput:
     def test_output_contains_all_metric_families(self):
         from prometheus_client import generate_latest
 
-        from src.lib.services.data.api.metrics import get_registry
+        from lib.services.data.api.metrics import get_registry
 
         output = generate_latest(get_registry()).decode("utf-8")
         expected_metrics = [
@@ -515,7 +515,7 @@ class TestCollectLiveGauges:
 
     def test_collect_with_no_cache_data(self):
         """Should not crash when cache returns None for everything."""
-        from src.lib.services.data.api.metrics import _collect_live_gauges
+        from lib.services.data.api.metrics import _collect_live_gauges
 
         with patch("src.lib.services.data.api.metrics.update_redis_status") as mock_redis:
             _collect_live_gauges()
@@ -523,7 +523,7 @@ class TestCollectLiveGauges:
             mock_redis.assert_called()
 
     def test_collect_focus_updates_gauges(self):
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             FOCUS_QUALITY_GAUGE,
             _collect_live_gauges,
         )
@@ -549,7 +549,7 @@ class TestCollectLiveGauges:
     def test_collect_positions_updates_gauge(self):
         # We test update_positions_count directly since _collect_live_gauges
         # reads from the real cache which may not be available
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             POSITIONS_OPEN_COUNT,
             update_positions_count,
         )
@@ -590,7 +590,7 @@ class TestPrometheusMiddleware:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from src.lib.services.data.api.metrics import PrometheusMiddleware
+        from lib.services.data.api.metrics import PrometheusMiddleware
 
         app = FastAPI()
         app.add_middleware(PrometheusMiddleware)
@@ -613,7 +613,7 @@ class TestPrometheusMiddleware:
         return TestClient(app, raise_server_exceptions=False)
 
     def test_middleware_records_successful_request(self, app_with_middleware):
-        from src.lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
+        from lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
         initial = HTTP_REQUESTS_TOTAL.labels(
             method="GET", path="/test/hello", status="200"
@@ -628,7 +628,7 @@ class TestPrometheusMiddleware:
         assert after == initial + 1
 
     def test_middleware_records_404(self, app_with_middleware):
-        from src.lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
+        from lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
         initial = HTTP_REQUESTS_TOTAL.labels(
             method="GET", path="/test/nonexistent", status="404"
@@ -643,7 +643,7 @@ class TestPrometheusMiddleware:
         assert after == initial + 1
 
     def test_middleware_records_duration(self, app_with_middleware):
-        from src.lib.services.data.api.metrics import HTTP_REQUEST_DURATION
+        from lib.services.data.api.metrics import HTTP_REQUEST_DURATION
 
         # Record initial sum
         initial_sum = HTTP_REQUEST_DURATION.labels(
@@ -660,7 +660,7 @@ class TestPrometheusMiddleware:
         assert after_sum > initial_sum
 
     def test_middleware_records_500_on_error(self, app_with_middleware):
-        from src.lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
+        from lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
         initial = HTTP_REQUESTS_TOTAL.labels(
             method="GET", path="/test/error", status="500"
@@ -688,8 +688,8 @@ class TestPrometheusEndpoint:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from src.lib.services.data.api.metrics import PrometheusMiddleware
-        from src.lib.services.data.api.metrics import router as metrics_router
+        from lib.services.data.api.metrics import PrometheusMiddleware
+        from lib.services.data.api.metrics import router as metrics_router
 
         app = FastAPI()
         app.add_middleware(PrometheusMiddleware)
@@ -749,7 +749,7 @@ class TestClientKeyFunction:
         return req
 
     def test_api_key_takes_priority(self):
-        from src.lib.services.data.api.rate_limit import _client_key_func
+        from lib.services.data.api.rate_limit import _client_key_func
 
         req = self._make_request(
             headers={"x-api-key": "my-secret-key-12345"},
@@ -760,14 +760,14 @@ class TestClientKeyFunction:
         assert "my-secre" in key  # first 8 chars
 
     def test_api_key_short_key(self):
-        from src.lib.services.data.api.rate_limit import _client_key_func
+        from lib.services.data.api.rate_limit import _client_key_func
 
         req = self._make_request(headers={"x-api-key": "abc"})
         key = _client_key_func(req)
         assert key == "apikey:abc"
 
     def test_forwarded_for_used_when_no_api_key(self):
-        from src.lib.services.data.api.rate_limit import _client_key_func
+        from lib.services.data.api.rate_limit import _client_key_func
 
         req = self._make_request(
             headers={"x-forwarded-for": "10.0.0.1, 10.0.0.2"},
@@ -777,14 +777,14 @@ class TestClientKeyFunction:
         assert key == "ip:10.0.0.1"
 
     def test_forwarded_for_single_ip(self):
-        from src.lib.services.data.api.rate_limit import _client_key_func
+        from lib.services.data.api.rate_limit import _client_key_func
 
         req = self._make_request(headers={"x-forwarded-for": "203.0.113.50"})
         key = _client_key_func(req)
         assert key == "ip:203.0.113.50"
 
     def test_remote_address_fallback(self):
-        from src.lib.services.data.api.rate_limit import _client_key_func
+        from lib.services.data.api.rate_limit import _client_key_func
 
         req = self._make_request(headers={}, client_host="192.168.1.100")
         # get_remote_address from slowapi reads request.client.host
@@ -796,7 +796,7 @@ class TestPathLimitMapping:
     """Test get_limit_for_path returns correct limits."""
 
     def test_health_gets_public_limit(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             PUBLIC_LIMIT,
             get_limit_for_path,
         )
@@ -804,7 +804,7 @@ class TestPathLimitMapping:
         assert get_limit_for_path("/health") == PUBLIC_LIMIT
 
     def test_docs_gets_public_limit(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             PUBLIC_LIMIT,
             get_limit_for_path,
         )
@@ -812,7 +812,7 @@ class TestPathLimitMapping:
         assert get_limit_for_path("/docs") == PUBLIC_LIMIT
 
     def test_metrics_gets_public_limit(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             PUBLIC_LIMIT,
             get_limit_for_path,
         )
@@ -821,7 +821,7 @@ class TestPathLimitMapping:
         assert get_limit_for_path("/metrics/prometheus") == PUBLIC_LIMIT
 
     def test_sse_gets_sse_limit(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             SSE_LIMIT,
             get_limit_for_path,
         )
@@ -830,7 +830,7 @@ class TestPathLimitMapping:
         assert get_limit_for_path("/sse/health") == SSE_LIMIT
 
     def test_trades_gets_mutations_limit(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             MUTATIONS_LIMIT,
             get_limit_for_path,
         )
@@ -839,7 +839,7 @@ class TestPathLimitMapping:
         assert get_limit_for_path("/trades/123/close") == MUTATIONS_LIMIT
 
     def test_log_trade_gets_mutations_limit(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             MUTATIONS_LIMIT,
             get_limit_for_path,
         )
@@ -847,7 +847,7 @@ class TestPathLimitMapping:
         assert get_limit_for_path("/log_trade") == MUTATIONS_LIMIT
 
     def test_positions_update_gets_mutations_limit(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             MUTATIONS_LIMIT,
             get_limit_for_path,
         )
@@ -855,7 +855,7 @@ class TestPathLimitMapping:
         assert get_limit_for_path("/positions/update") == MUTATIONS_LIMIT
 
     def test_risk_check_gets_mutations_limit(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             MUTATIONS_LIMIT,
             get_limit_for_path,
         )
@@ -863,7 +863,7 @@ class TestPathLimitMapping:
         assert get_limit_for_path("/risk/check") == MUTATIONS_LIMIT
 
     def test_force_refresh_gets_heavy_limit(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             HEAVY_LIMIT,
             get_limit_for_path,
         )
@@ -871,7 +871,7 @@ class TestPathLimitMapping:
         assert get_limit_for_path("/actions/force_refresh") == HEAVY_LIMIT
 
     def test_optimize_now_gets_heavy_limit(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             HEAVY_LIMIT,
             get_limit_for_path,
         )
@@ -879,7 +879,7 @@ class TestPathLimitMapping:
         assert get_limit_for_path("/actions/optimize_now") == HEAVY_LIMIT
 
     def test_run_backtest_gets_heavy_limit(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             HEAVY_LIMIT,
             get_limit_for_path,
         )
@@ -887,7 +887,7 @@ class TestPathLimitMapping:
         assert get_limit_for_path("/actions/run_backtest") == HEAVY_LIMIT
 
     def test_unknown_path_gets_default_limit(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             DEFAULT_LIMIT,
             get_limit_for_path,
         )
@@ -900,7 +900,7 @@ class TestLimiterSingleton:
     """Test limiter creation and lifecycle."""
 
     def test_get_limiter_returns_limiter(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             get_limiter,
             reset_limiter,
         )
@@ -910,7 +910,7 @@ class TestLimiterSingleton:
         assert limiter is not None
 
     def test_get_limiter_returns_same_instance(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             get_limiter,
             reset_limiter,
         )
@@ -921,7 +921,7 @@ class TestLimiterSingleton:
         assert limiter1 is limiter2
 
     def test_reset_limiter_clears_singleton(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             get_limiter,
             reset_limiter,
         )
@@ -940,7 +940,7 @@ class TestRateLimitEnabled:
 
     def test_is_rate_limiting_enabled_when_disabled(self):
         # Our test env sets RATE_LIMIT_ENABLED=0
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             is_rate_limiting_enabled,
         )
 
@@ -951,7 +951,7 @@ class TestRateLimitEnabled:
         assert isinstance(result, bool)
 
     def test_effective_limit_when_disabled(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             _DISABLED_LIMIT,
             _get_effective_limit,
         )
@@ -976,7 +976,7 @@ class TestRateLimitHandler:
         return RateLimitExceeded(mock_limit)
 
     def test_handler_returns_429(self):
-        from src.lib.services.data.api.rate_limit import _rate_limit_handler
+        from lib.services.data.api.rate_limit import _rate_limit_handler
 
         req = MagicMock()
         req.method = "POST"
@@ -991,7 +991,7 @@ class TestRateLimitHandler:
         assert resp.status_code == 429
 
     def test_handler_returns_json_body(self):
-        from src.lib.services.data.api.rate_limit import _rate_limit_handler
+        from lib.services.data.api.rate_limit import _rate_limit_handler
 
         req = MagicMock()
         req.method = "GET"
@@ -1010,7 +1010,7 @@ class TestRateLimitHandler:
         assert "retry_after" in body
 
     def test_handler_includes_retry_after_header(self):
-        from src.lib.services.data.api.rate_limit import _rate_limit_handler
+        from lib.services.data.api.rate_limit import _rate_limit_handler
 
         req = MagicMock()
         req.method = "GET"
@@ -1032,7 +1032,7 @@ class TestSetupRateLimiting:
     def test_setup_installs_limiter_on_app_state(self):
         from fastapi import FastAPI
 
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             reset_limiter,
             setup_rate_limiting,
         )
@@ -1047,7 +1047,7 @@ class TestSetupRateLimiting:
     def test_setup_returns_limiter_instance(self):
         from fastapi import FastAPI
 
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             reset_limiter,
             setup_rate_limiting,
         )
@@ -1062,7 +1062,7 @@ class TestSetupRateLimiting:
         """Calling setup multiple times should not crash."""
         from fastapi import FastAPI
 
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             reset_limiter,
             setup_rate_limiting,
         )
@@ -1078,7 +1078,7 @@ class TestStorageUri:
     """Test storage backend URI resolution."""
 
     def test_default_is_memory(self):
-        from src.lib.services.data.api.rate_limit import _get_storage_uri
+        from lib.services.data.api.rate_limit import _get_storage_uri
 
         uri = _get_storage_uri()
         assert "memory" in uri or uri.startswith("redis")
@@ -1101,7 +1101,7 @@ class TestRateLimitIntegration:
         from slowapi.errors import RateLimitExceeded
         from slowapi.util import get_remote_address
 
-        from src.lib.services.data.api.rate_limit import _rate_limit_handler
+        from lib.services.data.api.rate_limit import _rate_limit_handler
 
         # Create a fresh limiter with a very tight limit
         limiter = Limiter(
@@ -1178,9 +1178,9 @@ class TestCombinedIntegration:
         from slowapi.errors import RateLimitExceeded
         from slowapi.util import get_remote_address
 
-        from src.lib.services.data.api.metrics import PrometheusMiddleware
-        from src.lib.services.data.api.metrics import router as metrics_router
-        from src.lib.services.data.api.rate_limit import _rate_limit_handler
+        from lib.services.data.api.metrics import PrometheusMiddleware
+        from lib.services.data.api.metrics import router as metrics_router
+        from lib.services.data.api.rate_limit import _rate_limit_handler
 
         limiter = Limiter(
             key_func=get_remote_address,
@@ -1210,7 +1210,7 @@ class TestCombinedIntegration:
         assert resp.status_code == 200
 
     def test_metrics_track_normal_requests(self, full_client):
-        from src.lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
+        from lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
         initial = HTTP_REQUESTS_TOTAL.labels(
             method="GET", path="/test/data", status="200"
@@ -1224,7 +1224,7 @@ class TestCombinedIntegration:
         assert after == initial + 1
 
     def test_metrics_track_429_responses(self, full_client):
-        from src.lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
+        from lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
         # Exhaust the limit
         full_client.post("/test/action")
@@ -1270,7 +1270,7 @@ class TestMetricsEdgeCases:
 
     def test_sse_connect_disconnect_balance(self):
         """SSE gauge should track connects and disconnects accurately."""
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             SSE_CONNECTIONS_ACTIVE,
             record_sse_connect,
             record_sse_disconnect,
@@ -1291,7 +1291,7 @@ class TestMetricsEdgeCases:
 
     def test_update_focus_quality_overwrites(self):
         """Focus quality gauge should reflect the latest value."""
-        from src.lib.services.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             FOCUS_QUALITY_GAUGE,
             update_focus_quality,
         )
@@ -1306,21 +1306,21 @@ class TestMetricsEdgeCases:
 
     def test_record_engine_cycle_zero_duration(self):
         """Zero-duration cycle should be observable."""
-        from src.lib.services.data.api.metrics import record_engine_cycle
+        from lib.services.data.api.metrics import record_engine_cycle
 
         record_engine_cycle(0.0)
         # No crash
 
     def test_record_engine_cycle_large_duration(self):
         """Large duration should be observable."""
-        from src.lib.services.data.api.metrics import record_engine_cycle
+        from lib.services.data.api.metrics import record_engine_cycle
 
         record_engine_cycle(120.0)
         # No crash
 
     def test_many_different_sse_event_types(self):
         """Many different event types should not crash."""
-        from src.lib.services.data.api.metrics import record_sse_event
+        from lib.services.data.api.metrics import record_sse_event
 
         event_types = [
             "focus-update",
@@ -1344,7 +1344,7 @@ class TestRateLimitEdgeCases:
     """Edge cases for rate limiting."""
 
     def test_client_key_with_empty_headers(self):
-        from src.lib.services.data.api.rate_limit import _client_key_func
+        from lib.services.data.api.rate_limit import _client_key_func
 
         req = MagicMock()
         req.headers = {}
@@ -1354,7 +1354,7 @@ class TestRateLimitEdgeCases:
         assert key.startswith("ip:")
 
     def test_client_key_with_none_forwarded_for(self):
-        from src.lib.services.data.api.rate_limit import _client_key_func
+        from lib.services.data.api.rate_limit import _client_key_func
 
         req = MagicMock()
         req.headers = {"x-forwarded-for": ""}
@@ -1365,7 +1365,7 @@ class TestRateLimitEdgeCases:
         assert key.startswith("ip:")
 
     def test_get_limit_for_path_empty(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             DEFAULT_LIMIT,
             get_limit_for_path,
         )
@@ -1373,7 +1373,7 @@ class TestRateLimitEdgeCases:
         assert get_limit_for_path("") == DEFAULT_LIMIT
 
     def test_get_limit_for_path_root(self):
-        from src.lib.services.data.api.rate_limit import (
+        from lib.services.data.api.rate_limit import (
             DEFAULT_LIMIT,
             get_limit_for_path,
         )
@@ -1384,7 +1384,7 @@ class TestRateLimitEdgeCases:
         """Handler should work with a very low limit."""
         from slowapi.errors import RateLimitExceeded
 
-        from src.lib.services.data.api.rate_limit import _rate_limit_handler
+        from lib.services.data.api.rate_limit import _rate_limit_handler
 
         req = MagicMock()
         req.method = "GET"
@@ -1425,19 +1425,19 @@ class TestShouldNotTradePatterns:
         }
 
     def test_evaluate_no_trade_exists(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assert callable(evaluate_no_trade)
 
     def test_no_assets_triggers_no_trade(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         result = evaluate_no_trade([])
         assert result.should_skip is True
         assert len(result.reasons) > 0
 
     def test_all_low_quality_triggers(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [
             self._make_asset("MGC", quality=0.30),
@@ -1448,7 +1448,7 @@ class TestShouldNotTradePatterns:
         assert any("quality" in r.lower() for r in result.reasons)
 
     def test_extreme_vol_triggers(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [
             self._make_asset("MGC", quality=0.80, vol_percentile=0.92),
@@ -1458,7 +1458,7 @@ class TestShouldNotTradePatterns:
         assert any("vol" in r.lower() for r in result.reasons)
 
     def test_daily_loss_triggers(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [self._make_asset("MGC", quality=0.80)]
         risk_status = {"daily_pnl": -300.0, "consecutive_losses": 0}
@@ -1467,7 +1467,7 @@ class TestShouldNotTradePatterns:
         assert any("loss" in r.lower() for r in result.reasons)
 
     def test_consecutive_losses_triggers(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [self._make_asset("MGC", quality=0.80)]
         risk_status = {"daily_pnl": -50.0, "consecutive_losses": 3}
@@ -1478,7 +1478,7 @@ class TestShouldNotTradePatterns:
         )
 
     def test_good_conditions_allow_trading(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [
             self._make_asset("MGC", quality=0.75, vol_percentile=0.40),
@@ -1491,14 +1491,14 @@ class TestShouldNotTradePatterns:
         assert len(result.reasons) == 0
 
     def test_result_has_severity(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [self._make_asset("MGC", quality=0.30)]
         result = evaluate_no_trade(assets)
         assert result.severity in ("info", "warning", "critical")
 
     def test_result_to_dict(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [self._make_asset("MGC", quality=0.30)]
         result = evaluate_no_trade(assets)
@@ -1511,7 +1511,7 @@ class TestShouldNotTradePatterns:
         assert "checked_at" in d
 
     def test_publish_and_clear_no_trade_alert(self):
-        from src.lib.services.engine.patterns import (
+        from lib.services.engine.patterns import (
             clear_no_trade_alert,
             evaluate_no_trade,
             publish_no_trade_alert,
@@ -1530,7 +1530,7 @@ class TestShouldNotTradePatterns:
         assert isinstance(cleared, bool)
 
     def test_session_ended_check(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [self._make_asset("MGC", quality=0.80)]
         # 2 PM ET — session has ended
@@ -1542,7 +1542,7 @@ class TestShouldNotTradePatterns:
         )
 
     def test_no_trade_conditions_enum(self):
-        from src.lib.services.engine.patterns import NoTradeCondition
+        from lib.services.engine.patterns import NoTradeCondition
 
         assert hasattr(NoTradeCondition, "ALL_LOW_QUALITY")
         assert hasattr(NoTradeCondition, "EXTREME_VOLATILITY")

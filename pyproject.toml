@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 
 # Runtime dependencies are managed via requirements.txt for Docker builds.
 # This file exists purely to make `pip install -e .` work so that
-# `from src.lib.core.cache import ...` resolves everywhere without
+# `from lib.core.cache import ...` resolves everywhere without
 # PYTHONPATH hacks or sys.path.insert gymnastics.
 
 [tool.hatch.build.targets.wheel]

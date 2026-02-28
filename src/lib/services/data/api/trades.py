@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from src.lib.core.models import (
+from lib.core.models import (
     cancel_trade,
     close_trade,
     create_trade,
@@ -147,13 +147,13 @@ def api_create_trade(req: CreateTradeRequest):
     risk_details: Optional[Dict[str, Any]] = None
 
     try:
-        from src.lib.services.data.api.risk import check_trade_entry_risk
+        from lib.services.data.api.risk import check_trade_entry_risk
 
         # Compute per-contract risk if stop loss is provided
         risk_per_contract = 0.0
         if req.sl and req.sl > 0 and req.entry > 0:
             try:
-                from src.lib.core.models import CONTRACT_SPECS
+                from lib.core.models import CONTRACT_SPECS
 
                 spec = CONTRACT_SPECS.get(req.asset)
                 point_value: float = float(spec["point"]) if spec else 1.0

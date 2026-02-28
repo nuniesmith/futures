@@ -21,13 +21,13 @@ Configuration via environment variables:
 
 Usage in ``main.py``::
 
-    from src.lib.services.data.api.rate_limit import setup_rate_limiting
+    from lib.services.data.api.rate_limit import setup_rate_limiting
 
     setup_rate_limiting(app)
 
 To apply custom limits to specific endpoints::
 
-    from src.lib.services.data.api.rate_limit import get_limiter
+    from lib.services.data.api.rate_limit import get_limiter
 
     limiter = get_limiter()
 

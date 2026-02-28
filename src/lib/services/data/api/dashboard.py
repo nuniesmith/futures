@@ -46,7 +46,7 @@ router = APIRouter(tags=["Dashboard"])
 def _get_focus_data() -> Optional[dict[str, Any]]:
     """Read daily focus payload from Redis."""
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:daily_focus")
         if raw:
@@ -91,7 +91,7 @@ def _get_session_info() -> dict[str, str]:
 def _get_positions() -> list[dict[str, Any]]:
     """Read live positions from Redis."""
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("positions:current")
         if raw:
@@ -104,8 +104,8 @@ def _get_positions() -> list[dict[str, Any]]:
         pass
     # Try the positions router's hashed cache key as fallback
     try:
-        from src.lib.core.cache import cache_get as cg2
-        from src.lib.services.data.api.positions import _POSITIONS_CACHE_KEY
+        from lib.core.cache import cache_get as cg2
+        from lib.services.data.api.positions import _POSITIONS_CACHE_KEY
 
         raw2 = cg2(_POSITIONS_CACHE_KEY)
         if raw2:
@@ -119,7 +119,7 @@ def _get_positions() -> list[dict[str, Any]]:
 def _get_risk_status() -> Optional[dict[str, Any]]:
     """Read risk manager status from Redis."""
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:risk_status")
         if raw:
@@ -132,7 +132,7 @@ def _get_risk_status() -> Optional[dict[str, Any]]:
 def _get_orb_data() -> Optional[dict[str, Any]]:
     """Read the latest ORB (Opening Range Breakout) result from cache (TASK-801)."""
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:orb")
         if raw:
@@ -147,7 +147,7 @@ def _get_orb_data() -> Optional[dict[str, Any]]:
 def _get_grok_update() -> Optional[dict[str, Any]]:
     """Read latest Grok compact update from Redis."""
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:grok_update")
         if raw:
@@ -1237,7 +1237,7 @@ def get_alerts_html():
     # Read alerts from Redis if available
     alerts = []
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:alerts")
         if raw:
@@ -1288,7 +1288,7 @@ def get_time():
     # Try to get engine status
     engine_info = ""
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:status")
         if raw:

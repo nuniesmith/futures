@@ -24,7 +24,7 @@ Per the notes.md blueprint:
   - Reset CVD at market open for intraday anchoring
 
 Usage:
-    from src.lib.cvd import compute_cvd, detect_cvd_divergences, detect_absorption_candles
+    from lib.cvd import compute_cvd, detect_cvd_divergences, detect_absorption_candles
 
     df = get_data("GC=F", "5m", "5d")
     cvd_df = compute_cvd(df)

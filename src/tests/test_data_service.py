@@ -26,7 +26,7 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from src.lib.services.data.main import SafeJSONResponse  # noqa: E402
+from lib.services.data.main import SafeJSONResponse  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -111,7 +111,7 @@ def _use_sqlite_tempdb(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", db_file)
     monkeypatch.setenv("DATABASE_URL", "")
     # Re-init models to pick up new DB_PATH
-    from src.lib.core import models
+    from lib.core import models
 
     models.DB_PATH = db_file
     models.DATABASE_URL = ""
@@ -133,18 +133,18 @@ def _build_test_app(mock_engine):
     background threads.  The mock engine is injected directly into the
     routers that need it.
     """
-    from src.lib.services.data.api.actions import router as actions_router
-    from src.lib.services.data.api.actions import (
+    from lib.services.data.api.actions import router as actions_router
+    from lib.services.data.api.actions import (
         set_engine as actions_set_engine,
     )
-    from src.lib.services.data.api.analysis import router as analysis_router
-    from src.lib.services.data.api.analysis import (
+    from lib.services.data.api.analysis import router as analysis_router
+    from lib.services.data.api.analysis import (
         set_engine as analysis_set_engine,
     )
-    from src.lib.services.data.api.health import router as health_router
-    from src.lib.services.data.api.journal import router as journal_router
-    from src.lib.services.data.api.positions import router as positions_router
-    from src.lib.services.data.api.trades import router as trades_router
+    from lib.services.data.api.health import router as health_router
+    from lib.services.data.api.journal import router as journal_router
+    from lib.services.data.api.positions import router as positions_router
+    from lib.services.data.api.trades import router as trades_router
 
     # Inject the mock engine into routers that need it
     analysis_set_engine(mock_engine)
@@ -207,10 +207,10 @@ def client(mock_engine):
         yield c
 
     # Clean up
-    from src.lib.services.data.api.actions import (
+    from lib.services.data.api.actions import (
         set_engine as actions_set_engine,
     )
-    from src.lib.services.data.api.analysis import (
+    from lib.services.data.api.analysis import (
         set_engine as analysis_set_engine,
     )
 
@@ -1008,10 +1008,10 @@ class TestEngineNotReady:
             yield c
 
         # Restore
-        from src.lib.services.data.api.actions import (
+        from lib.services.data.api.actions import (
             set_engine as actions_set_engine,
         )
-        from src.lib.services.data.api.analysis import (
+        from lib.services.data.api.analysis import (
             set_engine as analysis_set_engine,
         )
 

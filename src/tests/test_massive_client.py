@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.lib.integrations.massive_client import (
+from lib.integrations.massive_client import (
     INTERVAL_TO_RESOLUTION,
     MASSIVE_PRODUCT_TO_YAHOO,
     PERIOD_TO_DAYS,
@@ -1718,7 +1718,7 @@ class TestCacheIntegration:
     def test_get_data_source_yfinance_default(self):
         """Without Massive API key, data source should be yfinance."""
         import src.lib.core.cache as cache
-        from src.lib.core.cache import get_data_source
+        from lib.core.cache import get_data_source
 
         # Directly inject a mock provider that reports unavailable
         mock_provider = MagicMock()
@@ -1735,7 +1735,7 @@ class TestCacheIntegration:
 
     def test_get_data_source_massive_when_available(self):
         import src.lib.core.cache as cache
-        from src.lib.core.cache import get_data_source
+        from lib.core.cache import get_data_source
 
         # Directly inject a mock provider that reports available
         mock_provider = MagicMock()

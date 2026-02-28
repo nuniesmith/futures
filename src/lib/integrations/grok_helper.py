@@ -10,7 +10,7 @@ Cost is extremely low: ~$0.007-0.01 per call, so a full trading day
 (pre-market + ~16 live calls over 4 hours) costs well under $0.20.
 
 Usage:
-    from src.lib.grok_helper import run_live_analysis, run_morning_briefing, format_market_context
+    from lib.grok_helper import run_live_analysis, run_morning_briefing, format_market_context
 
     # Build context from engine + scanner data
     context = format_market_context(engine, scanner_df, account_size, ...)
@@ -143,10 +143,10 @@ def format_market_context(
     specs_text = "\n".join(specs_parts)
 
     # Optimization results from engine cache
-    from src.lib.core.cache import get_cached_optimization
+    from lib.core.cache import get_cached_optimization
 
     opt_parts = []
-    from src.lib.core.models import ASSETS
+    from lib.core.models import ASSETS
 
     for name in selected_assets:
         ticker = ASSETS.get(name)

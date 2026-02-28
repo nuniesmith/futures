@@ -85,46 +85,46 @@ logger = get_logger("data_service")
 # Import routers — these live under src/services/data/api/
 # Bare imports like `from cache import ...` resolve via PYTHONPATH (/app/src).
 # ---------------------------------------------------------------------------
-from src.lib.core.models import init_db  # noqa: E402
-from src.lib.services.data.api.actions import (  # noqa: E402
+from lib.core.models import init_db  # noqa: E402
+from lib.services.data.api.actions import (  # noqa: E402
     router as actions_router,
 )
-from src.lib.services.data.api.actions import (  # noqa: E402
+from lib.services.data.api.actions import (  # noqa: E402
     set_engine as actions_set_engine,
 )
-from src.lib.services.data.api.analysis import (  # noqa: E402
+from lib.services.data.api.analysis import (  # noqa: E402
     router as analysis_router,
 )
-from src.lib.services.data.api.analysis import (  # noqa: E402
+from lib.services.data.api.analysis import (  # noqa: E402
     set_engine as analysis_set_engine,
 )
-from src.lib.services.data.api.audit import router as audit_router  # noqa: E402
-from src.lib.services.data.api.auth import require_api_key  # noqa: E402
-from src.lib.services.data.api.dashboard import (  # noqa: E402
+from lib.services.data.api.audit import router as audit_router  # noqa: E402
+from lib.services.data.api.auth import require_api_key  # noqa: E402
+from lib.services.data.api.dashboard import (  # noqa: E402
     router as dashboard_router,
 )
-from src.lib.services.data.api.health import (  # noqa: E402
+from lib.services.data.api.health import (  # noqa: E402
     router as health_router,
 )
-from src.lib.services.data.api.journal import (  # noqa: E402
+from lib.services.data.api.journal import (  # noqa: E402
     router as journal_router,
 )
-from src.lib.services.data.api.market_data import (  # noqa: E402
+from lib.services.data.api.market_data import (  # noqa: E402
     router as market_data_router,
 )
-from src.lib.services.data.api.metrics import PrometheusMiddleware  # noqa: E402
-from src.lib.services.data.api.metrics import (  # noqa: E402
+from lib.services.data.api.metrics import PrometheusMiddleware  # noqa: E402
+from lib.services.data.api.metrics import (  # noqa: E402
     router as metrics_router,
 )
-from src.lib.services.data.api.positions import (  # noqa: E402
+from lib.services.data.api.positions import (  # noqa: E402
     router as positions_router,
 )
-from src.lib.services.data.api.rate_limit import (  # noqa: E402
+from lib.services.data.api.rate_limit import (  # noqa: E402
     setup_rate_limiting,
 )
-from src.lib.services.data.api.risk import router as risk_router  # noqa: E402
-from src.lib.services.data.api.sse import router as sse_router  # noqa: E402
-from src.lib.services.data.api.trades import (  # noqa: E402
+from lib.services.data.api.risk import router as risk_router  # noqa: E402
+from lib.services.data.api.sse import router as sse_router  # noqa: E402
+from lib.services.data.api.trades import (  # noqa: E402
     router as trades_router,
 )
 
@@ -190,7 +190,7 @@ class _RemoteEngineProxy:
 
     def force_refresh(self) -> None:
         try:
-            from src.lib.core.cache import flush_all
+            from lib.core.cache import flush_all
 
             flush_all()
         except Exception:
@@ -256,7 +256,7 @@ async def lifespan(app: FastAPI):
         _engine = _RemoteEngineProxy()
         logger.info("Using remote engine proxy (reads from Redis)")
     else:
-        from src.lib.trading.engine import get_engine
+        from lib.trading.engine import get_engine
 
         _engine = get_engine(
             account_size=account_size,
@@ -278,7 +278,7 @@ async def lifespan(app: FastAPI):
 
     # 5. Log data source
     try:
-        from src.lib.core.cache import get_data_source
+        from lib.core.cache import get_data_source
 
         ds = get_data_source()
         logger.info("Primary data source: %s", ds)

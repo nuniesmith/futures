@@ -19,7 +19,7 @@ Configuration via environment variables:
   ALERT_COOLDOWN_SEC   — Cooldown period in seconds (default 300 = 5 min)
 
 Usage:
-    from src.lib.alerts import AlertDispatcher, get_dispatcher
+    from lib.alerts import AlertDispatcher, get_dispatcher
 
     dispatcher = get_dispatcher()
 

@@ -3,11 +3,11 @@ lib.core — Core infrastructure modules.
 
 Re-exports the public API from each sub-module so callers can do:
 
-    from src.lib.core import cache_get, cache_set, ASSETS, init_db
+    from lib.core import cache_get, cache_set, ASSETS, init_db
 """
 
-from src.lib.core.alerts import AlertDispatcher, get_dispatcher, send_risk_alert
-from src.lib.core.cache import (
+from lib.core.alerts import AlertDispatcher, get_dispatcher, send_risk_alert
+from lib.core.cache import (
     REDIS_AVAILABLE,
     TTL_DAILY,
     TTL_INTRADAY,
@@ -25,8 +25,8 @@ from src.lib.core.cache import (
     set_cached_indicator,
     set_cached_optimization,
 )
-from src.lib.core.logging_config import get_logger, setup_logging
-from src.lib.core.models import (
+from lib.core.logging_config import get_logger, setup_logging
+from lib.core.models import (
     ACCOUNT_PROFILES,
     ASSETS,
     CONTRACT_MODE,

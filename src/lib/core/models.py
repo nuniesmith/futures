@@ -1606,7 +1606,7 @@ def migrate_sqlite_to_postgres(
     """One-time migration: copy all data from SQLite to Postgres.
 
     Call this manually when transitioning from SQLite to Postgres:
-        from src.lib.models import migrate_sqlite_to_postgres
+        from lib.models import migrate_sqlite_to_postgres
         migrate_sqlite_to_postgres("data/futures_journal.db")
 
     Returns a dict with counts of migrated records.

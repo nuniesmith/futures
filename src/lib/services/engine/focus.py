@@ -20,7 +20,7 @@ Risk rules (from todo.md TASK-203):
     max vol_percentile > 88%
 
 Usage:
-    from src.lib.services.engine.focus import compute_daily_focus, should_not_trade
+    from lib.services.engine.focus import compute_daily_focus, should_not_trade
 
     focus = compute_daily_focus(account_size=50_000)
     if should_not_trade(focus):
@@ -186,11 +186,11 @@ def compute_asset_focus(
     Returns dict with all focus fields, or None on failure.
     """
     try:
-        from src.lib.analysis.signal_quality import compute_signal_quality
-        from src.lib.analysis.volatility import kmeans_volatility_clusters
-        from src.lib.analysis.wave_analysis import calculate_wave_analysis
-        from src.lib.core.cache import get_data
-        from src.lib.core.models import (  # noqa: F401
+        from lib.analysis.signal_quality import compute_signal_quality
+        from lib.analysis.volatility import kmeans_volatility_clusters
+        from lib.analysis.wave_analysis import calculate_wave_analysis
+        from lib.core.cache import get_data
+        from lib.core.models import (  # noqa: F401
             ASSETS,
             CONTRACT_SPECS,
             MICRO_CONTRACT_SPECS,
@@ -340,7 +340,7 @@ def compute_daily_focus(
       - session_mode: current session
     """
     try:
-        from src.lib.core.models import ASSETS
+        from lib.core.models import ASSETS
     except ImportError:
         ASSETS = {}
 
@@ -483,7 +483,7 @@ def publish_focus_to_redis(focus_data: dict[str, Any]) -> bool:
     Returns True on success.
     """
     try:
-        from src.lib.core.cache import REDIS_AVAILABLE, _r, cache_set
+        from lib.core.cache import REDIS_AVAILABLE, _r, cache_set
     except ImportError:
         logger.error("Cannot import cache module")
         return False

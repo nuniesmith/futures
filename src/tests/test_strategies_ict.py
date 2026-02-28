@@ -24,10 +24,10 @@ import pytest
 # Ensure src/ is importable
 # ---------------------------------------------------------------------------
 
-from src.lib.core.alerts import (  # noqa: E402
+from lib.core.alerts import (  # noqa: E402
     AlertDispatcher,
 )
-from src.lib.trading.strategies import (  # noqa: E402
+from lib.trading.strategies import (  # noqa: E402
     STRATEGY_CLASSES,
     STRATEGY_LABELS,
     ICTTrendEMA,
@@ -476,7 +476,7 @@ class TestICTConfluenceArray:
         return _random_walk_ohlcv(n=500, seed=42)
 
     def test_returns_numpy_array(self, df_500):
-        from src.lib.trading.strategies import _ict_confluence_array
+        from lib.trading.strategies import _ict_confluence_array
 
         close = pd.Series(df_500["Close"])
         ema_f = np.asarray(_ema(close, 9))
@@ -495,7 +495,7 @@ class TestICTConfluenceArray:
         assert len(result) == len(df_500)
 
     def test_values_in_valid_range(self, df_500):
-        from src.lib.trading.strategies import _ict_confluence_array
+        from lib.trading.strategies import _ict_confluence_array
 
         close = pd.Series(df_500["Close"])
         ema_f = np.asarray(_ema(close, 9))
@@ -513,7 +513,7 @@ class TestICTConfluenceArray:
         assert np.all(np.abs(result) <= 2.01)
 
     def test_empty_df_returns_zeros(self):
-        from src.lib.trading.strategies import _ict_confluence_array
+        from lib.trading.strategies import _ict_confluence_array
 
         empty = pd.DataFrame(
             columns=pd.Index(["Open", "High", "Low", "Close", "Volume"])
@@ -528,7 +528,7 @@ class TestICTConfluenceArray:
         assert len(result) == 0
 
     def test_short_df_returns_zeros(self):
-        from src.lib.trading.strategies import _ict_confluence_array
+        from lib.trading.strategies import _ict_confluence_array
 
         short = _random_walk_ohlcv(n=20, seed=99)
         close = pd.Series(short["Close"])
@@ -547,7 +547,7 @@ class TestICTConfluenceArray:
 
     def test_impulsive_data_has_nonzero_scores(self):
         """Impulsive data should produce at least some ICT confluence scores."""
-        from src.lib.trading.strategies import _ict_confluence_array
+        from lib.trading.strategies import _ict_confluence_array
 
         df = _impulsive_ohlcv(n=500, seed=77)
         close = pd.Series(df["Close"])
@@ -579,7 +579,7 @@ class TestICTConfluencePerBar:
     """Test _compute_ict_confluence (per-bar helper)."""
 
     def test_returns_dict(self):
-        from src.lib.trading.strategies import _compute_ict_confluence
+        from lib.trading.strategies import _compute_ict_confluence
 
         df = _random_walk_ohlcv(n=200, seed=42)
         result = _compute_ict_confluence(df, bar_index=150, direction="long")
@@ -589,14 +589,14 @@ class TestICTConfluencePerBar:
         assert "score" in result
 
     def test_score_is_nonnegative(self):
-        from src.lib.trading.strategies import _compute_ict_confluence
+        from lib.trading.strategies import _compute_ict_confluence
 
         df = _random_walk_ohlcv(n=200, seed=42)
         result = _compute_ict_confluence(df, bar_index=150, direction="long")
         assert result["score"] >= 0
 
     def test_score_max_is_2(self):
-        from src.lib.trading.strategies import _compute_ict_confluence
+        from lib.trading.strategies import _compute_ict_confluence
 
         df = _impulsive_ohlcv(n=300, seed=77)
         for bar in range(50, 250, 20):
@@ -605,7 +605,7 @@ class TestICTConfluencePerBar:
                 assert result["score"] <= 2
 
     def test_empty_df_returns_zero_score(self):
-        from src.lib.trading.strategies import _compute_ict_confluence
+        from lib.trading.strategies import _compute_ict_confluence
 
         empty = pd.DataFrame(
             columns=pd.Index(["Open", "High", "Low", "Close", "Volume"])
@@ -614,21 +614,21 @@ class TestICTConfluencePerBar:
         assert result["score"] == 0
 
     def test_short_df_returns_zero_score(self):
-        from src.lib.trading.strategies import _compute_ict_confluence
+        from lib.trading.strategies import _compute_ict_confluence
 
         short = _random_walk_ohlcv(n=10, seed=99)
         result = _compute_ict_confluence(short, bar_index=5, direction="short")
         assert result["score"] == 0
 
     def test_ob_sl_is_float_or_none(self):
-        from src.lib.trading.strategies import _compute_ict_confluence
+        from lib.trading.strategies import _compute_ict_confluence
 
         df = _impulsive_ohlcv(n=300, seed=77)
         result = _compute_ict_confluence(df, bar_index=200, direction="long")
         assert result["ob_sl"] is None or isinstance(result["ob_sl"], float)
 
     def test_fvg_tp_is_float_or_none(self):
-        from src.lib.trading.strategies import _compute_ict_confluence
+        from lib.trading.strategies import _compute_ict_confluence
 
         df = _impulsive_ohlcv(n=300, seed=77)
         result = _compute_ict_confluence(df, bar_index=200, direction="short")
@@ -644,7 +644,7 @@ class TestEngineAlertFlags:
     """Test that DashboardEngine respects alert enable/disable flags."""
 
     def test_default_flags_are_true(self):
-        from src.lib.trading.engine import DashboardEngine
+        from lib.trading.engine import DashboardEngine
 
         engine = DashboardEngine(account_size=100_000)
         assert engine._alerts_regime_enabled is True
@@ -652,7 +652,7 @@ class TestEngineAlertFlags:
         assert engine._alerts_signal_enabled is True
 
     def test_flags_can_be_toggled(self):
-        from src.lib.trading.engine import DashboardEngine
+        from lib.trading.engine import DashboardEngine
 
         engine = DashboardEngine(account_size=100_000)
         engine._alerts_regime_enabled = False
@@ -663,7 +663,7 @@ class TestEngineAlertFlags:
         assert engine._alerts_signal_enabled is False
 
     def test_dispatch_regime_alert_suppressed_when_disabled(self):
-        from src.lib.trading.engine import DashboardEngine
+        from lib.trading.engine import DashboardEngine
 
         engine = DashboardEngine(account_size=100_000)
         engine._alerts_regime_enabled = False
@@ -674,7 +674,7 @@ class TestEngineAlertFlags:
             mock_disp.assert_not_called()
 
     def test_dispatch_regime_alert_calls_dispatcher_when_enabled(self):
-        from src.lib.trading.engine import DashboardEngine
+        from lib.trading.engine import DashboardEngine
 
         engine = DashboardEngine(account_size=100_000)
         engine._alerts_regime_enabled = True
@@ -688,7 +688,7 @@ class TestEngineAlertFlags:
             mock_dispatcher.send_regime_change.assert_called_once()
 
     def test_check_confluence_suppressed_when_disabled(self):
-        from src.lib.trading.engine import DashboardEngine
+        from lib.trading.engine import DashboardEngine
 
         engine = DashboardEngine(account_size=100_000)
         engine._alerts_confluence_enabled = False
@@ -702,7 +702,7 @@ class TestEngineFetchTFSafe:
     """Test the _fetch_tf_safe helper for multi-TF data loading."""
 
     def test_returns_dataframe(self):
-        from src.lib.trading.engine import DashboardEngine
+        from lib.trading.engine import DashboardEngine
 
         engine = DashboardEngine(account_size=100_000)
         fake_df = _random_walk_ohlcv(n=100, seed=42)
@@ -713,7 +713,7 @@ class TestEngineFetchTFSafe:
             assert not result.empty
 
     def test_returns_empty_on_failure(self):
-        from src.lib.trading.engine import DashboardEngine
+        from lib.trading.engine import DashboardEngine
 
         engine = DashboardEngine(account_size=100_000)
 
@@ -723,7 +723,7 @@ class TestEngineFetchTFSafe:
             assert result.empty
 
     def test_fallback_to_engine_interval(self):
-        from src.lib.trading.engine import DashboardEngine
+        from lib.trading.engine import DashboardEngine
 
         engine = DashboardEngine(account_size=100_000, interval="5m", period="5d")
         fake_df = _random_walk_ohlcv(n=100, seed=42)
@@ -751,7 +751,7 @@ class TestEngineMultiTFConfluence:
     """Test that the engine uses proper multi-TF intervals for confluence."""
 
     def test_check_confluence_uses_recommended_timeframes(self):
-        from src.lib.trading.engine import DashboardEngine
+        from lib.trading.engine import DashboardEngine
 
         engine = DashboardEngine(account_size=100_000, interval="5m", period="5d")
         engine._alerts_confluence_enabled = True
@@ -978,7 +978,7 @@ class TestEdgeCases:
 
     def test_engine_previous_regimes_tracking(self):
         """Engine should track previous regimes per asset."""
-        from src.lib.trading.engine import DashboardEngine
+        from lib.trading.engine import DashboardEngine
 
         engine = DashboardEngine(account_size=100_000)
         assert engine._previous_regimes == {}
@@ -987,7 +987,7 @@ class TestEdgeCases:
 
     def test_engine_previous_confluence_tracking(self):
         """Engine should track previous confluence scores per asset."""
-        from src.lib.trading.engine import DashboardEngine
+        from lib.trading.engine import DashboardEngine
 
         engine = DashboardEngine(account_size=100_000)
         assert engine._previous_confluence == {}

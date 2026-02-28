@@ -20,7 +20,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # Path setup
 # ---------------------------------------------------------------------------
-from src.lib.integrations.grok_helper import (
+from lib.integrations.grok_helper import (
     DEFAULT_MAX_TOKENS_LIVE_COMPACT,
     GrokSession,
     _enforce_compact_limit,
@@ -518,7 +518,7 @@ class TestGrokSessionCompact:
 class TestRunLiveCompactPrompt:
     def test_compact_prompt_includes_scanner(self):
         """The compact prompt should include scanner text."""
-        from src.lib.integrations.grok_helper import _run_live_compact
+        from lib.integrations.grok_helper import _run_live_compact
 
         captured_prompt = {}
 
@@ -552,7 +552,7 @@ class TestRunLiveCompactPrompt:
         assert result is not None
 
     def test_compact_prompt_uses_lower_max_tokens(self):
-        from src.lib.integrations.grok_helper import _run_live_compact
+        from lib.integrations.grok_helper import _run_live_compact
 
         captured = {}
 
@@ -583,7 +583,7 @@ class TestRunLiveCompactPrompt:
         assert captured["max_tokens"] == DEFAULT_MAX_TOKENS_LIVE_COMPACT
 
     def test_compact_prompt_includes_positions_when_present(self):
-        from src.lib.integrations.grok_helper import _run_live_compact
+        from lib.integrations.grok_helper import _run_live_compact
 
         captured = {}
 
@@ -614,7 +614,7 @@ class TestRunLiveCompactPrompt:
         assert "MGC: LONG x2 @ 2700" in captured["prompt"]
 
     def test_compact_prompt_omits_positions_when_absent(self):
-        from src.lib.integrations.grok_helper import _run_live_compact
+        from lib.integrations.grok_helper import _run_live_compact
 
         captured = {}
 
@@ -646,7 +646,7 @@ class TestRunLiveCompactPrompt:
 
     def test_compact_result_enforced(self):
         """Even if API returns >8 lines, _enforce_compact_limit trims it."""
-        from src.lib.integrations.grok_helper import _run_live_compact
+        from lib.integrations.grok_helper import _run_live_compact
 
         verbose_response = "\n".join(
             [f"ASSET{i} 🟢 {1000 + i} | Bias VALID" for i in range(12)]
@@ -680,7 +680,7 @@ class TestRunLiveCompactPrompt:
 
     def test_compact_api_returns_none(self):
         """If API returns None, result should be None."""
-        from src.lib.integrations.grok_helper import _run_live_compact
+        from lib.integrations.grok_helper import _run_live_compact
 
         with patch(
             "src.lib.integrations.grok_helper._call_grok", return_value=None
@@ -704,7 +704,7 @@ class TestRunLiveCompactPrompt:
         assert result is None
 
     def test_compact_includes_morning_plan_ref(self):
-        from src.lib.integrations.grok_helper import _run_live_compact
+        from lib.integrations.grok_helper import _run_live_compact
 
         captured = {}
 
@@ -743,23 +743,23 @@ class TestRunLiveCompactPrompt:
 
 class TestCompactSystemPrompt:
     def test_system_prompt_mentions_line_limit(self):
-        from src.lib.integrations.grok_helper import _COMPACT_SYSTEM
+        from lib.integrations.grok_helper import _COMPACT_SYSTEM
 
         assert "8 lines" in _COMPACT_SYSTEM.lower() or "8" in _COMPACT_SYSTEM
 
     def test_system_prompt_mentions_do_now(self):
-        from src.lib.integrations.grok_helper import _COMPACT_SYSTEM
+        from lib.integrations.grok_helper import _COMPACT_SYSTEM
 
         assert "DO NOW" in _COMPACT_SYSTEM
 
     def test_system_prompt_mentions_emoji_rules(self):
-        from src.lib.integrations.grok_helper import _COMPACT_SYSTEM
+        from lib.integrations.grok_helper import _COMPACT_SYSTEM
 
         assert "🟢" in _COMPACT_SYSTEM
         assert "🔴" in _COMPACT_SYSTEM
 
     def test_system_prompt_mentions_no_dollar_signs(self):
-        from src.lib.integrations.grok_helper import _COMPACT_SYSTEM
+        from lib.integrations.grok_helper import _COMPACT_SYSTEM
 
         assert "USD" in _COMPACT_SYSTEM
 
@@ -771,7 +771,7 @@ class TestCompactSystemPrompt:
 
 class TestCompactTokenLimit:
     def test_compact_tokens_less_than_verbose(self):
-        from src.lib.integrations.grok_helper import (
+        from lib.integrations.grok_helper import (
             DEFAULT_MAX_TOKENS_LIVE,
             DEFAULT_MAX_TOKENS_LIVE_COMPACT,
         )

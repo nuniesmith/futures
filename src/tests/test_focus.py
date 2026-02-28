@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from src.lib.services.engine.focus import (
+from lib.services.engine.focus import (
     MIN_QUALITY_THRESHOLD,
     _compute_entry_zone,
     _compute_position_size,
@@ -379,7 +379,7 @@ class TestComputeDailyFocusPayload:
     @patch("src.lib.services.engine.focus.compute_asset_focus")
     def test_payload_structure(self, mock_asset_focus):
         """Verify the top-level focus payload has all required fields."""
-        from src.lib.services.engine.focus import compute_daily_focus
+        from lib.services.engine.focus import compute_daily_focus
 
         mock_asset_focus.return_value = {
             "symbol": "Gold",
@@ -428,7 +428,7 @@ class TestComputeDailyFocusPayload:
     @patch("src.lib.services.engine.focus.compute_asset_focus")
     def test_sorts_by_quality_desc(self, mock_asset_focus):
         """Assets should be sorted by quality (best first)."""
-        from src.lib.services.engine.focus import compute_daily_focus
+        from lib.services.engine.focus import compute_daily_focus
 
         def side_effect(name, account_size=50_000):
             qualities = {"Gold": 0.8, "Nasdaq": 0.6, "S&P": 0.9}
@@ -478,7 +478,7 @@ class TestComputeDailyFocusPayload:
     @patch("src.lib.services.engine.focus.compute_asset_focus")
     def test_no_trade_when_all_low_quality(self, mock_asset_focus):
         """Should flag no_trade when all assets are below quality threshold."""
-        from src.lib.services.engine.focus import compute_daily_focus
+        from lib.services.engine.focus import compute_daily_focus
 
         mock_asset_focus.return_value = {
             "symbol": "Gold",
@@ -561,7 +561,7 @@ class TestPublishFocusToRedis:
         """Should write focus payload to engine:daily_focus key."""
         mock_cache = self._ensure_mock_cache()
 
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         data = {
             "assets": [],
@@ -583,7 +583,7 @@ class TestPublishFocusToRedis:
         """Should handle data that can't be JSON-serialized."""
         self._ensure_mock_cache()
 
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         # datetime objects are handled via default=str
         data = {

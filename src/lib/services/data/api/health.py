@@ -25,7 +25,7 @@ router = APIRouter(tags=["health"])
 def _check_redis() -> dict[str, Any]:
     """Check Redis connectivity."""
     try:
-        from src.lib.core.cache import REDIS_AVAILABLE, _r
+        from lib.core.cache import REDIS_AVAILABLE, _r
 
         if REDIS_AVAILABLE and _r is not None:
             _r.ping()
@@ -38,7 +38,7 @@ def _check_redis() -> dict[str, Any]:
 def _get_engine_or_none():
     """Try to get the engine singleton without raising."""
     try:
-        from src.lib.trading.engine import get_engine
+        from lib.trading.engine import get_engine
 
         return get_engine()
     except Exception:
@@ -122,7 +122,7 @@ def metrics():
                 pass
 
             try:
-                from src.lib.core.models import ASSETS
+                from lib.core.models import ASSETS
 
                 result["tracked_assets_count"] = len(ASSETS)
             except Exception:
@@ -132,7 +132,7 @@ def metrics():
 
     # Redis key count (if available)
     try:
-        from src.lib.core.cache import REDIS_AVAILABLE, _r
+        from lib.core.cache import REDIS_AVAILABLE, _r
 
         if REDIS_AVAILABLE and _r is not None:
             futures_keys = list(_r.scan_iter("futures:*", count=1000))
@@ -157,7 +157,7 @@ def backfill_status():
     data is available for optimization and backtesting.
     """
     try:
-        from src.lib.services.engine.backfill import get_backfill_status
+        from lib.services.engine.backfill import get_backfill_status
 
         status = get_backfill_status()
         return {
@@ -196,7 +196,7 @@ def backfill_gaps(symbol: str, days_back: int = 30):
         and a list of significant gaps (>30 minutes).
     """
     try:
-        from src.lib.services.engine.backfill import get_gap_report
+        from lib.services.engine.backfill import get_gap_report
 
         report = get_gap_report(symbol, days_back=days_back)
         return {

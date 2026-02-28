@@ -14,7 +14,7 @@ Covers:
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from src.lib.services.engine.scheduler import (
+from lib.services.engine.scheduler import (
     ActionType,
     ScheduleManager,
     SessionMode,

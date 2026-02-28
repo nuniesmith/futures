@@ -15,14 +15,14 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query
 
-from src.lib.core.cache import (
+from lib.core.cache import (
     _cache_key,
     cache_get,
     flush_all,
     get_cached_optimization,
     get_data_source,
 )
-from src.lib.core.models import (
+from lib.core.models import (
     ACCOUNT_PROFILES,
     ASSETS,
     CONTRACT_SPECS,

@@ -19,7 +19,7 @@ import time
 
 # Ensure src/ is importable
 
-from src.lib.core.alerts import (  # noqa: E402
+from lib.core.alerts import (  # noqa: E402
     AlertDispatcher,
     _AlertStore,
     get_dispatcher,

@@ -19,7 +19,7 @@ Public API:
 The status dict is published to Redis for dashboard consumption.
 
 Usage:
-    from src.lib.services.engine.risk import RiskManager
+    from lib.services.engine.risk import RiskManager
 
     rm = RiskManager(account_size=50_000)
     allowed, reason = rm.can_enter_trade("MGC", "LONG", 2)
@@ -511,7 +511,7 @@ class RiskManager:
         Returns True on success.
         """
         try:
-            from src.lib.core.cache import REDIS_AVAILABLE, _r, cache_set
+            from lib.core.cache import REDIS_AVAILABLE, _r, cache_set
         except ImportError:
             logger.error("Cannot import cache module")
             return False

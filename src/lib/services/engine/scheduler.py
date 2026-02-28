@@ -15,7 +15,7 @@ has already run within each session to avoid redundant work (e.g. daily
 focus is computed once per pre-market window, not every loop iteration).
 
 Usage:
-    from src.lib.services.engine.scheduler import ScheduleManager
+    from lib.services.engine.scheduler import ScheduleManager
 
     mgr = ScheduleManager()
     while running:

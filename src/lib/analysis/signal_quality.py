@@ -25,7 +25,7 @@ Design decisions:
   - Result includes individual factor scores for debugging/dashboard
 
 Usage:
-    from src.lib.signal_quality import compute_signal_quality
+    from lib.signal_quality import compute_signal_quality
 
     result = compute_signal_quality(
         df,

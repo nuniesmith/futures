@@ -19,7 +19,7 @@ import pytest
 # ---------------------------------------------------------------------------
 from conftest import _random_walk_ohlcv, _trending_ohlcv
 
-from src.lib.analysis.cvd import (
+from lib.analysis.cvd import (
     _estimate_buy_volume,
     compute_cvd,
     cvd_confirms_trend,

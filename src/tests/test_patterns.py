@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from src.lib.services.engine.patterns import (
+from lib.services.engine.patterns import (
     DEFAULT_EXTREME_VOL,
     DEFAULT_LATE_SESSION_HOUR,
     DEFAULT_MAX_CONSECUTIVE_LOSSES,

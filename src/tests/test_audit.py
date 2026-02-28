@@ -32,7 +32,7 @@ def tmp_db(tmp_path):
     """Create a temporary SQLite database and patch models to use it."""
     db_path = str(tmp_path / "test_audit.db")
 
-    from src.lib.core import models
+    from lib.core import models
 
     orig_db_path = models.DB_PATH
     orig_use_pg = models._USE_POSTGRES
@@ -53,7 +53,7 @@ def tmp_db(tmp_path):
 @pytest.fixture()
 def populated_db(tmp_db):
     """A database pre-populated with sample risk and ORB events."""
-    from src.lib.core import models
+    from lib.core import models
 
     # Insert risk events
     models.record_risk_event(
@@ -239,7 +239,7 @@ class TestAuditTableCreation:
 
     def test_init_db_idempotent(self, tmp_db):
         """Calling init_db twice should not fail."""
-        from src.lib.core import models
+        from lib.core import models
 
         models.init_db()
         models.init_db()
@@ -270,7 +270,7 @@ class TestRecordRiskEvent:
     """Test record_risk_event and get_risk_events."""
 
     def test_insert_returns_id(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         row_id = models.record_risk_event(
             event_type="block",
@@ -283,7 +283,7 @@ class TestRecordRiskEvent:
         assert row_id > 0
 
     def test_insert_stores_all_fields(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         meta = {"extra_info": "test_value"}
         models.record_risk_event(
@@ -316,7 +316,7 @@ class TestRecordRiskEvent:
         assert parsed_meta["extra_info"] == "test_value"
 
     def test_insert_with_defaults(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         row_id = models.record_risk_event(event_type="clear")
         assert row_id is not None
@@ -331,7 +331,7 @@ class TestRecordRiskEvent:
 
     def test_get_risk_events_order(self, populated_db):
         """Events should be returned most recent first."""
-        from src.lib.core import models
+        from lib.core import models
 
         events = models.get_risk_events(limit=10)
         assert len(events) == 4
@@ -339,13 +339,13 @@ class TestRecordRiskEvent:
         assert events[0]["event_type"] == "clear"
 
     def test_get_risk_events_limit(self, populated_db):
-        from src.lib.core import models
+        from lib.core import models
 
         events = models.get_risk_events(limit=2)
         assert len(events) == 2
 
     def test_get_risk_events_filter_event_type(self, populated_db):
-        from src.lib.core import models
+        from lib.core import models
 
         events = models.get_risk_events(event_type="block")
         assert len(events) == 2
@@ -353,7 +353,7 @@ class TestRecordRiskEvent:
             assert ev["event_type"] == "block"
 
     def test_get_risk_events_filter_symbol(self, populated_db):
-        from src.lib.core import models
+        from lib.core import models
 
         events = models.get_risk_events(symbol="MGC")
         assert len(events) == 2
@@ -361,7 +361,7 @@ class TestRecordRiskEvent:
             assert ev["symbol"] == "MGC"
 
     def test_get_risk_events_filter_combined(self, populated_db):
-        from src.lib.core import models
+        from lib.core import models
 
         events = models.get_risk_events(event_type="block", symbol="MGC")
         assert len(events) == 2
@@ -370,7 +370,7 @@ class TestRecordRiskEvent:
         assert len(events) == 0
 
     def test_get_risk_events_filter_since(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         # Insert events with a known time gap
         models.record_risk_event(event_type="block", reason="old event")
@@ -383,7 +383,7 @@ class TestRecordRiskEvent:
         assert events[0]["reason"] == "new event"
 
     def test_multiple_inserts_unique_ids(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         ids = []
         for i in range(5):
@@ -392,7 +392,7 @@ class TestRecordRiskEvent:
         assert len(set(ids)) == 5
 
     def test_metadata_none_defaults_to_empty_json(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         models.record_risk_event(event_type="clear", metadata=None)
         events = models.get_risk_events(limit=1)
@@ -408,7 +408,7 @@ class TestRecordORBEvent:
     """Test record_orb_event and get_orb_events."""
 
     def test_insert_returns_id(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         row_id = models.record_orb_event(
             symbol="MGC",
@@ -422,7 +422,7 @@ class TestRecordORBEvent:
         assert row_id > 0
 
     def test_insert_stores_all_fields(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         meta = {"atr_period": 14}
         models.record_orb_event(
@@ -461,14 +461,14 @@ class TestRecordORBEvent:
         assert parsed_meta["atr_period"] == 14
 
     def test_breakout_false_stored_as_zero(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         models.record_orb_event(symbol="MNQ", breakout_detected=False)
         events = models.get_orb_events(limit=1)
         assert events[0]["breakout_detected"] == 0
 
     def test_get_orb_events_order(self, populated_db):
-        from src.lib.core import models
+        from lib.core import models
 
         events = models.get_orb_events(limit=10)
         assert len(events) == 3
@@ -476,13 +476,13 @@ class TestRecordORBEvent:
         assert events[0]["direction"] == "SHORT"
 
     def test_get_orb_events_limit(self, populated_db):
-        from src.lib.core import models
+        from lib.core import models
 
         events = models.get_orb_events(limit=1)
         assert len(events) == 1
 
     def test_get_orb_events_filter_symbol(self, populated_db):
-        from src.lib.core import models
+        from lib.core import models
 
         events = models.get_orb_events(symbol="MGC")
         assert len(events) == 2
@@ -490,7 +490,7 @@ class TestRecordORBEvent:
             assert ev["symbol"] == "MGC"
 
     def test_get_orb_events_filter_breakout_only(self, populated_db):
-        from src.lib.core import models
+        from lib.core import models
 
         events = models.get_orb_events(breakout_only=True)
         assert len(events) == 2
@@ -498,7 +498,7 @@ class TestRecordORBEvent:
             assert ev["breakout_detected"] == 1
 
     def test_get_orb_events_filter_combined(self, populated_db):
-        from src.lib.core import models
+        from lib.core import models
 
         events = models.get_orb_events(symbol="MGC", breakout_only=True)
         assert len(events) == 2
@@ -507,7 +507,7 @@ class TestRecordORBEvent:
         assert len(events) == 0
 
     def test_get_orb_events_filter_since(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         models.record_orb_event(symbol="OLD", breakout_detected=False)
         cutoff = datetime.now(tz=_EST).isoformat()
@@ -528,7 +528,7 @@ class TestAuditSummary:
     """Test get_audit_summary aggregation."""
 
     def test_summary_counts(self, populated_db):
-        from src.lib.core import models
+        from lib.core import models
 
         summary = models.get_audit_summary(days_back=7)
         assert summary["days_back"] == 7
@@ -539,7 +539,7 @@ class TestAuditSummary:
         assert summary["orb_events"]["breakouts"] == 2
 
     def test_summary_by_symbol(self, populated_db):
-        from src.lib.core import models
+        from lib.core import models
 
         summary = models.get_audit_summary(days_back=7)
         risk_by_sym = summary["risk_events"]["by_symbol"]
@@ -551,14 +551,14 @@ class TestAuditSummary:
         assert orb_by_sym["MGC"] == 2
 
     def test_summary_empty_db(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         summary = models.get_audit_summary(days_back=7)
         assert summary["risk_events"]["total"] == 0
         assert summary["orb_events"]["total"] == 0
 
     def test_summary_custom_days(self, populated_db):
-        from src.lib.core import models
+        from lib.core import models
 
         summary = models.get_audit_summary(days_back=1)
         # All events were just inserted, so should all be within 1 day
@@ -578,7 +578,7 @@ def audit_app(tmp_db):
 
     app = FastAPI()
 
-    from src.lib.services.data.api.audit import router as audit_router
+    from lib.services.data.api.audit import router as audit_router
 
     app.include_router(audit_router, prefix="/audit")
 
@@ -594,7 +594,7 @@ def populated_audit_app(populated_db):
 
     app = FastAPI()
 
-    from src.lib.services.data.api.audit import router as audit_router
+    from lib.services.data.api.audit import router as audit_router
 
     app.include_router(audit_router, prefix="/audit")
 
@@ -642,7 +642,7 @@ class TestAuditAPIGetRiskEvents:
 
     def test_get_risk_events_has_metadata_parsed(self, audit_app):
         """Events with metadata_json should have parsed metadata in response."""
-        from src.lib.core import models
+        from lib.core import models
 
         models.record_risk_event(
             event_type="block",
@@ -868,7 +868,7 @@ class TestEngineAuditPersistence:
     """Test _persist_risk_event and _persist_orb_event from engine/main.py."""
 
     def test_persist_risk_event(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         # Mock the ScheduleManager to avoid import issues
         mock_scheduler = MagicMock()
@@ -911,7 +911,7 @@ class TestEngineAuditPersistence:
         assert events[0]["session"] == "active"
 
     def test_persist_orb_event(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         row_id = models.record_orb_event(
             symbol="MES",
@@ -936,7 +936,7 @@ class TestEngineAuditPersistence:
 
     def test_record_risk_event_handles_db_error_gracefully(self, tmp_db):
         """If the DB write fails, it should return None, not raise."""
-        from src.lib.core import models
+        from lib.core import models
 
         # Break the DB path to simulate an error
         original = models.DB_PATH
@@ -950,7 +950,7 @@ class TestEngineAuditPersistence:
         models.DB_PATH = original
 
     def test_record_orb_event_handles_db_error_gracefully(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         original = models.DB_PATH
         models.DB_PATH = "/nonexistent/path/db.sqlite"
@@ -971,7 +971,7 @@ class TestAuditEdgeCases:
     """Test edge cases and boundary conditions."""
 
     def test_large_reason_string(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         long_reason = "A" * 10000
         row_id = models.record_risk_event(event_type="block", reason=long_reason)
@@ -981,7 +981,7 @@ class TestAuditEdgeCases:
         assert events[0]["reason"] == long_reason
 
     def test_special_characters_in_reason(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         special = (
             "Can't trade: $500 loss > $250 limit; consecutive losses = 3 & ratio < 0.5"
@@ -993,7 +993,7 @@ class TestAuditEdgeCases:
         assert events[0]["reason"] == special
 
     def test_unicode_in_metadata(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         meta = {"note": "Japanese: 日本語, Emoji: 📊🔔"}
         row_id = models.record_risk_event(event_type="warning", metadata=meta)
@@ -1006,21 +1006,21 @@ class TestAuditEdgeCases:
 
     def test_zero_limit_query(self, populated_db):
         """Limit of 1 is the minimum — 0 should be rejected by API validation."""
-        from src.lib.core import models
+        from lib.core import models
 
         # The raw function doesn't validate, so limit=0 returns nothing
         events = models.get_risk_events(limit=0)
         assert events == []
 
     def test_negative_pnl_values(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         models.record_risk_event(event_type="block", daily_pnl=-99999.99)
         events = models.get_risk_events(limit=1)
         assert events[0]["daily_pnl"] == pytest.approx(-99999.99)
 
     def test_float_precision_orb(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         models.record_orb_event(
             symbol="MGC",
@@ -1033,7 +1033,7 @@ class TestAuditEdgeCases:
 
     def test_concurrent_inserts(self, tmp_db):
         """Multiple rapid inserts should not conflict."""
-        from src.lib.core import models
+        from lib.core import models
 
         ids = []
         for i in range(20):
@@ -1049,14 +1049,14 @@ class TestAuditEdgeCases:
         assert len(events) == 20
 
     def test_empty_metadata_roundtrip(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         models.record_risk_event(event_type="clear", metadata={})
         events = models.get_risk_events(limit=1)
         assert events[0]["metadata_json"] == "{}"
 
     def test_complex_metadata_roundtrip(self, tmp_db):
-        from src.lib.core import models
+        from lib.core import models
 
         meta = {
             "rules_checked": ["max_daily_loss", "max_open_trades", "entry_cutoff"],

@@ -19,7 +19,7 @@ The key rule is to maintain a 4–6× factor between timeframes (not 5/10/15,
 which are too close together).
 
 Usage:
-    from src.lib.confluence import (
+    from lib.confluence import (
         MultiTimeframeFilter,
         check_confluence,
         get_recommended_timeframes,

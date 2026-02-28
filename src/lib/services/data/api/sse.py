@@ -126,7 +126,7 @@ def _make_session_event(session_mode: str) -> str:
 def _get_redis():
     """Get the Redis client from cache module, or None."""
     try:
-        from src.lib.core.cache import REDIS_AVAILABLE, _r
+        from lib.core.cache import REDIS_AVAILABLE, _r
 
         if REDIS_AVAILABLE and _r is not None:
             return _r
@@ -172,7 +172,7 @@ def _get_catchup_messages(count: int = _CATCHUP_COUNT) -> list[dict[str, str]]:
 def _get_focus_from_cache() -> Optional[str]:
     """Read the current focus JSON from Redis cache."""
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:daily_focus")
         if raw:
@@ -185,7 +185,7 @@ def _get_focus_from_cache() -> Optional[str]:
 def _get_positions_from_cache() -> Optional[str]:
     """Read current positions from Redis cache."""
     try:
-        from src.lib.core.cache import _cache_key, cache_get
+        from lib.core.cache import _cache_key, cache_get
 
         key = _cache_key("live_positions", "current")
         raw = cache_get(key)
@@ -199,7 +199,7 @@ def _get_positions_from_cache() -> Optional[str]:
 def _get_engine_status() -> Optional[dict[str, Any]]:
     """Read engine status from Redis."""
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:status")
         if raw:
@@ -212,7 +212,7 @@ def _get_engine_status() -> Optional[dict[str, Any]]:
 def _get_grok_from_cache() -> Optional[str]:
     """Read the latest Grok compact update from Redis cache (TASK-602)."""
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:grok_update")
         if raw:
@@ -225,7 +225,7 @@ def _get_grok_from_cache() -> Optional[str]:
 def _get_risk_from_cache() -> Optional[str]:
     """Read the latest risk status from Redis cache."""
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:risk_status")
         if raw:
@@ -238,7 +238,7 @@ def _get_risk_from_cache() -> Optional[str]:
 def _get_orb_from_cache() -> Optional[str]:
     """Read the latest Opening Range Breakout result from Redis cache (TASK-801)."""
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:orb")
         if raw:

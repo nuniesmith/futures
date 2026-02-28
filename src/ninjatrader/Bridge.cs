@@ -14,6 +14,7 @@ using NinjaTrader.Cbi;
 using NinjaTrader.Data;
 using NinjaTrader.Gui.Tools;
 using NinjaTrader.NinjaScript;
+using NinjaTrader.NinjaScript.Indicators;
 using NinjaTrader.NinjaScript.Strategies;
 #endregion
 
@@ -28,6 +29,11 @@ namespace NinjaTrader.NinjaScript.Strategies
         private bool lastPushSuccess = true;
         private DateTime lastErrorLog = DateTime.MinValue;
         private DateTime lastHeartbeat = DateTime.MinValue;
+
+        // Ruby indicator reference — instantiated during Configure so that
+        // Ruby.OnBarUpdate() runs on every bar, pushing signals into SignalBus.
+        // This is what makes backtesting via Strategy Analyzer work.
+        private Ruby rubyIndicator;
 
         // Order queue: signals are queued here, then processed on the main
         // thread in OnBarUpdate to avoid cross-thread NinjaScript exceptions.
@@ -105,20 +111,141 @@ namespace NinjaTrader.NinjaScript.Strategies
         public int MaxMicroContracts { get; set; } = 10;
         #endregion
 
+        [NinjaScriptProperty]
+        [Display(Name = "Enable SignalBus", GroupName = "3. Options", Order = 6,
+                 Description = "Consume in-process signals from Ruby indicator via SignalBus (required for backtest, also works live)")]
+        public bool EnableSignalBus { get; set; } = true;
+
+        [NinjaScriptProperty]
+        [Display(Name = "Attach Ruby Indicator", GroupName = "3. Options", Order = 7,
+                 Description = "Instantiate Ruby indicator on the chart so its signals feed the SignalBus during backtests")]
+        public bool AttachRuby { get; set; } = true;
+
+        #region Ruby Indicator Parameters (forwarded)
+        // These are forwarded to the Ruby indicator when AttachRuby is true.
+        // They mirror Ruby's ORB parameters so you can tune from Bridge's property grid.
+        [NinjaScriptProperty]
+        [Display(Name = "Ruby: Session Bias", GroupName = "5. Ruby ORB", Order = 1)]
+        public RubySessionBias RubySessionBias { get; set; } = RubySessionBias.Auto;
+
+        [NinjaScriptProperty]
+        [Range(5, 120)]
+        [Display(Name = "Ruby: ORB Minutes", GroupName = "5. Ruby ORB", Order = 2)]
+        public int RubyORB_Minutes { get; set; } = 30;
+
+        [NinjaScriptProperty]
+        [Range(30, 95)]
+        [Display(Name = "Ruby: Min Quality %", GroupName = "5. Ruby ORB", Order = 3)]
+        public int RubyORB_MinQuality { get; set; } = 60;
+
+        [NinjaScriptProperty]
+        [Range(0.5, 3.0)]
+        [Display(Name = "Ruby: Volume Gate (x avg)", GroupName = "5. Ruby ORB", Order = 4)]
+        public double RubyORB_VolumeGate { get; set; } = 1.2;
+
+        [NinjaScriptProperty]
+        [Display(Name = "Ruby: Require VWAP Cross", GroupName = "5. Ruby ORB", Order = 5)]
+        public bool RubyORB_RequireVWAPCross { get; set; } = true;
+
+        [NinjaScriptProperty]
+        [Display(Name = "Ruby: Allow ADD Signal", GroupName = "5. Ruby ORB", Order = 6)]
+        public bool RubyORB_AllowAdd { get; set; } = true;
+
+        [NinjaScriptProperty]
+        [Range(0.5, 5.0)]
+        [Display(Name = "Ruby: SL ATR Mult", GroupName = "5. Ruby ORB", Order = 7)]
+        public double RubySL_ATR_Mult { get; set; } = 1.5;
+
+        [NinjaScriptProperty]
+        [Range(0.5, 10.0)]
+        [Display(Name = "Ruby: TP1 ATR Mult", GroupName = "5. Ruby ORB", Order = 8)]
+        public double RubyTP1_ATR_Mult { get; set; } = 2.0;
+
+        [NinjaScriptProperty]
+        [Range(0.5, 15.0)]
+        [Display(Name = "Ruby: TP2 ATR Mult", GroupName = "5. Ruby ORB", Order = 9)]
+        public double RubyTP2_ATR_Mult { get; set; } = 3.5;
+
+        [NinjaScriptProperty]
+        [Range(1, 60)]
+        [Display(Name = "Ruby: Signal Cooldown (min)", GroupName = "5. Ruby ORB", Order = 10)]
+        public int RubySignalCooldownMinutes { get; set; } = 5;
+        #endregion
+
         #endregion
 
         protected override void OnStateChange()
         {
             if (State == State.SetDefaults)
             {
-                Description = "Two-way bridge: pushes live positions/account to dashboard, receives order signals with targets and risk enforcement";
+                Description = "Two-way bridge: pushes live positions/account to dashboard, receives order signals with targets and risk enforcement. Attach Ruby indicator for ORB backtest.";
                 Name = "Bridge";
-                Calculate = Calculate.OnEachTick;
+                Calculate = Calculate.OnBarClose;
                 IsOverlay = false;
+                IsUnmanaged = true;
+                EnableSignalBus = true;
+                AttachRuby = true;
             }
             else if (State == State.Configure)
             {
                 httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+
+                // Attach Ruby indicator so it runs on every bar and pushes
+                // signals to SignalBus.  This is what makes backtesting work —
+                // without this, Ruby never executes during Strategy Analyzer.
+                if (AttachRuby && EnableSignalBus)
+                {
+                    rubyIndicator = Ruby(
+                        /* SR_Lookback */        20,
+                        /* AO_Fast */            5,
+                        /* AO_Slow */            34,
+                        /* WaveLookback */       200,
+                        /* MinWaveRatio */       1.5,
+                        /* RegressionLength */   200,
+                        /* VP_Lookback */        100,
+                        /* VP_Bins */            40,
+                        /* ValueAreaPct */       70,
+                        /* SessionPOC_MaxDays */ 5,
+                        /* NakedPOC_Enabled */   true,
+                        /* VolumeAvgPeriod */    20,
+                        /* VolumeSpikeMult */    1.8,
+                        /* VolumeLowMult */      0.5,
+                        /* LowVolStreakBars */   3,
+                        /* AbsorptionVolMult */  1.5,
+                        /* AbsorptionBodyRatio */ 30,
+                        /* CVD_AnchorDaily */    true,
+                        /* ShowEMA9 */           true,
+                        /* ShowBollingerBands */ false,
+                        /* ShowAdaptiveSR */     false,
+                        /* ShowLabels */         true,
+                        /* ShowVolumeLabels */   false,
+                        /* HeatSensitivity */    70,
+                        /* SignalCooldownMin */   RubySignalCooldownMinutes,
+                        /* ShowVWAP */           true,
+                        /* ShowVWAPBands */      false,
+                        /* ShowPOC */            true,
+                        /* ShowValueArea */      false,
+                        /* ShowDeltaOutline */   false,
+                        /* ShowOpeningRange */   true,
+                        /* SessionBias */        RubySessionBias,
+                        /* ORB_Minutes */        RubyORB_Minutes,
+                        /* ORB_MinQuality */     RubyORB_MinQuality,
+                        /* ORB_VolumeGate */     RubyORB_VolumeGate,
+                        /* ORB_RequireVWAPCross */ RubyORB_RequireVWAPCross,
+                        /* ORB_AllowAdd */       RubyORB_AllowAdd,
+                        /* ORB_AddPullbackATR */ 0.5,
+                        /* ORB_MaxAddBarsAfterBreakout */ 30,
+                        /* SendSignalsToBridge */ true,
+                        /* BridgeUrl */          "http://localhost:" + SignalListenerPort,
+                        /* ExitOnReversal */     true,
+                        /* ExitOnBBTouch */      true,
+                        /* ExitCooldownMinutes */ 3,
+                        /* SL_ATR_Mult */        RubySL_ATR_Mult,
+                        /* TP1_ATR_Mult */       RubyTP1_ATR_Mult,
+                        /* TP2_ATR_Mult */       RubyTP2_ATR_Mult
+                    );
+                    Print("[Bridge] Ruby indicator attached for SignalBus integration");
+                }
 
                 lock (Account.All)
                     myAccount = Account.All.FirstOrDefault(a => a.Name == AccountName);
@@ -130,8 +257,27 @@ namespace NinjaTrader.NinjaScript.Strategies
                     Print($"[Bridge] Monitoring account: {myAccount.Name}");
                 }
 
+                // Register as a SignalBus consumer so Ruby (and other indicators)
+                // can forward signals in-process — works in both live and backtest.
+                if (EnableSignalBus)
+                {
+                    SignalBus.Reset();
+                    SignalBus.RegisterConsumer();
+                    Print("[Bridge] SignalBus consumer registered");
+                }
+
+                // Only start HTTP listener in live/sim — it would fail or be
+                // pointless during a Strategy Analyzer backtest.
+                // (Listener start is deferred to State.Realtime below.)
+            }
+            else if (State == State.Realtime)
+            {
+                // Start the HTTP signal listener only when we reach Realtime.
+                // During Historical (backtest) the listener is not needed
+                // because signals arrive via SignalBus.
                 StartSignalListener();
                 SendPositionUpdate();
+                Print("[Bridge] Realtime — HTTP listener started");
             }
             else if (State == State.Terminated)
             {
@@ -144,9 +290,17 @@ namespace NinjaTrader.NinjaScript.Strategies
                     }
                 }
                 catch { }
+
+                if (EnableSignalBus)
+                {
+                    SignalBus.UnregisterConsumer();
+                    Print($"[Bridge] SignalBus unregistered (total enqueued={SignalBus.TotalEnqueued}, drained={SignalBus.TotalDrained})");
+                }
+
                 StopSignalListener();
                 try { httpClient?.Dispose(); } catch { }
                 httpClient = null;
+                rubyIndicator = null;
             }
         }
 
@@ -458,27 +612,247 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             try
             {
-                if (State != State.Realtime) return;
+                // ── SignalBus: drain in-process signals from Ruby / other indicators ──
+                // This runs in ALL states (Historical, Realtime, etc.) so that
+                // backtesting via Strategy Analyzer works correctly.
+                if (EnableSignalBus)
+                    DrainSignalBus();
 
-                // Process queued order actions on the main thread
-                lock (queueLock)
+                // Process queued order actions on the main thread.
+                // In Realtime the queue is fed by the HTTP listener and by DrainSignalBus.
+                // In Historical the queue is fed only by DrainSignalBus (for legacy path).
+                bool canSubmit = State == State.Realtime || State == State.Historical;
+                if (canSubmit)
                 {
-                    while (orderQueue.Count > 0)
+                    lock (queueLock)
                     {
-                        var action = orderQueue.Dequeue();
-                        try { action(); }
-                        catch (Exception ex) { ThrottledLog($"Queued order error: {ex.Message}"); }
+                        while (orderQueue.Count > 0)
+                        {
+                            var action = orderQueue.Dequeue();
+                            try { action(); }
+                            catch (Exception ex) { ThrottledLog($"Queued order error: {ex.Message}"); }
+                        }
                     }
                 }
 
-                // Periodic heartbeat
-                if ((DateTime.Now - lastHeartbeat).TotalSeconds >= HEARTBEAT_INTERVAL_SECONDS)
+                if (State != State.Realtime && State != State.Historical) return;
+
+                // Periodic heartbeat (live/sim only — skip during backtest)
+                if (State == State.Realtime
+                    && (DateTime.Now - lastHeartbeat).TotalSeconds >= HEARTBEAT_INTERVAL_SECONDS)
                 {
                     lastHeartbeat = DateTime.Now;
                     SendHeartbeat();
                 }
             }
             catch (Exception ex) { ThrottledLog($"OnBarUpdate error: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// Drain all pending signals from the static SignalBus queue and route
+        /// them to ProcessSignal (entries) or FlattenAll (exits).
+        ///
+        /// This enables the Ruby indicator (or any other producer) to forward
+        /// signals to Bridge without HTTP — critical for Strategy Analyzer
+        /// backtests where the HTTP listener is not running.
+        ///
+        /// In Historical (backtest) mode, orders are submitted directly on the
+        /// current OnBarUpdate call rather than being queued, because:
+        ///   1. We are already on the main NinjaScript thread.
+        ///   2. The queue-dequeue lambda in ProcessSignal guards with
+        ///      `if (State != State.Realtime) return;` which would silently
+        ///      discard every order during a backtest.
+        ///
+        /// In Realtime mode, the normal ProcessSignal → queue → dequeue path
+        /// is used so that order submission happens on the correct thread.
+        /// </summary>
+        private void DrainSignalBus()
+        {
+            var signals = SignalBus.DrainAll();
+            if (signals.Count == 0) return;
+
+            foreach (var sig in signals)
+            {
+                try
+                {
+                    if (sig.SignalType == "exit")
+                    {
+                        string reason = !string.IsNullOrEmpty(sig.ExitReason) ? sig.ExitReason : "signal_bus_exit";
+                        Print($"[Bridge] SignalBus EXIT: reason={reason} strategy={sig.Strategy} asset={sig.Asset}");
+
+                        if (State == State.Historical)
+                            ExecuteFlattenDirect($"Ruby:{reason}");
+                        else
+                            FlattenAll($"Ruby:{reason}");
+                    }
+                    else
+                    {
+                        Print($"[Bridge] SignalBus ENTRY: {sig.Direction} strategy={sig.Strategy} Q={sig.SignalQuality:P0} id={sig.SignalId}");
+
+                        if (State == State.Historical)
+                            ExecuteEntryDirect(sig);
+                        else
+                            ProcessSignal(sig.ToJson());
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ThrottledLog($"SignalBus processing error: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Submit an entry order directly (no queue) — used during Historical
+        /// backtest mode where we are already on the main NinjaScript thread
+        /// and the queued-lambda approach would be skipped.
+        ///
+        /// Performs the same risk-sizing logic as ProcessSignal but executes
+        /// SubmitOrderUnmanaged immediately.
+        /// </summary>
+        private void ExecuteEntryDirect(SignalBus.Signal sig)
+        {
+            string dir = (sig.Direction ?? "long").ToLower();
+            int requestedQty = sig.Quantity > 0 ? sig.Quantity : 1;
+            string typeStr = (sig.OrderType ?? "market").ToLower();
+            double limitPrice = sig.LimitPrice;
+            double slPrice = sig.StopLoss;
+            double tpPrice = sig.TakeProfit;
+            double tp2Price = sig.TakeProfit2;
+            string signalId = sig.SignalId ?? Guid.NewGuid().ToString("N").Substring(0, 8);
+
+            OrderAction action = dir == "long" ? OrderAction.Buy : OrderAction.SellShort;
+            OrderAction exitAction = dir == "long" ? OrderAction.Sell : OrderAction.BuyToCover;
+            OrderType ot = OrderType.Market;
+            double stopPrice = 0;
+
+            if (typeStr == "limit") ot = OrderType.Limit;
+            else if (typeStr == "stop") { ot = OrderType.StopMarket; stopPrice = limitPrice; limitPrice = 0; }
+
+            // === RISK SIZING (same logic as ProcessSignal) ===
+            double currentBalance = AccountSize;
+            try
+            {
+                if (myAccount != null)
+                    currentBalance = myAccount.Get(AccountItem.CashValue, Currency.UsDollar);
+            }
+            catch { }
+
+            double riskDollars = currentBalance * (RiskPercentPerTrade / 100.0);
+            double entry = SafeGetClose();
+
+            double slDistancePoints = slPrice > 0 && entry > 0
+                ? Math.Abs(entry - slPrice)
+                : DefaultStopLossTicks * TickSize;
+
+            double pointValue = 10;
+            try
+            {
+                if (Instrument != null && Instrument.MasterInstrument.PointValue > 0)
+                    pointValue = Instrument.MasterInstrument.PointValue;
+            }
+            catch { }
+
+            double riskPerContract = slDistancePoints * pointValue;
+            int riskBasedQty = riskPerContract > 0
+                ? (int)Math.Floor(riskDollars / riskPerContract)
+                : 1;
+
+            int finalQty = Math.Max(1, Math.Min(requestedQty, Math.Min(riskBasedQty, MaxMicroContracts)));
+
+            Print($"[Bridge BT] {dir.ToUpper()} x{finalQty} (req={requestedQty}, risk={riskBasedQty}, cap={MaxMicroContracts}) id={signalId}");
+
+            string entryName = $"Signal-{dir}-{signalId}";
+
+            // Submit entry directly — we are on the main thread during backtest
+            SubmitOrderUnmanaged(0, action, ot, finalQty, limitPrice, stopPrice, "", entryName);
+
+            // Submit bracket orders (SL + TP)
+            if (EnableAutoBrackets)
+            {
+                double bracketEntry = SafeGetClose();
+                if (bracketEntry <= 0) return;
+
+                double sl;
+                if (slPrice > 0)
+                    sl = slPrice;
+                else
+                    sl = dir == "long"
+                        ? bracketEntry - DefaultStopLossTicks * TickSize
+                        : bracketEntry + DefaultStopLossTicks * TickSize;
+
+                double tp;
+                if (tpPrice > 0)
+                    tp = tpPrice;
+                else
+                    tp = dir == "long"
+                        ? bracketEntry + DefaultTakeProfitTicks * TickSize
+                        : bracketEntry - DefaultTakeProfitTicks * TickSize;
+
+                int slQty = finalQty;
+                int tp1Qty = tp2Price > 0 ? Math.Max(1, finalQty / 2) : finalQty;
+                int tp2Qty = tp2Price > 0 ? finalQty - tp1Qty : 0;
+
+                string oco = $"OCO-{signalId}";
+
+                SubmitOrderUnmanaged(0, exitAction, OrderType.StopMarket, slQty, 0, sl, oco, $"SL-{signalId}");
+                SubmitOrderUnmanaged(0, exitAction, OrderType.Limit, tp1Qty, tp, 0, oco, $"TP1-{signalId}");
+
+                if (tp2Price > 0 && tp2Qty > 0)
+                    SubmitOrderUnmanaged(0, exitAction, OrderType.Limit, tp2Qty, tp2Price, 0, "", $"TP2-{signalId}");
+
+                Print($"[Bridge BT] Brackets: SL={sl:F2} TP1={tp:F2}" + (tp2Price > 0 ? $" TP2={tp2Price:F2}" : ""));
+            }
+        }
+
+        /// <summary>
+        /// Flatten all positions directly (no queue) — used during Historical
+        /// backtest mode.  Uses the strategy's own Position object (not
+        /// myAccount.Positions which is empty during Strategy Analyzer runs).
+        /// Submits a market order in the opposite direction to close.
+        /// </summary>
+        private void ExecuteFlattenDirect(string reason)
+        {
+            try
+            {
+                // During backtest, use the strategy's own Position property
+                // which tracks the simulated position on the primary instrument.
+                if (Position != null && Position.MarketPosition != MarketPosition.Flat)
+                {
+                    OrderAction closeAction = Position.MarketPosition == MarketPosition.Long
+                        ? OrderAction.Sell
+                        : OrderAction.BuyToCover;
+
+                    int qty = Position.Quantity;
+
+                    SubmitOrderUnmanaged(0, closeAction, OrderType.Market, qty, 0, 0, "", $"Flatten-{reason}");
+                    Print($"[Bridge BT] Flattening {Position.MarketPosition} x{qty} reason={reason}");
+                }
+                else
+                {
+                    // Fallback: try account-level positions (works in live/sim)
+                    if (myAccount != null && myAccount.Positions != null)
+                    {
+                        foreach (Position pos in myAccount.Positions)
+                        {
+                            if (pos == null || pos.Quantity == 0 || pos.Instrument == null) continue;
+
+                            OrderAction closeAction = pos.MarketPosition == MarketPosition.Long
+                                ? OrderAction.Sell
+                                : OrderAction.BuyToCover;
+
+                            SubmitOrderUnmanaged(0, closeAction, OrderType.Market, pos.Quantity, 0, 0, "", $"Flatten-{pos.Instrument.FullName}");
+                            Print($"[Bridge BT] Flattening {pos.Instrument.FullName} {pos.MarketPosition} x{pos.Quantity} reason={reason}");
+                        }
+                    }
+                }
+
+                Print($"[Bridge BT] 🔴 FLATTEN ALL — reason: {reason}");
+            }
+            catch (Exception ex)
+            {
+                Print($"[Bridge BT] Flatten error: {ex.Message}");
+            }
         }
 
         /// <summary>

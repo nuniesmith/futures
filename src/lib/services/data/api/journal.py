@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from src.lib.core.models import (
+from lib.core.models import (
     get_daily_journal,
     get_journal_stats,
     save_daily_journal,

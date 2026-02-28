@@ -43,7 +43,7 @@ class BackgroundManager:
     def engine(self):
         """Lazy-load the engine to avoid import-time side effects."""
         if self._engine is None:
-            from src.lib.trading.engine import DashboardEngine
+            from lib.trading.engine import DashboardEngine
 
             self._engine = DashboardEngine(
                 account_size=self.account_size,
@@ -70,7 +70,7 @@ class BackgroundManager:
         )
 
         # Initialize the database
-        from src.lib.core.models import init_db
+        from lib.core.models import init_db
 
         init_db()
         logger.info("Database initialized")
@@ -195,7 +195,7 @@ async def lifespan_manager(app):
     """FastAPI lifespan context manager.
 
     Usage in main.py:
-        from src.lib.services.data.tasks.background import lifespan_manager
+        from lib.services.data.tasks.background import lifespan_manager
         app = FastAPI(lifespan=lifespan_manager)
 
     Starts all background tasks on startup and cleanly shuts them

@@ -19,7 +19,7 @@ Output:
   - Focus recommendation (top 2-3 instruments)
 
 Usage:
-    from src.lib.scorer import PreMarketScorer, score_instruments, EVENT_CATALOG
+    from lib.scorer import PreMarketScorer, score_instruments, EVENT_CATALOG
 
     scorer = PreMarketScorer()
     results = scorer.score_all(data_dict, daily_dict)

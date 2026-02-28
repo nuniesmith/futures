@@ -8,7 +8,7 @@ once at process startup — every subsequent ``structlog.get_logger()`` or
 
 Usage::
 
-    from src.lib.logging_config import setup_logging, get_logger
+    from lib.logging_config import setup_logging, get_logger
 
     setup_logging(service="data-service")
     logger = get_logger()

@@ -32,7 +32,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from src.lib.core.logging_config import get_logger, setup_logging
+from lib.core.logging_config import get_logger, setup_logging
 
 setup_logging(service="engine")
 logger = get_logger("engine_service")
@@ -66,7 +66,7 @@ def _get_risk_manager(account_size: int = 50_000):
     """Lazy-init and return the global RiskManager singleton."""
     global _risk_manager
     if _risk_manager is None:
-        from src.lib.services.engine.risk import RiskManager
+        from lib.services.engine.risk import RiskManager
 
         _risk_manager = RiskManager(account_size=account_size)
         logger.info("RiskManager initialised (account=$%s)", f"{account_size:,}")
@@ -80,7 +80,7 @@ def _get_risk_manager(account_size: int = 50_000):
 
 def _handle_compute_daily_focus(engine, account_size: int) -> None:
     """Compute daily focus for all tracked assets and publish to Redis."""
-    from src.lib.services.engine.focus import (
+    from lib.services.engine.focus import (
         compute_daily_focus,
         publish_focus_to_redis,
     )
@@ -108,7 +108,7 @@ def _handle_fks_recompute(engine) -> None:
 
 def _handle_publish_focus_update(engine, account_size: int) -> None:
     """Re-publish current focus data to Redis for SSE consumers."""
-    from src.lib.services.engine.focus import (
+    from lib.services.engine.focus import (
         compute_daily_focus,
         publish_focus_to_redis,
     )
@@ -123,7 +123,7 @@ def _handle_publish_focus_update(engine, account_size: int) -> None:
 
 def _handle_check_no_trade(engine, account_size: int) -> None:
     """Check should-not-trade conditions using the full TASK-802 detector."""
-    from src.lib.core.cache import cache_get
+    from lib.core.cache import cache_get
 
     try:
         raw = cache_get("engine:daily_focus")
@@ -137,7 +137,7 @@ def _handle_check_no_trade(engine, account_size: int) -> None:
         rm = _get_risk_manager(account_size)
         risk_status = rm.get_status()
 
-        from src.lib.services.engine.patterns import (
+        from lib.services.engine.patterns import (
             clear_no_trade_alert,
             evaluate_no_trade,
             publish_no_trade_alert,
@@ -156,7 +156,7 @@ def _handle_check_no_trade(engine, account_size: int) -> None:
             focus["no_trade_reason"] = result.primary_reason
             focus["no_trade_reasons"] = result.reasons
             focus["no_trade_severity"] = result.severity
-            from src.lib.services.engine.focus import publish_focus_to_redis
+            from lib.services.engine.focus import publish_focus_to_redis
 
             publish_focus_to_redis(focus)
 
@@ -167,7 +167,7 @@ def _handle_check_no_trade(engine, account_size: int) -> None:
             if focus.get("no_trade"):
                 focus["no_trade"] = False
                 focus["no_trade_reason"] = ""
-                from src.lib.services.engine.focus import publish_focus_to_redis
+                from lib.services.engine.focus import publish_focus_to_redis
 
                 publish_focus_to_redis(focus)
             clear_no_trade_alert()
@@ -180,7 +180,7 @@ def _handle_grok_morning_brief(engine) -> None:
     """Run Grok morning market briefing (pre-market)."""
     logger.info("▶ Grok morning briefing...")
     try:
-        from src.lib.integrations.grok_helper import GrokSession
+        from lib.integrations.grok_helper import GrokSession
 
         session = GrokSession()
         if session is not None:
@@ -203,7 +203,7 @@ def _handle_grok_live_update(engine) -> None:
         api_key = os.getenv("GROK_API_KEY", "")
 
         # Try local compact format from focus data first (fast, free)
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:daily_focus")
         compact_text = None
@@ -212,7 +212,7 @@ def _handle_grok_live_update(engine) -> None:
             focus = json.loads(raw)
             assets = focus.get("assets", [])
             if assets:
-                from src.lib.integrations.grok_helper import format_live_compact
+                from lib.integrations.grok_helper import format_live_compact
 
                 compact_text = format_live_compact(assets)
 
@@ -237,7 +237,7 @@ def _handle_grok_live_update(engine) -> None:
 def _publish_grok_update(text: str) -> None:
     """Publish a Grok update to Redis for SSE streaming (TASK-602 prep)."""
     try:
-        from src.lib.core.cache import REDIS_AVAILABLE, _r, cache_set
+        from lib.core.cache import REDIS_AVAILABLE, _r, cache_set
 
         now = datetime.now(tz=_EST)
         payload = json.dumps(
@@ -283,12 +283,12 @@ def _handle_check_risk_rules(engine, account_size: int = 50_000) -> None:
 
         # Sync positions from NT8 bridge (if available)
         try:
-            from src.lib.core.cache import cache_get
+            from lib.core.cache import cache_get
 
             raw = cache_get("positions:current")
             if not raw:
                 # Try the hashed key used by positions router
-                from src.lib.services.data.api.positions import (
+                from lib.services.data.api.positions import (
                     _POSITIONS_CACHE_KEY,
                 )
 
@@ -359,8 +359,8 @@ def _persist_risk_event(
 ) -> None:
     """Persist a risk event to the database audit trail (best-effort)."""
     try:
-        from src.lib.core.models import record_risk_event
-        from src.lib.services.engine.scheduler import ScheduleManager
+        from lib.core.models import record_risk_event
+        from lib.services.engine.scheduler import ScheduleManager
 
         session = ScheduleManager().get_session_mode().value
         record_risk_event(
@@ -387,14 +387,14 @@ def _handle_check_orb(engine) -> None:
     """
     logger.debug("▶ Opening Range Breakout check...")
     try:
-        from src.lib.services.engine.orb import (
+        from lib.services.engine.orb import (
             detect_opening_range_breakout,
             publish_orb_alert,
         )
 
         # Get 1-minute bars from cache for each focus asset
         try:
-            from src.lib.core.cache import cache_get
+            from lib.core.cache import cache_get
 
             raw_focus = cache_get("engine:daily_focus")
             if not raw_focus:
@@ -465,7 +465,7 @@ def _handle_check_orb(engine) -> None:
 
                     # Send alert
                     try:
-                        from src.lib.core.alerts import send_signal
+                        from lib.core.alerts import send_signal
 
                         send_signal(
                             signal_key=f"orb_{symbol}_{result.direction}",
@@ -498,8 +498,8 @@ def _handle_check_orb(engine) -> None:
 def _persist_orb_event(result) -> None:
     """Persist an ORB evaluation result to the database audit trail (best-effort)."""
     try:
-        from src.lib.core.models import record_orb_event
-        from src.lib.services.engine.scheduler import ScheduleManager
+        from lib.core.models import record_orb_event
+        from lib.services.engine.scheduler import ScheduleManager
 
         session = ScheduleManager().get_session_mode().value
         record_orb_event(
@@ -533,7 +533,7 @@ def _handle_historical_backfill(engine) -> None:
     logger.info("▶ Historical backfill starting (TASK-204)")
 
     try:
-        from src.lib.services.engine.backfill import run_backfill
+        from lib.services.engine.backfill import run_backfill
 
         summary = run_backfill()
 
@@ -611,7 +611,7 @@ def _handle_next_day_prep(engine) -> None:
 def _publish_engine_status(engine, session_mode: str, scheduler_status: dict) -> None:
     """Publish engine status + scheduler state to Redis for data-service."""
     try:
-        from src.lib.core.cache import cache_set
+        from lib.core.cache import cache_set
 
         status = engine.get_status()
         status["session_mode"] = session_mode
@@ -669,8 +669,8 @@ def main():
     period = os.getenv("ENGINE_PERIOD", os.getenv("DEFAULT_PERIOD", "5d"))
 
     # Import and start the engine
-    from src.lib.core.cache import get_data_source
-    from src.lib.trading.engine import get_engine
+    from lib.core.cache import get_data_source
+    from lib.trading.engine import get_engine
 
     engine = get_engine(
         account_size=account_size,
@@ -679,7 +679,7 @@ def main():
     )
 
     # Import scheduler
-    from src.lib.services.engine.scheduler import ActionType, ScheduleManager
+    from lib.services.engine.scheduler import ActionType, ScheduleManager
 
     scheduler = ScheduleManager()
     session = scheduler.get_session_mode()

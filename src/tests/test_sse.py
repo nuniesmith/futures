@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from src.lib.services.data.api.sse import (
+from lib.services.data.api.sse import (
     _CATCHUP_COUNT,
     _HEARTBEAT_INTERVAL,
     _THROTTLE_SECONDS,
@@ -470,7 +470,7 @@ class TestSSEHealthEndpoint:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from src.lib.services.data.api.sse import router
+        from lib.services.data.api.sse import router
 
         app = FastAPI()
         app.include_router(router)
@@ -568,7 +568,7 @@ class TestSSEDashboardEndpoint:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from src.lib.services.data.api.sse import router
+        from lib.services.data.api.sse import router
 
         app = FastAPI()
         app.include_router(router)

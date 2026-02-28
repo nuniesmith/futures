@@ -24,7 +24,7 @@ Design decisions:
     high vol to limit losses, wider in low vol for breathing room)
 
 Usage:
-    from src.lib.volatility import kmeans_volatility_clusters, volatility_summary_text
+    from lib.volatility import kmeans_volatility_clusters, volatility_summary_text
 
     result = kmeans_volatility_clusters(df)
     # result = {

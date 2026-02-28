@@ -17,7 +17,7 @@ Note: This module was renamed from ``wave.py`` to ``wave_analysis.py`` to
 avoid shadowing Python's built-in ``wave`` (audio) module.
 
 Usage:
-    from src.lib.wave_analysis import calculate_wave_analysis
+    from lib.wave_analysis import calculate_wave_analysis
 
     result = calculate_wave_analysis(df)
     # result = {

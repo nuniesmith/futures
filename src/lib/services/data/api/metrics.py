@@ -21,7 +21,7 @@ All metrics are collected in-process via ``prometheus_client`` and the ASGI
 middleware automatically instruments request count + latency.
 
 Usage:
-    from src.lib.services.data.api.metrics import router as metrics_router, PrometheusMiddleware
+    from lib.services.data.api.metrics import router as metrics_router, PrometheusMiddleware
     app.include_router(metrics_router)
     app.add_middleware(PrometheusMiddleware)
 
@@ -301,7 +301,7 @@ def _collect_live_gauges() -> None:
     """
     # Redis connectivity
     try:
-        from src.lib.core.cache import REDIS_AVAILABLE, _r
+        from lib.core.cache import REDIS_AVAILABLE, _r
 
         if REDIS_AVAILABLE and _r is not None:
             _r.ping()
@@ -315,7 +315,7 @@ def _collect_live_gauges() -> None:
     try:
         import json as _json
 
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:daily_focus")
         if raw:
@@ -332,7 +332,7 @@ def _collect_live_gauges() -> None:
     try:
         import json as _json
 
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:positions")
         if raw:
@@ -351,7 +351,7 @@ def _collect_live_gauges() -> None:
     try:
         import json as _json
 
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:status")
         if raw:

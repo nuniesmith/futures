@@ -1082,7 +1082,7 @@ def _compute_ict_confluence(
     }
 
     try:
-        from src.lib.analysis.ict import get_active_order_blocks, get_unfilled_fvgs
+        from lib.analysis.ict import get_active_order_blocks, get_unfilled_fvgs
     except ImportError:
         return result
 
@@ -1100,7 +1100,7 @@ def _compute_ict_confluence(
     close_s = df_slice["Close"].astype(float)
 
     # Compute ATR at current bar
-    from src.lib.analysis.ict import _atr as ict_atr
+    from lib.analysis.ict import _atr as ict_atr
 
     atr_series = ict_atr(high_s, low_s, close_s, atr_period)
     atr_val = float(atr_series.iloc[-1]) if len(atr_series) > 0 else 0.0
@@ -1186,7 +1186,7 @@ def _ict_confluence_array(
     scores = np.zeros(n, dtype=float)
 
     try:
-        from src.lib.analysis.ict import get_active_order_blocks, get_unfilled_fvgs
+        from lib.analysis.ict import get_active_order_blocks, get_unfilled_fvgs
     except ImportError:
         return scores
 
@@ -1409,8 +1409,8 @@ _VP_AVAILABLE = False
 _VolumeProfileStrategy = None
 _suggest_volume_profile_params = None
 try:
-    from src.lib.analysis.volume_profile import VolumeProfileStrategy as _VPS
-    from src.lib.analysis.volume_profile import (
+    from lib.analysis.volume_profile import VolumeProfileStrategy as _VPS
+    from lib.analysis.volume_profile import (
         suggest_volume_profile_params as _svpp,
     )
 

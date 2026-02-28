@@ -213,7 +213,7 @@ class TestFocusRoundTrip:
 
     def test_publish_then_read(self, redis_store, mock_cache):
         """publish_focus_to_redis writes to store, _get_focus_data reads it."""
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         focus = _make_focus_payload()
         result = publish_focus_to_redis(focus)
@@ -230,7 +230,7 @@ class TestFocusRoundTrip:
 
     def test_publish_writes_timestamp(self, redis_store, mock_cache):
         """publish_focus_to_redis also writes a timestamp key."""
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         focus = _make_focus_payload()
         publish_focus_to_redis(focus)
@@ -244,7 +244,7 @@ class TestFocusRoundTrip:
 
     def test_publish_triggers_pubsub(self, redis_store, mock_cache):
         """publish_focus_to_redis publishes to dashboard:live channel."""
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         focus = _make_focus_payload()
         publish_focus_to_redis(focus)
@@ -254,7 +254,7 @@ class TestFocusRoundTrip:
 
     def test_publish_triggers_per_asset_pubsub(self, redis_store, mock_cache):
         """Each asset gets its own dashboard:asset:{symbol} publish."""
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         focus = _make_focus_payload()
         publish_focus_to_redis(focus)
@@ -266,7 +266,7 @@ class TestFocusRoundTrip:
 
     def test_publish_writes_stream(self, redis_store, mock_cache):
         """publish_focus_to_redis adds to the Redis Stream for SSE catch-up."""
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         focus = _make_focus_payload()
         publish_focus_to_redis(focus)
@@ -279,7 +279,7 @@ class TestFocusRoundTrip:
 
     def test_no_trade_publishes_no_trade_event(self, redis_store, mock_cache):
         """When no_trade=True, publish_focus_to_redis sends no-trade event."""
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         focus = _make_focus_payload(no_trade=True, no_trade_reason="All low quality")
         publish_focus_to_redis(focus)
@@ -292,7 +292,7 @@ class TestFocusRoundTrip:
 
     def test_focus_survives_nan_sanitization(self, redis_store, mock_cache):
         """Focus with NaN values should be handled gracefully."""
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         focus = _make_focus_payload()
         # Inject a NaN — publish_focus_to_redis uses allow_nan=False
@@ -304,7 +304,7 @@ class TestFocusRoundTrip:
 
     def test_multiple_publishes_append_stream(self, redis_store, mock_cache):
         """Multiple publishes add multiple stream entries."""
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         for i in range(5):
             focus = _make_focus_payload()
@@ -323,12 +323,12 @@ class TestSSEReadsEngineFocus:
 
     def test_get_focus_from_cache_reads_published_data(self, redis_store, mock_cache):
         """_get_focus_from_cache returns what publish_focus_to_redis wrote."""
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         focus = _make_focus_payload()
         publish_focus_to_redis(focus)
 
-        from src.lib.services.data.api.sse import _get_focus_from_cache
+        from lib.services.data.api.sse import _get_focus_from_cache
 
         result = _get_focus_from_cache()
         assert result is not None
@@ -338,18 +338,18 @@ class TestSSEReadsEngineFocus:
 
     def test_get_focus_from_cache_returns_string(self, redis_store, mock_cache):
         """SSE focus helper always returns a string (not bytes)."""
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         publish_focus_to_redis(_make_focus_payload())
 
-        from src.lib.services.data.api.sse import _get_focus_from_cache
+        from lib.services.data.api.sse import _get_focus_from_cache
 
         result = _get_focus_from_cache()
         assert isinstance(result, str)
 
     def test_get_focus_from_cache_none_when_empty(self, redis_store, mock_cache):
         """When no focus has been published, returns None."""
-        from src.lib.services.data.api.sse import _get_focus_from_cache
+        from lib.services.data.api.sse import _get_focus_from_cache
 
         result = _get_focus_from_cache()
         assert result is None
@@ -364,7 +364,7 @@ class TestRiskManagerIntegration:
     def _make_rm(
         self, account_size: int = 50_000, now_fn=None, max_daily_loss: float = -250.0
     ):
-        from src.lib.services.engine.risk import RiskManager
+        from lib.services.engine.risk import RiskManager
 
         if now_fn is None:
             # Fixed time: 9:00 AM ET (active session)
@@ -484,7 +484,7 @@ class TestNoTradeIntegration:
     """Verify evaluate_no_trade uses RiskManager's get_status output."""
 
     def test_low_quality_triggers_no_trade(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [
             _make_focus_asset("MGC", quality=0.40),
@@ -496,7 +496,7 @@ class TestNoTradeIntegration:
         assert any("quality" in r.lower() for r in result.reasons)
 
     def test_extreme_vol_triggers_no_trade(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [
             _make_focus_asset("MGC", quality=0.72, vol_percentile=0.92),
@@ -508,7 +508,7 @@ class TestNoTradeIntegration:
 
     def test_daily_loss_from_risk_status(self):
         """Daily loss from RiskManager status triggers no-trade."""
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [_make_focus_asset("MGC", quality=0.72)]
         risk_status = {
@@ -523,7 +523,7 @@ class TestNoTradeIntegration:
 
     def test_consecutive_losses_from_risk_status(self):
         """Consecutive losses from RiskManager triggers no-trade."""
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [_make_focus_asset("MGC", quality=0.72)]
         risk_status = {
@@ -539,7 +539,7 @@ class TestNoTradeIntegration:
         )
 
     def test_good_conditions_allow_trading(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [
             _make_focus_asset("MGC", quality=0.72, vol_percentile=0.45),
@@ -552,7 +552,7 @@ class TestNoTradeIntegration:
         assert len(result.reasons) == 0
 
     def test_no_trade_result_has_severity(self):
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         assets = [
             _make_focus_asset("MGC", quality=0.30),
@@ -564,7 +564,7 @@ class TestNoTradeIntegration:
 
     def test_publish_no_trade_alert_writes_redis(self, redis_store, mock_cache):
         """publish_no_trade_alert puts data in Redis."""
-        from src.lib.services.engine.patterns import (
+        from lib.services.engine.patterns import (
             evaluate_no_trade,
             publish_no_trade_alert,
         )
@@ -582,7 +582,7 @@ class TestNoTradeIntegration:
 
     def test_late_session_check(self):
         """After 10 AM ET with no setups should flag."""
-        from src.lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.patterns import evaluate_no_trade
 
         late_time = datetime(2026, 1, 15, 10, 30, 0, tzinfo=_EST)
         # All assets have OK quality but it's late
@@ -604,7 +604,7 @@ class TestFocusHTMLRendering:
     """Verify dashboard HTML endpoints return valid HTML with data attributes."""
 
     def test_render_asset_card_has_symbol(self, mock_cache):
-        from src.lib.services.data.api.dashboard import _render_asset_card
+        from lib.services.data.api.dashboard import _render_asset_card
 
         asset = _make_focus_asset("MGC", "LONG", quality=0.72)
         html = _render_asset_card(asset)
@@ -613,14 +613,14 @@ class TestFocusHTMLRendering:
         assert "72" in html  # quality percentage
 
     def test_render_asset_card_has_id(self, mock_cache):
-        from src.lib.services.data.api.dashboard import _render_asset_card
+        from lib.services.data.api.dashboard import _render_asset_card
 
         asset = _make_focus_asset("MGC")
         html = _render_asset_card(asset)
         assert 'id="asset-card-mgc"' in html
 
     def test_render_no_trade_banner(self, mock_cache):
-        from src.lib.services.data.api.dashboard import _render_no_trade_banner
+        from lib.services.data.api.dashboard import _render_no_trade_banner
 
         html = _render_no_trade_banner("All low quality — sit today out")
         assert (
@@ -631,7 +631,7 @@ class TestFocusHTMLRendering:
         assert "low quality" in html.lower()
 
     def test_render_positions_panel(self, mock_cache):
-        from src.lib.services.data.api.dashboard import _render_positions_panel
+        from lib.services.data.api.dashboard import _render_positions_panel
 
         # _render_positions_panel expects a list of position dicts, not a wrapper
         positions = [
@@ -648,7 +648,7 @@ class TestFocusHTMLRendering:
         assert "LONG" in html
 
     def test_render_risk_panel(self, mock_cache):
-        from src.lib.services.data.api.dashboard import _render_risk_panel
+        from lib.services.data.api.dashboard import _render_risk_panel
 
         risk_status = {
             "can_trade": True,
@@ -661,7 +661,7 @@ class TestFocusHTMLRendering:
         assert "RISK" in html.upper() or "risk" in html
 
     def test_render_grok_panel(self, mock_cache):
-        from src.lib.services.data.api.dashboard import _render_grok_panel
+        from lib.services.data.api.dashboard import _render_grok_panel
 
         grok_data = {
             "text": "MGC: LONG bias, 72% quality\nMNQ: SHORT bias, 68% quality",
@@ -674,14 +674,14 @@ class TestFocusHTMLRendering:
 
     def test_render_risk_panel_none(self, mock_cache):
         """Risk panel with None input should not crash."""
-        from src.lib.services.data.api.dashboard import _render_risk_panel
+        from lib.services.data.api.dashboard import _render_risk_panel
 
         html = _render_risk_panel(None)
         assert isinstance(html, str)
 
     def test_render_grok_panel_none(self, mock_cache):
         """Grok panel with None input should not crash."""
-        from src.lib.services.data.api.dashboard import _render_grok_panel
+        from lib.services.data.api.dashboard import _render_grok_panel
 
         html = _render_grok_panel(None)
         assert isinstance(html, str)
@@ -694,7 +694,7 @@ class TestGrokCompactIntegration:
     """Verify Grok compact formatting works with real focus data."""
 
     def test_format_live_compact_produces_short_output(self):
-        from src.lib.integrations.grok_helper import format_live_compact
+        from lib.integrations.grok_helper import format_live_compact
 
         assets = [
             _make_focus_asset("MGC", "LONG", 0.72, 0.45),
@@ -708,7 +708,7 @@ class TestGrokCompactIntegration:
         assert len(lines) <= 8, f"Compact output has {len(lines)} lines, expected <= 8"
 
     def test_format_live_compact_mentions_symbols(self):
-        from src.lib.integrations.grok_helper import format_live_compact
+        from lib.integrations.grok_helper import format_live_compact
 
         assets = [
             _make_focus_asset("MGC", "LONG", 0.72),
@@ -719,14 +719,14 @@ class TestGrokCompactIntegration:
         assert "MNQ" in result
 
     def test_format_live_compact_empty_assets(self):
-        from src.lib.integrations.grok_helper import format_live_compact
+        from lib.integrations.grok_helper import format_live_compact
 
         result = format_live_compact([])
         assert isinstance(result, str)
 
     def test_grok_publish_round_trip(self, redis_store, mock_cache):
         """Engine publishes Grok update → SSE reads it back."""
-        from src.lib.integrations.grok_helper import format_live_compact
+        from lib.integrations.grok_helper import format_live_compact
 
         assets = [_make_focus_asset("MGC", "LONG", 0.72)]
         text = format_live_compact(assets)
@@ -743,7 +743,7 @@ class TestGrokCompactIntegration:
         redis_store.cache_set("engine:grok_update", payload.encode(), ttl=900)
 
         # Read it back as SSE would
-        from src.lib.services.data.api.sse import _get_grok_from_cache
+        from lib.services.data.api.sse import _get_grok_from_cache
 
         result = _get_grok_from_cache()
         assert result is not None
@@ -772,7 +772,7 @@ class TestEngineStatusIntegration:
             ttl=60,
         )
 
-        from src.lib.services.data.api.sse import _get_engine_status
+        from lib.services.data.api.sse import _get_engine_status
 
         result = _get_engine_status()
         assert result is not None
@@ -788,7 +788,7 @@ class TestRiskSSEWiring:
 
     def test_risk_status_readable_by_sse(self, redis_store, mock_cache):
         """Risk status published by engine is readable by SSE helper."""
-        from src.lib.services.engine.risk import RiskManager
+        from lib.services.engine.risk import RiskManager
 
         fixed = datetime(2026, 1, 15, 9, 0, 0, tzinfo=_EST)
         rm = RiskManager(account_size=50_000, now_fn=lambda: fixed)
@@ -797,7 +797,7 @@ class TestRiskSSEWiring:
         )
         rm.publish_to_redis()
 
-        from src.lib.services.data.api.sse import _get_risk_from_cache
+        from lib.services.data.api.sse import _get_risk_from_cache
 
         result = _get_risk_from_cache()
         assert result is not None
@@ -813,7 +813,7 @@ class TestFullPipeline:
 
     def test_focus_to_sse_pipeline(self, redis_store, mock_cache):
         """Simulates: compute_daily_focus → publish → SSE reads → verify."""
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         # Step 1: Build focus (we skip compute_daily_focus since it needs
         # real market data; we test the publish + read path)
@@ -825,7 +825,7 @@ class TestFullPipeline:
         assert ok is True
 
         # Step 3: Verify SSE can read it
-        from src.lib.services.data.api.sse import _get_focus_from_cache
+        from lib.services.data.api.sse import _get_focus_from_cache
 
         raw = _get_focus_from_cache()
         assert raw is not None
@@ -842,7 +842,7 @@ class TestFullPipeline:
 
     def test_no_trade_pipeline(self, redis_store, mock_cache):
         """Simulates: focus with no_trade → publish → SSE reads banner."""
-        from src.lib.services.engine.focus import publish_focus_to_redis
+        from lib.services.engine.focus import publish_focus_to_redis
 
         focus = _make_focus_payload(
             assets=[_make_focus_asset("MGC", quality=0.30)],
@@ -852,7 +852,7 @@ class TestFullPipeline:
         publish_focus_to_redis(focus)
 
         # SSE should see no_trade
-        from src.lib.services.data.api.sse import _get_focus_from_cache
+        from lib.services.data.api.sse import _get_focus_from_cache
 
         raw = _get_focus_from_cache()
         assert raw is not None, "Expected focus data in cache after publish"
@@ -866,8 +866,8 @@ class TestFullPipeline:
 
     def test_risk_and_no_trade_combined(self, redis_store, mock_cache):
         """RiskManager loss + evaluate_no_trade → combined block."""
-        from src.lib.services.engine.patterns import evaluate_no_trade
-        from src.lib.services.engine.risk import RiskManager
+        from lib.services.engine.patterns import evaluate_no_trade
+        from lib.services.engine.risk import RiskManager
 
         fixed = datetime(2026, 1, 15, 9, 0, 0, tzinfo=_EST)
         rm = RiskManager(
@@ -896,7 +896,7 @@ class TestSSEFormatIntegration:
     """Verify SSE format produces valid events from real payloads."""
 
     def test_format_focus_event(self, mock_cache):
-        from src.lib.services.data.api.sse import _format_sse
+        from lib.services.data.api.sse import _format_sse
 
         focus = _make_focus_payload()
         data = json.dumps(focus)
@@ -912,21 +912,21 @@ class TestSSEFormatIntegration:
                 break
 
     def test_format_grok_event(self, mock_cache):
-        from src.lib.services.data.api.sse import _format_sse
+        from lib.services.data.api.sse import _format_sse
 
         grok = {"text": "MGC: bullish", "compact": True}
         event = _format_sse(data=json.dumps(grok), event="grok-update")
         assert "event: grok-update\n" in event
 
     def test_format_risk_event(self, mock_cache):
-        from src.lib.services.data.api.sse import _format_sse
+        from lib.services.data.api.sse import _format_sse
 
         risk = {"can_trade": True, "daily_pnl": -50.0}
         event = _format_sse(data=json.dumps(risk), event="risk-update")
         assert "event: risk-update\n" in event
 
     def test_heartbeat_parseable(self, mock_cache):
-        from src.lib.services.data.api.sse import _make_heartbeat_event
+        from lib.services.data.api.sse import _make_heartbeat_event
 
         event = _make_heartbeat_event()
         for line in event.split("\n"):
@@ -937,7 +937,7 @@ class TestSSEFormatIntegration:
                 break
 
     def test_session_event_parseable(self, mock_cache):
-        from src.lib.services.data.api.sse import _make_session_event
+        from lib.services.data.api.sse import _make_session_event
 
         event = _make_session_event("active")
         for line in event.split("\n"):
@@ -955,7 +955,7 @@ class TestSchedulerEngineWiring:
 
     def test_all_action_types_in_handler_table(self):
         """Every ActionType should be referenced in engine main's dispatch."""
-        from src.lib.services.engine.scheduler import ActionType
+        from lib.services.engine.scheduler import ActionType
 
         # We can't easily run main() but we can inspect it
         # Instead, check that the dispatch table concept covers all action types
@@ -978,7 +978,7 @@ class TestSchedulerEngineWiring:
             assert action in action_names, f"Missing ActionType: {action}"
 
     def test_session_modes_defined(self):
-        from src.lib.services.engine.scheduler import SessionMode
+        from lib.services.engine.scheduler import SessionMode
 
         assert SessionMode.PRE_MARKET.value == "pre-market"
         assert SessionMode.ACTIVE.value == "active"
@@ -986,7 +986,7 @@ class TestSchedulerEngineWiring:
 
     def test_scheduler_returns_pending_actions(self):
         """ScheduleManager should return actions for current session."""
-        from src.lib.services.engine.scheduler import ScheduleManager
+        from lib.services.engine.scheduler import ScheduleManager
 
         mgr = ScheduleManager()
         session = mgr.get_session_mode()
@@ -1015,7 +1015,7 @@ class TestGrokSSEChannel:
         )
         redis_store.cache_set("engine:grok_update", payload.encode(), ttl=900)
 
-        from src.lib.services.data.api.sse import _get_grok_from_cache
+        from lib.services.data.api.sse import _get_grok_from_cache
 
         result = _get_grok_from_cache()
         assert result is not None
@@ -1042,7 +1042,7 @@ class TestPositionsSyncIntegration:
     """Verify RiskManager can sync positions from NT8 bridge cache."""
 
     def test_sync_positions_updates_risk_state(self):
-        from src.lib.services.engine.risk import RiskManager
+        from lib.services.engine.risk import RiskManager
 
         fixed = datetime(2026, 1, 15, 9, 0, 0, tzinfo=_EST)
         rm = RiskManager(account_size=50_000, now_fn=lambda: fixed)
@@ -1069,7 +1069,7 @@ class TestPositionsSyncIntegration:
         assert status["open_trade_count"] == 2
 
     def test_sync_then_check_max_open(self):
-        from src.lib.services.engine.risk import RiskManager
+        from lib.services.engine.risk import RiskManager
 
         fixed = datetime(2026, 1, 15, 9, 0, 0, tzinfo=_EST)
         rm = RiskManager(account_size=50_000, max_open_trades=2, now_fn=lambda: fixed)
@@ -1096,7 +1096,7 @@ class TestSafeJSONResponse:
         """NaN should be converted to None."""
         # Import from data-service main
         try:
-            from src.lib.services.data.main import _sanitize
+            from lib.services.data.main import _sanitize
         except ImportError:
             # Might not be importable without full setup; define inline
             def _sanitize(obj: Any) -> Any:
@@ -1119,7 +1119,7 @@ class TestSafeJSONResponse:
 
     def test_sanitize_nested(self):
         try:
-            from src.lib.services.data.main import _sanitize
+            from lib.services.data.main import _sanitize
         except ImportError:
 
             def _sanitize(obj: Any) -> Any:

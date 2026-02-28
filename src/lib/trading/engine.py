@@ -11,7 +11,7 @@ Improvements over the original:
   - Engine-triggered alerts: auto-dispatch on regime changes and full confluence
 
 Usage:
-    from src.lib.engine import get_engine
+    from lib.engine import get_engine
     engine = get_engine(account_size=150_000, interval="5m", period="5d")
     # engine auto-starts a daemon thread on first call
 
@@ -33,16 +33,16 @@ import optuna  # noqa: E402
 import pandas as pd  # noqa: E402
 from backtesting import Backtest  # noqa: E402
 
-from src.lib.analysis.confluence import (  # noqa: E402
+from lib.analysis.confluence import (  # noqa: E402
     check_confluence,
     get_recommended_timeframes,
 )
-from src.lib.analysis.regime import detect_regime_hmm, fit_detector  # noqa: E402
-from src.lib.analysis.signal_quality import compute_signal_quality  # noqa: E402
-from src.lib.analysis.volatility import kmeans_volatility_clusters  # noqa: E402
-from src.lib.analysis.wave_analysis import calculate_wave_analysis  # noqa: E402
-from src.lib.core.alerts import get_dispatcher  # noqa: E402
-from src.lib.core.cache import (  # noqa: E402
+from lib.analysis.regime import detect_regime_hmm, fit_detector  # noqa: E402
+from lib.analysis.signal_quality import compute_signal_quality  # noqa: E402
+from lib.analysis.volatility import kmeans_volatility_clusters  # noqa: E402
+from lib.analysis.wave_analysis import calculate_wave_analysis  # noqa: E402
+from lib.core.alerts import get_dispatcher  # noqa: E402
+from lib.core.cache import (  # noqa: E402
     _cache_key,
     cache_get,
     cache_set,
@@ -52,14 +52,14 @@ from src.lib.core.cache import (  # noqa: E402
     get_data_source,
     set_cached_optimization,
 )
-from src.lib.core.models import ASSETS, CONTRACT_MODE  # noqa: E402
-from src.lib.integrations.massive_client import (  # noqa: E402
+from lib.core.models import ASSETS, CONTRACT_MODE  # noqa: E402
+from lib.integrations.massive_client import (  # noqa: E402
     MassiveFeedManager,
     get_massive_provider,
     is_massive_available,
 )
-from src.lib.trading.costs import slippage_commission_rate  # noqa: E402
-from src.lib.trading.strategies import (  # noqa: E402
+from lib.trading.costs import slippage_commission_rate  # noqa: E402
+from lib.trading.strategies import (  # noqa: E402
     STRATEGY_CLASSES,
     STRATEGY_LABELS,
     _safe_float,
@@ -280,7 +280,7 @@ def run_optimization(
         return None
 
     # Compute realistic commission rate for this instrument
-    from src.lib.core.models import TICKER_TO_NAME
+    from lib.core.models import TICKER_TO_NAME
 
     asset_name = TICKER_TO_NAME.get(ticker, "S&P")
     comm_rate = slippage_commission_rate(asset_name, CONTRACT_MODE)
@@ -523,7 +523,7 @@ def run_backtest(
         params_label = "Optimized" if opt else "Default"
 
     # Compute realistic commission rate for this instrument
-    from src.lib.core.models import CONTRACT_MODE, TICKER_TO_NAME
+    from lib.core.models import CONTRACT_MODE, TICKER_TO_NAME
 
     bt_asset_name = TICKER_TO_NAME.get(ticker, name)
     bt_comm_rate = slippage_commission_rate(bt_asset_name, CONTRACT_MODE)

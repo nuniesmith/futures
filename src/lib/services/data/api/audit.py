@@ -20,7 +20,7 @@ consumers, plus write access for manual / programmatic event injection.
 
 Usage:
     # In main.py:
-    from src.lib.services.data.api.audit import router as audit_router
+    from lib.services.data.api.audit import router as audit_router
     app.include_router(audit_router, prefix="/audit", tags=["Audit"])
 """
 
@@ -144,7 +144,7 @@ def get_risk_events(
     and by the risk pre-flight check endpoint.
     """
     try:
-        from src.lib.core.models import get_risk_events as _get_risk_events
+        from lib.core.models import get_risk_events as _get_risk_events
 
         events = _get_risk_events(
             limit=limit,
@@ -198,7 +198,7 @@ def get_orb_events(
     These events are written by the engine's CHECK_ORB handler.
     """
     try:
-        from src.lib.core.models import get_orb_events as _get_orb_events
+        from lib.core.models import get_orb_events as _get_orb_events
 
         events = _get_orb_events(
             limit=limit,
@@ -246,7 +246,7 @@ def get_audit_summary(
     useful for dashboard widgets and reporting.
     """
     try:
-        from src.lib.core.models import get_audit_summary as _get_audit_summary
+        from lib.core.models import get_audit_summary as _get_audit_summary
 
         summary = _get_audit_summary(days_back=days)
         summary["timestamp"] = datetime.now(tz=_EST).isoformat()
@@ -267,7 +267,7 @@ def create_risk_event(req: RiskEventCreate):
     or external system integrations.
     """
     try:
-        from src.lib.core.models import record_risk_event
+        from lib.core.models import record_risk_event
 
         row_id = record_risk_event(
             event_type=req.event_type,
@@ -316,7 +316,7 @@ def create_orb_event(req: ORBEventCreate):
     or external system integrations.
     """
     try:
-        from src.lib.core.models import record_orb_event
+        from lib.core.models import record_orb_event
 
         row_id = record_orb_event(
             symbol=req.symbol,

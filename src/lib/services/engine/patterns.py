@@ -25,7 +25,7 @@ Public API:
     # result.checks       -> list[NoTradeCheck]  (per-condition detail)
 
 Usage:
-    from src.lib.services.engine.patterns import evaluate_no_trade, publish_no_trade_alert
+    from lib.services.engine.patterns import evaluate_no_trade, publish_no_trade_alert
 
     result = evaluate_no_trade(focus_assets, risk_status=risk_mgr.get_status())
     if result.should_skip:
@@ -513,7 +513,7 @@ def publish_no_trade_alert(result: NoTradeResult) -> bool:
     Returns True on success.
     """
     try:
-        from src.lib.core.cache import REDIS_AVAILABLE, _r, cache_set
+        from lib.core.cache import REDIS_AVAILABLE, _r, cache_set
     except ImportError:
         logger.error("Cannot import cache module")
         return False
@@ -548,7 +548,7 @@ def clear_no_trade_alert() -> bool:
     Called when conditions improve and trading is allowed again.
     """
     try:
-        from src.lib.core.cache import REDIS_AVAILABLE, _r, cache_set
+        from lib.core.cache import REDIS_AVAILABLE, _r, cache_set
     except ImportError:
         return False
 

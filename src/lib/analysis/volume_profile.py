@@ -13,7 +13,7 @@ Three trading setups (per todo.md blueprint):
   3. Naked POC Magnet — trade toward unfilled POCs from prior sessions
 
 Usage:
-    from src.lib.volume_profile import (
+    from lib.volume_profile import (
         compute_volume_profile,
         compute_session_profiles,
         find_naked_pocs,

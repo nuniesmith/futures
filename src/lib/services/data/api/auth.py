@@ -14,7 +14,7 @@ Configuration:
 
 Usage in ``main.py``::
 
-    from src.lib.services.data.api.auth import require_api_key
+    from lib.services.data.api.auth import require_api_key
 
     app = FastAPI(dependencies=[Depends(require_api_key)])
 

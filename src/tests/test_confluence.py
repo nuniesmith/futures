@@ -17,7 +17,7 @@ import pandas as pd
 import pytest
 from conftest import _random_walk_ohlcv, _trending_ohlcv
 
-from src.lib.analysis.confluence import (
+from lib.analysis.confluence import (
     DEFAULT_EMA_FAST,
     DEFAULT_EMA_MID,
     DEFAULT_EMA_SLOW,

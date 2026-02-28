@@ -288,7 +288,7 @@ def _get_massive_provider():
     global _massive_provider, _massive_checked
     if not _massive_checked:
         try:
-            from src.lib.integrations.massive_client import get_massive_provider
+            from lib.integrations.massive_client import get_massive_provider
 
             _massive_provider = get_massive_provider()
         except Exception as exc:

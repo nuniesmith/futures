@@ -32,7 +32,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.lib.core.cache import (  # noqa: PLC2701
+from lib.core.cache import (  # noqa: PLC2701
     REDIS_AVAILABLE,
     _cache_key,
     cache_get,
@@ -288,7 +288,7 @@ def update_positions(payload: NTPositionsPayload):
     # --- Risk evaluation ---
     risk_status: Dict[str, Any] = {}
     try:
-        from src.lib.services.data.api.risk import evaluate_position_risk
+        from lib.services.data.api.risk import evaluate_position_risk
 
         risk_status = evaluate_position_risk(position_dicts)
 
@@ -382,7 +382,7 @@ def execute_signal(req: ExecuteSignalRequest):
     # --- Optional pre-flight risk check ---
     if req.enforce_risk:
         try:
-            from src.lib.services.data.api.risk import check_trade_entry_risk
+            from lib.services.data.api.risk import check_trade_entry_risk
 
             allowed, reason, details = check_trade_entry_risk(
                 symbol=req.asset or "UNKNOWN",
@@ -616,13 +616,13 @@ def clear_positions():
     keys_to_clear = [_POSITIONS_CACHE_KEY, _HEARTBEAT_CACHE_KEY]
 
     if REDIS_AVAILABLE:
-        from src.lib.core.cache import _r
+        from lib.core.cache import _r
 
         if _r is not None:
             for key in keys_to_clear:
                 _r.delete(key)
     else:
-        from src.lib.core.cache import _mem_cache
+        from lib.core.cache import _mem_cache
 
         for key in keys_to_clear:
             _mem_cache.pop(key, None)

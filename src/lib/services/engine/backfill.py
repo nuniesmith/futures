@@ -22,7 +22,7 @@ Data source priority:
   2. yfinance (fallback — limited to ~7 days of 1-min data)
 
 Public API:
-    from src.lib.services.engine.backfill import run_backfill, get_backfill_status, get_stored_bars
+    from lib.services.engine.backfill import run_backfill, get_backfill_status, get_stored_bars
 
     # Run a full backfill for all assets (called by engine scheduler)
     summary = run_backfill()
@@ -168,7 +168,7 @@ ORDER BY symbol, interval
 def _is_postgres() -> bool:
     """Check if we're using Postgres."""
     try:
-        from src.lib.core.models import _is_using_postgres
+        from lib.core.models import _is_using_postgres
 
         return _is_using_postgres()
     except ImportError:
@@ -178,7 +178,7 @@ def _is_postgres() -> bool:
 def _get_conn():
     """Get a database connection."""
     try:
-        from src.lib.core.models import _get_conn
+        from lib.core.models import _get_conn
 
         return _get_conn()
     except ImportError:
@@ -250,7 +250,7 @@ def _get_backfill_symbols() -> list[str]:
         return [s.strip() for s in _SYMBOLS_OVERRIDE.split(",") if s.strip()]
 
     try:
-        from src.lib.core.models import ASSETS
+        from lib.core.models import ASSETS
 
         return list(ASSETS.values())
     except ImportError:
@@ -261,7 +261,7 @@ def _get_backfill_symbols() -> list[str]:
 def _symbol_display_name(ticker: str) -> str:
     """Return a human-readable name for a ticker, or the ticker itself."""
     try:
-        from src.lib.core.models import TICKER_TO_NAME
+        from lib.core.models import TICKER_TO_NAME
 
         return TICKER_TO_NAME.get(ticker, ticker)
     except ImportError:
@@ -282,13 +282,13 @@ def _fetch_chunk_massive(
     and a DatetimeIndex, or empty DataFrame on failure.
     """
     try:
-        from src.lib.core.cache import _get_massive_provider
+        from lib.core.cache import _get_massive_provider
 
         provider = _get_massive_provider()
         if provider is None or not provider.is_available:
             return pd.DataFrame()
 
-        from src.lib.integrations.massive_client import (
+        from lib.integrations.massive_client import (
             _dropna_ohlc,
             _parse_timestamp_index,
         )
@@ -355,7 +355,7 @@ def _fetch_chunk_yfinance(
     try:
         import yfinance as yf
 
-        from src.lib.core.cache import _flatten_columns
+        from lib.core.cache import _flatten_columns
 
         # yfinance 1-min data only works for recent ~7 days
         now = datetime.now(tz=timezone.utc)
@@ -1055,7 +1055,7 @@ def _publish_backfill_status(summary: dict[str, Any]) -> None:
     try:
         import json
 
-        from src.lib.core.cache import REDIS_AVAILABLE, _r, cache_set
+        from lib.core.cache import REDIS_AVAILABLE, _r, cache_set
 
         payload = json.dumps(summary, default=str)
         cache_set("engine:backfill_status", payload.encode(), ttl=86400)  # 24h TTL

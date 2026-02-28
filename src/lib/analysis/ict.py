@@ -25,7 +25,7 @@ All detectors return lists of plain dicts so they are easy to serialise,
 cache, display in the dashboard, and overlay on Plotly charts.
 
 Usage:
-    from src.lib.ict import (
+    from lib.ict import (
         detect_fvgs,
         detect_order_blocks,
         detect_liquidity_sweeps,

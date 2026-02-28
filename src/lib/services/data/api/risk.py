@@ -125,7 +125,7 @@ def _get_local_risk_manager():
     global _local_risk_manager
     if _local_risk_manager is None:
         try:
-            from src.lib.services.engine.risk import RiskManager
+            from lib.services.engine.risk import RiskManager
 
             account_size = int(os.getenv("ACCOUNT_SIZE", "50000"))
             _local_risk_manager = RiskManager(account_size=account_size)
@@ -145,12 +145,12 @@ def _sync_local_risk_manager():
         return
 
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("positions:current")
         if not raw:
             try:
-                from src.lib.core.cache import _cache_key
+                from lib.core.cache import _cache_key
 
                 key = _cache_key("live_positions", "current")
                 raw = cache_get(key)
@@ -191,7 +191,7 @@ def _record_risk_event(
 
     # Also publish to Redis for persistence
     try:
-        from src.lib.core.cache import REDIS_AVAILABLE, _r
+        from lib.core.cache import REDIS_AVAILABLE, _r
 
         if REDIS_AVAILABLE and _r is not None:
             _r.lpush("engine:risk_events", json.dumps(event))
@@ -214,7 +214,7 @@ def get_risk_status():
     """
     # Try Redis first (engine publishes here)
     try:
-        from src.lib.core.cache import cache_get
+        from lib.core.cache import cache_get
 
         raw = cache_get("engine:risk_status")
         if raw:
@@ -294,7 +294,7 @@ def check_trade_risk(req: RiskCheckRequest):
 
         # Send alert for blocked trade
         try:
-            from src.lib.core.alerts import send_risk_alert
+            from lib.core.alerts import send_risk_alert
 
             send_risk_alert(
                 title=f"🚫 Trade Blocked: {req.side} {req.symbol}",
@@ -337,7 +337,7 @@ def get_risk_history(limit: int = 50):
     # If in-memory is empty, try Redis
     if not events:
         try:
-            from src.lib.core.cache import REDIS_AVAILABLE, _r
+            from lib.core.cache import REDIS_AVAILABLE, _r
 
             if REDIS_AVAILABLE and _r is not None:
                 raw_list = _r.lrange("engine:risk_events", 0, limit - 1)  # type: ignore[union-attr]
