@@ -1,4 +1,4 @@
-# Ruby v2 + Bridge — Backtest Guide
+# Ruby + Bridge — Backtest Guide
 
 ## Overview
 

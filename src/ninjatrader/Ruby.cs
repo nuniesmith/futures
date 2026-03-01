@@ -193,7 +193,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         {
             if (State == State.SetDefaults)
             {
-                Description = "Ruby v2 — Opening Range Breakout + Session Bias | Quality over Quantity";
+                Description = "Ruby — Opening Range Breakout + Session Bias | Quality over Quantity";
                 Name = "Ruby";
                 Calculate = Calculate.OnBarClose;
                 IsOverlay = true;
@@ -1948,7 +1948,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                     float fullW = panelWidth - padX * 2;
 
                     // ── Title ────────────────────────────────────────────
-                    DrawText(target, dwFactory, fontTitle, titleBr, cx, cy, fullW, titleH, "RUBY v2");
+                    DrawText(target, dwFactory, fontTitle, titleBr, cx, cy, fullW, titleH, "RUBY");
                     // Version tag
                     DrawTextRight(target, dwFactory, fontLabel, mutedGrayBr, panelX + panelWidth - padX, cy + 2f, "DASHBOARD");
                     cy += titleH;

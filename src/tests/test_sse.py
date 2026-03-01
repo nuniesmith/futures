@@ -367,7 +367,7 @@ class TestCatchupMessages:
             assert result == []
 
     def test_default_count(self):
-        assert _CATCHUP_COUNT == 8
+        assert _CATCHUP_COUNT == 1
 
 
 class TestGetFocusFromCache:

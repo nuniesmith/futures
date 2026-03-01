@@ -1,6 +1,6 @@
-# Ruby v2 + Bridge ORB System — Project Status & Next Steps
+# Ruby + Bridge ORB System — Project Status & Next Steps
 
-> **Goal:** Evolve the Ruby v2 + Bridge ORB system into a quality-first pipeline
+> **Goal:** Evolve the Ruby + Bridge ORB system into a quality-first pipeline
 > with deterministic filters and an image-based CNN. Target: 1–3 high-conviction
 > trades/day on micro contracts, scaling to normal size once proven.
 
@@ -170,7 +170,7 @@ Per-filter rejection rates (`all` mode):
 - [x] **2.4** Tune filter parameters — **recommendation: switch default gate mode from `all` to `majority`**
   - `majority` mode delivers the best balance: meaningful WR/PF improvement while keeping trade volume viable
   - VWAP Confluence and Pre-Market Range are the most aggressive — consider relaxing tolerance thresholds if more trades are needed
-- [ ] **2.5** Run live paper trades on Sim101 for 2–3 sessions with filters on (`majority` mode)
+- [ ] **2.5** Run live paper trades on Sim100 for 2–3 sessions with filters on (`majority` mode)
 - [ ] **2.6** Accumulate 20–30 trading days of real data to strengthen statistical significance
   - Re-run: `export $(grep -v '^#' .env | xargs) && PYTHONPATH=src .venv/bin/python scripts/backtest_filters.py --symbols MGC MES MNQ --source massive --days 30 --gate-mode majority -v --export data/backtest_results_30d.csv`
 
@@ -350,7 +350,7 @@ Accuracy target of 81–87% requires scaling to 5k–10k+ images.
   - Automatic cleanup of inference images (30-minute TTL)
 - [x] **5.3** Added `ORB_CNN_GATE` env var to docker-compose (default: `0` / disabled)
 - [x] **5.4** Added volume mounts for `./models` and `./dataset` in docker-compose
-- [ ] **5.5** Paper trade on Sim101 with CNN enrichment for 1 week (1 micro contract)
+- [ ] **5.5** Paper trade on Sim100 with CNN enrichment for 1 week (1 micro contract)
 - [ ] **5.6** Compare paper results: majority gate + CNN vs. filter-only baseline (Phase 2)
 - [ ] **5.7** Once accuracy > 80%, enable `ORB_CNN_GATE=1` for hard gating
 

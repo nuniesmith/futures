@@ -44,7 +44,14 @@ router = APIRouter(tags=["Dashboard"])
 
 
 def _get_focus_data() -> dict[str, Any] | None:
-    """Read daily focus payload from Redis."""
+    """Read daily focus payload from Redis.
+
+    Primary source: ``engine:daily_focus`` key (written by the engine with
+    a 5-minute TTL).  During off-hours or after a restart the key may have
+    expired, so we fall back to the most recent entry in the durable Redis
+    Stream ``dashboard:stream:focus`` which has no TTL.
+    """
+    # 1. Try the primary cache key (fast, most common path)
     try:
         from lib.core.cache import cache_get
 
@@ -52,7 +59,23 @@ def _get_focus_data() -> dict[str, Any] | None:
         if raw:
             return json.loads(raw)
     except Exception as exc:
-        logger.debug("Failed to read focus from Redis: %s", exc)
+        logger.debug("Failed to read focus from Redis key: %s", exc)
+
+    # 2. Fallback: read the latest entry from the Redis Stream
+    try:
+        from lib.core.cache import REDIS_AVAILABLE, _r
+
+        if REDIS_AVAILABLE and _r is not None:
+            entries = _r.xrevrange("dashboard:stream:focus", count=1)
+            if entries:
+                _msg_id, fields = entries[0]
+                raw_data = fields.get(b"data") or fields.get("data")
+                if raw_data:
+                    decoded = raw_data.decode() if isinstance(raw_data, bytes) else str(raw_data)
+                    return json.loads(decoded)
+    except Exception as exc:
+        logger.debug("Failed to read focus from Redis stream: %s", exc)
+
     return None
 
 
@@ -764,10 +787,12 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 </head>
 <body class="bg-zinc-950 text-white min-h-screen">
 
-    <!-- SSE Connection Wrapper — streams live events from engine via data-service -->
+    <!-- SSE Connection Wrapper — streams live events from engine via data-service.
+         NOTE: sse-connect is set by JS after DOMContentLoaded so the EventSource
+         doesn't fire before HTMX + sse.js are loaded (avoids "connection
+         interrupted while the page was loading" in Firefox). -->
     <div id="sse-container"
          hx-ext="sse"
-         sse-connect="/sse/dashboard"
          sse-close="close">
 
     <div class="max-w-7xl mx-auto px-4 py-4">
@@ -1025,6 +1050,25 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 
     <!-- SSE Event Handlers — process JSON events and update DOM -->
     <script>
+        // ---------------------------------------------------------------
+        // Deferred SSE connection: wait until the full DOM + scripts are
+        // ready before opening the EventSource.  This prevents the
+        // "connection interrupted while the page was loading" error that
+        // Firefox (and sometimes Chrome) raises when the SSE stream
+        // starts before HTMX / sse.js are initialised.
+        // ---------------------------------------------------------------
+        document.addEventListener('DOMContentLoaded', function() {{
+            var sseEl = document.getElementById('sse-container');
+            if (sseEl && !sseEl.getAttribute('sse-connect')) {{
+                sseEl.setAttribute('sse-connect', '/sse/dashboard');
+                // Tell HTMX to re-process the element so it picks up the
+                // newly-added sse-connect attribute.
+                if (typeof htmx !== 'undefined') {{
+                    htmx.process(sseEl);
+                }}
+            }}
+        }});
+
         // SSE connection status tracking
         const sseContainer = document.getElementById('sse-container');
         if (sseContainer) {{

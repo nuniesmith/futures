@@ -46,7 +46,7 @@ router = APIRouter(tags=["SSE"])
 # ---------------------------------------------------------------------------
 _THROTTLE_SECONDS = 7.0
 _HEARTBEAT_INTERVAL = 30.0
-_CATCHUP_COUNT = 8
+_CATCHUP_COUNT = 1
 
 # Track last send time per event type for throttling
 _last_sent: dict[str, float] = {}
@@ -337,6 +337,14 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
         session_mode = status.get("session_mode", "unknown")
         yield _make_session_event(session_mode)
 
+    # Flush hint: yield an SSE comment to force the HTTP chunked-encoding
+    # layer to push all buffered catch-up data to the client before we
+    # enter the long-lived pub/sub / polling loop.  SSE comments (lines
+    # starting with ':') are silently ignored by EventSource but cause
+    # the server to emit a chunk boundary.  Unlike asyncio.sleep(0) this
+    # doesn't interact with test patches that raise CancelledError.
+    yield ": flush\n\n"
+
     # 3. Try Redis pub/sub for live events, fall back to polling
     r = _get_redis()
     pubsub = None
@@ -617,7 +625,6 @@ async def sse_dashboard(request: Request):
             "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # Disable nginx buffering
-            "Access-Control-Allow-Origin": "*",
         },
     )
 

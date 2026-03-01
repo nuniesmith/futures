@@ -1,7 +1,7 @@
 """
 Chart Renderer — Ruby-Style ORB Snapshot Generator
 ====================================================
-Generates chart images that replicate the Ruby v2 NinjaTrader indicator's
+Generates chart images that replicate the Ruby NinjaTrader indicator's
 visual language: dark theme, colored candlesticks, ORB shaded box, VWAP
 line, EMA9 overlay, volume panel, and quality badge.
 
@@ -79,7 +79,7 @@ except ImportError:
 
 @dataclass
 class RenderConfig:
-    """Rendering configuration — matches Ruby v2 NT8 indicator colors."""
+    """Rendering configuration — matches Ruby NT8 indicator colors."""
 
     # Canvas
     figsize: tuple[float, float] = (14, 9)
@@ -87,7 +87,7 @@ class RenderConfig:
     background_color: str = "#0F0F1A"
     panel_ratios: tuple[int, int] = (4, 1)
 
-    # Candlestick colors (Ruby v2 palette)
+    # Candlestick colors (Ruby palette)
     candle_up: str = "#00FFAA"  # green-cyan for bullish
     candle_down: str = "#FF3366"  # hot pink for bearish
     candle_edge: str = "#FFFFFF"
@@ -175,7 +175,7 @@ def _compute_vwap(df: pd.DataFrame) -> pd.Series:
 
 
 def _build_style(config: RenderConfig, direction: str | None = None) -> Any:
-    """Build an mplfinance style matching the Ruby v2 dark theme."""
+    """Build an mplfinance style matching the Ruby dark theme."""
     mc = mpf.make_marketcolors(
         up=config.candle_up,
         down=config.candle_down,
@@ -251,7 +251,7 @@ def render_ruby_snapshot(
     extra_hlines: Sequence[float] | None = None,
     title_suffix: str = "",
 ) -> str | None:
-    """Render a candlestick chart snapshot in Ruby v2 indicator style.
+    """Render a candlestick chart snapshot in Ruby indicator style.
 
     Produces a PNG image with:
       - OHLCV candlesticks (Ruby color scheme on dark background)
