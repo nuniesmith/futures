@@ -15,6 +15,8 @@ using NinjaTrader.Data;
 using NinjaTrader.Gui.Tools;
 using NinjaTrader.NinjaScript;
 using NinjaTrader.NinjaScript.Strategies;
+using RubyIndicator = NinjaTrader.NinjaScript.Indicators.Ruby;
+using RubyBias = NinjaTrader.NinjaScript.Indicators.RubySessionBias;
 #endregion
 
 namespace NinjaTrader.NinjaScript.Strategies
@@ -35,7 +37,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         // Ruby indicator reference — instantiated during Configure so that
         // Ruby.OnBarUpdate() runs on every bar, pushing signals into SignalBus.
         // This is what makes backtesting via Strategy Analyzer work.
-        private NinjaTrader.NinjaScript.Indicators.Ruby rubyIndicator;
+        private RubyIndicator rubyIndicator;
 
         // Order queue: signals are queued here, then processed on the main
         // thread in OnBarUpdate to avoid cross-thread NinjaScript exceptions.
@@ -128,7 +130,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         // They mirror Ruby's ORB parameters so you can tune from Bridge's property grid.
         [NinjaScriptProperty]
         [Display(Name = "Ruby: Session Bias", GroupName = "5. Ruby ORB", Order = 1)]
-        public NinjaTrader.NinjaScript.Indicators.RubySessionBias RubySessionBias { get; set; } = NinjaTrader.NinjaScript.Indicators.RubySessionBias.Auto;
+        public RubyBias RubySessionBias { get; set; } = RubyBias.Auto;
 
         [NinjaScriptProperty]
         [Range(5, 120)]
@@ -197,55 +199,76 @@ namespace NinjaTrader.NinjaScript.Strategies
                 // without this, Ruby never executes during Strategy Analyzer.
                 if (AttachRuby && EnableSignalBus)
                 {
-                    rubyIndicator = Ruby(
-                        /* SR_Lookback */        20,
-                        /* AO_Fast */            5,
-                        /* AO_Slow */            34,
-                        /* WaveLookback */       200,
-                        /* MinWaveRatio */       1.5,
-                        /* RegressionLength */   200,
-                        /* VP_Lookback */        100,
-                        /* VP_Bins */            40,
-                        /* ValueAreaPct */       70,
-                        /* SessionPOC_MaxDays */ 5,
-                        /* NakedPOC_Enabled */   true,
-                        /* VolumeAvgPeriod */    20,
-                        /* VolumeSpikeMult */    1.8,
-                        /* VolumeLowMult */      0.5,
-                        /* LowVolStreakBars */   3,
-                        /* AbsorptionVolMult */  1.5,
-                        /* AbsorptionBodyRatio */ 30,
-                        /* CVD_AnchorDaily */    true,
-                        /* ShowEMA9 */           true,
-                        /* ShowBollingerBands */ false,
-                        /* ShowAdaptiveSR */     false,
-                        /* ShowLabels */         true,
-                        /* ShowVolumeLabels */   false,
-                        /* HeatSensitivity */    70,
-                        /* SignalCooldownMin */   RubySignalCooldownMinutes,
-                        /* ShowVWAP */           true,
-                        /* ShowVWAPBands */      false,
-                        /* ShowPOC */            true,
-                        /* ShowValueArea */      false,
-                        /* ShowDeltaOutline */   false,
-                        /* ShowOpeningRange */   true,
-                        /* SessionBias */        RubySessionBias,
-                        /* ORB_Minutes */        RubyORB_Minutes,
-                        /* ORB_MinQuality */     RubyORB_MinQuality,
-                        /* ORB_VolumeGate */     RubyORB_VolumeGate,
-                        /* ORB_RequireVWAPCross */ RubyORB_RequireVWAPCross,
-                        /* ORB_AllowAdd */       RubyORB_AllowAdd,
-                        /* ORB_AddPullbackATR */ 0.5,
-                        /* ORB_MaxAddBarsAfterBreakout */ 30,
-                        /* SendSignalsToBridge */ true,
-                        /* BridgeUrl */          "http://localhost:" + SignalListenerPort,
-                        /* ExitOnReversal */     true,
-                        /* ExitOnBBTouch */      true,
-                        /* ExitCooldownMinutes */ 3,
-                        /* SL_ATR_Mult */        RubySL_ATR_Mult,
-                        /* TP1_ATR_Mult */       RubyTP1_ATR_Mult,
-                        /* TP2_ATR_Mult */       RubyTP2_ATR_Mult
-                    );
+                    // Manual instantiation — avoids dependency on the NT8 auto-generated
+                    // Ruby() factory method which may not exist until Ruby.cs compiles first.
+                    rubyIndicator = new RubyIndicator();
+
+                    // Core
+                    rubyIndicator.SR_Lookback = 20;
+                    rubyIndicator.AO_Fast = 5;
+                    rubyIndicator.AO_Slow = 34;
+                    rubyIndicator.WaveLookback = 200;
+                    rubyIndicator.MinWaveRatio = 1.5;
+                    rubyIndicator.RegressionLength = 200;
+
+                    // Volume Profile
+                    rubyIndicator.VP_Lookback = 100;
+                    rubyIndicator.VP_Bins = 40;
+                    rubyIndicator.ValueAreaPct = 70;
+
+                    // Session POC
+                    rubyIndicator.SessionPOC_MaxDays = 5;
+                    rubyIndicator.NakedPOC_Enabled = true;
+
+                    // Volume Detection
+                    rubyIndicator.VolumeAvgPeriod = 20;
+                    rubyIndicator.VolumeSpikeMult = 1.8;
+                    rubyIndicator.VolumeLowMult = 0.5;
+                    rubyIndicator.LowVolStreakBars = 3;
+                    rubyIndicator.AbsorptionVolMult = 1.5;
+                    rubyIndicator.AbsorptionBodyRatio = 30;
+
+                    // CVD
+                    rubyIndicator.CVD_AnchorDaily = true;
+
+                    // Visibility
+                    rubyIndicator.ShowEMA9 = true;
+                    rubyIndicator.ShowBollingerBands = false;
+                    rubyIndicator.ShowAdaptiveSR = false;
+                    rubyIndicator.ShowLabels = true;
+                    rubyIndicator.ShowVolumeLabels = false;
+                    rubyIndicator.HeatSensitivity = 70;
+                    rubyIndicator.SignalCooldownMinutes = RubySignalCooldownMinutes;
+                    rubyIndicator.ShowVWAP = true;
+                    rubyIndicator.ShowVWAPBands = false;
+                    rubyIndicator.ShowPOC = true;
+                    rubyIndicator.ShowValueArea = false;
+                    rubyIndicator.ShowDeltaOutline = false;
+                    rubyIndicator.ShowOpeningRange = true;
+
+                    // ORB Strategy (forwarded from Bridge properties)
+                    rubyIndicator.SessionBias = RubySessionBias;
+                    rubyIndicator.ORB_Minutes = RubyORB_Minutes;
+                    rubyIndicator.ORB_MinQuality = RubyORB_MinQuality;
+                    rubyIndicator.ORB_VolumeGate = RubyORB_VolumeGate;
+                    rubyIndicator.ORB_RequireVWAPCross = RubyORB_RequireVWAPCross;
+                    rubyIndicator.ORB_AllowAdd = RubyORB_AllowAdd;
+                    rubyIndicator.ORB_AddPullbackATR = 0.5;
+                    rubyIndicator.ORB_MaxAddBarsAfterBreakout = 30;
+
+                    // Signal Forwarding
+                    rubyIndicator.SendSignalsToBridge = true;
+                    rubyIndicator.BridgeUrl = "http://localhost:" + SignalListenerPort;
+                    rubyIndicator.ExitOnReversal = true;
+                    rubyIndicator.ExitOnBBTouch = true;
+                    rubyIndicator.ExitCooldownMinutes = 3;
+                    rubyIndicator.SL_ATR_Mult = RubySL_ATR_Mult;
+                    rubyIndicator.TP1_ATR_Mult = RubyTP1_ATR_Mult;
+                    rubyIndicator.TP2_ATR_Mult = RubyTP2_ATR_Mult;
+
+                    // Register with NinjaTrader so it receives bar updates
+                    AddChartIndicator(rubyIndicator);
+
                     Print("[Bridge] Ruby indicator attached for SignalBus integration");
                 }
 
