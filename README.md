@@ -34,33 +34,33 @@ strategy — targeting 1–3 high-conviction trades per day.
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        Futures Trading Co-Pilot                         │
 │                                                                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐ │
-│  │   Postgres    │  │    Redis     │  │ Data Service │  │   Engine   │ │
-│  │  (journal,    │  │  (hot cache, │  │  (FastAPI +  │  │ (scheduler,│ │
-│  │   history,    │  │   live bars, │  │   HTMX dash, │  │  analysis, │ │
-│  │   risk)       │  │   focus,     │  │   REST API)  │  │  training) │ │
-│  │              │  │   positions) │  │              │  │            │ │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └─────┬──────┘ │
-│         └─────────────────┴─────────────────┴────────────────┘        │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐   │
+│  │   Postgres   │  │    Redis     │  │ Data Service │  │   Engine   │   │
+│  │  (journal,   │  │  (hot cache, │  │  (FastAPI +  │  │ (scheduler,│   │
+│  │   history,   │  │   live bars, │  │   HTMX dash, │  │  analysis, │   │
+│  │   risk)      │  │   focus,     │  │   REST API)  │  │  training) │   │
+│  │              │  │   positions) │  │              │  │            │   │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └─────┬──────┘   │
+│         └─────────────────┴─────────────────┴────────────────┘          │
 │                                    │                                    │
-│  ┌─────────────────────────────────┴─────────────────────────────────┐ │
-│  │                    Analysis & ML Pipeline                          │ │
-│  │                                                                    │ │
-│  │  Wave Analysis ─ Volatility Clustering ─ Regime Detection (HMM)   │ │
-│  │  ICT/SMC (FVGs, OBs, Sweeps) ─ Volume Profile ─ CVD              │ │
-│  │  Monte Carlo ─ Multi-TF Confluence ─ Signal Quality               │ │
-│  │  ORB Detection ─ 6 Deterministic Filters ─ CNN Inference          │ │
-│  │                                                                    │ │
-│  └─────────────────────────────────┬─────────────────────────────────┘ │
+│  ┌─────────────────────────────────┴─────────────────────────────────┐  │
+│  │                    Analysis & ML Pipeline                         │  │
+│  │                                                                   │  │
+│  │  Wave Analysis ─ Volatility Clustering ─ Regime Detection (HMM)   │  │
+│  │  ICT/SMC (FVGs, OBs, Sweeps) ─ Volume Profile ─ CVD               │  │
+│  │  Monte Carlo ─ Multi-TF Confluence ─ Signal Quality               │  │
+│  │  ORB Detection ─ 6 Deterministic Filters ─ CNN Inference          │  │
+│  │                                                                   │  │
+│  └─────────────────────────────────┬─────────────────────────────────┘  │
 │                                    │                                    │
-│  ┌─────────────────────────────────┴─────────────────────────────────┐ │
-│  │                    Execution Layer                                  │ │
-│  │                                                                    │ │
-│  │  Grok AI Analyst ─ Pre-Market Scorer ─ Risk Manager               │ │
-│  │  POST /execute_signal → Bridge.cs → ATR brackets → CME order      │ │
-│  │  Ruby.cs draws zones/arrows on NinjaTrader chart                  │ │
-│  │                                                                    │ │
-│  └────────────────────────────────────────────────────────────────────┘ │
+│  ┌─────────────────────────────────┴─────────────────────────────────┐  │
+│  │                    Execution Layer                                │  │
+│  │                                                                   │  │
+│  │  Grok AI Analyst ─ Pre-Market Scorer ─ Risk Manager               │  │
+│  │  POST /execute_signal → Bridge.cs → ATR brackets → CME order      │  │
+│  │  Ruby.cs draws zones/arrows on NinjaTrader chart                  │  │
+│  │                                                                   │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 

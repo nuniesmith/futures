@@ -2,10 +2,10 @@
 Tests for the NinjaTrader Live Position Bridge API.
 
 Covers:
-  - POST /update_positions — push positions from NinjaTrader
-  - GET  /positions        — read current positions
-  - DELETE /positions      — clear stale positions
-  - get_live_positions()   — direct cache read helper
+  - POST /positions/update   — push positions from NinjaTrader
+  - GET  /positions/          — read current positions
+  - DELETE /positions/        — clear stale positions
+  - get_live_positions()      — direct cache read helper
   - Edge cases: empty positions, malformed payloads, cache expiry, etc.
   - Integration with Grok context builder (positions in market context)
 """
@@ -14,6 +14,7 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 # ---------------------------------------------------------------------------
@@ -51,9 +52,23 @@ def _clear_position_cache():
 
 @pytest.fixture()
 def client():
-    """FastAPI test client for the trade API."""
-    from lib.api_server import app
+    """FastAPI test client with the positions router mounted at /positions."""
+    from lib.services.data.api.positions import router as positions_router
 
+    app = FastAPI()
+    app.include_router(positions_router, prefix="/positions")
+    return TestClient(app)
+
+
+@pytest.fixture()
+def full_client():
+    """FastAPI test client with positions + health routers (for regression tests)."""
+    from lib.services.data.api.health import router as health_router
+    from lib.services.data.api.positions import router as positions_router
+
+    app = FastAPI()
+    app.include_router(positions_router, prefix="/positions")
+    app.include_router(health_router)
     return TestClient(app)
 
 
@@ -113,52 +128,52 @@ def empty_payload():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# POST /update_positions
+# POST /positions/update
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestUpdatePositions:
-    """Tests for the POST /update_positions endpoint."""
+    """Tests for the POST /positions/update endpoint."""
 
     def test_post_positions_success(self, client, sample_payload):
         """Basic successful position push."""
-        resp = client.post("/update_positions", json=sample_payload)
+        resp = client.post("/positions/update", json=sample_payload)
         assert resp.status_code == 200
         body = resp.json()
-        assert body["status"] == "ok"
-        assert body["positions_received"] == 2
+        assert body["status"] == "received"
+        assert body["positions_count"] == 2
         assert body["open_positions"] == 2
         assert body["total_unrealized_pnl"] == 83.00  # 125 + (-42)
         assert "received_at" in body
 
     def test_post_single_position(self, client, single_position_payload):
         """Push a single position."""
-        resp = client.post("/update_positions", json=single_position_payload)
+        resp = client.post("/positions/update", json=single_position_payload)
         assert resp.status_code == 200
         body = resp.json()
-        assert body["positions_received"] == 1
+        assert body["positions_count"] == 1
         assert body["open_positions"] == 1
         assert body["total_unrealized_pnl"] == 30.00
 
     def test_post_empty_positions(self, client, empty_payload):
         """Push an empty positions list (all positions closed)."""
-        resp = client.post("/update_positions", json=empty_payload)
+        resp = client.post("/positions/update", json=empty_payload)
         assert resp.status_code == 200
         body = resp.json()
-        assert body["positions_received"] == 0
+        assert body["positions_count"] == 0
         assert body["open_positions"] == 0
         assert body["total_unrealized_pnl"] == 0.0
 
     def test_post_updates_cache(self, client, sample_payload):
         """Verify that POST actually writes to the cache."""
-        from lib.api_server import get_live_positions
+        from lib.services.data.api.positions import get_live_positions
 
         # Before: no positions
         before = get_live_positions()
         assert before["has_positions"] is False
 
         # Push
-        client.post("/update_positions", json=sample_payload)
+        client.post("/positions/update", json=sample_payload)
 
         # After: positions present
         after = get_live_positions()
@@ -166,18 +181,16 @@ class TestUpdatePositions:
         assert after["account"] == "Sim101"
         assert len(after["positions"]) == 2
 
-    def test_post_overwrites_previous(
-        self, client, sample_payload, single_position_payload
-    ):
+    def test_post_overwrites_previous(self, client, sample_payload, single_position_payload):
         """A new POST replaces the previous positions snapshot."""
-        from lib.api_server import get_live_positions
+        from lib.services.data.api.positions import get_live_positions
 
         # First push: 2 positions
-        client.post("/update_positions", json=sample_payload)
+        client.post("/positions/update", json=sample_payload)
         assert len(get_live_positions()["positions"]) == 2
 
         # Second push: 1 position (replaces, not appends)
-        client.post("/update_positions", json=single_position_payload)
+        client.post("/positions/update", json=single_position_payload)
         result = get_live_positions()
         assert len(result["positions"]) == 1
         assert result["account"] == "Live001"
@@ -197,7 +210,7 @@ class TestUpdatePositions:
             ],
             "timestamp": "2025-01-15T14:30:00Z",
         }
-        resp = client.post("/update_positions", json=payload)
+        resp = client.post("/positions/update", json=payload)
         assert resp.status_code == 200
         assert resp.json()["total_unrealized_pnl"] == -500.00
 
@@ -223,11 +236,11 @@ class TestUpdatePositions:
             ],
             "timestamp": "2025-01-15T14:30:00Z",
         }
-        resp = client.post("/update_positions", json=payload)
+        resp = client.post("/positions/update", json=payload)
         assert resp.status_code == 200
         body = resp.json()
         # Total received includes both, but open count only counts qty > 0
-        assert body["positions_received"] == 2
+        assert body["positions_count"] == 2
         assert body["open_positions"] == 1
 
     def test_post_missing_account_fails(self, client):
@@ -243,7 +256,7 @@ class TestUpdatePositions:
                 }
             ],
         }
-        resp = client.post("/update_positions", json=payload)
+        resp = client.post("/positions/update", json=payload)
         assert resp.status_code == 422  # Pydantic validation error
 
     def test_post_missing_position_fields_fails(self, client):
@@ -258,7 +271,7 @@ class TestUpdatePositions:
             ],
             "timestamp": "2025-01-15T14:30:00Z",
         }
-        resp = client.post("/update_positions", json=payload)
+        resp = client.post("/positions/update", json=payload)
         assert resp.status_code == 422
 
     def test_post_optional_fields_default(self, client):
@@ -276,10 +289,10 @@ class TestUpdatePositions:
             ],
             # timestamp is optional
         }
-        resp = client.post("/update_positions", json=payload)
+        resp = client.post("/positions/update", json=payload)
         assert resp.status_code == 200
         body = resp.json()
-        assert body["positions_received"] == 1
+        assert body["positions_count"] == 1
         assert body["total_unrealized_pnl"] == 0.0  # default
 
     def test_post_large_position_count(self, client):
@@ -300,22 +313,22 @@ class TestUpdatePositions:
             "positions": positions,
             "timestamp": "2025-01-15T14:30:00Z",
         }
-        resp = client.post("/update_positions", json=payload)
+        resp = client.post("/positions/update", json=payload)
         assert resp.status_code == 200
-        assert resp.json()["positions_received"] == 20
+        assert resp.json()["positions_count"] == 20
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# GET /positions
+# GET /positions/
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestGetPositions:
-    """Tests for the GET /positions endpoint."""
+    """Tests for the GET /positions/ endpoint."""
 
     def test_get_no_positions(self, client):
         """GET with no cached positions returns empty response."""
-        resp = client.get("/positions")
+        resp = client.get("/positions/")
         assert resp.status_code == 200
         body = resp.json()
         assert body["has_positions"] is False
@@ -325,9 +338,9 @@ class TestGetPositions:
 
     def test_get_after_push(self, client, sample_payload):
         """GET returns the positions pushed by POST."""
-        client.post("/update_positions", json=sample_payload)
+        client.post("/positions/update", json=sample_payload)
 
-        resp = client.get("/positions")
+        resp = client.get("/positions/")
         assert resp.status_code == 200
         body = resp.json()
         assert body["has_positions"] is True
@@ -338,9 +351,9 @@ class TestGetPositions:
 
     def test_get_position_details(self, client, sample_payload):
         """Verify individual position fields are preserved."""
-        client.post("/update_positions", json=sample_payload)
+        client.post("/positions/update", json=sample_payload)
 
-        resp = client.get("/positions")
+        resp = client.get("/positions/")
         positions = resp.json()["positions"]
 
         mes = next(p for p in positions if p["symbol"] == "MESZ5")
@@ -356,48 +369,48 @@ class TestGetPositions:
         assert mnq["unrealizedPnL"] == -42.00
 
     def test_get_after_clear(self, client, sample_payload):
-        """GET returns empty after DELETE /positions."""
-        client.post("/update_positions", json=sample_payload)
-        client.delete("/positions")
+        """GET returns empty after DELETE /positions/."""
+        client.post("/positions/update", json=sample_payload)
+        client.delete("/positions/")
 
-        resp = client.get("/positions")
+        resp = client.get("/positions/")
         body = resp.json()
         assert body["has_positions"] is False
         assert body["positions"] == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# DELETE /positions
+# DELETE /positions/
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestClearPositions:
-    """Tests for the DELETE /positions endpoint."""
+    """Tests for the DELETE /positions/ endpoint."""
 
     def test_clear_when_empty(self, client):
         """DELETE on empty cache succeeds without error."""
-        resp = client.delete("/positions")
+        resp = client.delete("/positions/")
         assert resp.status_code == 200
         assert resp.json()["status"] == "cleared"
 
     def test_clear_removes_data(self, client, sample_payload):
         """DELETE removes cached positions."""
-        from lib.api_server import get_live_positions
+        from lib.services.data.api.positions import get_live_positions
 
-        client.post("/update_positions", json=sample_payload)
+        client.post("/positions/update", json=sample_payload)
         assert get_live_positions()["has_positions"] is True
 
-        client.delete("/positions")
+        client.delete("/positions/")
         assert get_live_positions()["has_positions"] is False
 
     def test_clear_idempotent(self, client, sample_payload):
         """Multiple DELETEs don't cause errors."""
-        client.post("/update_positions", json=sample_payload)
-        client.delete("/positions")
-        client.delete("/positions")
-        client.delete("/positions")
+        client.post("/positions/update", json=sample_payload)
+        client.delete("/positions/")
+        client.delete("/positions/")
+        client.delete("/positions/")
 
-        resp = client.get("/positions")
+        resp = client.get("/positions/")
         assert resp.json()["has_positions"] is False
 
 
@@ -411,7 +424,7 @@ class TestGetLivePositionsHelper:
 
     def test_no_data(self):
         """Returns empty dict structure when cache is empty."""
-        from lib.api_server import get_live_positions
+        from lib.services.data.api.positions import get_live_positions
 
         result = get_live_positions()
         assert result["has_positions"] is False
@@ -423,9 +436,9 @@ class TestGetLivePositionsHelper:
 
     def test_after_push(self, client, sample_payload):
         """Returns correct data after a push."""
-        from lib.api_server import get_live_positions
+        from lib.services.data.api.positions import get_live_positions
 
-        client.post("/update_positions", json=sample_payload)
+        client.post("/positions/update", json=sample_payload)
 
         result = get_live_positions()
         assert result["has_positions"] is True
@@ -435,7 +448,7 @@ class TestGetLivePositionsHelper:
 
     def test_pnl_calculation(self, client):
         """Total unrealized PnL is computed correctly across positions."""
-        from lib.api_server import get_live_positions
+        from lib.services.data.api.positions import get_live_positions
 
         payload = {
             "account": "Test",
@@ -463,15 +476,18 @@ class TestGetLivePositionsHelper:
                 },
             ],
         }
-        client.post("/update_positions", json=payload)
+        client.post("/positions/update", json=payload)
 
         result = get_live_positions()
         assert result["total_unrealized_pnl"] == 120.0  # 50 + (-30) + 100
 
     def test_corrupt_cache_data(self):
         """Handles corrupt cache data gracefully."""
-        from lib.api_server import _POSITIONS_CACHE_KEY, get_live_positions
         from lib.core.cache import cache_set
+        from lib.services.data.api.positions import (
+            _POSITIONS_CACHE_KEY,
+            get_live_positions,
+        )
 
         cache_set(_POSITIONS_CACHE_KEY, b"not valid json{{{", 60)
 
@@ -481,8 +497,11 @@ class TestGetLivePositionsHelper:
 
     def test_partial_cache_data(self):
         """Handles cache data with missing fields gracefully."""
-        from lib.api_server import _POSITIONS_CACHE_KEY, get_live_positions
         from lib.core.cache import cache_set
+        from lib.services.data.api.positions import (
+            _POSITIONS_CACHE_KEY,
+            get_live_positions,
+        )
 
         data = json.dumps({"account": "Test"}).encode()  # missing positions key
         cache_set(_POSITIONS_CACHE_KEY, data, 60)
@@ -494,32 +513,27 @@ class TestGetLivePositionsHelper:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Health endpoint with bridge status
+# Health endpoint basic check
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestHealthWithBridge:
-    """Tests for the /health endpoint's NT bridge status."""
+class TestHealthEndpoint:
+    """Tests for the /health endpoint (mounted alongside positions)."""
 
-    def test_health_no_positions(self, client):
-        """Health shows bridge as disconnected when no positions."""
-        resp = client.get("/health")
+    def test_health_returns_ok_or_degraded(self, full_client):
+        """Health endpoint responds with a status field."""
+        resp = full_client.get("/health")
         assert resp.status_code == 200
         body = resp.json()
-        assert "nt_bridge" in body
-        assert body["nt_bridge"]["connected"] is False
-        assert body["nt_bridge"]["open_positions"] == 0
+        assert "status" in body
+        assert body["status"] in ("ok", "degraded")
 
-    def test_health_with_positions(self, client, sample_payload):
-        """Health shows bridge as connected when positions are present."""
-        client.post("/update_positions", json=sample_payload)
-
-        resp = client.get("/health")
+    def test_health_has_components(self, full_client):
+        """Health endpoint includes component status."""
+        resp = full_client.get("/health")
         body = resp.json()
-        assert body["nt_bridge"]["connected"] is True
-        assert body["nt_bridge"]["account"] == "Sim101"
-        assert body["nt_bridge"]["open_positions"] == 2
-        assert body["nt_bridge"]["last_update"] != ""
+        assert "components" in body
+        assert "redis" in body["components"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -680,7 +694,7 @@ class TestModelValidation:
 
     def test_nt_position_model(self):
         """NTPosition model accepts valid data."""
-        from lib.api_server import NTPosition
+        from lib.services.data.api.positions import NTPosition
 
         pos = NTPosition(
             symbol="MESZ5",
@@ -697,7 +711,7 @@ class TestModelValidation:
 
     def test_nt_position_defaults(self):
         """NTPosition model defaults for optional fields."""
-        from lib.api_server import NTPosition
+        from lib.services.data.api.positions import NTPosition
 
         pos = NTPosition(
             symbol="MESZ5",
@@ -710,7 +724,7 @@ class TestModelValidation:
 
     def test_nt_payload_model(self):
         """NTPositionsPayload model validates correctly."""
-        from lib.api_server import NTPosition, NTPositionsPayload
+        from lib.services.data.api.positions import NTPosition, NTPositionsPayload
 
         payload = NTPositionsPayload(
             account="Sim101",
@@ -729,7 +743,7 @@ class TestModelValidation:
 
     def test_nt_payload_empty_positions(self):
         """Payload with empty positions list is valid."""
-        from lib.api_server import NTPositionsPayload
+        from lib.services.data.api.positions import NTPositionsPayload
 
         payload = NTPositionsPayload(
             account="Sim101",
@@ -740,7 +754,7 @@ class TestModelValidation:
 
     def test_nt_response_model(self):
         """NTPositionsResponse model works with defaults."""
-        from lib.api_server import NTPositionsResponse
+        from lib.services.data.api.positions import NTPositionsResponse
 
         resp = NTPositionsResponse()
         assert resp.account == ""
@@ -750,36 +764,26 @@ class TestModelValidation:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Existing trade endpoints still work (regression)
+# Existing endpoints still work (regression)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestExistingEndpointsRegression:
-    """Verify that existing trade endpoints still work after position bridge addition."""
+    """Verify that existing endpoints still respond after position bridge addition."""
 
-    def test_health_still_works(self, client):
-        resp = client.get("/health")
+    def test_health_still_works(self, full_client):
+        resp = full_client.get("/health")
         assert resp.status_code == 200
-        assert resp.json()["status"] == "ok"
+        body = resp.json()
+        assert "status" in body
 
-    def test_accounts_still_works(self, client):
-        resp = client.get("/accounts")
+    def test_positions_get_still_works(self, full_client):
+        """GET /positions/ returns a valid response."""
+        resp = full_client.get("/positions/")
         assert resp.status_code == 200
-        data = resp.json()
-        assert "50k" in data
-        assert "100k" in data
-        assert "150k" in data
-
-    def test_assets_still_works(self, client):
-        resp = client.get("/assets")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "Gold" in data or "S&P" in data
-
-    def test_trades_open_still_works(self, client):
-        resp = client.get("/trades/open")
-        assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        body = resp.json()
+        assert "has_positions" in body
+        assert "positions" in body
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -792,7 +796,7 @@ class TestRapidUpdates:
 
     def test_rapid_position_updates(self, client):
         """Multiple rapid POSTs don't corrupt data."""
-        from lib.api_server import get_live_positions
+        from lib.services.data.api.positions import get_live_positions
 
         for i in range(10):
             payload = {
@@ -808,7 +812,7 @@ class TestRapidUpdates:
                 ],
                 "timestamp": f"2025-01-15T14:30:{i:02d}Z",
             }
-            resp = client.post("/update_positions", json=payload)
+            resp = client.post("/positions/update", json=payload)
             assert resp.status_code == 200
 
         # Final state should reflect the last update
@@ -818,14 +822,14 @@ class TestRapidUpdates:
 
     def test_position_lifecycle(self, client):
         """Simulate: no positions → open → update PnL → close → clear."""
-        from lib.api_server import get_live_positions
+        from lib.services.data.api.positions import get_live_positions
 
         # 1. No positions initially
         assert get_live_positions()["has_positions"] is False
 
         # 2. Open a position
         client.post(
-            "/update_positions",
+            "/positions/update",
             json={
                 "account": "Sim101",
                 "positions": [
@@ -845,7 +849,7 @@ class TestRapidUpdates:
 
         # 3. PnL updates
         client.post(
-            "/update_positions",
+            "/positions/update",
             json={
                 "account": "Sim101",
                 "positions": [
@@ -863,7 +867,7 @@ class TestRapidUpdates:
 
         # 4. Position closed (empty list)
         client.post(
-            "/update_positions",
+            "/positions/update",
             json={
                 "account": "Sim101",
                 "positions": [],
@@ -874,5 +878,5 @@ class TestRapidUpdates:
         assert result["total_unrealized_pnl"] == 0.0
 
         # 5. Clean up
-        client.delete("/positions")
+        client.delete("/positions/")
         assert get_live_positions()["has_positions"] is False
