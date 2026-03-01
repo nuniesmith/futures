@@ -60,6 +60,20 @@ namespace NinjaTrader.NinjaScript.Strategies
         // Heartbeat interval in seconds
         private const int HEARTBEAT_INTERVAL_SECONDS = 15;
 
+        // ── Prometheus-style metrics counters ─────────────────────────
+        private long metricSignalsReceived;
+        private long metricSignalsExecuted;
+        private long metricSignalsRejected;
+        private long metricExitsExecuted;
+        private long metricPositionPushes;
+        private long metricPositionPushErrors;
+        private long metricHeartbeatsSent;
+        private long metricHttpRequests;
+        private long metricSignalBusDrained;
+        private long metricOrdersFilled;
+        private long metricOrdersRejected;
+        private DateTime startTime = DateTime.UtcNow;
+
         #region Properties
         [NinjaScriptProperty]
         [TypeConverter(typeof(AccountNameConverter))]
@@ -368,12 +382,14 @@ namespace NinjaTrader.NinjaScript.Strategies
                 // Log significant state changes
                 if (e.Order.OrderState == NinjaTrader.Cbi.OrderState.Filled)
                 {
+                    Interlocked.Increment(ref metricOrdersFilled);
                     Print($"[Bridge] Order FILLED: {e.Order.Name} {e.Order.OrderAction} x{e.Order.Filled} @ {e.Order.AverageFillPrice:F2}");
                     // Push updated positions after a fill
                     SendPositionUpdate();
                 }
                 else if (e.Order.OrderState == NinjaTrader.Cbi.OrderState.Rejected)
                 {
+                    Interlocked.Increment(ref metricOrdersRejected);
                     Print($"[Bridge] Order REJECTED: {e.Order.Name} — check NinjaTrader log");
                 }
                 else if (e.Order.OrderState == NinjaTrader.Cbi.OrderState.Cancelled)
@@ -401,6 +417,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             var client = httpClient;
             if (client == null) return;
 
+            Interlocked.Increment(ref metricPositionPushes);
             try
             {
                 double lastPrice = SafeGetClose();
@@ -516,6 +533,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 {
                     if (t.IsFaulted)
                     {
+                        Interlocked.Increment(ref metricPositionPushErrors);
                         if (lastPushSuccess || (DateTime.Now - lastErrorLog).TotalSeconds > 30)
                         {
                             lastErrorLog = DateTime.Now;
@@ -598,6 +616,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         #region Heartbeat
         private void SendHeartbeat()
         {
+            Interlocked.Increment(ref metricHeartbeatsSent);
             var client = httpClient;
             if (client == null || myAccount == null) return;
 
@@ -702,6 +721,8 @@ namespace NinjaTrader.NinjaScript.Strategies
             var signals = SignalBus.DrainAll();
             if (signals.Count == 0) return;
 
+            Interlocked.Add(ref metricSignalBusDrained, signals.Count);
+
             foreach (var sig in signals)
             {
                 try
@@ -709,6 +730,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     if (sig.SignalType == "exit")
                     {
                         string reason = !string.IsNullOrEmpty(sig.ExitReason) ? sig.ExitReason : "signal_bus_exit";
+                        Interlocked.Increment(ref metricSignalsReceived);
                         Print($"[Bridge] SignalBus EXIT: reason={reason} strategy={sig.Strategy} asset={sig.Asset}");
 
                         if (State == State.Historical)
@@ -743,6 +765,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         /// </summary>
         private void ExecuteEntryDirect(SignalBus.Signal sig)
         {
+            Interlocked.Increment(ref metricSignalsReceived);
             string dir = (sig.Direction ?? "long").ToLower();
             int requestedQty = sig.Quantity > 0 ? sig.Quantity : 1;
             string typeStr = (sig.OrderType ?? "market").ToLower();
@@ -791,6 +814,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 
             int finalQty = Math.Max(1, Math.Min(requestedQty, Math.Min(riskBasedQty, MaxMicroContracts)));
 
+            Interlocked.Increment(ref metricSignalsExecuted);
             Print($"[Bridge BT] {dir.ToUpper()} x{finalQty} (req={requestedQty}, risk={riskBasedQty}, cap={MaxMicroContracts}) id={signalId}");
 
             string entryName = $"Signal-{dir}-{signalId}";
@@ -878,6 +902,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     }
                 }
 
+                Interlocked.Increment(ref metricExitsExecuted);
                 Print($"[Bridge BT] 🔴 FLATTEN ALL — reason: {reason}");
             }
             catch (Exception ex)
@@ -906,6 +931,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         private Dictionary<string, object> ProcessSignal(string json)
         {
             var response = new Dictionary<string, object>();
+            Interlocked.Increment(ref metricSignalsReceived);
 
             try
             {
@@ -928,6 +954,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 {
                     string msg = $"Signal rejected — risk blocked: {riskBlockReason}";
                     Print($"[Bridge] ⚠️ {msg}");
+                    Interlocked.Increment(ref metricSignalsRejected);
                     response["status"] = "rejected";
                     response["reason"] = msg;
                     response["signal_id"] = signalId;
@@ -1044,6 +1071,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 
                         // Push updated positions after signal processing
                         SendPositionUpdate();
+                        Interlocked.Increment(ref metricSignalsExecuted);
                         Print($"[Bridge] ✅ Executed {capturedDir.ToUpper()} x{capturedQty} [{capturedStrategy}] id={capturedSignalId}");
                     });
                 }
@@ -1073,6 +1101,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         private Dictionary<string, object> FlattenAll(string reason)
         {
             var response = new Dictionary<string, object>();
+            Interlocked.Increment(ref metricExitsExecuted);
 
             try
             {
@@ -1279,6 +1308,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     try
                     {
                         var context = listener.GetContext();
+                        Interlocked.Increment(ref metricHttpRequests);
 
                         // Add CORS headers to every response so the browser dashboard
                         // (or Python proxy) can call the Bridge directly if needed.
@@ -1343,9 +1373,16 @@ namespace NinjaTrader.NinjaScript.Strategies
                             // Lightweight health check — just returns 200 with minimal JSON
                             SendResponse(context.Response, 200, "{\"status\":\"ok\",\"bridge_version\":\"2.0\"}");
                         }
+                        else if (method == "GET" && path == "/metrics")
+                        {
+                            // Prometheus exposition format — scrapeable by Prometheus
+                            string metrics = BuildPrometheusMetrics();
+                            context.Response.ContentType = "text/plain; version=0.0.4; charset=utf-8";
+                            SendResponse(context.Response, 200, metrics);
+                        }
                         else
                         {
-                            SendResponse(context.Response, 404, "{\"error\":\"not found\",\"endpoints\":[\"/execute_signal\",\"/flatten\",\"/cancel_orders\",\"/status\",\"/orders\",\"/health\"]}");
+                            SendResponse(context.Response, 404, "{\"error\":\"not found\",\"endpoints\":[\"/execute_signal\",\"/flatten\",\"/cancel_orders\",\"/status\",\"/orders\",\"/health\",\"/metrics\"]}");
                         }
                     }
                     catch (HttpListenerException)
@@ -1386,6 +1423,154 @@ namespace NinjaTrader.NinjaScript.Strategies
             response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
             response.Headers.Add("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key");
             response.Headers.Add("Access-Control-Max-Age", "86400");
+        }
+
+        /// <summary>
+        /// Build Prometheus exposition format metrics for /metrics endpoint.
+        /// This allows Prometheus to scrape Bridge directly on its listener port.
+        /// </summary>
+        private string BuildPrometheusMetrics()
+        {
+            var sb = new StringBuilder();
+            double uptimeSeconds = (DateTime.UtcNow - startTime).TotalSeconds;
+
+            // Connection status
+            bool connected = myAccount != null && State == NinjaTrader.NinjaScript.State.Realtime;
+            bool listenerUp = listener != null && !listenerStopped;
+            bool rubyAttached = rubyIndicator != null;
+            bool signalBusActive = EnableSignalBus && SignalBus.HasConsumer;
+
+            sb.AppendLine("# HELP bridge_up Whether the Bridge strategy is connected and running (1=up, 0=down).");
+            sb.AppendLine("# TYPE bridge_up gauge");
+            sb.Append("bridge_up ").AppendLine(connected ? "1" : "0");
+
+            sb.AppendLine("# HELP bridge_listener_up Whether the HTTP signal listener is running (1=up, 0=down).");
+            sb.AppendLine("# TYPE bridge_listener_up gauge");
+            sb.Append("bridge_listener_up ").AppendLine(listenerUp ? "1" : "0");
+
+            sb.AppendLine("# HELP bridge_ruby_attached Whether the Ruby indicator is attached to Bridge (1=yes, 0=no).");
+            sb.AppendLine("# TYPE bridge_ruby_attached gauge");
+            sb.Append("bridge_ruby_attached ").AppendLine(rubyAttached ? "1" : "0");
+
+            sb.AppendLine("# HELP bridge_signalbus_active Whether the SignalBus consumer is registered (1=active, 0=inactive).");
+            sb.AppendLine("# TYPE bridge_signalbus_active gauge");
+            sb.Append("bridge_signalbus_active ").AppendLine(signalBusActive ? "1" : "0");
+
+            sb.AppendLine("# HELP bridge_uptime_seconds Seconds since Bridge strategy started.");
+            sb.AppendLine("# TYPE bridge_uptime_seconds gauge");
+            sb.Append("bridge_uptime_seconds ").AppendLine(uptimeSeconds.ToString("F0"));
+
+            // Account & position gauges
+            int posCount = 0;
+            double cashBalance = 0;
+            double unrealizedPnL = 0;
+            double realizedPnL = 0;
+            try
+            {
+                if (myAccount != null)
+                {
+                    cashBalance = myAccount.Get(AccountItem.CashValue, Currency.UsDollar);
+                    realizedPnL = myAccount.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar);
+                    if (myAccount.Positions != null)
+                    {
+                        foreach (Position pos in myAccount.Positions)
+                        {
+                            if (pos != null && pos.Quantity != 0)
+                            {
+                                posCount++;
+                                try
+                                {
+                                    double lastPrice = SafeGetClose();
+                                    if (lastPrice > 0)
+                                        unrealizedPnL += pos.GetUnrealizedProfitLoss(PerformanceUnit.Currency, lastPrice);
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            sb.AppendLine("# HELP bridge_positions_count Number of open positions.");
+            sb.AppendLine("# TYPE bridge_positions_count gauge");
+            sb.Append("bridge_positions_count ").AppendLine(posCount.ToString());
+
+            sb.AppendLine("# HELP bridge_cash_balance Account cash balance in USD.");
+            sb.AppendLine("# TYPE bridge_cash_balance gauge");
+            sb.Append("bridge_cash_balance ").AppendLine(Math.Round(cashBalance, 2).ToString());
+
+            sb.AppendLine("# HELP bridge_unrealized_pnl Total unrealized P&L in USD.");
+            sb.AppendLine("# TYPE bridge_unrealized_pnl gauge");
+            sb.Append("bridge_unrealized_pnl ").AppendLine(Math.Round(unrealizedPnL, 2).ToString());
+
+            sb.AppendLine("# HELP bridge_realized_pnl Total realized P&L in USD.");
+            sb.AppendLine("# TYPE bridge_realized_pnl gauge");
+            sb.Append("bridge_realized_pnl ").AppendLine(Math.Round(realizedPnL, 2).ToString());
+
+            sb.AppendLine("# HELP bridge_risk_blocked Whether the risk engine has blocked trading (1=blocked, 0=ok).");
+            sb.AppendLine("# TYPE bridge_risk_blocked gauge");
+            sb.Append("bridge_risk_blocked ").AppendLine(riskBlocked ? "1" : "0");
+
+            // Counters
+            sb.AppendLine("# HELP bridge_signals_received_total Total signals received (HTTP + SignalBus).");
+            sb.AppendLine("# TYPE bridge_signals_received_total counter");
+            sb.Append("bridge_signals_received_total ").AppendLine(Interlocked.Read(ref metricSignalsReceived).ToString());
+
+            sb.AppendLine("# HELP bridge_signals_executed_total Total entry signals that were executed.");
+            sb.AppendLine("# TYPE bridge_signals_executed_total counter");
+            sb.Append("bridge_signals_executed_total ").AppendLine(Interlocked.Read(ref metricSignalsExecuted).ToString());
+
+            sb.AppendLine("# HELP bridge_signals_rejected_total Total signals rejected (risk block, cooldown, etc).");
+            sb.AppendLine("# TYPE bridge_signals_rejected_total counter");
+            sb.Append("bridge_signals_rejected_total ").AppendLine(Interlocked.Read(ref metricSignalsRejected).ToString());
+
+            sb.AppendLine("# HELP bridge_exits_executed_total Total flatten/exit operations executed.");
+            sb.AppendLine("# TYPE bridge_exits_executed_total counter");
+            sb.Append("bridge_exits_executed_total ").AppendLine(Interlocked.Read(ref metricExitsExecuted).ToString());
+
+            sb.AppendLine("# HELP bridge_position_pushes_total Total position updates pushed to dashboard.");
+            sb.AppendLine("# TYPE bridge_position_pushes_total counter");
+            sb.Append("bridge_position_pushes_total ").AppendLine(Interlocked.Read(ref metricPositionPushes).ToString());
+
+            sb.AppendLine("# HELP bridge_position_push_errors_total Total failed position pushes.");
+            sb.AppendLine("# TYPE bridge_position_push_errors_total counter");
+            sb.Append("bridge_position_push_errors_total ").AppendLine(Interlocked.Read(ref metricPositionPushErrors).ToString());
+
+            sb.AppendLine("# HELP bridge_heartbeats_total Total heartbeats sent to dashboard.");
+            sb.AppendLine("# TYPE bridge_heartbeats_total counter");
+            sb.Append("bridge_heartbeats_total ").AppendLine(Interlocked.Read(ref metricHeartbeatsSent).ToString());
+
+            sb.AppendLine("# HELP bridge_orders_filled_total Total orders that reached Filled state.");
+            sb.AppendLine("# TYPE bridge_orders_filled_total counter");
+            sb.Append("bridge_orders_filled_total ").AppendLine(Interlocked.Read(ref metricOrdersFilled).ToString());
+
+            sb.AppendLine("# HELP bridge_orders_rejected_total Total orders that were rejected by broker.");
+            sb.AppendLine("# TYPE bridge_orders_rejected_total counter");
+            sb.Append("bridge_orders_rejected_total ").AppendLine(Interlocked.Read(ref metricOrdersRejected).ToString());
+
+            // SignalBus gauges
+            sb.AppendLine("# HELP bridge_signalbus_enqueued_total Total signals ever enqueued into SignalBus.");
+            sb.AppendLine("# TYPE bridge_signalbus_enqueued_total counter");
+            sb.Append("bridge_signalbus_enqueued_total ").AppendLine(SignalBus.TotalEnqueued.ToString());
+
+            sb.AppendLine("# HELP bridge_signalbus_drained_total Total signals drained from SignalBus by Bridge.");
+            sb.AppendLine("# TYPE bridge_signalbus_drained_total counter");
+            sb.Append("bridge_signalbus_drained_total ").AppendLine(SignalBus.TotalDrained.ToString());
+
+            sb.AppendLine("# HELP bridge_signalbus_pending Number of signals waiting in SignalBus queue.");
+            sb.AppendLine("# TYPE bridge_signalbus_pending gauge");
+            sb.Append("bridge_signalbus_pending ").AppendLine(SignalBus.PendingCount.ToString());
+
+            // Info metric (labels carry version/account metadata)
+            string acctName = myAccount?.Name ?? "disconnected";
+            sb.AppendLine("# HELP bridge_info Bridge metadata as labels.");
+            sb.AppendLine("# TYPE bridge_info gauge");
+            sb.Append("bridge_info{version=\"2.0\",account=\"").Append(acctName)
+              .Append("\",port=\"").Append(SignalListenerPort)
+              .AppendLine("\"} 1");
+
+            return sb.ToString();
         }
 
         private string BuildStatusJson()
@@ -1459,6 +1644,12 @@ namespace NinjaTrader.NinjaScript.Strategies
                 sb.Append("\"bridge_version\":\"2.0\",");
                 sb.Append("\"listenerPort\":").Append(SignalListenerPort).Append(",");
                 sb.Append("\"dashboardUrl\":\"").Append(EscapeJson(DashboardBaseUrl)).Append("\",");
+                sb.Append("\"rubyAttached\":").Append(rubyIndicator != null ? "true" : "false").Append(",");
+                sb.Append("\"signalBusActive\":").Append(EnableSignalBus && SignalBus.HasConsumer ? "true" : "false").Append(",");
+                sb.Append("\"signalBusEnqueued\":").Append(SignalBus.TotalEnqueued).Append(",");
+                sb.Append("\"signalBusDrained\":").Append(SignalBus.TotalDrained).Append(",");
+                sb.Append("\"signalBusPending\":").Append(SignalBus.PendingCount).Append(",");
+                sb.Append("\"metricsUrl\":\"http://localhost:").Append(SignalListenerPort).Append("/metrics\",");
                 sb.Append("\"timestamp\":\"").Append(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")).Append("\"");
                 sb.Append("}");
                 return sb.ToString();
