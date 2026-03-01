@@ -31,7 +31,7 @@ import json
 import logging
 import math
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("engine.focus")
@@ -180,7 +180,7 @@ def _derive_bias(
 def compute_asset_focus(
     name: str,
     account_size: int = DEFAULT_ACCOUNT_SIZE,
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Compute focus data for a single asset.
 
     Returns dict with all focus fields, or None on failure.
@@ -327,7 +327,7 @@ def compute_asset_focus(
 
 def compute_daily_focus(
     account_size: int = DEFAULT_ACCOUNT_SIZE,
-    symbols: Optional[list[str]] = None,
+    symbols: list[str] | None = None,
 ) -> dict[str, Any]:
     """Compute full daily focus payload for all tracked assets.
 

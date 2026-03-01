@@ -1,5 +1,5 @@
 """
-FKS Signal Quality Score — ported from fks.pine and fks_info.pine.
+Ruby Signal Quality Score — ported from fks.pine and fks_info.pine.
 
 This module computes the multi-factor signal quality score exactly as
 implemented in your Pine Script indicators. The score combines 5 weighted
@@ -94,26 +94,15 @@ def _detect_bullish_candle(
     upper_wick = high[i] - max(open_[i], close[i])
 
     # Hammer pattern
-    hammer = (
-        body_size < candle_range * 0.3
-        and lower_wick > body_size * 2
-        and upper_wick < body_size
-    )
+    hammer = body_size < candle_range * 0.3 and lower_wick > body_size * 2 and upper_wick < body_size
 
     # Bullish engulfing
     bullish_engulfing = (
-        close[i] > open_[i]
-        and close[i - 1] < open_[i - 1]
-        and close[i] > open_[i - 1]
-        and open_[i] < close[i - 1]
+        close[i] > open_[i] and close[i - 1] < open_[i - 1] and close[i] > open_[i - 1] and open_[i] < close[i - 1]
     )
 
     # Pin bar (long lower wick rejection)
-    pin_bar = (
-        lower_wick > candle_range * 0.6
-        and body_size < candle_range * 0.3
-        and upper_wick < candle_range * 0.3
-    )
+    pin_bar = lower_wick > candle_range * 0.6 and body_size < candle_range * 0.3 and upper_wick < candle_range * 0.3
 
     return hammer or bullish_engulfing or pin_bar
 
@@ -149,26 +138,15 @@ def _detect_bearish_candle(
     upper_wick = high[i] - max(open_[i], close[i])
 
     # Shooting star
-    shooting_star = (
-        body_size < candle_range * 0.3
-        and upper_wick > body_size * 2
-        and lower_wick < body_size
-    )
+    shooting_star = body_size < candle_range * 0.3 and upper_wick > body_size * 2 and lower_wick < body_size
 
     # Bearish engulfing
     bearish_engulfing = (
-        close[i] < open_[i]
-        and close[i - 1] > open_[i - 1]
-        and close[i] < open_[i - 1]
-        and open_[i] > close[i - 1]
+        close[i] < open_[i] and close[i - 1] > open_[i - 1] and close[i] < open_[i - 1] and open_[i] > close[i - 1]
     )
 
     # Pin bar (long upper wick rejection)
-    pin_bar = (
-        upper_wick > candle_range * 0.6
-        and body_size < candle_range * 0.3
-        and lower_wick < candle_range * 0.3
-    )
+    pin_bar = upper_wick > candle_range * 0.6 and body_size < candle_range * 0.3 and lower_wick < candle_range * 0.3
 
     return shooting_star or bearish_engulfing or pin_bar
 
@@ -347,9 +325,7 @@ def _compute_rsi(close: ArrayLike, period: int = 14) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _compute_ao(
-    high: ArrayLike, low: ArrayLike, fast: int = 5, slow: int = 34
-) -> float:
+def _compute_ao(high: ArrayLike, low: ArrayLike, fast: int = 5, slow: int = 34) -> float:
     """Compute Awesome Oscillator: SMA(hl2, fast) - SMA(hl2, slow)."""
     if len(high) < slow:
         return 0.0
@@ -373,7 +349,7 @@ def compute_signal_quality(
     min_wave_ratio: float = 1.5,
     momentum_lookback: int = 3,
 ) -> dict[str, Any]:
-    """Compute the FKS multi-factor signal quality score.
+    """Compute the Ruby multi-factor signal quality score.
 
     This is the exact port of the signal_quality_score calculation from
     fks.pine (lines ~960–1010) and fks_info.pine (lines ~610–650).
@@ -440,10 +416,7 @@ def compute_signal_quality(
     # --- Gather inputs from pre-computed results or compute fresh ---
 
     # Volatility percentile
-    if vol_result:
-        vol_percentile = vol_result.get("percentile", 0.5)
-    else:
-        vol_percentile = 0.5
+    vol_percentile = vol_result.get("percentile", 0.5) if vol_result else 0.5
 
     # Wave analysis
     if wave_result:
@@ -510,9 +483,7 @@ def compute_signal_quality(
         # Factor 5 (12.5%): HTF long bias
         htf_factor = htf_bias_factor * 0.5
 
-        score = (
-            vol_factor + vel_factor + tsf_component + candle_factor + htf_factor
-        ) / 4.0
+        score = (vol_factor + vel_factor + tsf_component + candle_factor + htf_factor) / 4.0
 
         factors = {
             "vol_sweet_spot": vol_factor,
@@ -536,9 +507,7 @@ def compute_signal_quality(
         # Factor 5 (12.5%): HTF short bias
         htf_factor = htf_bias_factor * 0.5
 
-        score = (
-            vol_factor + vel_factor + tsf_component + candle_factor + htf_factor
-        ) / 4.0
+        score = (vol_factor + vel_factor + tsf_component + candle_factor + htf_factor) / 4.0
 
         factors = {
             "vol_sweet_spot": vol_factor,
@@ -563,9 +532,7 @@ def compute_signal_quality(
         # Factor 5 (12.5%): Any directional bias
         htf_factor = htf_bias_factor * 0.5
 
-        score = (
-            vol_factor + vel_factor + tsf_component + candle_factor + htf_factor
-        ) / 4.0
+        score = (vol_factor + vel_factor + tsf_component + candle_factor + htf_factor) / 4.0
 
         factors = {
             "vol_sweet_spot": vol_factor,

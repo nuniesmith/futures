@@ -1,5 +1,5 @@
 """
-K-Means Adaptive Volatility Clustering — ported from FKS Pine Script.
+K-Means Adaptive Volatility Clustering — ported from Ruby Pine Script.
 
 This module implements the exact K-Means clustering logic from fks.pine:
   - Training window of ATR values (default 250 bars)
@@ -154,7 +154,7 @@ def _kmeans_1d(
 
     labels = np.zeros(len(data), dtype=int)
 
-    for iteration in range(max_iterations):
+    for _iteration in range(max_iterations):
         # Assignment step: assign each point to nearest centroid
         distances = np.abs(data[:, np.newaxis] - centroids[np.newaxis, :])
         labels = np.argmin(distances, axis=1)

@@ -6,7 +6,7 @@ Runs the DashboardEngine as a standalone service, separate from data-service.
 Now uses ScheduleManager for session-aware scheduling:
   - **Pre-market (00:00–05:00 ET):** Compute daily focus once, Grok morning
     briefing, prepare alerts for the trading day.
-  - **Active (05:00–12:00 ET):** Live FKS recomputation every 5 min,
+  - **Active (05:00–12:00 ET):** Live Ruby recomputation every 5 min,
     publish focus updates to Redis, Grok updates every 15 min.
   - **Off-hours (12:00–00:00 ET):** Historical data backfill, full
     optimization runs, backtesting, next-day prep.
@@ -25,6 +25,7 @@ Docker:
     CMD ["python", "-m", "lib.services.engine.main"]
 """
 
+import contextlib
 import json
 import os
 import signal
@@ -97,13 +98,13 @@ def _handle_compute_daily_focus(engine, account_size: int) -> None:
 
 
 def _handle_fks_recompute(engine) -> None:
-    """Trigger data refresh + FKS recomputation via the DashboardEngine."""
-    logger.info("▶ FKS recomputation (data refresh)...")
+    """Trigger data refresh + Ruby recomputation via the DashboardEngine."""
+    logger.info("▶ Ruby recomputation (data refresh)...")
     try:
         engine.force_refresh()
-        logger.info("✅ FKS recomputation complete")
+        logger.info("✅ Ruby recomputation complete")
     except Exception as exc:
-        logger.warning("FKS recompute error: %s", exc)
+        logger.warning("Ruby recompute error: %s", exc)
 
 
 def _handle_publish_focus_update(engine, account_size: int) -> None:
@@ -251,10 +252,8 @@ def _publish_grok_update(text: str) -> None:
         cache_set("engine:grok_update", payload.encode(), ttl=900)  # 15 min TTL
 
         if REDIS_AVAILABLE and _r is not None:
-            try:
+            with contextlib.suppress(Exception):
                 _r.publish("dashboard:grok", payload)
-            except Exception:
-                pass
 
         logger.debug("Grok update published to Redis")
     except Exception as exc:
@@ -451,10 +450,8 @@ def _handle_check_orb(engine) -> None:
 
                 # Attempt via engine's fetch method
                 if bars_1m is None or bars_1m.empty:
-                    try:
+                    with contextlib.suppress(Exception):
                         bars_1m = engine._fetch_tf_safe(ticker or symbol, interval="1m", period="1d")
-                    except Exception:
-                        pass
 
                 if bars_1m is None or bars_1m.empty:
                     logger.debug("No 1m bars for %s — skipping ORB", symbol)
@@ -507,7 +504,7 @@ def _handle_check_orb(engine) -> None:
 
                             # If no dedicated 15m bars, try resampling from 1m
                             if (bars_htf is None or bars_htf.empty) and bars_1m is not None:
-                                try:
+                                with contextlib.suppress(Exception):
                                     bars_htf = (
                                         bars_1m.resample("15min")
                                         .agg(
@@ -521,8 +518,6 @@ def _handle_check_orb(engine) -> None:
                                         )
                                         .dropna()
                                     )
-                                except Exception:
-                                    pass
 
                             from datetime import datetime as _dt
                             from zoneinfo import ZoneInfo as _ZI

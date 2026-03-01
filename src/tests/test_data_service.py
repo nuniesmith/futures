@@ -317,7 +317,7 @@ class TestAnalysis:
         # Should have entries for each tracked asset
         assert isinstance(data, dict)
         # Each value should have at least a ticker key
-        for name, analysis in data.items():
+        for _name, analysis in data.items():
             assert "ticker" in analysis
 
     def test_latest_ticker_returns_analysis(self, client):

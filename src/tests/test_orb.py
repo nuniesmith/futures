@@ -1363,8 +1363,8 @@ class TestORBConstants:
     def test_or_window(self):
         from lib.services.engine.orb import OR_END, OR_START
 
-        assert OR_START == dt_time(9, 30)
-        assert OR_END == dt_time(10, 0)
+        assert dt_time(9, 30) == OR_START
+        assert dt_time(10, 0) == OR_END
 
     def test_atr_period(self):
         from lib.services.engine.orb import ATR_PERIOD

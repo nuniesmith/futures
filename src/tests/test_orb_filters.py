@@ -17,18 +17,14 @@ The composite function is tested for:
   - Enable/disable toggles
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from lib.analysis.orb_filters import (
-    DEFAULT_SESSION_WINDOWS,
-    LUNCH_END,
-    LUNCH_START,
     FilterVerdict,
     ORBFilterResult,
     apply_all_filters,

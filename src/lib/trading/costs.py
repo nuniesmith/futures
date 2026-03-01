@@ -38,7 +38,6 @@ Usage:
 """
 
 from datetime import datetime
-from typing import Optional
 from zoneinfo import ZoneInfo
 
 _EST = ZoneInfo("America/New_York")
@@ -223,7 +222,7 @@ RTH_START_HOUR = 8
 RTH_END_HOUR = 16
 
 
-def _get_session_type(dt: Optional[datetime] = None) -> str:
+def _get_session_type(dt: datetime | None = None) -> str:
     """Determine the current session type based on time of day.
 
     Returns "rth" during regular trading hours, "eth" otherwise.
@@ -330,7 +329,7 @@ def estimate_trade_costs(
 def slippage_commission_rate(
     asset_name: str,
     contract_mode: str = "micro",
-    reference_price: Optional[float] = None,
+    reference_price: float | None = None,
 ) -> float:
     """Compute a fractional commission rate for use with backtesting.py.
 

@@ -42,15 +42,18 @@ Design:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger("analysis.chart_renderer")
 
@@ -145,10 +148,8 @@ def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
                 break
         else:
             # Last resort: try to parse the existing index
-            try:
+            with contextlib.suppress(Exception):
                 df.index = pd.to_datetime(df.index)
-            except Exception:
-                pass
 
     # mplfinance requires the index name to be one of a few specific values
     if isinstance(df.index, pd.DatetimeIndex):
@@ -173,12 +174,8 @@ def _compute_vwap(df: pd.DataFrame) -> pd.Series:
     return cum_tp_vol / cum_vol
 
 
-def _build_style(config: RenderConfig, direction: Optional[str] = None) -> Any:
+def _build_style(config: RenderConfig, direction: str | None = None) -> Any:
     """Build an mplfinance style matching the Ruby v2 dark theme."""
-    vol_color = config.volume_up_color
-    if direction and direction.upper() == "SHORT":
-        vol_color = config.volume_down_color
-
     mc = mpf.make_marketcolors(
         up=config.candle_up,
         down=config.candle_down,
@@ -220,8 +217,8 @@ def _get_badge_color(quality_pct: int, config: RenderConfig) -> str:
 
 def _generate_filename(
     symbol: str,
-    timestamp: Optional[datetime] = None,
-    label: Optional[str] = None,
+    timestamp: datetime | None = None,
+    label: str | None = None,
     output_dir: str = "dataset/images",
 ) -> str:
     """Generate a unique filename for the chart image."""
@@ -242,18 +239,18 @@ def _generate_filename(
 def render_ruby_snapshot(
     bars: pd.DataFrame,
     symbol: str = "",
-    orb_high: Optional[float] = None,
-    orb_low: Optional[float] = None,
-    vwap: Optional[float] = None,
-    ema9: Optional[pd.Series] = None,
-    direction: Optional[str] = None,
+    orb_high: float | None = None,
+    orb_low: float | None = None,
+    vwap: float | None = None,
+    ema9: pd.Series | None = None,
+    direction: str | None = None,
     quality_pct: int = 0,
-    label: Optional[str] = None,
-    save_path: Optional[str] = None,
-    config: Optional[RenderConfig] = None,
-    extra_hlines: Optional[Sequence[float]] = None,
+    label: str | None = None,
+    save_path: str | None = None,
+    config: RenderConfig | None = None,
+    extra_hlines: Sequence[float] | None = None,
     title_suffix: str = "",
-) -> Optional[str]:
+) -> str | None:
     """Render a candlestick chart snapshot in Ruby v2 indicator style.
 
     Produces a PNG image with:
@@ -330,10 +327,7 @@ def render_ruby_snapshot(
     addplots = []
 
     # EMA9
-    if ema9 is not None:
-        ema_series = ema9.reindex(df.index)
-    else:
-        ema_series = _compute_ema(df["Close"], span=9)
+    ema_series = ema9.reindex(df.index) if ema9 is not None else _compute_ema(df["Close"], span=9)
 
     addplots.append(
         mpf.make_addplot(
@@ -526,20 +520,18 @@ def render_ruby_snapshot(
     except Exception as exc:
         logger.error("Chart rendering failed: %s", exc, exc_info=True)
         # Ensure we don't leak figures
-        try:
+        with contextlib.suppress(Exception):
             plt.close("all")
-        except Exception:
-            pass
         return None
 
 
 def render_batch_snapshots(
     bars_by_symbol: dict[str, pd.DataFrame],
-    orb_results: Optional[dict[str, dict[str, Any]]] = None,
-    quality_by_symbol: Optional[dict[str, int]] = None,
-    config: Optional[RenderConfig] = None,
-    output_dir: Optional[str] = None,
-) -> dict[str, Optional[str]]:
+    orb_results: dict[str, dict[str, Any]] | None = None,
+    quality_by_symbol: dict[str, int] | None = None,
+    config: RenderConfig | None = None,
+    output_dir: str | None = None,
+) -> dict[str, str | None]:
     """Render chart snapshots for multiple symbols.
 
     Convenience wrapper around ``render_ruby_snapshot`` for batch jobs
@@ -560,7 +552,7 @@ def render_batch_snapshots(
     if output_dir:
         cfg = RenderConfig(**{**cfg.__dict__, "output_dir": output_dir})
 
-    results: dict[str, Optional[str]] = {}
+    results: dict[str, str | None] = {}
 
     for symbol, bars in bars_by_symbol.items():
         orb = (orb_results or {}).get(symbol, {})
@@ -590,8 +582,8 @@ def render_snapshot_for_inference(
     orb_low: float,
     direction: str,
     quality_pct: int = 0,
-    config: Optional[RenderConfig] = None,
-) -> Optional[str]:
+    config: RenderConfig | None = None,
+) -> str | None:
     """Render a snapshot specifically for CNN inference.
 
     This is a thin wrapper that stores images in a temporary inference
@@ -620,7 +612,7 @@ def render_snapshot_for_inference(
     )
 
 
-def cleanup_inference_images(max_age_seconds: int = 3600, config: Optional[RenderConfig] = None) -> int:
+def cleanup_inference_images(max_age_seconds: int = 3600, config: RenderConfig | None = None) -> int:
     """Remove inference images older than ``max_age_seconds``.
 
     Called periodically by the scheduler to prevent disk bloat.

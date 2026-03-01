@@ -39,7 +39,7 @@ Usage:
 
 import logging
 import math
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -56,7 +56,7 @@ def run_monte_carlo(
     trade_pnls: list[float],
     n_simulations: int = 10000,
     initial_equity: float = 150000.0,
-    seed: Optional[int] = 42,
+    seed: int | None = 42,
 ) -> dict[str, Any]:
     """Run Monte Carlo simulation via trade-level bootstrap.
 
@@ -179,7 +179,7 @@ def _empty_mc_result(initial_equity: float) -> dict[str, Any]:
 
 def compute_confidence_cones(
     mc_result: dict[str, Any],
-    percentiles: Optional[list[float]] = None,
+    percentiles: list[float] | None = None,
 ) -> dict[str, Any]:
     """Extract percentile bands from Monte Carlo equity curves.
 
@@ -335,10 +335,7 @@ def check_live_performance(
         )
     else:
         status = "normal"
-        message = (
-            f"Live equity is within normal MC range. "
-            f"Current ~{current_pct:.0f}th percentile."
-        )
+        message = f"Live equity is within normal MC range. Current ~{current_pct:.0f}th percentile."
 
     return {
         "status": status,
@@ -362,10 +359,7 @@ def _estimate_percentile(value: float, percentile_values: dict) -> float:
     if value >= sorted_vals[-1]:
         return min(
             99.0,
-            float(sorted_pcts[-1])
-            + (value - sorted_vals[-1])
-            / max(sorted_vals[-1] - sorted_vals[-2], 1e-10)
-            * 5,
+            float(sorted_pcts[-1]) + (value - sorted_vals[-1]) / max(sorted_vals[-1] - sorted_vals[-2], 1e-10) * 5,
         )
 
     for i in range(len(sorted_pcts) - 1):
@@ -423,7 +417,7 @@ def estimate_pbo(
     scores = np.array(strategy_scores, dtype=np.float64)
     n_strategies, T = scores.shape
 
-    if T < n_partitions:
+    if n_partitions > T:
         n_partitions = max(2, T // 2) * 2  # ensure even, at least 2
 
     # Ensure n_partitions is even
@@ -468,9 +462,7 @@ def estimate_pbo(
     logit_distribution = []
 
     for train_partitions in all_combos:
-        test_partitions = tuple(
-            s for s in range(n_partitions) if s not in train_partitions
-        )
+        test_partitions = tuple(s for s in range(n_partitions) if s not in train_partitions)
 
         # In-sample performance per strategy
         is_perfs = partition_perfs[:, list(train_partitions)].sum(axis=1)
@@ -521,11 +513,8 @@ def estimate_pbo(
 
 def _pbo_message(pbo: float, interpretation: str) -> str:
     """Generate a human-readable PBO interpretation."""
-    if interpretation == "low":
-        return (
-            f"PBO = {pbo:.2%} — LOW overfitting risk. "
-            f"The strategy selection is robust across different data splits."
-        )
+    if interpretation == "low":  # noqa: SIM116
+        return f"PBO = {pbo:.2%} — LOW overfitting risk. The strategy selection is robust across different data splits."
     elif interpretation == "moderate":
         return (
             f"PBO = {pbo:.2%} — MODERATE overfitting risk. "

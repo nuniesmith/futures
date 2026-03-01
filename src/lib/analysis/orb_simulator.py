@@ -39,11 +39,12 @@ Design:
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from datetime import time as dt_time
-from typing import Any, Optional, Sequence
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -234,14 +235,12 @@ def _localize_to_est(df: pd.DataFrame) -> pd.DataFrame:
         if str(idx.tz) != str(_EST):
             df = df.tz_convert(_EST)
     else:
-        try:
+        with contextlib.suppress(Exception):
             df.index = idx.tz_localize(_EST)
-        except Exception:
-            pass
     return df
 
 
-def _safe_time(idx) -> Optional[dt_time]:
+def _safe_time(idx) -> dt_time | None:
     """Extract time from an index entry, returning None on failure."""
     try:
         return idx.time() if hasattr(idx, "time") else None
@@ -257,8 +256,8 @@ def _safe_time(idx) -> Optional[dt_time]:
 def simulate_orb_outcome(
     bars_1m: pd.DataFrame,
     symbol: str = "",
-    config: Optional[BracketConfig] = None,
-    bars_daily: Optional[pd.DataFrame] = None,
+    config: BracketConfig | None = None,
+    bars_daily: pd.DataFrame | None = None,
 ) -> ORBSimResult:
     """Simulate an ORB trade on a window of 1-minute bars.
 
@@ -316,10 +315,8 @@ def simulate_orb_outcome(
 
     # --- Step 1: Identify Opening Range ---
     times = None
-    try:
+    with contextlib.suppress(Exception):
         times = df.index.time
-    except Exception:
-        pass
 
     if times is None:
         result.error = "Cannot extract time from index"
@@ -341,10 +338,8 @@ def simulate_orb_outcome(
     result.or_low = or_low
     result.or_range = or_range
 
-    try:
+    with contextlib.suppress(Exception):
         result.or_start_time = str(df.index[or_indices[0]])
-    except Exception:
-        pass
 
     if or_high <= 0 or or_low <= 0 or or_high <= or_low:
         result.error = f"Invalid OR: high={or_high}, low={or_low}"
@@ -393,8 +388,8 @@ def simulate_orb_outcome(
         result.outcome = "no_post_or_bars"
         return result
 
-    direction: Optional[str] = None
-    breakout_idx: Optional[int] = None
+    direction: str | None = None
+    breakout_idx: int | None = None
     entry_price: float = 0.0
 
     for idx in post_or_indices:
@@ -441,10 +436,8 @@ def simulate_orb_outcome(
     result.entry = entry_price
     result.breakout_bar_idx = breakout_idx
 
-    try:
+    with contextlib.suppress(Exception):
         result.breakout_time = str(df.index[breakout_idx])
-    except Exception:
-        pass
 
     # Volume ratio at breakout bar
     avg_vol = float(np.mean(volumes[max(0, breakout_idx - 20) : breakout_idx])) if breakout_idx > 0 else 1.0
@@ -499,10 +492,8 @@ def simulate_orb_outcome(
 
     result.hold_bars = exit_idx - breakout_idx
 
-    try:
+    with contextlib.suppress(Exception):
         result.exit_time = str(df.index[exit_idx])
-    except Exception:
-        pass
 
     # --- Step 6: Assign label ---
     if hit_tp1:
@@ -549,9 +540,14 @@ def simulate_orb_outcome(
         quality += 15.0
 
     # Pre-market confluence
-    if direction == "LONG" and result.pm_high > 0 and entry_price >= result.pm_high:
-        quality += 5.0
-    elif direction == "SHORT" and result.pm_low > 0 and entry_price <= result.pm_low:
+    if (
+        direction == "LONG"
+        and result.pm_high > 0
+        and entry_price >= result.pm_high
+        or direction == "SHORT"
+        and result.pm_low > 0
+        and entry_price <= result.pm_low
+    ):
         quality += 5.0
 
     result.quality_pct = min(99, max(0, int(quality)))
@@ -567,8 +563,8 @@ def simulate_orb_outcome(
 def simulate_batch(
     bars_1m: pd.DataFrame,
     symbol: str = "",
-    config: Optional[BracketConfig] = None,
-    bars_daily: Optional[pd.DataFrame] = None,
+    config: BracketConfig | None = None,
+    bars_daily: pd.DataFrame | None = None,
     window_size: int = 240,
     step_size: int = 30,
     min_window_bars: int = 60,
@@ -644,8 +640,8 @@ def simulate_batch(
 def simulate_day(
     bars_1m: pd.DataFrame,
     symbol: str = "",
-    config: Optional[BracketConfig] = None,
-    bars_daily: Optional[pd.DataFrame] = None,
+    config: BracketConfig | None = None,
+    bars_daily: pd.DataFrame | None = None,
 ) -> ORBSimResult:
     """Simulate a single day's ORB trade.
 

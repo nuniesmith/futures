@@ -50,13 +50,14 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from datetime import time as dt_time
-from pathlib import Path
-from typing import Any, Optional, Sequence
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 import pandas as pd
 
 logger = logging.getLogger("analysis.dataset_generator")
@@ -199,7 +200,7 @@ def _resolve_ticker(symbol: str) -> str:
     return _SYMBOL_TO_TICKER.get(symbol.upper(), f"{symbol.upper()}=F")
 
 
-def _load_bars_from_cache(symbol: str, days: int = 90) -> Optional[pd.DataFrame]:
+def _load_bars_from_cache(symbol: str, days: int = 90) -> pd.DataFrame | None:
     """Attempt to load 1-minute bars from Redis cache.
 
     Uses the standard ``get_data()`` cache layer (which stores bars under
@@ -264,7 +265,7 @@ def _load_bars_from_cache(symbol: str, days: int = 90) -> Optional[pd.DataFrame]
     return None
 
 
-def _load_bars_from_csv(symbol: str, csv_dir: str = "data/bars") -> Optional[pd.DataFrame]:
+def _load_bars_from_csv(symbol: str, csv_dir: str = "data/bars") -> pd.DataFrame | None:
     """Load 1-minute bars from a local CSV file.
 
     Expected filename pattern: ``{csv_dir}/{symbol}_1m.csv``
@@ -308,7 +309,7 @@ def _load_bars_from_csv(symbol: str, csv_dir: str = "data/bars") -> Optional[pd.
         return None
 
 
-def _load_bars_from_massive(symbol: str, days: int = 90) -> Optional[pd.DataFrame]:
+def _load_bars_from_massive(symbol: str, days: int = 90) -> pd.DataFrame | None:
     """Load 1-minute bars via the Massive REST API.
 
     Uses ``MassiveDataProvider.get_aggs()`` with Yahoo-style ticker resolution.
@@ -360,7 +361,7 @@ def load_bars(
     source: str = "cache",
     days: int = 90,
     csv_dir: str = "data/bars",
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """Load 1-minute bars from the configured source, with fallback chain.
 
     Tries the specified source first, then falls back through:
@@ -407,7 +408,7 @@ def load_daily_bars(
     symbol: str,
     source: str = "cache",
     csv_dir: str = "data/bars",
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """Load daily bars for NR7 detection.
 
     Tries to derive daily bars from 1-minute data by resampling,
@@ -456,8 +457,8 @@ def load_daily_bars(
 def generate_dataset_for_symbol(
     symbol: str,
     bars_1m: pd.DataFrame,
-    bars_daily: Optional[pd.DataFrame] = None,
-    config: Optional[DatasetConfig] = None,
+    bars_daily: pd.DataFrame | None = None,
+    config: DatasetConfig | None = None,
 ) -> tuple[list[dict[str, Any]], DatasetStats]:
     """Generate labeled chart images for a single symbol.
 
@@ -541,9 +542,8 @@ def generate_dataset_for_symbol(
         stats.label_distribution[label] = stats.label_distribution.get(label, 0) + 1
 
         # Check max samples per label
-        if cfg.max_samples_per_label > 0:
-            if stats.label_distribution[label] > cfg.max_samples_per_label:
-                continue
+        if cfg.max_samples_per_label > 0 and stats.label_distribution[label] > cfg.max_samples_per_label:
+            continue
 
         # Determine image path
         ts_str = result.breakout_time or result.or_start_time or datetime.now(_EST).isoformat()
@@ -652,8 +652,8 @@ def _build_row(result, image_path: str) -> dict[str, Any]:
 def generate_dataset(
     symbols: Sequence[str],
     days_back: int = 90,
-    config: Optional[DatasetConfig] = None,
-    bars_override: Optional[dict[str, pd.DataFrame]] = None,
+    config: DatasetConfig | None = None,
+    bars_override: dict[str, pd.DataFrame] | None = None,
 ) -> DatasetStats:
     """Generate a complete labeled dataset for CNN training.
 
@@ -776,7 +776,7 @@ def generate_dataset(
 def split_dataset(
     csv_path: str,
     val_fraction: float = 0.15,
-    output_dir: Optional[str] = None,
+    output_dir: str | None = None,
     stratify: bool = True,
     random_seed: int = 42,
 ) -> tuple[str, str]:
@@ -800,7 +800,7 @@ def split_dataset(
     if stratify and "label" in df.columns:
         train_parts = []
         val_parts = []
-        for label, group in df.groupby("label"):
+        for _label, group in df.groupby("label"):
             n_val = max(1, int(len(group) * val_fraction))
             shuffled = group.sample(frac=1, random_state=rng)
             val_parts.append(shuffled.iloc[:n_val])
@@ -964,7 +964,7 @@ def _cli():
             csv_path=args.csv,
             check_images=not args.no_check_images,
         )
-        print(f"\nDataset validation report:")
+        print("\nDataset validation report:")
         for k, v in report.items():
             print(f"  {k}: {v}")
 

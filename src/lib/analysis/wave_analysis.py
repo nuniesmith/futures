@@ -1,5 +1,5 @@
 """
-Wave Analysis Module — ported from FKS Pine Script.
+Wave Analysis Module — ported from Ruby Pine Script.
 
 This module implements the core wave dominance tracking from fks.pine:
   - Dynamic accelerated EMA (adaptive alpha based on momentum change)

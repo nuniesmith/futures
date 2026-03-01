@@ -13,12 +13,12 @@ The active backend is chosen automatically at module load time:
 All CRUD functions use the same interface regardless of backend.
 """
 
+import contextlib
 import json
 import logging
 import os
 import sqlite3
 from datetime import datetime
-from typing import Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -182,8 +182,7 @@ ACCOUNT_PROFILES = {
         "eod_dd": 1_500,
         "label": "$50k TakeProfit Trader",
         "playbook_note": (
-            "TPT PLAYBOOK: Max 1-2 full / 10 micro contracts on $50k (25% rule). "
-            "Daily Loss Removed: $1,500."
+            "TPT PLAYBOOK: Max 1-2 full / 10 micro contracts on $50k (25% rule). Daily Loss Removed: $1,500."
         ),
     },
     "100k": {
@@ -197,8 +196,7 @@ ACCOUNT_PROFILES = {
         "eod_dd": 3_000,
         "label": "$100k TakeProfit Trader",
         "playbook_note": (
-            "TPT PLAYBOOK: Max 2-3 full / 20 micro contracts on $100k (25% rule). "
-            "Daily Loss Removed: $3,000."
+            "TPT PLAYBOOK: Max 2-3 full / 20 micro contracts on $100k (25% rule). Daily Loss Removed: $3,000."
         ),
     },
     "150k": {
@@ -212,8 +210,7 @@ ACCOUNT_PROFILES = {
         "eod_dd": 4_500,
         "label": "$150k TakeProfit Trader",
         "playbook_note": (
-            "TPT PLAYBOOK: Max 3-4 full / 30 micro contracts on $150k (25% rule). "
-            "Daily Loss Removed: $4,500."
+            "TPT PLAYBOOK: Max 3-4 full / 30 micro contracts on $150k (25% rule). Daily Loss Removed: $4,500."
         ),
     },
 }
@@ -283,22 +280,16 @@ MICRO_CONTRACT_SPECS = {
 # ---------------------------------------------------------------------------
 # Active contract specs — selected by CONTRACT_MODE env var
 # ---------------------------------------------------------------------------
-CONTRACT_SPECS = (
-    MICRO_CONTRACT_SPECS if CONTRACT_MODE == "micro" else FULL_CONTRACT_SPECS
-)
+CONTRACT_SPECS = MICRO_CONTRACT_SPECS if CONTRACT_MODE == "micro" else FULL_CONTRACT_SPECS
 
 # Convenience: name → data ticker (for data fetching).
 # When data_ticker differs from ticker, data is fetched using data_ticker.
 # Gold uses MGC=F directly to avoid front-month mismatch between GC and MGC.
-ASSETS: dict[str, str] = {
-    name: str(spec.get("data_ticker", spec["ticker"]))
-    for name, spec in CONTRACT_SPECS.items()
-}
+ASSETS: dict[str, str] = {name: str(spec.get("data_ticker", spec["ticker"])) for name, spec in CONTRACT_SPECS.items()}
 
 # Reverse lookup: data ticker → name
 TICKER_TO_NAME: dict[str, str] = {
-    str(spec.get("data_ticker", spec["ticker"])): name
-    for name, spec in CONTRACT_SPECS.items()
+    str(spec.get("data_ticker", spec["ticker"])): name for name, spec in CONTRACT_SPECS.items()
 }
 
 
@@ -322,20 +313,10 @@ def set_contract_mode(mode: str) -> dict:
     CONTRACT_SPECS.update(source)
 
     ASSETS.clear()
-    ASSETS.update(
-        {
-            name: spec.get("data_ticker", spec["ticker"])
-            for name, spec in CONTRACT_SPECS.items()
-        }
-    )
+    ASSETS.update({name: spec.get("data_ticker", spec["ticker"]) for name, spec in CONTRACT_SPECS.items()})
 
     TICKER_TO_NAME.clear()
-    TICKER_TO_NAME.update(
-        {
-            spec.get("data_ticker", spec["ticker"]): name
-            for name, spec in CONTRACT_SPECS.items()
-        }
-    )
+    TICKER_TO_NAME.update({spec.get("data_ticker", spec["ticker"]): name for name, spec in CONTRACT_SPECS.items()})
 
     return CONTRACT_SPECS
 
@@ -398,7 +379,7 @@ class _RowProxy:
     __slots__ = ("_data",)
 
     def __init__(self, columns: list[str], values: tuple):
-        self._data = dict(zip(columns, values))
+        self._data = dict(zip(columns, values, strict=False))
 
     def __getitem__(self, key: str):
         return self._data[key]
@@ -504,14 +485,10 @@ class _PgConnectionWrapper:
         self._conn.rollback()
 
     def close(self):
-        try:
+        with contextlib.suppress(Exception):
             self._cursor.close()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             self._conn.close()
-        except Exception:
-            pass
 
 
 def _get_sqlite_conn() -> sqlite3.Connection:
@@ -534,9 +511,7 @@ def _get_conn():
             raw = engine.raw_connection()
             return _PgConnectionWrapper(raw)
         except Exception as exc:
-            logger.warning(
-                "Postgres connection failed, falling back to SQLite: %s", exc
-            )
+            logger.warning("Postgres connection failed, falling back to SQLite: %s", exc)
             return _get_sqlite_conn()
     return _get_sqlite_conn()
 
@@ -668,19 +643,15 @@ def init_db() -> None:
             _init_audit_tables(conn, use_postgres=True)
         except Exception as exc:
             logger.error("Audit table init failed (non-fatal): %s", exc)
-            try:
+            with contextlib.suppress(Exception):
                 conn.rollback()
-            except Exception:
-                pass
 
         conn.close()
         return
 
     # --- SQLite path ---
     # Check if new table already exists
-    cur = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='trades_v2'"
-    )
+    cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades_v2'")
     if cur.fetchone() is not None:
         # trades_v2 exists — just ensure daily_journal + audit tables exist
         conn.executescript(_SCHEMA_DAILY_JOURNAL_SQLITE)
@@ -698,9 +669,7 @@ def init_db() -> None:
     _init_audit_tables(conn, use_postgres=False)
 
     # Migrate from v1 if it exists
-    cur = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='trades'"
-    )
+    cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'")
     if cur.fetchone() is not None:
         try:
             conn.executescript(_MIGRATE_V1)
@@ -724,7 +693,7 @@ def _row_to_dict(row) -> dict:
     if isinstance(row, dict):
         return row
     if hasattr(row, "keys"):
-        return {k: row[k] for k in row.keys()}
+        return {k: row[k] for k in row.keys()}  # noqa: SIM118
     return dict(row)
 
 
@@ -733,9 +702,7 @@ def _row_to_dict(row) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _insert_returning_id(
-    conn, sql: str, params: tuple, table: str = "trades_v2"
-) -> int:
+def _insert_returning_id(conn, sql: str, params: tuple, table: str = "trades_v2") -> int:
     """Execute an INSERT and return the new row's id.
 
     For Postgres, appends RETURNING id to the SQL.
@@ -823,18 +790,10 @@ def close_trade(trade_id: int, close_price: float) -> dict:
 
     if direction.upper() == "LONG":
         pnl = (close_price - entry) * point_value * contracts
-        rr = (
-            abs((close_price - entry) / (entry - row["sl"]))
-            if row["sl"] and row["sl"] != entry
-            else 0.0
-        )
+        rr = abs((close_price - entry) / (entry - row["sl"])) if row["sl"] and row["sl"] != entry else 0.0
     else:
         pnl = (entry - close_price) * point_value * contracts
-        rr = (
-            abs((entry - close_price) / (row["sl"] - entry))
-            if row["sl"] and row["sl"] != entry
-            else 0.0
-        )
+        rr = abs((entry - close_price) / (row["sl"] - entry)) if row["sl"] and row["sl"] != entry else 0.0
 
     close_time = datetime.now(tz=_EST).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -885,7 +844,7 @@ def _query_to_list(conn, sql: str, params: tuple = ()) -> list[dict]:
         return df.to_dict(orient="records")
 
 
-def get_open_trades(account_size: Optional[int] = None) -> list[dict]:
+def get_open_trades(account_size: int | None = None) -> list[dict]:
     """Return all OPEN trades, optionally filtered by account size."""
     conn = _get_conn()
     if account_size:
@@ -904,7 +863,7 @@ def get_open_trades(account_size: Optional[int] = None) -> list[dict]:
     return results
 
 
-def get_closed_trades(account_size: Optional[int] = None) -> list[dict]:
+def get_closed_trades(account_size: int | None = None) -> list[dict]:
     """Return all CLOSED trades for the journal."""
     conn = _get_conn()
     if account_size:
@@ -923,7 +882,7 @@ def get_closed_trades(account_size: Optional[int] = None) -> list[dict]:
     return results
 
 
-def get_all_trades(account_size: Optional[int] = None) -> list[dict]:
+def get_all_trades(account_size: int | None = None) -> list[dict]:
     """Return all trades regardless of status."""
     conn = _get_conn()
     if account_size:
@@ -941,7 +900,7 @@ def get_all_trades(account_size: Optional[int] = None) -> list[dict]:
     return results
 
 
-def get_today_pnl(account_size: Optional[int] = None) -> float:
+def get_today_pnl(account_size: int | None = None) -> float:
     """Sum of realised P&L for trades closed today."""
     today = datetime.now(tz=_EST).strftime("%Y-%m-%d")
     conn = _get_conn()
@@ -965,7 +924,7 @@ def get_today_pnl(account_size: Optional[int] = None) -> float:
     return float(row[0]) if row else 0.0
 
 
-def get_today_trades(account_size: Optional[int] = None) -> list[dict]:
+def get_today_trades(account_size: int | None = None) -> list[dict]:
     """Return all trades created or closed today."""
     today = datetime.now(tz=_EST).strftime("%Y-%m-%d")
     conn = _get_conn()
@@ -1069,9 +1028,7 @@ def save_daily_journal(
     conn = _get_conn()
 
     # Check if entry exists for this date
-    existing = conn.execute(
-        "SELECT id FROM daily_journal WHERE trade_date = ?", (trade_date,)
-    ).fetchone()
+    existing = conn.execute("SELECT id FROM daily_journal WHERE trade_date = ?", (trade_date,)).fetchone()
 
     if existing:
         conn.execute(
@@ -1118,7 +1075,7 @@ def save_daily_journal(
 
 def get_daily_journal(
     limit: int = 30,
-    account_size: Optional[int] = None,
+    account_size: int | None = None,
 ) -> pd.DataFrame:
     """Return recent daily journal entries as a DataFrame."""
     conn = _get_conn()
@@ -1161,7 +1118,7 @@ def get_daily_journal(
         return df
 
 
-def get_journal_stats(account_size: Optional[int] = None) -> dict:
+def get_journal_stats(account_size: int | None = None) -> dict:
     """Compute aggregate stats from the daily journal.
 
     Returns dict with total_days, total_gross, total_net, total_commissions,
@@ -1250,8 +1207,8 @@ def record_risk_event(
     account_size: int = 0,
     risk_pct: float = 0.0,
     session: str = "",
-    metadata: Optional[dict] = None,
-) -> Optional[int]:
+    metadata: dict | None = None,
+) -> int | None:
     """Persist a risk event to the database for permanent audit trail.
 
     Args:
@@ -1328,9 +1285,9 @@ def record_risk_event(
 
 def get_risk_events(
     limit: int = 100,
-    event_type: Optional[str] = None,
-    symbol: Optional[str] = None,
-    since: Optional[str] = None,
+    event_type: str | None = None,
+    symbol: str | None = None,
+    since: str | None = None,
 ) -> list[dict]:
     """Query risk events from the database.
 
@@ -1388,8 +1345,8 @@ def record_orb_event(
     short_trigger: float = 0.0,
     bar_count: int = 0,
     session: str = "",
-    metadata: Optional[dict] = None,
-) -> Optional[int]:
+    metadata: dict | None = None,
+) -> int | None:
     """Persist an ORB evaluation result to the database.
 
     Args:
@@ -1478,9 +1435,9 @@ def record_orb_event(
 
 def get_orb_events(
     limit: int = 100,
-    symbol: Optional[str] = None,
+    symbol: str | None = None,
     breakout_only: bool = False,
-    since: Optional[str] = None,
+    since: str | None = None,
 ) -> list[dict]:
     """Query ORB events from the database.
 
@@ -1563,9 +1520,7 @@ def get_audit_summary(days_back: int = 7) -> dict:
             elif et == "warning":
                 summary["risk_events"]["warnings"] += cnt
             if sym:
-                summary["risk_events"]["by_symbol"][sym] = (
-                    summary["risk_events"]["by_symbol"].get(sym, 0) + cnt
-                )
+                summary["risk_events"]["by_symbol"][sym] = summary["risk_events"]["by_symbol"].get(sym, 0) + cnt
 
         # ORB events summary
         cur = conn.execute(
@@ -1582,9 +1537,7 @@ def get_audit_summary(days_back: int = 7) -> dict:
                 summary["orb_events"]["breakouts"] += cnt
             sym = d.get("symbol", "")
             if sym:
-                summary["orb_events"]["by_symbol"][sym] = (
-                    summary["orb_events"]["by_symbol"].get(sym, 0) + cnt
-                )
+                summary["orb_events"]["by_symbol"][sym] = summary["orb_events"]["by_symbol"].get(sym, 0) + cnt
 
         conn.close()
     except Exception as exc:
@@ -1600,8 +1553,8 @@ def get_audit_summary(days_back: int = 7) -> dict:
 
 
 def migrate_sqlite_to_postgres(
-    sqlite_path: Optional[str] = None,
-    pg_url: Optional[str] = None,
+    sqlite_path: str | None = None,
+    pg_url: str | None = None,
 ) -> dict:
     """One-time migration: copy all data from SQLite to Postgres.
 
@@ -1626,12 +1579,7 @@ def migrate_sqlite_to_postgres(
     result = {"trades": 0, "journal": 0, "errors": []}
 
     # Check source tables
-    tables = [
-        r[0]
-        for r in src_conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    ]
+    tables = [r[0] for r in src_conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
 
     from sqlalchemy import create_engine, text
 
@@ -1646,7 +1594,7 @@ def migrate_sqlite_to_postgres(
                 d.pop("id", None)
                 try:
                     cols = ", ".join(d.keys())
-                    placeholders = ", ".join(f":{k}" for k in d.keys())
+                    placeholders = ", ".join(f":{k}" for k in d)
                     pg_conn.execute(
                         text(f"INSERT INTO trades_v2 ({cols}) VALUES ({placeholders})"),
                         d,
@@ -1663,7 +1611,7 @@ def migrate_sqlite_to_postgres(
                 d.pop("id", None)
                 try:
                     cols = ", ".join(d.keys())
-                    placeholders = ", ".join(f":{k}" for k in d.keys())
+                    placeholders = ", ".join(f":{k}" for k in d)
                     pg_conn.execute(
                         text(
                             f"INSERT INTO daily_journal ({cols}) VALUES ({placeholders}) "

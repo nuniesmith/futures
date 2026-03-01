@@ -9,12 +9,13 @@ Falls back to in-memory dict if Redis is unavailable, so the app
 still works without Docker / Redis running.
 """
 
+import contextlib
 import hashlib
 import json
 import logging
 import os
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 
 import pandas as pd
@@ -31,18 +32,14 @@ def _flatten_columns(df: "pd.DataFrame | None") -> pd.DataFrame:
     result: pd.DataFrame = df.copy()
     if isinstance(result.columns, pd.MultiIndex):
         # Flatten to single level: take first level names only
-        result.columns = pd.Index(
-            [col[0] if isinstance(col, tuple) else col for col in result.columns]
-        )
+        result.columns = pd.Index([col[0] if isinstance(col, tuple) else col for col in result.columns])
     # Remove duplicate columns (keep first occurrence)
     mask = ~pd.Index(result.columns).duplicated(keep="first")
     result = result.loc[:, mask]
     # Reset column names to plain strings to avoid any leftover index weirdness
     result.columns = pd.Index([str(c) for c in result.columns])
     # Drop rows with NaN in OHLCV columns (yfinance sometimes returns partial rows)
-    ohlcv = [
-        c for c in ("Open", "High", "Low", "Close", "Volume") if c in result.columns
-    ]
+    ohlcv = [c for c in ("Open", "High", "Low", "Close", "Volume") if c in result.columns]
     if ohlcv:
         result = result.dropna(subset=ohlcv)
     return result
@@ -89,10 +86,8 @@ def _bytes_to_df(raw: bytes) -> pd.DataFrame:
     if not df.empty and df.index.dtype == "int64":
         pass  # leave numeric index as-is
     elif not df.empty:
-        try:
+        with contextlib.suppress(Exception):
             df.index = pd.to_datetime(df.index)
-        except Exception:
-            pass
     return df
 
 
@@ -110,7 +105,7 @@ def cache_get(key: str) -> bytes | None:
     entry = _mem_cache.get(key)
     if entry is None:
         return None
-    if datetime.now(tz=timezone.utc).timestamp() > entry["expires"]:
+    if datetime.now(tz=UTC).timestamp() > entry["expires"]:
         del _mem_cache[key]
         return None
     return entry["data"]
@@ -122,7 +117,7 @@ def cache_set(key: str, data: bytes, ttl: int) -> None:
     else:
         _mem_cache[key] = {
             "data": data,
-            "expires": datetime.now(tz=timezone.utc).timestamp() + ttl,
+            "expires": datetime.now(tz=UTC).timestamp() + ttl,
         }
 
 
@@ -230,10 +225,7 @@ def _clamp_period(interval: str, period: str) -> str:
             best = p
 
     if best != period:
-        print(
-            f"[cache] Clamped period {period!r} → {best!r} for interval {interval!r} "
-            f"(Yahoo limit)"
-        )
+        print(f"[cache] Clamped period {period!r} → {best!r} for interval {interval!r} (Yahoo limit)")
     return best
 
 
@@ -268,9 +260,7 @@ def _yf_download(ticker: str, interval: str, period: str, **kwargs) -> pd.DataFr
             )
         )
     else:
-        return _flatten_columns(
-            yf.download(ticker, interval=interval, period=period, **kwargs)
-        )
+        return _flatten_columns(yf.download(ticker, interval=interval, period=period, **kwargs))
 
 
 # ---------------------------------------------------------------------------
@@ -311,9 +301,7 @@ def _try_massive(ticker: str, interval: str, period: str) -> pd.DataFrame:
     try:
         df = provider.get_aggs(ticker, interval=interval, period=period)
         if not df.empty:
-            logger.debug(
-                "Massive: got %d bars for %s %s/%s", len(df), ticker, interval, period
-            )
+            logger.debug("Massive: got %d bars for %s %s/%s", len(df), ticker, interval, period)
         return df
     except Exception as exc:
         logger.debug("Massive fetch failed for %s: %s", ticker, exc)
@@ -329,9 +317,7 @@ def _try_massive_daily(ticker: str, period: str) -> pd.DataFrame:
     try:
         df = provider.get_daily(ticker, period=period)
         if not df.empty:
-            logger.debug(
-                "Massive: got %d daily bars for %s/%s", len(df), ticker, period
-            )
+            logger.debug("Massive: got %d daily bars for %s/%s", len(df), ticker, period)
         return df
     except Exception as exc:
         logger.debug("Massive daily fetch failed for %s: %s", ticker, exc)
@@ -372,9 +358,7 @@ def get_data(ticker: str, interval: str, period: str) -> pd.DataFrame:
 
     # Fallback to yfinance
     if df.empty:
-        df = _yf_download(
-            ticker, interval, clamped_period, prepost=True, auto_adjust=True
-        )
+        df = _yf_download(ticker, interval, clamped_period, prepost=True, auto_adjust=True)
 
     if not df.empty:
         ttl = TTL_MINUTE if interval == "1m" else TTL_INTRADAY
@@ -409,9 +393,7 @@ def get_daily(ticker: str, period: str = "10d") -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def get_cached_indicator(
-    name: str, ticker: str, interval: str, period: str
-) -> dict | None:
+def get_cached_indicator(name: str, ticker: str, interval: str, period: str) -> dict | None:
     """Return cached indicator dict or None."""
     key = _cache_key("ind", name, ticker, interval, period)
     cached = cache_get(key)
@@ -420,9 +402,7 @@ def get_cached_indicator(
     return None
 
 
-def set_cached_indicator(
-    name: str, ticker: str, interval: str, period: str, payload: dict
-) -> None:
+def set_cached_indicator(name: str, ticker: str, interval: str, period: str, payload: dict) -> None:
     key = _cache_key("ind", name, ticker, interval, period)
     cache_set(key, json.dumps(payload).encode(), TTL_INDICATOR)
 
@@ -440,9 +420,7 @@ def get_cached_optimization(ticker: str, interval: str, period: str) -> dict | N
     return None
 
 
-def set_cached_optimization(
-    ticker: str, interval: str, period: str, result: dict
-) -> None:
+def set_cached_optimization(ticker: str, interval: str, period: str, result: dict) -> None:
     key = _cache_key("opt", ticker, interval, period)
     cache_set(key, json.dumps(result).encode(), TTL_OPTIMIZATION)
 

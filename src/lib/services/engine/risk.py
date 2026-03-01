@@ -25,14 +25,16 @@ Usage:
     allowed, reason = rm.can_enter_trade("MGC", "LONG", 2)
     if not allowed:
         print(f"Trade blocked: {reason}")
-"""
+    """
 
-import json
+    from __future__ import annotations
+
+    import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import time as dt_time
-from typing import Any, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("engine.risk")
@@ -66,12 +68,12 @@ class TradeRecord:
     side: str  # "LONG" or "SHORT"
     quantity: int
     entry_price: float
-    exit_price: Optional[float] = None
+    exit_price: float | None = None
     pnl: float = 0.0
     is_win: bool = False
     closed: bool = False
-    opened_at: Optional[str] = None
-    closed_at: Optional[str] = None
+    opened_at: str | None = None
+    closed_at: str | None = None
 
 
 @dataclass
@@ -125,7 +127,7 @@ class RiskManager:
         session_end: dt_time = DEFAULT_SESSION_END,
         stack_min_r: float = DEFAULT_STACK_MIN_R,
         stack_min_wave: float = DEFAULT_STACK_MIN_WAVE,
-        now_fn: Optional[callable] = None,
+        now_fn: callable | None = None,
     ):
         self.account_size = account_size
         self.risk_pct_per_trade = risk_pct_per_trade
@@ -147,8 +149,8 @@ class RiskManager:
         self._daily_pnl: float = 0.0
         self._daily_trade_count: int = 0
         self._consecutive_losses: int = 0
-        self._trading_date: Optional[str] = None
-        self._last_trade_time: Optional[str] = None
+        self._trading_date: str | None = None
+        self._last_trade_time: str | None = None
 
         # Initialize for today
         self._ensure_day_reset()
@@ -188,31 +190,21 @@ class RiskManager:
 
         # Rule 1: Max daily loss
         if self._daily_pnl <= self.max_daily_loss:
-            reasons.append(
-                f"Daily loss limit hit (${self._daily_pnl:,.2f} <= "
-                f"${self.max_daily_loss:,.2f})"
-            )
+            reasons.append(f"Daily loss limit hit (${self._daily_pnl:,.2f} <= ${self.max_daily_loss:,.2f})")
 
         # Rule 2: Max open trades
         current_open = len(self._open_positions)
         if not is_stack and current_open >= self.max_open_trades:
-            reasons.append(
-                f"Max open trades reached ({current_open}/{self.max_open_trades})"
-            )
+            reasons.append(f"Max open trades reached ({current_open}/{self.max_open_trades})")
 
         # Rule 3: Per-trade risk limit
         total_risk = risk_per_contract * size if risk_per_contract > 0 else 0
         if total_risk > self.max_risk_per_trade:
-            reasons.append(
-                f"Risk ${total_risk:,.2f} exceeds per-trade max "
-                f"${self.max_risk_per_trade:,.2f}"
-            )
+            reasons.append(f"Risk ${total_risk:,.2f} exceeds per-trade max ${self.max_risk_per_trade:,.2f}")
 
         # Rule 4: No new entries after cutoff time
         if now_time >= self.no_entry_after and now_time < self.session_end:
-            reasons.append(
-                f"Past entry cutoff ({self.no_entry_after.strftime('%I:%M %p')} ET)"
-            )
+            reasons.append(f"Past entry cutoff ({self.no_entry_after.strftime('%I:%M %p')} ET)")
 
         # Rule 5: Session ended
         if now_time >= self.session_end:
@@ -221,28 +213,17 @@ class RiskManager:
         # Rule 6: Micro contract stacking rules
         if is_stack:
             if unrealized_r < self.stack_min_r:
-                reasons.append(
-                    f"Cannot stack: unrealized {unrealized_r:.2f}R < "
-                    f"required +{self.stack_min_r}R"
-                )
+                reasons.append(f"Cannot stack: unrealized {unrealized_r:.2f}R < required +{self.stack_min_r}R")
             if wave_ratio < self.stack_min_wave:
-                reasons.append(
-                    f"Cannot stack: wave ratio {wave_ratio:.2f}x < "
-                    f"required {self.stack_min_wave}x"
-                )
+                reasons.append(f"Cannot stack: wave ratio {wave_ratio:.2f}x < required {self.stack_min_wave}x")
 
         # Rule 7: Consecutive losses circuit breaker
         if self._consecutive_losses >= 3:
-            reasons.append(
-                f"Circuit breaker: {self._consecutive_losses} consecutive losses — "
-                f"take a break"
-            )
+            reasons.append(f"Circuit breaker: {self._consecutive_losses} consecutive losses — take a break")
 
         if reasons:
             combined = "; ".join(reasons)
-            logger.warning(
-                "Trade BLOCKED: %s %s %dx — %s", side, symbol, size, combined
-            )
+            logger.warning("Trade BLOCKED: %s %s %dx — %s", side, symbol, size, combined)
             return False, combined
 
         logger.info("Trade ALLOWED: %s %s %dx", side, symbol, size)
@@ -276,7 +257,7 @@ class RiskManager:
 
         return False, ""
 
-    def get_status(self, now: Optional[datetime] = None) -> dict[str, Any]:
+    def get_status(self, now: datetime | None = None) -> dict[str, Any]:
         """Return a comprehensive risk status dict for dashboard display.
 
         This is published to Redis and consumed by the data-service
@@ -287,12 +268,8 @@ class RiskManager:
             now = self._now_fn()
         now_time = now.time()
 
-        total_exposure = sum(
-            pos.get("risk_dollars", 0) for pos in self._open_positions.values()
-        )
-        risk_pct = (
-            (total_exposure / self.account_size * 100) if self.account_size else 0
-        )
+        total_exposure = sum(pos.get("risk_dollars", 0) for pos in self._open_positions.values())
+        risk_pct = (total_exposure / self.account_size * 100) if self.account_size else 0
 
         is_past_cutoff = now_time >= self.no_entry_after and now_time < self.session_end
         is_overnight = now_time >= self.overnight_warning

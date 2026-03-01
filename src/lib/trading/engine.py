@@ -20,6 +20,7 @@ All results are stored in the Redis/memory cache layer so the dashboard
 simply reads from cache without blocking on heavy computation.
 """
 
+import contextlib
 import json
 import logging
 import threading
@@ -199,10 +200,7 @@ def detect_regime(df: pd.DataFrame, ticker: str | None = None) -> dict:
     if ticker:
         try:
             hmm_result = detect_regime_hmm(ticker, df)
-            if (
-                hmm_result.get("regime") != "choppy"
-                or hmm_result.get("confidence", 0) > 0
-            ):
+            if hmm_result.get("regime") != "choppy" or hmm_result.get("confidence", 0) > 0:
                 hmm_result["method"] = "hmm"
             else:
                 hmm_result = None
@@ -257,9 +255,7 @@ def detect_regime(df: pd.DataFrame, ticker: str | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def run_optimization(
-    ticker: str, interval: str, period: str, account_size: int
-) -> dict | None:
+def run_optimization(ticker: str, interval: str, period: str, account_size: int) -> dict | None:
     """Run Optuna optimization across all strategy types for one asset.
 
     Walk-forward approach:
@@ -366,10 +362,7 @@ def run_optimization(
                 test_score = -100.0
 
         # Combined score: prioritise out-of-sample performance
-        if use_walk_forward:
-            combined = 0.4 * train_score + 0.6 * test_score
-        else:
-            combined = train_score
+        combined = 0.4 * train_score + 0.6 * test_score if use_walk_forward else train_score
 
         if combined > best_score:
             best_score = combined
@@ -406,11 +399,7 @@ def run_optimization(
 
             # Confidence assessment based on train→test degradation
             if use_walk_forward and train_score > -50:
-                degradation = (
-                    (train_score - test_score) / (abs(train_score) + 1e-10)
-                    if train_score > 0
-                    else 0
-                )
+                degradation = (train_score - test_score) / (abs(train_score) + 1e-10) if train_score > 0 else 0
                 if degradation < 0.2:
                     confidence = "high"
                 elif degradation < 0.5:
@@ -424,9 +413,7 @@ def run_optimization(
                 "ticker": ticker,
                 "strategy": strat_key,
                 "strategy_label": STRATEGY_LABELS.get(strat_key, strat_key),
-                "params": {
-                    k: v for k, v in bp.items() if k not in ("strategy", "score")
-                },
+                "params": {k: v for k, v in bp.items() if k not in ("strategy", "score")},
                 "return_pct": return_pct,
                 "sharpe": round(sharpe, 2),
                 "sortino": round(sortino, 2),
@@ -554,18 +541,14 @@ def run_backtest(
         "Ticker": ticker,
         "Strategy": STRATEGY_LABELS.get(used_strategy, used_strategy),
         "Strategy Key": used_strategy,
-        "n1": display_params.get("n1", None),
-        "n2": display_params.get("n2", None),
-        "Size": display_params.get(
-            "trade_size", opt.get("size", 0.10) if opt else 0.10
-        ),
+        "n1": display_params.get("n1"),
+        "n2": display_params.get("n2"),
+        "Size": display_params.get("trade_size", opt.get("size", 0.10) if opt else 0.10),
         "Params": params_label,
         "Return %": round(float(stats["Return [%]"]), 2),
         "Buy & Hold %": round(float(stats["Buy & Hold Return [%]"]), 2),
         "# Trades": int(stats["# Trades"]),
-        "Win Rate %": round(float(stats["Win Rate [%]"]), 1)
-        if int(stats["# Trades"]) > 0
-        else 0.0,
+        "Win Rate %": round(float(stats["Win Rate [%]"]), 1) if int(stats["# Trades"]) > 0 else 0.0,
         "Max DD %": round(float(stats["Max. Drawdown [%]"]), 2),
         "Sharpe": round(_safe_float(stats["Sharpe Ratio"]), 2),
         "Sortino": round(_safe_float(stats.get("Sortino Ratio", 0)), 2),
@@ -726,12 +709,8 @@ class DashboardEngine:
                     return
 
             # Reuse cached wave & vol from the 5m optimisation cycle (if available)
-            wave_raw = cache_get(
-                _cache_key("fks_wave", yahoo_ticker, self.interval, self.period)
-            )
-            vol_raw = cache_get(
-                _cache_key("fks_vol", yahoo_ticker, self.interval, self.period)
-            )
+            wave_raw = cache_get(_cache_key("fks_wave", yahoo_ticker, self.interval, self.period))
+            vol_raw = cache_get(_cache_key("fks_vol", yahoo_ticker, self.interval, self.period))
             wave_result = json.loads(wave_raw) if wave_raw else None
             vol_result = json.loads(vol_raw) if vol_raw else None
 
@@ -813,9 +792,7 @@ class DashboardEngine:
                 self._bar_buffer[yahoo_ticker].append(row)
                 # Trim to keep memory bounded
                 if len(self._bar_buffer[yahoo_ticker]) > self.MAX_BAR_BUFFER:
-                    self._bar_buffer[yahoo_ticker] = self._bar_buffer[yahoo_ticker][
-                        -self.MAX_BAR_BUFFER :
-                    ]
+                    self._bar_buffer[yahoo_ticker] = self._bar_buffer[yahoo_ticker][-self.MAX_BAR_BUFFER :]
 
                 # --- Compute signal quality on this 1m bar ---
                 self._compute_sq_from_buffer(yahoo_ticker)
@@ -902,10 +879,7 @@ class DashboardEngine:
 
     def get_status(self) -> dict:
         with self._lock:
-            status_copy = {
-                k: (dict(v) if isinstance(v, dict) else v)
-                for k, v in self.status.items()
-            }
+            status_copy = {k: (dict(v) if isinstance(v, dict) else v) for k, v in self.status.items()}
         # Merge in live feed stats if running
         if self._live_feed is not None:
             feed_info = self._live_feed.get_status()
@@ -940,9 +914,7 @@ class DashboardEngine:
 
     # -- alert dispatch ------------------------------------------------------
 
-    def _dispatch_regime_alert(
-        self, asset_name: str, old_regime: str, new_regime: str, confidence: float
-    ) -> None:
+    def _dispatch_regime_alert(self, asset_name: str, old_regime: str, new_regime: str, confidence: float) -> None:
         """Fire a regime-change alert via the alert dispatcher."""
         if not self._alerts_regime_enabled:
             logger.debug("Regime alert suppressed (disabled): %s", asset_name)
@@ -985,19 +957,13 @@ class DashboardEngine:
             for name, ticker in ASSETS.items():
                 try:
                     # Get recommended multi-TF intervals for this asset
-                    htf_interval, setup_interval, entry_interval = (
-                        get_recommended_timeframes(name)
-                    )
+                    htf_interval, setup_interval, entry_interval = get_recommended_timeframes(name)
 
                     # Fetch each timeframe independently; fall back to
                     # the engine's default interval on failure.
                     htf_df = self._fetch_tf_safe(ticker, htf_interval, name, "HTF")
-                    setup_df = self._fetch_tf_safe(
-                        ticker, setup_interval, name, "Setup"
-                    )
-                    entry_df = self._fetch_tf_safe(
-                        ticker, entry_interval, name, "Entry"
-                    )
+                    setup_df = self._fetch_tf_safe(ticker, setup_interval, name, "Setup")
+                    entry_df = self._fetch_tf_safe(ticker, entry_interval, name, "Entry")
 
                     # Need at least the entry frame to evaluate
                     if entry_df.empty or len(entry_df) < 30:
@@ -1021,15 +987,9 @@ class DashboardEngine:
 
                     # Only alert when confluence *transitions* to 3/3
                     if score == 3 and prev_score < 3:
-                        tf_label = (
-                            f"HTF={htf_interval} Setup={setup_interval} "
-                            f"Entry={entry_interval}"
-                        )
+                        tf_label = f"HTF={htf_interval} Setup={setup_interval} Entry={entry_interval}"
                         details = result.get("summary", "")
-                        if details:
-                            details = f"{details} [{tf_label}]"
-                        else:
-                            details = tf_label
+                        details = f"{details} [{tf_label}]" if details else tf_label
 
                         dispatcher.send_confluence_alert(
                             asset=name,
@@ -1053,9 +1013,7 @@ class DashboardEngine:
         except Exception as exc:
             logger.debug("Confluence alert sweep failed: %s", exc)
 
-    def _fetch_tf_safe(
-        self, ticker: str, interval: str, name: str, label: str
-    ) -> pd.DataFrame:
+    def _fetch_tf_safe(self, ticker: str, interval: str, name: str, label: str) -> pd.DataFrame:
         """Fetch data for a specific timeframe, returning empty DF on failure.
 
         Uses a sensible period for each interval type:
@@ -1158,18 +1116,14 @@ class DashboardEngine:
                     (entry_iv, "Entry"),
                 ]:
                     if iv != self.interval and iv != "1m":
-                        try:
+                        with contextlib.suppress(Exception):
                             self._fetch_tf_safe(ticker, iv, name, label)
-                        except Exception:
-                            pass
             except Exception as exc:
                 msg = f"{name}: {exc}"
                 errors.append(msg)
                 logger.warning("Data refresh failed for %s: %s", name, exc)
         with self._lock:
-            self.status["data_refresh"]["last"] = datetime.now(tz=_EST).strftime(
-                "%H:%M:%S"
-            )
+            self.status["data_refresh"]["last"] = datetime.now(tz=_EST).strftime("%H:%M:%S")
             self.status["data_refresh"]["status"] = "idle"
             self.status["data_refresh"]["error"] = "; ".join(errors) if errors else None
         if not errors:
@@ -1197,7 +1151,7 @@ class DashboardEngine:
             except Exception as exc:
                 logger.debug("HMM refit failed for %s: %s", name, exc)
 
-        # --- FKS Wave & Volatility Analysis (cached per asset) ---
+        # --- Ruby Wave & Volatility Analysis (cached per asset) ---
         for name, ticker in ASSETS.items():
             try:
                 df = get_data(ticker, self.interval, self.period)
@@ -1236,7 +1190,7 @@ class DashboardEngine:
                 )
 
                 logger.info(
-                    "FKS analysis %s: wave=%s (ratio=%s), vol=%s (%s%%), quality=%s%%",
+                    "Ruby analysis %s: wave=%s (ratio=%s), vol=%s (%s%%), quality=%s%%",
                     name,
                     wave_result.get("bias", "?"),
                     wave_result.get("wave_ratio_text", "?"),
@@ -1245,26 +1199,20 @@ class DashboardEngine:
                     sq_result.get("quality_pct", "?"),
                 )
             except Exception as exc:
-                logger.debug("FKS analysis failed for %s: %s", name, exc)
+                logger.debug("Ruby analysis failed for %s: %s", name, exc)
 
         for i, (name, ticker) in enumerate(ASSETS.items()):
             with self._lock:
                 self.status["optimization"]["progress"] = f"{name} ({i + 1}/{total})"
             try:
-                result = run_optimization(
-                    ticker, self.interval, self.period, self.account_size
-                )
+                result = run_optimization(ticker, self.interval, self.period, self.account_size)
                 if result:
                     strat_label = result.get("strategy_label", "?")
                     confidence = result.get("confidence", "?")
                     regime = result.get("regime", "?")
-                    # Enrich optimization result with FKS data
-                    fks_wave_raw = cache_get(
-                        _cache_key("fks_wave", ticker, self.interval, self.period)
-                    )
-                    fks_vol_raw = cache_get(
-                        _cache_key("fks_vol", ticker, self.interval, self.period)
-                    )
+                    # Enrich optimization result with Ruby data
+                    fks_wave_raw = cache_get(_cache_key("fks_wave", ticker, self.interval, self.period))
+                    fks_vol_raw = cache_get(_cache_key("fks_vol", ticker, self.interval, self.period))
                     if fks_wave_raw:
                         fks_wave = json.loads(fks_wave_raw)
                         result["wave_bias"] = fks_wave.get("bias", "NEUTRAL")
@@ -1278,23 +1226,15 @@ class DashboardEngine:
                         result["vol_percentile"] = fks_vol.get("percentile", 0.5)
                         # Apply vol cluster multiplier to position sizing
                         vol_mult = fks_vol.get("position_multiplier", 1.0)
-                        result["position_multiplier"] = round(
-                            result.get("position_multiplier", 1.0) * vol_mult, 4
-                        )
+                        result["position_multiplier"] = round(result.get("position_multiplier", 1.0) * vol_mult, 4)
                     # Signal quality enrichment
-                    fks_sq_raw = cache_get(
-                        _cache_key("fks_sq", ticker, self.interval, self.period)
-                    )
+                    fks_sq_raw = cache_get(_cache_key("fks_sq", ticker, self.interval, self.period))
                     if fks_sq_raw:
                         fks_sq = json.loads(fks_sq_raw)
                         result["signal_quality"] = fks_sq.get("score", 0.0)
                         result["signal_quality_pct"] = fks_sq.get("quality_pct", 0.0)
-                        result["high_quality_signal"] = fks_sq.get(
-                            "high_quality", False
-                        )
-                        result["signal_market_context"] = fks_sq.get(
-                            "market_context", "?"
-                        )
+                        result["high_quality_signal"] = fks_sq.get("high_quality", False)
+                        result["signal_market_context"] = fks_sq.get("market_context", "?")
                     # Re-cache with enriched data
                     set_cached_optimization(ticker, self.interval, self.period, result)
 
@@ -1316,9 +1256,7 @@ class DashboardEngine:
                         prev_regime = self._previous_regimes.get(name)
                     if prev_regime is not None and prev_regime != regime:
                         regime_conf = result.get("regime_confidence", 0.0)
-                        self._dispatch_regime_alert(
-                            name, prev_regime, regime, regime_conf
-                        )
+                        self._dispatch_regime_alert(name, prev_regime, regime, regime_conf)
                     with self._lock:
                         self._previous_regimes[name] = regime
                     # Track strategy selection history
@@ -1333,9 +1271,7 @@ class DashboardEngine:
                 errors.append(msg)
                 logger.warning("Optimization failed for %s: %s", name, exc)
         with self._lock:
-            self.status["optimization"]["last"] = datetime.now(tz=_EST).strftime(
-                "%H:%M:%S"
-            )
+            self.status["optimization"]["last"] = datetime.now(tz=_EST).strftime("%H:%M:%S")
             self.status["optimization"]["status"] = "idle"
             self.status["optimization"]["progress"] = ""
             self.status["optimization"]["error"] = "; ".join(errors) if errors else None
@@ -1355,9 +1291,7 @@ class DashboardEngine:
             with self._lock:
                 self.status["backtest"]["progress"] = f"{name} ({i + 1}/{total})"
             try:
-                row = run_backtest(
-                    ticker, name, self.interval, self.period, self.account_size
-                )
+                row = run_backtest(ticker, name, self.interval, self.period, self.account_size)
                 if row is not None:
                     results.append(row)
             except Exception as exc:
@@ -1371,9 +1305,7 @@ class DashboardEngine:
             self.status["backtest"]["progress"] = ""
             self.status["backtest"]["error"] = "; ".join(errors) if errors else None
         if not errors:
-            logger.info(
-                "Backtest complete for %d assets (%d results)", total, len(results)
-            )
+            logger.info("Backtest complete for %d assets (%d results)", total, len(results))
 
     def get_backtest_results(self) -> list[dict]:
         """Return latest backtest results (thread-safe)."""

@@ -43,7 +43,6 @@ DEFAULT_MAX_TOKENS_LIVE_COMPACT = 350
 DEFAULT_TEMPERATURE = 0.3
 
 
-
 def _call_grok(
     prompt: str,
     api_key: str,
@@ -203,9 +202,7 @@ def format_market_context(
             score = conf.get("score", 0)
             direction = conf.get("direction", "neutral")
             emoji = "🟢" if score >= 3 else "🟡" if score >= 2 else "🔴"
-            conf_parts.append(
-                f"  {asset_name}: {emoji} {score}/3 — bias={direction.upper()}"
-            )
+            conf_parts.append(f"  {asset_name}: {emoji} {score}/3 — bias={direction.upper()}")
         conf_text = "\n".join(conf_parts)
 
     # CVD summary text
@@ -216,9 +213,7 @@ def format_market_context(
             bias = summary.get("bias", "neutral")
             slope = summary.get("cvd_slope", 0)
             cvd_parts.append(
-                f"  {asset_name}: bias={bias}, "
-                f"slope={slope:+.3f}, "
-                f"delta={summary.get('delta_current', 0):,.0f}"
+                f"  {asset_name}: bias={bias}, slope={slope:+.3f}, delta={summary.get('delta_current', 0):,.0f}"
             )
         cvd_text = "\n".join(cvd_parts)
 
@@ -227,10 +222,7 @@ def format_market_context(
     if scorer_results:
         scorer_parts = []
         for r in scorer_results:
-            scorer_parts.append(
-                f"  {r['asset']}: score={r['composite_score']:.0f}/100, "
-                f"signal={r['signal']}"
-            )
+            scorer_parts.append(f"  {r['asset']}: score={r['composite_score']:.0f}/100, signal={r['signal']}")
         scorer_text = "\n".join(scorer_parts)
 
     # Session status
@@ -255,26 +247,18 @@ def format_market_context(
             avg = p.get("avgPrice", 0)
             upnl = p.get("unrealizedPnL", 0)
             pnl_emoji = "🟢" if upnl >= 0 else "🔴"
-            pos_parts.append(
-                f"  {symbol}: {side} x{qty} @ {avg:.2f} — "
-                f"{pnl_emoji} unrealized USD {upnl:+,.2f}"
-            )
+            pos_parts.append(f"  {symbol}: {side} x{qty} @ {avg:.2f} — {pnl_emoji} unrealized USD {upnl:+,.2f}")
         total_pnl = live_positions.get("total_unrealized_pnl", 0)
         acct_name = live_positions.get("account", "")
-        positions_text = (
-            f"Account: {acct_name} | Total unrealized: USD {total_pnl:+,.2f}\n"
-            + "\n".join(pos_parts)
-        )
+        positions_text = f"Account: {acct_name} | Total unrealized: USD {total_pnl:+,.2f}\n" + "\n".join(pos_parts)
 
-    # FKS Wave Analysis text
+    # Ruby Wave Analysis text
     fks_wave_text = "Not available"
     if fks_wave_results:
         wave_parts = []
         for asset_name, wave in fks_wave_results.items():
             bias = wave.get("bias", "NEUTRAL")
-            bias_emoji = (
-                "🟢" if bias == "BULLISH" else "🔴" if bias == "BEARISH" else "⚪"
-            )
+            bias_emoji = "🟢" if bias == "BULLISH" else "🔴" if bias == "BEARISH" else "⚪"
             wave_parts.append(
                 f"  {asset_name}: {bias_emoji} {bias} — "
                 f"wave_ratio={wave.get('wave_ratio_text', '?')}, "
@@ -286,15 +270,13 @@ def format_market_context(
             )
         fks_wave_text = "\n".join(wave_parts)
 
-    # FKS Volatility Clustering text
+    # Ruby Volatility Clustering text
     fks_vol_text = "Not available"
     if fks_vol_results:
         vol_parts = []
         for asset_name, vol in fks_vol_results.items():
             cluster = vol.get("cluster", "MEDIUM")
-            cluster_emoji = (
-                "⚡" if cluster == "HIGH" else "🧘" if cluster == "LOW" else "〰️"
-            )
+            cluster_emoji = "⚡" if cluster == "HIGH" else "🧘" if cluster == "LOW" else "〰️"
             vol_parts.append(
                 f"  {asset_name}: {cluster_emoji} {cluster} cluster — "
                 f"percentile={vol.get('percentile', 0):.0%}, "
@@ -305,7 +287,7 @@ def format_market_context(
             )
         fks_vol_text = "\n".join(vol_parts)
 
-    # FKS Signal Quality text
+    # Ruby Signal Quality text
     fks_sq_text = "Not available"
     if fks_signal_quality:
         sq_parts = []
@@ -389,13 +371,13 @@ CONFLUENCE (Multi-Timeframe):
 CVD (Volume Delta):
 {context["cvd_text"]}
 
-FKS WAVE ANALYSIS (Bull/Bear wave dominance, trend speed, market phase):
+Ruby WAVE ANALYSIS (Bull/Bear wave dominance, trend speed, market phase):
 {context.get("fks_wave_text", "Not available")}
 
-FKS VOLATILITY CLUSTERS (K-Means adaptive ATR, position sizing):
+Ruby VOLATILITY CLUSTERS (K-Means adaptive ATR, position sizing):
 {context.get("fks_vol_text", "Not available")}
 
-FKS SIGNAL QUALITY (multi-factor score: vol sweet-spot, velocity, trend speed, candle patterns, HTF bias):
+Ruby SIGNAL QUALITY (multi-factor score: vol sweet-spot, velocity, trend speed, candle patterns, HTF bias):
 {context.get("fks_sq_text", "Not available")}
 
 PRE-MARKET SCORES:
@@ -443,7 +425,7 @@ def run_live_analysis(
 ) -> str | None:
     """Generate a 15-minute market update during active trading.
 
-    When compact=True (default), uses the simplified ≤8-line format. 
+    When compact=True (default), uses the simplified ≤8-line format.
     When compact=False, uses the original verbose format.
 
     This is designed to be cheap (~$0.007 per call) and fast.
@@ -590,16 +572,11 @@ def format_live_compact(
         bias_status = "VALID" if quality >= 55 and not skip else "INVALID"
 
         # Key watch level: TP1 for valid bias, stop for invalid
-        if bias_status == "VALID":
-            watch = asset.get("tp1", 0)
-        else:
-            watch = asset.get("stop", 0)
+        watch = asset.get("tp1", 0) if bias_status == "VALID" else asset.get("stop", 0)
 
         # Pad symbol for alignment
         sym_padded = f"{symbol:<5s}"
-        lines.append(
-            f"{sym_padded} {emoji} {price:,.2f} | Bias {bias_status} | Watch {watch:,.2f}"
-        )
+        lines.append(f"{sym_padded} {emoji} {price:,.2f} | Bias {bias_status} | Watch {watch:,.2f}")
 
     # Blank separator
     lines.append("")
@@ -644,9 +621,7 @@ def _run_live_verbose(
     plan_ref = ""
     if previous_briefing:
         # Take first 500 chars of the morning briefing as context
-        plan_ref = (
-            f"\nMORNING PLAN SUMMARY (reference):\n{previous_briefing[:500]}...\n"
-        )
+        plan_ref = f"\nMORNING PLAN SUMMARY (reference):\n{previous_briefing[:500]}...\n"
 
     prev_ref = ""
     if previous_update:
@@ -765,9 +740,7 @@ class GrokSession:
             return False
         return (time.time() - self.last_update_time) >= self.LIVE_INTERVAL_SEC
 
-    def run_update(
-        self, context: dict, api_key: str, compact: bool = True
-    ) -> str | None:
+    def run_update(self, context: dict, api_key: str, compact: bool = True) -> str | None:
         """Run a live analysis update if the interval has elapsed.
 
         Args:

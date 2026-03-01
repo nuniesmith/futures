@@ -52,10 +52,12 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -113,8 +115,8 @@ MODEL_PREFIX = "breakout_cnn_"
 
 # Thread lock for model loading
 _model_lock = threading.Lock()
-_cached_model: Optional[Any] = None
-_cached_model_path: Optional[str] = None
+_cached_model: Any | None = None
+_cached_model_path: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +198,7 @@ if _TORCH_AVAILABLE:
             self,
             csv_path: str,
             transform=None,
-            image_root: Optional[str] = None,
+            image_root: str | None = None,
         ):
             self.df = pd.read_csv(csv_path)
             self.transform = transform or get_inference_transform()
@@ -376,17 +378,17 @@ else:
 
 def train_model(
     data_csv: str,
-    val_csv: Optional[str] = None,
+    val_csv: str | None = None,
     epochs: int = 8,
     batch_size: int = 32,
     lr: float = 3e-4,
     weight_decay: float = 1e-5,
     freeze_epochs: int = 2,
     model_dir: str = DEFAULT_MODEL_DIR,
-    image_root: Optional[str] = None,
+    image_root: str | None = None,
     num_workers: int = 4,
     save_best: bool = True,
-) -> Optional[str]:
+) -> str | None:
     """Train the HybridBreakoutCNN model.
 
     Two-phase training:
@@ -467,7 +469,7 @@ def train_model(
 
     # --- Training loop ---
     best_val_acc = 0.0
-    best_model_path: Optional[str] = None
+    best_model_path: str | None = None
     os.makedirs(model_dir, exist_ok=True)
 
     for epoch in range(epochs):
@@ -591,7 +593,7 @@ def train_model(
 # ---------------------------------------------------------------------------
 
 
-def _find_latest_model(model_dir: str = DEFAULT_MODEL_DIR) -> Optional[str]:
+def _find_latest_model(model_dir: str = DEFAULT_MODEL_DIR) -> str | None:
     """Find the most recently modified .pt file in the model directory."""
     model_path = Path(model_dir)
     if not model_path.is_dir():
@@ -607,9 +609,9 @@ def _find_latest_model(model_dir: str = DEFAULT_MODEL_DIR) -> Optional[str]:
 
 
 def _load_model(
-    model_path: Optional[str] = None,
-    device: Optional[str] = None,
-) -> Optional[Any]:
+    model_path: str | None = None,
+    device: str | None = None,
+) -> Any | None:
     """Load a HybridBreakoutCNN model from disk.
 
     Uses a module-level cache to avoid reloading on every inference call.
@@ -694,9 +696,9 @@ def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[floa
 def predict_breakout(
     image_path: str,
     tabular_features: Sequence[float],
-    model_path: Optional[str] = None,
+    model_path: str | None = None,
     threshold: float = DEFAULT_THRESHOLD,
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Predict whether a chart snapshot shows a high-quality breakout.
 
     Args:
@@ -774,10 +776,10 @@ def predict_breakout(
 def predict_breakout_batch(
     image_paths: Sequence[str],
     tabular_features_batch: Sequence[Sequence[float]],
-    model_path: Optional[str] = None,
+    model_path: str | None = None,
     threshold: float = DEFAULT_THRESHOLD,
     batch_size: int = 16,
-) -> list[Optional[dict[str, Any]]]:
+) -> list[dict[str, Any] | None]:
     """Batch inference for multiple chart snapshots.
 
     More efficient than calling ``predict_breakout`` in a loop because it
@@ -807,7 +809,7 @@ def predict_breakout_batch(
 
     device = next(model.parameters()).device
     transform = get_inference_transform()
-    results: list[Optional[dict[str, Any]]] = [None] * len(image_paths)
+    results: list[dict[str, Any] | None] = [None] * len(image_paths)
 
     # Process in batches
     for batch_start in range(0, len(image_paths), batch_size):
@@ -868,7 +870,7 @@ def predict_breakout_batch(
 # ---------------------------------------------------------------------------
 
 
-def model_info(model_path: Optional[str] = None) -> dict[str, Any]:
+def model_info(model_path: str | None = None) -> dict[str, Any]:
     """Return diagnostic information about the current or specified model.
 
     Useful for the dashboard / health checks.

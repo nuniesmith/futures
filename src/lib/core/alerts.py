@@ -45,7 +45,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import requests
@@ -177,14 +177,10 @@ class _AlertStore:
                             {
                                 "signal_key": signal_key,
                                 "timestamp": ts_val,
-                                "datetime": datetime.fromtimestamp(
-                                    ts_val, tz=_EST
-                                ).strftime("%H:%M:%S"),
+                                "datetime": datetime.fromtimestamp(ts_val, tz=_EST).strftime("%H:%M:%S"),
                             }
                         )
-                return sorted(alerts, key=lambda x: x["timestamp"], reverse=True)[
-                    :limit
-                ]
+                return sorted(alerts, key=lambda x: x["timestamp"], reverse=True)[:limit]
             except Exception:
                 pass
 
@@ -218,9 +214,7 @@ class _AlertStore:
 # ---------------------------------------------------------------------------
 
 
-def _send_slack(
-    webhook_url: str, title: str, message: str, fields: Optional[dict] = None
-) -> bool:
+def _send_slack(webhook_url: str, title: str, message: str, fields: dict | None = None) -> bool:
     """Send an alert to Slack via incoming webhook.
 
     Uses Slack Block Kit for rich formatting.
@@ -271,18 +265,14 @@ def _send_slack(
             logger.debug("Slack alert sent: %s", title)
             return True
         else:
-            logger.warning(
-                "Slack alert failed: %s %s", resp.status_code, resp.text[:200]
-            )
+            logger.warning("Slack alert failed: %s %s", resp.status_code, resp.text[:200])
             return False
     except Exception as exc:
         logger.warning("Slack alert error: %s", exc)
         return False
 
 
-def _send_discord(
-    webhook_url: str, title: str, message: str, fields: Optional[dict] = None
-) -> bool:
+def _send_discord(webhook_url: str, title: str, message: str, fields: dict | None = None) -> bool:
     """Send an alert to Discord via webhook.
 
     Uses Discord embed for rich formatting.
@@ -299,10 +289,7 @@ def _send_discord(
     }
 
     if fields:
-        embed["fields"] = [
-            {"name": str(k), "value": str(v), "inline": True}
-            for k, v in list(fields.items())[:25]
-        ]
+        embed["fields"] = [{"name": str(k), "value": str(v), "inline": True} for k, v in list(fields.items())[:25]]
 
     payload = {"embeds": [embed]}
 
@@ -317,9 +304,7 @@ def _send_discord(
             logger.debug("Discord alert sent: %s", title)
             return True
         else:
-            logger.warning(
-                "Discord alert failed: %s %s", resp.status_code, resp.text[:200]
-            )
+            logger.warning("Discord alert failed: %s %s", resp.status_code, resp.text[:200])
             return False
     except Exception as exc:
         logger.warning("Discord alert error: %s", exc)
@@ -331,7 +316,7 @@ def _send_telegram(
     chat_id: str,
     title: str,
     message: str,
-    fields: Optional[dict] = None,
+    fields: dict | None = None,
 ) -> bool:
     """Send an alert to Telegram via Bot API.
 
@@ -349,9 +334,7 @@ def _send_telegram(
             parts.append(f"<b>{_escape_html(str(k))}:</b> {_escape_html(str(v))}")
 
     parts.append("")
-    parts.append(
-        f"<i>Futures Dashboard • {datetime.now(_EST).strftime('%I:%M %p ET')}</i>"
-    )
+    parts.append(f"<i>Futures Dashboard • {datetime.now(_EST).strftime('%I:%M %p ET')}</i>")
 
     text = "\n".join(parts)
 
@@ -374,9 +357,7 @@ def _send_telegram(
                 logger.warning("Telegram API error: %s", result.get("description", ""))
                 return False
         else:
-            logger.warning(
-                "Telegram alert failed: %s %s", resp.status_code, resp.text[:200]
-            )
+            logger.warning("Telegram alert failed: %s %s", resp.status_code, resp.text[:200])
             return False
     except Exception as exc:
         logger.warning("Telegram alert error: %s", exc)
@@ -460,7 +441,7 @@ class AlertDispatcher:
         asset: str = "",
         strategy: str = "",
         direction: str = "",
-        extra_fields: Optional[dict[str, str]] = None,
+        extra_fields: dict[str, str] | None = None,
     ) -> bool:
         """Send a trading signal alert (subject to deduplication cooldown).
 
@@ -512,7 +493,7 @@ class AlertDispatcher:
         self,
         title: str,
         message: str,
-        extra_fields: Optional[dict[str, str]] = None,
+        extra_fields: dict[str, str] | None = None,
     ) -> bool:
         """Send a risk/compliance alert (always sent, no cooldown).
 
@@ -559,8 +540,7 @@ class AlertDispatcher:
 
         title = f"{emoji} Regime Change — {asset}"
         message = (
-            f"{asset} regime shifted from {old_regime.upper()} to {new_regime.upper()} "
-            f"(confidence: {confidence:.0%})"
+            f"{asset} regime shifted from {old_regime.upper()} to {new_regime.upper()} (confidence: {confidence:.0%})"
         )
         fields = {
             "Asset": asset,
@@ -611,31 +591,32 @@ class AlertDispatcher:
         self,
         title: str,
         message: str,
-        fields: Optional[dict[str, str]] = None,
+        fields: dict[str, str] | None = None,
     ) -> bool:
         """Send to all configured channels. Returns True if any succeeded."""
         any_success = False
 
-        if self.slack_webhook:
-            if _send_slack(self.slack_webhook, title, message, fields):
-                self._stats["slack_sent"] += 1
-                any_success = True
+        if self.slack_webhook and _send_slack(self.slack_webhook, title, message, fields):
+            self._stats["slack_sent"] += 1
+            any_success = True
 
-        if self.discord_webhook:
-            if _send_discord(self.discord_webhook, title, message, fields):
-                self._stats["discord_sent"] += 1
-                any_success = True
+        if self.discord_webhook and _send_discord(self.discord_webhook, title, message, fields):
+            self._stats["discord_sent"] += 1
+            any_success = True
 
-        if self.telegram_token and self.telegram_chat_id:
-            if _send_telegram(
+        if (
+            self.telegram_token
+            and self.telegram_chat_id
+            and _send_telegram(
                 self.telegram_token,
                 self.telegram_chat_id,
                 title,
                 message,
                 fields,
-            ):
-                self._stats["telegram_sent"] += 1
-                any_success = True
+            )
+        ):
+            self._stats["telegram_sent"] += 1
+            any_success = True
 
         return any_success
 
@@ -662,7 +643,7 @@ class AlertDispatcher:
 # Singleton accessor
 # ---------------------------------------------------------------------------
 
-_dispatcher: Optional[AlertDispatcher] = None
+_dispatcher: AlertDispatcher | None = None
 
 
 def get_dispatcher() -> AlertDispatcher:

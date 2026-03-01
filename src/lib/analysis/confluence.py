@@ -92,9 +92,7 @@ def _rsi(series: pd.Series, length: int = 14) -> pd.Series:
     return pd.Series(100 - (100 / (1 + rs)))
 
 
-def _atr(
-    high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14
-) -> pd.Series:
+def _atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.Series:
     """Average True Range."""
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
@@ -157,12 +155,7 @@ def evaluate_htf_bias(
     price_below_all = price < fast_val and price < mid_val and price < slow_val
 
     # Slope of slow EMA (momentum of the bias)
-    if len(slow) >= 5:
-        slope = (float(slow.iloc[-1]) - float(slow.iloc[-5])) / (
-            float(slow.iloc[-5]) + 1e-10
-        )
-    else:
-        slope = 0.0
+    slope = (float(slow.iloc[-1]) - float(slow.iloc[-5])) / (float(slow.iloc[-5]) + 1e-10) if len(slow) >= 5 else 0.0
 
     # Determine direction
     if bullish_stack:
@@ -304,9 +297,7 @@ def evaluate_setup(
     return {
         "direction": direction,
         "quality": round(quality, 3),
-        "has_pullback": has_bullish_pullback
-        if direction == "bullish"
-        else has_bearish_pullback,
+        "has_pullback": has_bullish_pullback if direction == "bullish" else has_bearish_pullback,
         "rsi": round(rsi_val, 1),
         "trend_bars": bullish_count if direction == "bullish" else bearish_count,
         "ema_fast": round(fast_val, 4),
@@ -435,9 +426,7 @@ def evaluate_entry(
                 candle_pattern = "shooting_star"
 
     # Volume confirmation: above 20-bar average
-    avg_vol = (
-        float(pd.Series(volume.rolling(20).mean()).iloc[-1]) if len(volume) >= 20 else 0
-    )
+    avg_vol = float(pd.Series(volume.rolling(20).mean()).iloc[-1]) if len(volume) >= 20 else 0
     current_vol = float(volume.iloc[-1])
     volume_confirmed = current_vol > avg_vol * 1.0 if avg_vol > 0 else False
 
@@ -583,9 +572,7 @@ class MultiTimeframeFilter:
 
         # Quality composite
         overall_quality = (
-            htf["confidence"] * 0.4
-            + setup["quality"] * 0.35
-            + (1.0 if entry.get("trigger", False) else 0.0) * 0.25
+            htf["confidence"] * 0.4 + setup["quality"] * 0.35 + (1.0 if entry.get("trigger", False) else 0.0) * 0.25
         )
 
         # Summary

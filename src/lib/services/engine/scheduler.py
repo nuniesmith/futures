@@ -5,7 +5,7 @@ Manages the engine's behavior based on Eastern Time trading sessions:
 
   - **Pre-market (00:00–05:00 ET):** Compute daily focus once, run Grok
     morning briefing, prepare alerts for the trading day.
-  - **Active (05:00–12:00 ET):** Live FKS recomputation every 5 min,
+  - **Active (05:00–12:00 ET):** Live Ruby recomputation every 5 min,
     publish focus updates to Redis, run Grok updates every 15 min.
   - **Off-hours (12:00–00:00 ET):** Historical data backfill, full
     optimization runs, backtesting, next-day prep.
@@ -30,8 +30,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
-from enum import Enum
-from typing import Optional
+from enum import StrEnum
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("engine.scheduler")
@@ -39,13 +38,13 @@ logger = logging.getLogger("engine.scheduler")
 _EST = ZoneInfo("America/New_York")
 
 
-class SessionMode(str, Enum):
+class SessionMode(StrEnum):
     PRE_MARKET = "pre-market"
     ACTIVE = "active"
     OFF_HOURS = "off-hours"
 
 
-class ActionType(str, Enum):
+class ActionType(StrEnum):
     """All schedulable engine actions."""
 
     # Pre-market actions (run once per day)
@@ -86,9 +85,9 @@ class _ActionTracker:
     """Tracks when an action was last executed and whether it's been
     completed for the current session/day."""
 
-    last_run: Optional[float] = None  # timestamp
-    last_run_date: Optional[date] = None  # for once-per-day actions
-    last_run_session: Optional[str] = None  # for once-per-session actions
+    last_run: float | None = None  # timestamp
+    last_run_date: date | None = None  # for once-per-day actions
+    last_run_session: str | None = None  # for once-per-session actions
     run_count_today: int = 0
 
 
@@ -117,9 +116,9 @@ class ScheduleManager:
 
     def __init__(self) -> None:
         self._trackers: dict[ActionType, _ActionTracker] = {action: _ActionTracker() for action in ActionType}
-        self._current_session: Optional[SessionMode] = None
-        self._session_started_at: Optional[float] = None
-        self._today: Optional[date] = None
+        self._current_session: SessionMode | None = None
+        self._session_started_at: float | None = None
+        self._today: date | None = None
         self._session_transition_logged: bool = False
 
     # ------------------------------------------------------------------
@@ -127,7 +126,7 @@ class ScheduleManager:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_session_mode(now: Optional[datetime] = None) -> SessionMode:
+    def get_session_mode(now: datetime | None = None) -> SessionMode:
         """Determine current trading session based on ET time."""
         if now is None:
             now = datetime.now(tz=_EST)
@@ -157,7 +156,7 @@ class ScheduleManager:
 
     def get_pending_actions(
         self,
-        now: Optional[datetime] = None,
+        now: datetime | None = None,
     ) -> list[ScheduledAction]:
         """Return ordered list of actions that should run right now.
 
@@ -200,7 +199,7 @@ class ScheduleManager:
         pending.sort(key=lambda a: a.priority)
         return pending
 
-    def mark_done(self, action: ActionType, now: Optional[datetime] = None) -> None:
+    def mark_done(self, action: ActionType, now: datetime | None = None) -> None:
         """Mark an action as completed. Called after successful execution.
 
         Parameters
@@ -229,7 +228,7 @@ class ScheduleManager:
         logger.warning("Action failed: %s — %s", action.value, error)
         # Don't update last_run so it gets retried
 
-    def get_status(self, now: Optional[datetime] = None) -> dict:
+    def get_status(self, now: datetime | None = None) -> dict:
         """Return scheduler status for health/monitoring.
 
         Parameters
@@ -257,7 +256,7 @@ class ScheduleManager:
             "actions": action_statuses,
         }
 
-    def time_until_next_session(self, now: Optional[datetime] = None) -> tuple[SessionMode, float]:
+    def time_until_next_session(self, now: datetime | None = None) -> tuple[SessionMode, float]:
         """Return the next session and seconds until it starts."""
         if now is None:
             now = datetime.now(tz=_EST)
@@ -348,13 +347,13 @@ class ScheduleManager:
                 )
             )
 
-        # FKS recomputation — every 5 minutes
+        # Ruby recomputation — every 5 minutes
         if self._interval_elapsed(ActionType.FKS_RECOMPUTE, ts, self.FKS_INTERVAL):
             actions.append(
                 ScheduledAction(
                     action=ActionType.FKS_RECOMPUTE,
                     priority=1,
-                    description="Recompute FKS wave/vol/quality for all assets",
+                    description="Recompute Ruby wave/vol/quality for all assets",
                 )
             )
 
@@ -404,15 +403,16 @@ class ScheduleManager:
 
         _orb_start = _dt_time(9, 30)
         _orb_end = _dt_time(11, 0)
-        if _orb_start <= now_time <= _orb_end:
-            if self._interval_elapsed(ActionType.CHECK_ORB, ts, self.ORB_CHECK_INTERVAL):
-                actions.append(
-                    ScheduledAction(
-                        action=ActionType.CHECK_ORB,
-                        priority=6,
-                        description="Check Opening Range Breakout (09:30–10:00 OR)",
-                    )
+        if _orb_start <= now_time <= _orb_end and self._interval_elapsed(
+            ActionType.CHECK_ORB, ts, self.ORB_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB,
+                    priority=6,
+                    description="Check Opening Range Breakout (09:30–10:00 OR)",
                 )
+            )
 
         return actions
 
@@ -496,7 +496,7 @@ class ScheduleManager:
         """Check if action has already run today."""
         return self._trackers[action].last_run_date == today
 
-    def _ran_this_session(self, action: ActionType, session_value: str, today: Optional[date] = None) -> bool:
+    def _ran_this_session(self, action: ActionType, session_value: str, today: date | None = None) -> bool:
         """Check if action has already run during this session instance."""
         tracker = self._trackers[action]
         if tracker.last_run_session != session_value:

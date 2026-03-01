@@ -187,9 +187,7 @@ class TestComputeVolumeProfile:
 
         # Sum volume in bins within the value area
         va_vol = sum(
-            bv
-            for bc, bv in zip(bin_centers, bin_volumes)
-            if result["val"] <= bc <= result["vah"]
+            bv for bc, bv in zip(bin_centers, bin_volumes, strict=False) if result["val"] <= bc <= result["vah"]
         )
 
         # Should be at least 70% (may be slightly more due to discrete bins)
@@ -250,9 +248,7 @@ class TestComputeVolumeProfile:
         # POC should be within 5 points of one of the centers
         dist1 = abs(result["poc"] - 2640)
         dist2 = abs(result["poc"] - 2660)
-        assert min(dist1, dist2) < 5.0, (
-            f"POC={result['poc']}, expected near 2640 or 2660"
-        )
+        assert min(dist1, dist2) < 5.0, f"POC={result['poc']}, expected near 2640 or 2660"
 
     def test_reproducible_results(self):
         """Same input should produce same output."""
@@ -305,9 +301,7 @@ class TestVolumeProfileEdgeCases:
                 "Close": [100.5, 101],
                 "Volume": [1000, 1200],
             },
-            index=pd.DatetimeIndex(
-                [datetime(2025, 1, 15, 10, 0), datetime(2025, 1, 15, 10, 5)]
-            ),
+            index=pd.DatetimeIndex([datetime(2025, 1, 15, 10, 0), datetime(2025, 1, 15, 10, 5)]),
         )
         result = compute_volume_profile(df)
         assert result["poc"] > 0
@@ -324,12 +318,7 @@ class TestVolumeProfileEdgeCases:
                 "Close": [100.0] * n,
                 "Volume": [500.0] * n,
             },
-            index=pd.DatetimeIndex(
-                [
-                    datetime(2025, 1, 15, 9, 30) + timedelta(minutes=5 * i)
-                    for i in range(n)
-                ]
-            ),
+            index=pd.DatetimeIndex([datetime(2025, 1, 15, 9, 30) + timedelta(minutes=5 * i) for i in range(n)]),
         )
         result = compute_volume_profile(df, n_bins=20)
         assert abs(result["poc"] - 100.0) < 1.0
@@ -544,9 +533,7 @@ class TestFindNakedPOCs:
         max_dist = 50.0
         result = find_naked_pocs(sessions, current_price, max_distance_points=max_dist)
         for poc in result:
-            assert (
-                abs(poc["poc"] - current_price) <= max_dist + 1.0
-            )  # +1 for bin center offset
+            assert abs(poc["poc"] - current_price) <= max_dist + 1.0  # +1 for bin center offset
 
     def test_empty_sessions_returns_empty(self):
         result = find_naked_pocs([], 2650.0)
@@ -571,9 +558,7 @@ class TestFindNakedPOCs:
 class TestRollingPOC:
     def test_returns_series(self):
         df = _make_ohlcv(200)
-        result = _rolling_poc(
-            df["High"], df["Low"], df["Close"], df["Volume"], lookback=50
-        )
+        result = _rolling_poc(df["High"], df["Low"], df["Close"], df["Volume"], lookback=50)
         assert isinstance(result, pd.Series)
         assert len(result) == len(df)
 
@@ -581,9 +566,7 @@ class TestRollingPOC:
         """Values before the lookback period should be NaN."""
         df = _make_ohlcv(200)
         lookback = 60
-        result = _rolling_poc(
-            df["High"], df["Low"], df["Close"], df["Volume"], lookback=lookback
-        )
+        result = _rolling_poc(df["High"], df["Low"], df["Close"], df["Volume"], lookback=lookback)
         assert np.isnan(result.iloc[0])
         assert np.isnan(result.iloc[lookback - 1])
 
@@ -591,18 +574,14 @@ class TestRollingPOC:
         """Values after the lookback period should be valid numbers."""
         df = _make_ohlcv(200)
         lookback = 50
-        result = _rolling_poc(
-            df["High"], df["Low"], df["Close"], df["Volume"], lookback=lookback
-        )
+        result = _rolling_poc(df["High"], df["Low"], df["Close"], df["Volume"], lookback=lookback)
         valid_values = result.iloc[lookback:]
         assert valid_values.notna().all()
 
     def test_poc_within_price_range(self):
         df = _make_ohlcv(200)
         lookback = 50
-        result = _rolling_poc(
-            df["High"], df["Low"], df["Close"], df["Volume"], lookback=lookback
-        )
+        result = _rolling_poc(df["High"], df["Low"], df["Close"], df["Volume"], lookback=lookback)
         for i in range(lookback, len(df)):
             poc = result.iloc[i]
             if not np.isnan(poc):
@@ -619,9 +598,7 @@ class TestRollingPOC:
 class TestRollingVAHVAL:
     def test_returns_two_series(self):
         df = _make_ohlcv(200)
-        vah_s, val_s = _rolling_vah_val(
-            df["High"], df["Low"], df["Close"], df["Volume"], lookback=50
-        )
+        vah_s, val_s = _rolling_vah_val(df["High"], df["Low"], df["Close"], df["Volume"], lookback=50)
         assert isinstance(vah_s, pd.Series)
         assert isinstance(val_s, pd.Series)
         assert len(vah_s) == len(df)
@@ -631,9 +608,7 @@ class TestRollingVAHVAL:
         """VAH should be >= VAL at every valid point."""
         df = _make_ohlcv(200)
         lookback = 50
-        vah_s, val_s = _rolling_vah_val(
-            df["High"], df["Low"], df["Close"], df["Volume"], lookback=lookback
-        )
+        vah_s, val_s = _rolling_vah_val(df["High"], df["Low"], df["Close"], df["Volume"], lookback=lookback)
         for i in range(lookback, len(df)):
             if not np.isnan(vah_s.iloc[i]) and not np.isnan(val_s.iloc[i]):
                 assert vah_s.iloc[i] >= val_s.iloc[i]
@@ -655,11 +630,7 @@ class TestProfileToDataFrame:
         df = _make_ohlcv(100)
         profile = compute_volume_profile(df)
         result = profile_to_dataframe(profile)
-        assert (
-            "price" in result.columns
-            or "bin_center" in result.columns
-            or len(result.columns) >= 1
-        )
+        assert "price" in result.columns or "bin_center" in result.columns or len(result.columns) >= 1
 
     def test_row_count_matches_bins(self):
         n_bins = 30
@@ -747,10 +718,7 @@ class TestVolumeProfileIntegration:
 
         # Total volume reasonable
         assert profile["total_volume"] > 0
-        assert (
-            abs(profile["total_volume"] - df["Volume"].sum()) / df["Volume"].sum()
-            < 0.01
-        )
+        assert abs(profile["total_volume"] - df["Volume"].sum()) / df["Volume"].sum() < 0.01
 
         # POC volume > 0
         assert profile["poc_volume"] > 0
@@ -796,8 +764,7 @@ class TestVolumeProfileIntegration:
         price_range = df["High"].max() - df["Low"].min()
         tolerance = price_range * 0.1  # within 10% of range
         assert abs(last_rolling_poc - static_poc) < tolerance, (
-            f"Rolling POC={last_rolling_poc:.2f} vs Static POC={static_poc:.2f}, "
-            f"tolerance={tolerance:.2f}"
+            f"Rolling POC={last_rolling_poc:.2f} vs Static POC={static_poc:.2f}, tolerance={tolerance:.2f}"
         )
 
     def test_different_seeds_produce_different_profiles(self):

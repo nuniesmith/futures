@@ -4,9 +4,9 @@
 #
 # Services:
 #   postgres       — durable storage (journal, historical opts, alerts)
-#   redis          — hot cache (latest FKS metrics, live positions, 1m bars)
+#   redis          — hot cache (latest Ruby metrics, live positions, 1m bars)
 #   data-service   — FastAPI API layer + HTMX dashboard (reads from Redis)
-#   engine         — background computation (FKS, optimization, backtesting)
+#   engine         — background computation (Ruby, optimization, backtesting)
 #   prometheus     — metrics collection & alerting  (monitoring profile)
 #   grafana        — dashboards & visualization      (monitoring profile)
 #
@@ -115,7 +115,7 @@ services:
 
     # -------------------------------------------------------------------------
     # Engine — Background computation worker
-    # Heavy: DashboardEngine, FKS modules, optimization, backtesting,
+    # Heavy: DashboardEngine, Ruby modules, optimization, backtesting,
     # Massive WebSocket, wave analysis, volatility, signal quality, regime,
     # CVD, ICT. Reads data from Massive/Redis, writes results to Redis.
     # -------------------------------------------------------------------------

@@ -69,7 +69,7 @@ strategy — targeting 1–3 high-conviction trades per day.
 | Service | Role | Port |
 |---|---|---|
 | **Postgres** | Durable storage — trade journal, historical optimizations, risk events | 5432 |
-| **Redis** | Hot cache — live bars, FKS metrics, positions, focus updates, SSE pub/sub | 6379 |
+| **Redis** | Hot cache — live bars, Ruby metrics, positions, focus updates, SSE pub/sub | 6379 |
 | **Data Service** | FastAPI API + HTMX dashboard — thin read layer over Redis | 8000 |
 | **Engine** | Background worker — all heavy computation, analysis, training, scheduling | — |
 | **Prometheus** | Metrics collection for monitoring | 9090 |
@@ -86,7 +86,7 @@ The engine operates on three Eastern Time sessions, each with different responsi
 | Session | Hours (ET) | What Happens |
 |---|---|---|
 | 🌙 **Pre-Market** | 00:00–05:00 | Compute daily focus, Grok morning briefing, prep alerts |
-| 🟢 **Active** | 05:00–12:00 | Live FKS recompute (5 min), ORB detection (2 min), risk checks (1 min), Grok updates (15 min) |
+| 🟢 **Active** | 05:00–12:00 | Live Ruby recompute (5 min), ORB detection (2 min), risk checks (1 min), Grok updates (15 min) |
 | ⚙️ **Off-Hours** | 12:00–00:00 | Historical backfill, strategy optimization, backtesting, CNN dataset generation + retraining |
 
 ### The Trade Pipeline
@@ -184,12 +184,6 @@ open http://localhost:8000        # dashboard
 
 ```bash
 docker compose up -d --build
-```
-
-### With Monitoring (+ Prometheus & Grafana)
-
-```bash
-docker compose --profile monitoring up -d --build
 # Prometheus: http://localhost:9090
 # Grafana:    http://localhost:3000 (admin/admin)
 ```
@@ -368,7 +362,7 @@ futures/
 │   │   │   ├── orb_simulator.py      #   ORB trade simulation + auto-labeling
 │   │   │   ├── regime.py             #   HMM market regime detection
 │   │   │   ├── scorer.py             #   Pre-market instrument scoring
-│   │   │   ├── signal_quality.py     #   FKS signal quality score (Pine port)
+│   │   │   ├── signal_quality.py     #   Ruby signal quality score (Pine port)
 │   │   │   ├── volatility.py         #   K-Means adaptive vol clustering
 │   │   │   ├── volume_profile.py     #   POC, VAH/VAL, naked POCs
 │   │   │   └── wave_analysis.py      #   Wave dominance tracking (Pine port)
@@ -384,7 +378,7 @@ futures/
 │   │   │   └── massive_client.py     #   Massive.com REST + WebSocket client
 │   │   │
 │   │   ├── trading/                  # Trading engine
-│   │   │   ├── engine.py             #   DashboardEngine: FKS, optimization, backtest
+│   │   │   ├── engine.py             #   DashboardEngine: Ruby, optimization, backtest
 │   │   │   ├── strategies.py         #   10 backtesting strategies (Optuna-tunable)
 │   │   │   └── costs.py              #   CME slippage + commission model
 │   │   │
@@ -406,7 +400,7 @@ futures/
 │   │   └── BACKTEST_GUIDE.md         #   NinjaTrader backtesting guide
 │   │
 │   ├── pinescript/
-│   │   └── ruby.pine                 # TradingView Pine Script (original FKS)
+│   │   └── ruby.pine                 # TradingView Pine Script (original Ruby)
 │   │
 │   └── tests/                        # Pytest test suite (25 test modules)
 │
@@ -497,7 +491,7 @@ futures/
 | Bracket take-profit 2 | 3.0 × ATR | `orb_simulator.py` |
 | Max hold time | 120 bars (2 hours) | `dataset_generator.py` |
 | Chart image size | 224 × 224 px | `breakout_cnn.py` |
-| FKS recompute interval | 5 minutes | `scheduler.py` |
+| Ruby recompute interval | 5 minutes | `scheduler.py` |
 | Grok update interval | 15 minutes | `scheduler.py` |
 | Risk check interval | 1 minute | `scheduler.py` |
 

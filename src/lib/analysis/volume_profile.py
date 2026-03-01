@@ -133,9 +133,7 @@ def compute_volume_profile(
     poc_volume = float(bin_volumes[poc_idx])
 
     # Value Area: expand outward from POC until value_area_pct is captured
-    vah, val = _compute_value_area(
-        bin_centers, bin_volumes, poc_idx, total_volume, value_area_pct
-    )
+    vah, val = _compute_value_area(bin_centers, bin_volumes, poc_idx, total_volume, value_area_pct)
 
     # High/Low Volume Nodes
     hvn, lvn = _find_volume_nodes(bin_centers, bin_volumes, total_volume, n_bins)
@@ -212,14 +210,8 @@ def _find_volume_nodes(
     hvn_threshold = avg_vol * 1.5
     lvn_threshold = avg_vol * 0.5
 
-    hvn = [
-        float(bin_centers[i]) for i in range(n_bins) if bin_volumes[i] > hvn_threshold
-    ]
-    lvn = [
-        float(bin_centers[i])
-        for i in range(n_bins)
-        if 0 < bin_volumes[i] < lvn_threshold
-    ]
+    hvn = [float(bin_centers[i]) for i in range(n_bins) if bin_volumes[i] > hvn_threshold]
+    lvn = [float(bin_centers[i]) for i in range(n_bins) if 0 < bin_volumes[i] < lvn_threshold]
 
     return hvn, lvn
 
@@ -272,10 +264,7 @@ def compute_session_profiles(
     # Group by date
     try:
         idx = df.index.to_series()
-        if hasattr(idx.dt, "date"):
-            dates = idx.dt.date
-        else:
-            dates = pd.to_datetime(idx).dt.date
+        dates = idx.dt.date if hasattr(idx.dt, "date") else pd.to_datetime(idx).dt.date
     except Exception:
         return []
 
@@ -290,12 +279,8 @@ def compute_session_profiles(
 
         profile = compute_volume_profile(day_df, n_bins, value_area_pct)
         profile["date"] = d
-        profile["open"] = (
-            float(day_df["Close"].iloc[0]) if "Close" in day_df.columns else 0.0
-        )
-        profile["close"] = (
-            float(day_df["Close"].iloc[-1]) if "Close" in day_df.columns else 0.0
-        )
+        profile["open"] = float(day_df["Close"].iloc[0]) if "Close" in day_df.columns else 0.0
+        profile["close"] = float(day_df["Close"].iloc[-1]) if "Close" in day_df.columns else 0.0
         profiles.append(profile)
 
     return profiles
@@ -340,10 +325,7 @@ def find_naked_pocs(
                 sub_low = subsequent["val"]  # use VAL as proxy for session low
                 sub_high = subsequent["vah"]  # use VAH as proxy for session high
                 # More accurate: check actual data range
-                if (
-                    subsequent.get("bin_edges") is not None
-                    and len(subsequent["bin_edges"]) > 1
-                ):
+                if subsequent.get("bin_edges") is not None and len(subsequent["bin_edges"]) > 1:
                     sub_low = float(subsequent["bin_edges"][0])
                     sub_high = float(subsequent["bin_edges"][-1])
 
@@ -713,9 +695,7 @@ def profile_to_dataframe(profile: dict[str, Any]) -> pd.DataFrame:
     Returns a DataFrame with columns: Price, Volume, IsPOC, InValueArea.
     """
     if not profile or len(profile.get("bin_centers", [])) == 0:
-        return pd.DataFrame(
-            columns=pd.Index(["Price", "Volume", "IsPOC", "InValueArea"])
-        )
+        return pd.DataFrame(columns=pd.Index(["Price", "Volume", "IsPOC", "InValueArea"]))
 
     centers = profile["bin_centers"]
     volumes = profile["bin_volumes"]
@@ -724,14 +704,12 @@ def profile_to_dataframe(profile: dict[str, Any]) -> pd.DataFrame:
     val = profile["val"]
 
     rows = []
-    for i, (price, vol) in enumerate(zip(centers, volumes)):
+    for _i, (price, vol) in enumerate(zip(centers, volumes, strict=False)):
         rows.append(
             {
                 "Price": round(float(price), 2),
                 "Volume": float(vol),
-                "IsPOC": abs(float(price) - poc) < (centers[1] - centers[0]) * 0.6
-                if len(centers) > 1
-                else False,
+                "IsPOC": abs(float(price) - poc) < (centers[1] - centers[0]) * 0.6 if len(centers) > 1 else False,
                 "InValueArea": val <= float(price) <= vah,
             }
         )

@@ -42,15 +42,20 @@ Design:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from datetime import time as dt_time
-from typing import Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
-import pandas as pd
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    import pandas as pd
 
 logger = logging.getLogger("analysis.orb_filters")
 
@@ -190,8 +195,8 @@ def check_nr7(
 def check_premarket_range(
     direction: str,
     trigger_price: float,
-    premarket_high: Optional[float] = None,
-    premarket_low: Optional[float] = None,
+    premarket_high: float | None = None,
+    premarket_low: float | None = None,
     tolerance_pct: float = 0.001,
 ) -> FilterVerdict:
     """Check whether the ORB breakout also clears the pre-market range extreme.
@@ -275,7 +280,7 @@ DEFAULT_SESSION_WINDOWS: list[tuple[dt_time, dt_time]] = [
 
 def check_session_window(
     signal_time: datetime,
-    allowed_windows: Optional[Sequence[tuple[dt_time, dt_time]]] = None,
+    allowed_windows: Sequence[tuple[dt_time, dt_time]] | None = None,
 ) -> FilterVerdict:
     """Check whether the signal time falls within an allowed trading window.
 
@@ -291,10 +296,7 @@ def check_session_window(
     windows = allowed_windows if allowed_windows is not None else DEFAULT_SESSION_WINDOWS
 
     # Ensure we have an ET time
-    if signal_time.tzinfo is None:
-        signal_et = signal_time.replace(tzinfo=_EST)
-    else:
-        signal_et = signal_time.astimezone(_EST)
+    signal_et = signal_time.replace(tzinfo=_EST) if signal_time.tzinfo is None else signal_time.astimezone(_EST)
 
     t = signal_et.time()
 
@@ -345,10 +347,7 @@ def check_lunch_filter(
     """
     name = "Lunch Filter"
 
-    if signal_time.tzinfo is None:
-        signal_et = signal_time.replace(tzinfo=_EST)
-    else:
-        signal_et = signal_time.astimezone(_EST)
+    signal_et = signal_time.replace(tzinfo=_EST) if signal_time.tzinfo is None else signal_time.astimezone(_EST)
 
     t = signal_et.time()
 
@@ -484,7 +483,7 @@ def check_multi_tf_bias(
 # This is a simple but effective confluence check.
 
 
-def compute_session_vwap(bars_1m: pd.DataFrame) -> Optional[float]:
+def compute_session_vwap(bars_1m: pd.DataFrame) -> float | None:
     """Compute the session VWAP from 1-minute bars.
 
     VWAP = cumsum(Typical_Price × Volume) / cumsum(Volume)
@@ -517,7 +516,7 @@ def check_vwap_confluence(
     bars_1m: pd.DataFrame,
     direction: str,
     trigger_price: float,
-    vwap: Optional[float] = None,
+    vwap: float | None = None,
 ) -> FilterVerdict:
     """Check that the breakout trigger price is on the correct side of VWAP.
 
@@ -584,14 +583,14 @@ def apply_all_filters(
     direction: str,
     trigger_price: float,
     signal_time: datetime,
-    bars_daily: Optional[pd.DataFrame] = None,
-    bars_1m: Optional[pd.DataFrame] = None,
-    bars_htf: Optional[pd.DataFrame] = None,
-    premarket_high: Optional[float] = None,
-    premarket_low: Optional[float] = None,
-    orb_high: Optional[float] = None,
-    orb_low: Optional[float] = None,
-    vwap: Optional[float] = None,
+    bars_daily: pd.DataFrame | None = None,
+    bars_1m: pd.DataFrame | None = None,
+    bars_htf: pd.DataFrame | None = None,
+    premarket_high: float | None = None,
+    premarket_low: float | None = None,
+    orb_high: float | None = None,
+    orb_low: float | None = None,
+    vwap: float | None = None,
     # Configuration
     enable_nr7: bool = True,
     enable_premarket: bool = True,
@@ -599,7 +598,7 @@ def apply_all_filters(
     enable_lunch_filter: bool = True,
     enable_multi_tf: bool = True,
     enable_vwap: bool = True,
-    allowed_windows: Optional[Sequence[tuple[dt_time, dt_time]]] = None,
+    allowed_windows: Sequence[tuple[dt_time, dt_time]] | None = None,
     nr7_lookback: int = 7,
     ema_period: int = 34,
     # Gating mode: "all" requires every enabled hard filter to pass,
@@ -731,7 +730,7 @@ def extract_premarket_range(
     bars_1m: pd.DataFrame,
     pm_start: dt_time = PM_START,
     pm_end: dt_time = PM_END,
-) -> tuple[Optional[float], Optional[float]]:
+) -> tuple[float | None, float | None]:
     """Extract pre-market high and low from 1-minute bars.
 
     Scans bars between ``pm_start`` and ``pm_end`` (Eastern Time) and
@@ -756,10 +755,8 @@ def extract_premarket_range(
         if str(idx.tz) != str(_EST):
             df = df.tz_convert(_EST)
     else:
-        try:
+        with contextlib.suppress(Exception):
             df.index = idx.tz_localize(_EST)
-        except Exception:
-            pass
 
     try:
         times = df.index.time

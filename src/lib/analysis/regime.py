@@ -37,9 +37,9 @@ REGIME_LABELS = {0: "trending", 1: "volatile", 2: "choppy"}
 
 # Position sizing multipliers per regime
 REGIME_MULTIPLIERS = {
-    "trending": 1.0,   # full size — favorable conditions
-    "volatile": 0.5,   # half size — high vol, wider stops needed
-    "choppy": 0.25,    # quarter size — low edge, preserve capital
+    "trending": 1.0,  # full size — favorable conditions
+    "volatile": 0.5,  # half size — high vol, wider stops needed
+    "choppy": 0.25,  # quarter size — low edge, preserve capital
 }
 
 # Default config
@@ -47,7 +47,7 @@ DEFAULT_N_STATES = 3
 DEFAULT_CONFIDENCE_THRESHOLD = 0.6
 DEFAULT_PERSISTENCE_BARS = 3
 DEFAULT_LOOKBACK_DAYS = 30  # rolling window for training (in calendar days)
-MIN_BARS_FOR_FIT = 200      # minimum bars needed to fit HMM
+MIN_BARS_FOR_FIT = 200  # minimum bars needed to fit HMM
 
 
 def _compute_features(df: pd.DataFrame) -> np.ndarray | None:
@@ -83,11 +83,13 @@ def _compute_features(df: pd.DataFrame) -> np.ndarray | None:
     vol_ma20 = volume.rolling(20).mean()
     vol_ratio = volume / (vol_ma20 + 1e-10)
 
-    features = pd.DataFrame({
-        "log_ret": log_ret,
-        "norm_atr": norm_atr,
-        "vol_ratio": vol_ratio,
-    }).dropna()
+    features = pd.DataFrame(
+        {
+            "log_ret": log_ret,
+            "norm_atr": norm_atr,
+            "vol_ratio": vol_ratio,
+        }
+    ).dropna()
 
     if len(features) < MIN_BARS_FOR_FIT:
         return None
@@ -152,10 +154,7 @@ class RegimeDetector:
             from hmmlearn.hmm import GaussianHMM
             from sklearn.preprocessing import StandardScaler
         except ImportError:
-            logger.warning(
-                "hmmlearn or scikit-learn not installed. "
-                "Install with: pip install hmmlearn scikit-learn"
-            )
+            logger.warning("hmmlearn or scikit-learn not installed. Install with: pip install hmmlearn scikit-learn")
             return False
 
         features = _compute_features(df)
@@ -277,10 +276,7 @@ class RegimeDetector:
         else:
             self._persistence_count = 1
 
-        if self._persistence_count >= self.persistence_bars:
-            effective_regime = raw_regime
-        else:
-            effective_regime = self._last_regime
+        effective_regime = raw_regime if self._persistence_count >= self.persistence_bars else self._last_regime
 
         self._last_regime = raw_regime
 
@@ -289,10 +285,7 @@ class RegimeDetector:
         # Position multiplier: blend by probability if confident,
         # else use conservative choppy multiplier
         if confident:
-            multiplier = sum(
-                proba.get(r, 0.0) * REGIME_MULTIPLIERS[r]
-                for r in REGIME_MULTIPLIERS
-            )
+            multiplier = sum(proba.get(r, 0.0) * REGIME_MULTIPLIERS[r] for r in REGIME_MULTIPLIERS)
         else:
             multiplier = REGIME_MULTIPLIERS["choppy"]
 

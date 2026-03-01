@@ -32,13 +32,14 @@ Usage:
         publish_no_trade_alert(result)
 """
 
+import contextlib
 import json
 import logging
 import math
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
-from typing import Any, Optional
+from enum import StrEnum
+from typing import Any
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("engine.patterns")
@@ -61,7 +62,7 @@ DEFAULT_SESSION_END_HOUR = 12  # 12:00 PM ET session end
 # ---------------------------------------------------------------------------
 
 
-class NoTradeCondition(str, Enum):
+class NoTradeCondition(StrEnum):
     """Enumeration of all no-trade conditions."""
 
     ALL_LOW_QUALITY = "all_low_quality"
@@ -178,19 +179,13 @@ def _check_all_low_quality(
         return NoTradeCheck(
             condition=NoTradeCondition.ALL_LOW_QUALITY,
             triggered=True,
-            reason=(
-                f"All assets below {min_quality * 100:.0f}% quality "
-                f"(best: {best_asset} at {best_q * 100:.0f}%)"
-            ),
+            reason=(f"All assets below {min_quality * 100:.0f}% quality (best: {best_asset} at {best_q * 100:.0f}%)"),
             severity="critical",
             details={
                 "threshold": min_quality,
                 "best_quality": round(best_q, 3),
                 "best_asset": best_asset,
-                "qualities": {
-                    a.get("symbol", "?"): round(_safe_float(a.get("quality", 0)), 3)
-                    for a in focus_assets
-                },
+                "qualities": {a.get("symbol", "?"): round(_safe_float(a.get("quality", 0)), 3) for a in focus_assets},
             },
         )
 
@@ -254,7 +249,7 @@ def _check_extreme_volatility(
 
 
 def _check_daily_loss(
-    risk_status: Optional[dict[str, Any]],
+    risk_status: dict[str, Any] | None,
     max_daily_loss: float = DEFAULT_MAX_DAILY_LOSS,
 ) -> NoTradeCheck:
     """Check: Has the daily loss exceeded the threshold?"""
@@ -272,10 +267,7 @@ def _check_daily_loss(
         return NoTradeCheck(
             condition=NoTradeCondition.DAILY_LOSS_EXCEEDED,
             triggered=True,
-            reason=(
-                f"Daily loss ${daily_pnl:,.2f} exceeds limit "
-                f"${max_daily_loss:,.2f} — stop trading"
-            ),
+            reason=(f"Daily loss ${daily_pnl:,.2f} exceeds limit ${max_daily_loss:,.2f} — stop trading"),
             severity="critical",
             details={
                 "daily_pnl": round(daily_pnl, 2),
@@ -296,7 +288,7 @@ def _check_daily_loss(
 
 
 def _check_consecutive_losses(
-    risk_status: Optional[dict[str, Any]],
+    risk_status: dict[str, Any] | None,
     max_consecutive: int = DEFAULT_MAX_CONSECUTIVE_LOSSES,
 ) -> NoTradeCheck:
     """Check: Have there been too many consecutive losing trades?"""
@@ -314,10 +306,7 @@ def _check_consecutive_losses(
         return NoTradeCheck(
             condition=NoTradeCondition.CONSECUTIVE_LOSSES,
             triggered=True,
-            reason=(
-                f"{streak} consecutive losing trades "
-                f"(max allowed: {max_consecutive}) — take a break"
-            ),
+            reason=(f"{streak} consecutive losing trades (max allowed: {max_consecutive}) — take a break"),
             severity="warning",
             details={
                 "consecutive_losses": streak,
@@ -335,7 +324,7 @@ def _check_consecutive_losses(
 
 def _check_late_session_no_setups(
     focus_assets: list[dict[str, Any]],
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
     late_hour: int = DEFAULT_LATE_SESSION_HOUR,
     session_end_hour: int = DEFAULT_SESSION_END_HOUR,
 ) -> NoTradeCheck:
@@ -361,10 +350,7 @@ def _check_late_session_no_setups(
         return NoTradeCheck(
             condition=NoTradeCondition.LATE_SESSION_NO_SETUPS,
             triggered=True,
-            reason=(
-                f"After {late_hour}:00 AM ET with no quality setups — "
-                f"session winding down"
-            ),
+            reason=(f"After {late_hour}:00 AM ET with no quality setups — session winding down"),
             severity="warning",
             details={
                 "current_hour": hour,
@@ -386,7 +372,7 @@ def _check_late_session_no_setups(
 
 
 def _check_session_ended(
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
     session_end_hour: int = DEFAULT_SESSION_END_HOUR,
 ) -> NoTradeCheck:
     """Check: Has the trading session already ended?"""
@@ -419,8 +405,8 @@ def _check_session_ended(
 
 def evaluate_no_trade(
     focus_assets: list[dict[str, Any]],
-    risk_status: Optional[dict[str, Any]] = None,
-    now: Optional[datetime] = None,
+    risk_status: dict[str, Any] | None = None,
+    now: datetime | None = None,
     min_quality: float = DEFAULT_MIN_QUALITY,
     extreme_vol: float = DEFAULT_EXTREME_VOL,
     max_daily_loss: float = DEFAULT_MAX_DAILY_LOSS,
@@ -566,13 +552,11 @@ def clear_no_trade_alert() -> bool:
         cache_set("engine:no_trade", cleared.encode(), ttl=300)
 
         if REDIS_AVAILABLE and _r is not None:
-            try:
+            with contextlib.suppress(Exception):
                 _r.publish(
                     "dashboard:no_trade",
                     json.dumps({"should_skip": False, "cleared": True}),
                 )
-            except Exception:
-                pass
 
         return True
     except Exception:

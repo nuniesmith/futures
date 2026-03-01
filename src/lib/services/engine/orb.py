@@ -23,12 +23,14 @@ Usage from engine scheduler:
         publish_orb_alert(result)
 """
 
+import contextlib
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import time as dt_time
-from typing import Any, Callable, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -125,9 +127,7 @@ class ORBResult:
 # ---------------------------------------------------------------------------
 
 
-def compute_atr(
-    highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = ATR_PERIOD
-) -> float:
+def compute_atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = ATR_PERIOD) -> float:
     """Compute the Average True Range for the given bar data.
 
     Uses the standard Wilder ATR calculation:
@@ -153,10 +153,7 @@ def compute_atr(
         tr[i] = max(hl, hc, lc)
 
     # Simple moving average of the last `period` true ranges
-    if n >= period:
-        atr = float(np.mean(tr[-period:]))
-    else:
-        atr = float(np.mean(tr))
+    atr = float(np.mean(tr[-period:])) if n >= period else float(np.mean(tr))
 
     return atr
 
@@ -175,10 +172,8 @@ def _localize_index(df: pd.DataFrame) -> pd.DataFrame:
         return df.tz_convert(_EST) if str(idx.tz) != str(_EST) else df  # type: ignore[attr-defined]
     else:
         # Naive — assume Eastern
-        try:
+        with contextlib.suppress(Exception):
             df.index = idx.tz_localize(_EST)  # type: ignore[attr-defined]
-        except Exception:
-            pass
         return df
 
 
@@ -221,7 +216,7 @@ def detect_opening_range_breakout(
     symbol: str = "",
     atr_period: int = ATR_PERIOD,
     breakout_multiplier: float = BREAKOUT_ATR_MULTIPLIER,
-    now_fn: Optional[Callable[..., Any]] = None,
+    now_fn: Callable[..., Any] | None = None,
 ) -> ORBResult:
     """Detect an Opening Range Breakout from 1-minute bar data.
 
@@ -274,9 +269,7 @@ def detect_opening_range_breakout(
     result.or_complete = or_complete
 
     if or_bar_count < MIN_OR_BARS:
-        result.error = (
-            f"Opening range has only {or_bar_count} bars (need >= {MIN_OR_BARS})"
-        )
+        result.error = f"Opening range has only {or_bar_count} bars (need >= {MIN_OR_BARS})"
         return result
 
     if or_high <= 0 or or_low <= 0 or or_high <= or_low:

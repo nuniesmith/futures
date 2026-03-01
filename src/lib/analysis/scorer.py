@@ -30,7 +30,7 @@ Usage:
 import logging
 import math
 from datetime import time
-from typing import Any, Optional, TypedDict
+from typing import Any, TypedDict
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -119,7 +119,7 @@ EUROPEAN_SESSION = {"start": time(2, 0), "end": time(8, 0)}
 
 def calc_natr_score(
     df: pd.DataFrame,
-    daily_df: Optional[pd.DataFrame] = None,
+    daily_df: pd.DataFrame | None = None,
     atr_period: int = 14,
     avg_lookback: int = 20,
 ) -> dict[str, Any]:
@@ -191,7 +191,7 @@ def calc_natr_score(
 
 def calc_rvol_score(
     df: pd.DataFrame,
-    daily_df: Optional[pd.DataFrame] = None,
+    daily_df: pd.DataFrame | None = None,
     avg_lookback: int = 20,
 ) -> dict[str, Any]:
     """Compute Relative Volume score (0-100).
@@ -255,7 +255,7 @@ def calc_rvol_score(
 
 def calc_gap_score(
     df: pd.DataFrame,
-    daily_df: Optional[pd.DataFrame] = None,
+    daily_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Compute overnight gap magnitude score (0-100).
 
@@ -297,7 +297,7 @@ def calc_gap_score(
 
 def calc_catalyst_score(
     asset_name: str,
-    active_events: Optional[list[str]] = None,
+    active_events: list[str] | None = None,
 ) -> dict[str, Any]:
     """Compute economic catalyst score (0-100) for an instrument.
 
@@ -487,7 +487,7 @@ class PreMarketScorer:
             print(f"{r['asset']}: {r['composite_score']:.1f}")
     """
 
-    def __init__(self, weights: Optional[dict[str, float]] = None):
+    def __init__(self, weights: dict[str, float] | None = None):
         """Initialize with optional custom weights.
 
         Args:
@@ -505,8 +505,8 @@ class PreMarketScorer:
         self,
         asset_name: str,
         intraday_df: pd.DataFrame,
-        daily_df: Optional[pd.DataFrame] = None,
-        active_events: Optional[list[str]] = None,
+        daily_df: pd.DataFrame | None = None,
+        active_events: list[str] | None = None,
     ) -> dict[str, Any]:
         """Score a single instrument on all five metrics.
 
@@ -554,8 +554,8 @@ class PreMarketScorer:
     def score_all(
         self,
         intraday_data: dict[str, pd.DataFrame],
-        daily_data: Optional[dict[str, pd.DataFrame]] = None,
-        active_events: Optional[list[str]] = None,
+        daily_data: dict[str, pd.DataFrame] | None = None,
+        active_events: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Score all instruments and return sorted results.
 
@@ -606,9 +606,9 @@ class PreMarketScorer:
 
 def score_instruments(
     intraday_data: dict[str, pd.DataFrame],
-    daily_data: Optional[dict[str, pd.DataFrame]] = None,
-    active_events: Optional[list[str]] = None,
-    weights: Optional[dict[str, float]] = None,
+    daily_data: dict[str, pd.DataFrame] | None = None,
+    active_events: list[str] | None = None,
+    weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Score all instruments and return sorted results.
 

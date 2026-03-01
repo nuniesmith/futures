@@ -1,5 +1,5 @@
 # Dockerfile.engine — Background Engine Service
-# Runs DashboardEngine: FKS modules, optimization, backtesting,
+# Runs DashboardEngine: Ruby modules, optimization, backtesting,
 # daily focus computation, session-aware scheduling.
 # Reads market data from Redis (written by data-service), writes results back.
 

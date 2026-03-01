@@ -70,9 +70,7 @@ def _safe_float(val: Any) -> float:
         return 0.0
 
 
-def _swing_highs(
-    high: pd.Series, lookback: int = 5, min_bars_between: int = 3
-) -> list[dict[str, Any]]:
+def _swing_highs(high: pd.Series, lookback: int = 5, min_bars_between: int = 3) -> list[dict[str, Any]]:
     """Find swing highs — local maxima with *lookback* bars on each side.
 
     Returns list of ``{"index": int, "price": float, "timestamp": ...}``.
@@ -81,37 +79,27 @@ def _swing_highs(
     last_idx = -min_bars_between - 1
     for i in range(lookback, len(high) - lookback):
         window = high.iloc[i - lookback : i + lookback + 1]
-        if (
-            float(high.iloc[i]) == float(window.max())
-            and (i - last_idx) >= min_bars_between
-        ):
+        if float(high.iloc[i]) == float(window.max()) and (i - last_idx) >= min_bars_between:
             ts = high.index[i] if hasattr(high.index, "__getitem__") else i
             swings.append({"index": i, "price": float(high.iloc[i]), "timestamp": ts})
             last_idx = i
     return swings
 
 
-def _swing_lows(
-    low: pd.Series, lookback: int = 5, min_bars_between: int = 3
-) -> list[dict[str, Any]]:
+def _swing_lows(low: pd.Series, lookback: int = 5, min_bars_between: int = 3) -> list[dict[str, Any]]:
     """Find swing lows — local minima with *lookback* bars on each side."""
     swings: list[dict[str, Any]] = []
     last_idx = -min_bars_between - 1
     for i in range(lookback, len(low) - lookback):
         window = low.iloc[i - lookback : i + lookback + 1]
-        if (
-            float(low.iloc[i]) == float(window.min())
-            and (i - last_idx) >= min_bars_between
-        ):
+        if float(low.iloc[i]) == float(window.min()) and (i - last_idx) >= min_bars_between:
             ts = low.index[i] if hasattr(low.index, "__getitem__") else i
             swings.append({"index": i, "price": float(low.iloc[i]), "timestamp": ts})
             last_idx = i
     return swings
 
 
-def _atr(
-    high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14
-) -> pd.Series:
+def _atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.Series:
     """Average True Range."""
     h = high.to_numpy(dtype=float)
     l = low.to_numpy(dtype=float)  # noqa: E741
@@ -258,9 +246,7 @@ def get_unfilled_fvgs(
     atr_period: int = 14,
 ) -> list[dict[str, Any]]:
     """Convenience: return only unfilled FVGs (active trade targets)."""
-    all_fvgs = detect_fvgs(
-        df, min_gap_atr=min_gap_atr, atr_period=atr_period, check_fill=True
-    )
+    all_fvgs = detect_fvgs(df, min_gap_atr=min_gap_atr, atr_period=atr_period, check_fill=True)
     return [f for f in all_fvgs if not f["filled"]]
 
 
@@ -378,7 +364,7 @@ def detect_order_blocks(
     # Deduplicate OBs at the same bar_index (keep the one with larger impulse)
     seen: dict[int, int] = {}
     deduped: list[dict[str, Any]] = []
-    for idx, ob in enumerate(obs):
+    for _idx, ob in enumerate(obs):
         bi = ob["bar_index"]
         if bi in seen:
             existing = deduped[seen[bi]]
@@ -839,9 +825,7 @@ def order_blocks_to_dataframe(obs: list[dict[str, Any]]) -> pd.DataFrame:
     rows = []
     for o in obs:
         emoji = "🟢" if o["type"] == "bullish" else "🔴"
-        status = (
-            "Mitigated" if o["mitigated"] else ("Tested" if o["tested"] else "Active")
-        )
+        status = "Mitigated" if o["mitigated"] else ("Tested" if o["tested"] else "Active")
         rows.append(
             {
                 "Type": f"{emoji} {o['type'].title()}",

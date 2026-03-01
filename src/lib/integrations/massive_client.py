@@ -26,6 +26,7 @@ Environment:
     MASSIVE_API_KEY  — API key from https://massive.com/dashboard
 """
 
+import contextlib
 import logging
 import os
 import threading
@@ -71,9 +72,7 @@ YAHOO_TO_MASSIVE_PRODUCT: dict[str, str] = {
 }
 
 # Reverse: product code → Yahoo ticker (for WebSocket → cache mapping)
-MASSIVE_PRODUCT_TO_YAHOO: dict[str, str] = {
-    v: k for k, v in YAHOO_TO_MASSIVE_PRODUCT.items()
-}
+MASSIVE_PRODUCT_TO_YAHOO: dict[str, str] = {v: k for k, v in YAHOO_TO_MASSIVE_PRODUCT.items()}
 
 # Interval mapping: our internal intervals → Massive resolution strings
 # The Massive futures aggs endpoint uses a 'resolution' query param
@@ -198,9 +197,7 @@ class MassiveDataProvider:
         self._api_key = api_key or os.getenv("MASSIVE_API_KEY", "")
         self._client = None
         self._is_available = False
-        self._contract_cache: dict[
-            str, tuple[str, float]
-        ] = {}  # product → (ticker, timestamp)
+        self._contract_cache: dict[str, tuple[str, float]] = {}  # product → (ticker, timestamp)
         self._lock = threading.Lock()
 
         if self._api_key:
@@ -214,10 +211,7 @@ class MassiveDataProvider:
                 logger.warning("Failed to initialize Massive client: %s", exc)
                 self._is_available = False
         else:
-            logger.info(
-                "MASSIVE_API_KEY not set — Massive data provider disabled, "
-                "using yfinance fallback"
-            )
+            logger.info("MASSIVE_API_KEY not set — Massive data provider disabled, using yfinance fallback")
 
     @property
     def is_available(self) -> bool:
@@ -260,12 +254,7 @@ class MassiveDataProvider:
             """Filter to outright futures only — exclude spreads/combos."""
             ticker = str(getattr(c, "ticker", "") or "")
             ctype = getattr(c, "type", "") or ""
-            return (
-                bool(ticker)
-                and ctype in ("future", "single", "")
-                and "-" not in ticker
-                and ":" not in ticker
-            )
+            return bool(ticker) and ctype in ("future", "single", "") and "-" not in ticker and ":" not in ticker
 
         def _sort_by_expiry(c) -> str:
             """Sort key: nearest last_trade_date first."""
@@ -286,9 +275,7 @@ class MassiveDataProvider:
                     sort="date",
                 )
             )
-            active = [
-                c for c in contracts if getattr(c, "active", True) and _is_outright(c)
-            ]
+            active = [c for c in contracts if getattr(c, "active", True) and _is_outright(c)]
             if active:
                 active.sort(key=_sort_by_expiry)
                 ticker = str(getattr(active[0], "ticker", ""))
@@ -319,8 +306,7 @@ class MassiveDataProvider:
             future_contracts = [
                 c
                 for c in contracts
-                if _is_outright(c)
-                and str(getattr(c, "last_trade_date", "0000-00-00")) >= today_str
+                if _is_outright(c) and str(getattr(c, "last_trade_date", "0000-00-00")) >= today_str
             ]
             if future_contracts:
                 future_contracts.sort(key=_sort_by_expiry)
@@ -336,9 +322,7 @@ class MassiveDataProvider:
                     )
                     return ticker
         except Exception as exc:
-            logger.debug(
-                "Tier 2 (future expiration) failed for %s: %s", product_code, exc
-            )
+            logger.debug("Tier 2 (future expiration) failed for %s: %s", product_code, exc)
 
         # --- Tier 3: Root symbol fallback ---
         # The root symbol (e.g., "ES", "GC") works reliably for REST
@@ -346,8 +330,7 @@ class MassiveDataProvider:
         # For WebSocket, the broad subscription (AM.*, T.*) will catch
         # whatever contract ticker Massive broadcasts.
         logger.warning(
-            "Resolved %s → %s (tier 3: root symbol fallback — "
-            "contracts endpoint returned no usable results)",
+            "Resolved %s → %s (tier 3: root symbol fallback — contracts endpoint returned no usable results)",
             product_code,
             product_code,
         )
@@ -366,9 +349,7 @@ class MassiveDataProvider:
         """
         product_code = YAHOO_TO_MASSIVE_PRODUCT.get(yahoo_ticker)
         if product_code is None:
-            logger.debug(
-                "No Massive product code mapping for Yahoo ticker %s", yahoo_ticker
-            )
+            logger.debug("No Massive product code mapping for Yahoo ticker %s", yahoo_ticker)
             return None
         return self.resolve_front_month(product_code)
 
@@ -585,9 +566,7 @@ class MassiveDataProvider:
                 result["change"] = getattr(sess, "change", None)
                 result["change_percent"] = getattr(sess, "change_percent", None)
                 result["settlement_price"] = getattr(sess, "settlement_price", None)
-                result["previous_settlement"] = getattr(
-                    sess, "previous_settlement", None
-                )
+                result["previous_settlement"] = getattr(sess, "previous_settlement", None)
 
             # Last minute bar
             lm = getattr(snap, "last_minute", None)
@@ -842,9 +821,7 @@ class MassiveDataProvider:
                 "unit_of_measure_qty": getattr(c, "unit_of_measure_qty", None),
                 "order_quantity_min": getattr(c, "order_quantity_min", None),
                 "order_quantity_max": getattr(c, "order_quantity_max", None),
-                "order_quantity_increment": getattr(
-                    c, "order_quantity_increment", None
-                ),
+                "order_quantity_increment": getattr(c, "order_quantity_increment", None),
             }
 
         except Exception as exc:
@@ -1394,10 +1371,8 @@ class MassiveFeedManager:
         # websockets connection (with an async close) so we guard broadly.
         ws = self._ws
         if ws is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await ws.close()
-            except Exception:
-                pass
         if self._thread is not None:
             self._thread.join(timeout=5)
         self._connected = False
@@ -1415,17 +1390,16 @@ class MassiveFeedManager:
             if yt not in self._yahoo_tickers:
                 self._yahoo_tickers.append(yt)
             # Re-resolve
-            if yt not in self._yahoo_to_massive:
-                if self._provider and self._provider.is_available:
-                    mt = self._provider.resolve_from_yahoo(yt)
-                    if mt:
-                        self._yahoo_to_massive[yt] = mt
-                        self._massive_to_yahoo[mt] = yt
-                        new_subs.append(f"{self.PREFIX_MINUTE_AGG}.{mt}")
-                        if self._subscribe_trades:
-                            new_subs.append(f"{self.PREFIX_TRADE}.{mt}")
-                        if self._subscribe_quotes:
-                            new_subs.append(f"{self.PREFIX_QUOTE}.{mt}")
+            if yt not in self._yahoo_to_massive and self._provider and self._provider.is_available:
+                mt = self._provider.resolve_from_yahoo(yt)
+                if mt:
+                    self._yahoo_to_massive[yt] = mt
+                    self._massive_to_yahoo[mt] = yt
+                    new_subs.append(f"{self.PREFIX_MINUTE_AGG}.{mt}")
+                    if self._subscribe_trades:
+                        new_subs.append(f"{self.PREFIX_TRADE}.{mt}")
+                    if self._subscribe_quotes:
+                        new_subs.append(f"{self.PREFIX_QUOTE}.{mt}")
 
         if new_subs and self._running:
             with self._lock:
@@ -1461,9 +1435,7 @@ class MassiveFeedManager:
         if new_subs and self._running:
             with self._lock:
                 self._pending_subscribe.extend(new_subs)
-            logger.info(
-                "Queued upgrade to per-second aggs for %d tickers", len(new_subs)
-            )
+            logger.info("Queued upgrade to per-second aggs for %d tickers", len(new_subs))
 
     def downgrade_to_minute_aggs(self) -> None:
         """Switch back from per-second to per-minute aggregates."""
@@ -1472,9 +1444,7 @@ class MassiveFeedManager:
         if unsubs and self._running:
             with self._lock:
                 self._pending_unsubscribe.extend(unsubs)
-            logger.info(
-                "Queued downgrade from per-second aggs for %d tickers", len(unsubs)
-            )
+            logger.info("Queued downgrade from per-second aggs for %d tickers", len(unsubs))
 
     def get_status(self) -> dict:
         """Return current feed status for display in the UI."""
@@ -1553,8 +1523,7 @@ class MassiveFeedManager:
         if self._use_broad_subscriptions:
             if not resolved_any:
                 logger.info(
-                    "No tickers pre-resolved, but broad subscriptions will "
-                    "auto-discover contracts via reverse mapping"
+                    "No tickers pre-resolved, but broad subscriptions will auto-discover contracts via reverse mapping"
                 )
             return True
 
@@ -1639,9 +1608,7 @@ class MassiveFeedManager:
                 # Cache the mapping for future lookups
                 self._massive_to_yahoo[symbol] = yahoo
                 self._yahoo_to_massive.setdefault(yahoo, symbol)
-                logger.debug(
-                    "Reverse-mapped %s → root %s → Yahoo %s", symbol, root, yahoo
-                )
+                logger.debug("Reverse-mapped %s → root %s → Yahoo %s", symbol, root, yahoo)
                 return yahoo
 
         return None
@@ -1700,9 +1667,7 @@ class MassiveFeedManager:
                 greeting_raw = await asyncio.wait_for(ws.recv(), timeout=15)
                 greeting = _json.loads(greeting_raw)
                 greeting_items = greeting if isinstance(greeting, list) else [greeting]
-                is_greeting = any(
-                    item.get("status") == "connected" for item in greeting_items
-                )
+                is_greeting = any(item.get("status") == "connected" for item in greeting_items)
                 if is_greeting:
                     logger.info("WebSocket connected, sending auth …")
                 else:
@@ -1719,9 +1684,7 @@ class MassiveFeedManager:
                 auth_resp = _json.loads(auth_resp_raw)
                 # auth_resp is typically [{"ev":"status","status":"auth_success",...}]
                 auth_items = auth_resp if isinstance(auth_resp, list) else [auth_resp]
-                auth_ok = any(
-                    item.get("status") == "auth_success" for item in auth_items
-                )
+                auth_ok = any(item.get("status") == "auth_success" for item in auth_items)
                 if not auth_ok:
                     error_msg = f"WS auth failed: {auth_resp_raw[:300]}"
                     logger.error(error_msg)
@@ -1734,9 +1697,7 @@ class MassiveFeedManager:
                 # --- 2. Subscribe ---
                 subs = self._build_subscriptions()
                 if subs:
-                    sub_payload = _json.dumps(
-                        {"action": "subscribe", "params": ",".join(subs)}
-                    )
+                    sub_payload = _json.dumps({"action": "subscribe", "params": ",".join(subs)})
                     await ws.send(sub_payload)
                     logger.info(
                         "Subscribed to %d channels: %s",
@@ -1776,10 +1737,8 @@ class MassiveFeedManager:
                 self._connected = False
                 self._ws = None
                 if ws is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         await ws.close()
-                    except Exception:
-                        pass
 
             if not self._running:
                 break
@@ -1800,9 +1759,7 @@ class MassiveFeedManager:
 
         if to_sub:
             try:
-                payload = _json.dumps(
-                    {"action": "subscribe", "params": ",".join(to_sub)}
-                )
+                payload = _json.dumps({"action": "subscribe", "params": ",".join(to_sub)})
                 await ws.send(payload)
                 logger.info("Dynamic subscribe: %s", to_sub)
             except Exception as exc:
@@ -1810,9 +1767,7 @@ class MassiveFeedManager:
 
         if to_unsub:
             try:
-                payload = _json.dumps(
-                    {"action": "unsubscribe", "params": ",".join(to_unsub)}
-                )
+                payload = _json.dumps({"action": "unsubscribe", "params": ",".join(to_unsub)})
                 await ws.send(payload)
                 logger.info("Dynamic unsubscribe: %s", to_unsub)
             except Exception as exc:

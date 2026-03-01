@@ -18,7 +18,6 @@ complete isolation between tests (no shared Redis state).
 import time
 
 # Ensure src/ is importable
-
 from lib.core.alerts import (  # noqa: E402
     AlertDispatcher,
     _AlertStore,

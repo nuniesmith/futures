@@ -136,9 +136,7 @@ class TrendEMACross(Strategy):
         close = pd.Series(self.data.Close)
         self.ema_fast = self.I(_ema, close, self.n1, name=f"EMA{self.n1}")
         self.ema_slow = self.I(_ema, close, self.n2, name=f"EMA{self.n2}")
-        self.ema_trend = self.I(
-            _ema, close, self.trend_period, name=f"Trend{self.trend_period}"
-        )
+        self.ema_trend = self.I(_ema, close, self.trend_period, name=f"Trend{self.trend_period}")
         self.atr = self.I(
             _atr,
             self.data.High,
@@ -160,12 +158,11 @@ class TrendEMACross(Strategy):
 
         # --- Exit logic (signal-based; SL/TP handled by broker) ---
         if self.position:
-            if self.position.is_long and crossover(
-                list(self.ema_slow), list(self.ema_fast)
-            ):
-                self.position.close()
-            elif self.position.is_short and crossover(
-                list(self.ema_fast), list(self.ema_slow)
+            if (
+                self.position.is_long
+                and crossover(list(self.ema_slow), list(self.ema_fast))
+                or self.position.is_short
+                and crossover(list(self.ema_fast), list(self.ema_slow))
             ):
                 self.position.close()
             return  # no new entries while in a position
@@ -218,9 +215,7 @@ class RSIReversal(Strategy):
     def init(self):
         close = pd.Series(self.data.Close)
         self.rsi = self.I(_rsi, close, self.rsi_period, name=f"RSI{self.rsi_period}")
-        self.ema_trend = self.I(
-            _ema, close, self.trend_period, name=f"Trend{self.trend_period}"
-        )
+        self.ema_trend = self.I(_ema, close, self.trend_period, name=f"Trend{self.trend_period}")
         self.atr = self.I(
             _atr,
             self.data.High,
@@ -249,29 +244,24 @@ class RSIReversal(Strategy):
 
         # --- Exit: RSI reaches opposite extreme ---
         if self.position:
-            if self.position.is_long and rsi_now >= self.rsi_overbought:
-                self.position.close()
-            elif self.position.is_short and rsi_now <= self.rsi_oversold:
+            if (
+                self.position.is_long
+                and rsi_now >= self.rsi_overbought
+                or self.position.is_short
+                and rsi_now <= self.rsi_oversold
+            ):
                 self.position.close()
             return
 
         # --- Entry ---
         # Long: RSI crosses UP through oversold threshold, price above trend
-        if (
-            rsi_prev <= self.rsi_oversold
-            and rsi_now > self.rsi_oversold
-            and price > trend
-        ):
+        if rsi_prev <= self.rsi_oversold and rsi_now > self.rsi_oversold and price > trend:
             sl = price - atr_val * self.atr_sl_mult
             tp = price + atr_val * self.atr_tp_mult
             self.buy(size=self.trade_size, sl=sl, tp=tp)
 
         # Short: RSI crosses DOWN through overbought threshold, price below trend
-        elif (
-            rsi_prev >= self.rsi_overbought
-            and rsi_now < self.rsi_overbought
-            and price < trend
-        ):
+        elif rsi_prev >= self.rsi_overbought and rsi_now < self.rsi_overbought and price < trend:
             sl = price + atr_val * self.atr_sl_mult
             tp = price - atr_val * self.atr_tp_mult
             self.sell(size=self.trade_size, sl=sl, tp=tp)
@@ -319,9 +309,7 @@ class BreakoutStrategy(Strategy):
             self.atr_period,
             name="ATR",
         )
-        self.vol_avg = self.I(
-            _sma, self.data.Volume, self.vol_sma_period, name="VolSMA"
-        )
+        self.vol_avg = self.I(_sma, self.data.Volume, self.vol_sma_period, name="VolSMA")
 
     def next(self):
         atr_val = self.atr[-1]
@@ -398,9 +386,7 @@ class VWAPReversion(Strategy):
 
     def init(self):
         close = pd.Series(self.data.Close)
-        self.ema_trend = self.I(
-            _ema, close, self.trend_period, name=f"Trend{self.trend_period}"
-        )
+        self.ema_trend = self.I(_ema, close, self.trend_period, name=f"Trend{self.trend_period}")
         self.atr = self.I(
             _atr,
             self.data.High,
@@ -409,9 +395,7 @@ class VWAPReversion(Strategy):
             self.atr_period,
             name="ATR",
         )
-        self.vol_avg = self.I(
-            _sma, self.data.Volume, self.vol_sma_period, name="VolSMA"
-        )
+        self.vol_avg = self.I(_sma, self.data.Volume, self.vol_sma_period, name="VolSMA")
 
         # Pre-compute daily-resetting VWAP
         df = self.data.df
@@ -460,9 +444,7 @@ class VWAPReversion(Strategy):
 
         # --- Exit: price reverts back through VWAP ---
         if self.position:
-            if self.position.is_long and price < vwap_now:
-                self.position.close()
-            elif self.position.is_short and price > vwap_now:
+            if self.position.is_long and price < vwap_now or self.position.is_short and price > vwap_now:
                 self.position.close()
             return
 
@@ -525,9 +507,7 @@ class ORBStrategy(Strategy):
             self.atr_period,
             name="ATR",
         )
-        self.vol_avg = self.I(
-            _sma, self.data.Volume, self.vol_sma_period, name="VolSMA"
-        )
+        self.vol_avg = self.I(_sma, self.data.Volume, self.vol_sma_period, name="VolSMA")
 
         # Pre-compute ORB levels per session day
         df = self.data.df
@@ -633,9 +613,7 @@ class MACDMomentum(Strategy):
 
     def init(self):
         close = pd.Series(self.data.Close)
-        self.macd = self.I(
-            _macd_line, close, self.macd_fast, self.macd_slow, name="MACD"
-        )
+        self.macd = self.I(_macd_line, close, self.macd_fast, self.macd_slow, name="MACD")
         self.signal = self.I(
             _macd_signal,
             close,
@@ -652,9 +630,7 @@ class MACDMomentum(Strategy):
             self.macd_signal,
             name="Hist",
         )
-        self.ema_trend = self.I(
-            _ema, close, self.trend_period, name=f"Trend{self.trend_period}"
-        )
+        self.ema_trend = self.I(_ema, close, self.trend_period, name=f"Trend{self.trend_period}")
         self.atr = self.I(
             _atr,
             self.data.High,
@@ -685,29 +661,22 @@ class MACDMomentum(Strategy):
 
         # --- Exit: opposite MACD crossover ---
         if self.position:
-            if self.position.is_long and crossover(list(self.signal), list(self.macd)):
-                self.position.close()
-            elif self.position.is_short and crossover(
-                list(self.macd), list(self.signal)
+            if (
+                self.position.is_long
+                and crossover(list(self.signal), list(self.macd))
+                or self.position.is_short
+                and crossover(list(self.macd), list(self.signal))
             ):
                 self.position.close()
             return
 
         # --- Entry: MACD crossover + histogram acceleration + trend filter ---
-        if (
-            crossover(list(self.macd), list(self.signal))
-            and hist_growing
-            and price > trend
-        ):
+        if crossover(list(self.macd), list(self.signal)) and hist_growing and price > trend:
             sl = price - atr_val * self.atr_sl_mult
             tp = price + atr_val * self.atr_tp_mult
             self.buy(size=self.trade_size, sl=sl, tp=tp)
 
-        elif (
-            crossover(list(self.signal), list(self.macd))
-            and not hist_growing
-            and price < trend
-        ):
+        elif crossover(list(self.signal), list(self.macd)) and not hist_growing and price < trend:
             sl = price + atr_val * self.atr_sl_mult
             tp = price - atr_val * self.atr_tp_mult
             self.sell(size=self.trade_size, sl=sl, tp=tp)
@@ -743,12 +712,7 @@ def _is_hammer(o, h, lo, c, atr_val):
     lower_wick = min(o, c) - lo
     upper_wick = h - max(o, c)
     # Lower wick >= 2× body, upper wick small, close in upper half
-    return (
-        lower_wick >= 2 * body
-        and upper_wick <= body * 0.5
-        and c >= (h + lo) / 2
-        and full_range >= atr_val * 0.3
-    )
+    return lower_wick >= 2 * body and upper_wick <= body * 0.5 and c >= (h + lo) / 2 and full_range >= atr_val * 0.3
 
 
 def _is_shooting_star(o, h, lo, c, atr_val):
@@ -759,12 +723,7 @@ def _is_shooting_star(o, h, lo, c, atr_val):
         return False
     upper_wick = h - max(o, c)
     lower_wick = min(o, c) - lo
-    return (
-        upper_wick >= 2 * body
-        and lower_wick <= body * 0.5
-        and c <= (h + lo) / 2
-        and full_range >= atr_val * 0.3
-    )
+    return upper_wick >= 2 * body and lower_wick <= body * 0.5 and c <= (h + lo) / 2 and full_range >= atr_val * 0.3
 
 
 class PullbackEMA(Strategy):
@@ -864,30 +823,18 @@ class PullbackEMA(Strategy):
         bull_candle = _is_bullish_engulfing(o_prev, c_prev, o_now, c_now) or _is_hammer(
             o_now, h_now, l_now, c_now, atr_val
         )
-        bear_candle = _is_bearish_engulfing(
-            o_prev, c_prev, o_now, c_now
-        ) or _is_shooting_star(o_now, h_now, l_now, c_now, atr_val)
+        bear_candle = _is_bearish_engulfing(o_prev, c_prev, o_now, c_now) or _is_shooting_star(
+            o_now, h_now, l_now, c_now, atr_val
+        )
 
         # --- Long: stacked bull + pullback to mid EMA + bull candle + RSI filter ---
-        if (
-            bullish_stack
-            and pulled_to_mid_bull
-            and bull_candle
-            and c_now > em
-            and rsi_now < self.rsi_limit
-        ):
+        if bullish_stack and pulled_to_mid_bull and bull_candle and c_now > em and rsi_now < self.rsi_limit:
             sl = price - atr_val * self.atr_sl_mult
             tp = price + atr_val * self.atr_tp_mult
             self.buy(size=self.trade_size, sl=sl, tp=tp)
 
         # --- Short: stacked bear + pullback to mid EMA + bear candle + RSI filter ---
-        elif (
-            bearish_stack
-            and pulled_to_mid_bear
-            and bear_candle
-            and c_now < em
-            and rsi_now > (100 - self.rsi_limit)
-        ):
+        elif bearish_stack and pulled_to_mid_bear and bear_candle and c_now < em and rsi_now > (100 - self.rsi_limit):
             sl = price + atr_val * self.atr_sl_mult
             tp = price - atr_val * self.atr_tp_mult
             self.sell(size=self.trade_size, sl=sl, tp=tp)
@@ -946,9 +893,7 @@ class EventReaction(Strategy):
             self.atr_period,
             name="ATR",
         )
-        self.vol_avg = self.I(
-            _sma, self.data.Volume, self.vol_sma_period, name="VolSMA"
-        )
+        self.vol_avg = self.I(_sma, self.data.Volume, self.vol_sma_period, name="VolSMA")
         # Track detected spike bars: direction (+1 long, -1 short) and countdown
         # We use pre-computed arrays to avoid look-ahead
         df = self.data.df
@@ -974,10 +919,7 @@ class EventReaction(Strategy):
             vol_ratio = volume[i] / vol_sma_arr[i]
             price_move = close[i] - close[i - 1]
             move_magnitude = abs(price_move) / atr_arr[i]
-            if (
-                vol_ratio >= self.vol_spike_mult
-                and move_magnitude >= self.move_atr_mult
-            ):
+            if vol_ratio >= self.vol_spike_mult and move_magnitude >= self.move_atr_mult:
                 spike_dir[i] = 1.0 if price_move > 0 else -1.0
 
         # Shift spike signal forward by wait_bars so we act after waiting
@@ -1042,9 +984,12 @@ class PlainEMACross(Strategy):
 
     def next(self):
         if self.position:
-            if self.position.is_long and crossover(list(self.ema2), list(self.ema1)):
-                self.position.close()
-            elif self.position.is_short and crossover(list(self.ema1), list(self.ema2)):
+            if (
+                self.position.is_long
+                and crossover(list(self.ema2), list(self.ema1))
+                or self.position.is_short
+                and crossover(list(self.ema1), list(self.ema2))
+            ):
                 self.position.close()
             return
         if crossover(list(self.ema1), list(self.ema2)):
@@ -1109,9 +1054,7 @@ def _compute_ict_confluence(
 
     # --- Order Block alignment ---
     try:
-        active_obs = get_active_order_blocks(
-            df_slice, impulse_atr_mult=1.2, atr_period=atr_period
-        )
+        active_obs = get_active_order_blocks(df_slice, impulse_atr_mult=1.2, atr_period=atr_period)
         for ob in active_obs:
             dist = abs(price - ob["midpoint"])
             if dist > ob_proximity_atr * atr_val:
@@ -1125,12 +1068,11 @@ def _compute_ict_confluence(
                     result["ob_sl"] = ob["low"]
                     break
             # Bearish OB aligns with short entries (price near/below OB zone)
-            elif direction == "short" and ob["type"] == "bearish":
-                if ob["low"] - atr_val * 0.5 <= price <= ob["high"]:
-                    result["ob_aligned"] = True
-                    result["score"] += 1
-                    result["ob_sl"] = ob["high"]
-                    break
+            elif direction == "short" and ob["type"] == "bearish" and ob["low"] - atr_val * 0.5 <= price <= ob["high"]:
+                result["ob_aligned"] = True
+                result["score"] += 1
+                result["ob_sl"] = ob["high"]
+                break
     except Exception:
         pass
 
@@ -1149,12 +1091,11 @@ def _compute_ict_confluence(
                     result["fvg_tp"] = fvg["midpoint"]
                     break
             # Bearish FVG below price → target for short TP
-            elif direction == "short" and fvg["type"] == "bearish":
-                if fvg["midpoint"] < price:
-                    result["fvg_aligned"] = True
-                    result["score"] += 1
-                    result["fvg_tp"] = fvg["midpoint"]
-                    break
+            elif direction == "short" and fvg["type"] == "bearish" and fvg["midpoint"] < price:
+                result["fvg_aligned"] = True
+                result["score"] += 1
+                result["fvg_tp"] = fvg["midpoint"]
+                break
     except Exception:
         pass
 
@@ -1220,9 +1161,7 @@ def _ict_confluence_array(
 
         # Check OBs
         try:
-            active_obs = get_active_order_blocks(
-                df_slice, impulse_atr_mult=1.2, atr_period=atr_period
-            )
+            active_obs = get_active_order_blocks(df_slice, impulse_atr_mult=1.2, atr_period=atr_period)
             for ob in active_obs[:5]:  # check nearest 5
                 dist = abs(price - ob["midpoint"])
                 if dist > ob_proximity_atr * atr_val:
@@ -1231,33 +1170,25 @@ def _ict_confluence_array(
                     if ob["low"] <= price <= ob["high"] + atr_val * 0.5:
                         score += 1.0
                         break
-                elif direction == "short" and ob["type"] == "bearish":
-                    if ob["low"] - atr_val * 0.5 <= price <= ob["high"]:
-                        score += 1.0
-                        break
+                elif (
+                    direction == "short"
+                    and ob["type"] == "bearish"
+                    and ob["low"] - atr_val * 0.5 <= price <= ob["high"]
+                ):
+                    score += 1.0
+                    break
         except Exception:
             pass
 
         # Check FVGs
         try:
-            unfilled = get_unfilled_fvgs(
-                df_slice, min_gap_atr=0.2, atr_period=atr_period
-            )
+            unfilled = get_unfilled_fvgs(df_slice, min_gap_atr=0.2, atr_period=atr_period)
             for fvg in unfilled[:5]:
                 dist = abs(price - fvg["midpoint"])
                 if dist > fvg_proximity_atr * atr_val:
                     continue
-                if (
-                    direction == "long"
-                    and fvg["type"] == "bullish"
-                    and fvg["midpoint"] > price
-                ):
-                    score += 1.0
-                    break
-                elif (
-                    direction == "short"
-                    and fvg["type"] == "bearish"
-                    and fvg["midpoint"] < price
+                if (direction == "long" and fvg["type"] == "bullish" and fvg["midpoint"] > price) or (
+                    direction == "short" and fvg["type"] == "bearish" and fvg["midpoint"] < price
                 ):
                     score += 1.0
                     break
@@ -1321,9 +1252,7 @@ class ICTTrendEMA(Strategy):
         close = pd.Series(self.data.Close)
         self.ema_fast = self.I(_ema, close, self.n1, name=f"EMA{self.n1}")
         self.ema_slow = self.I(_ema, close, self.n2, name=f"EMA{self.n2}")
-        self.ema_trend = self.I(
-            _ema, close, self.trend_period, name=f"Trend{self.trend_period}"
-        )
+        self.ema_trend = self.I(_ema, close, self.trend_period, name=f"Trend{self.trend_period}")
         self.atr = self.I(
             _atr,
             self.data.High,
@@ -1337,9 +1266,7 @@ class ICTTrendEMA(Strategy):
         ema_f_arr = np.asarray(_ema(close, self.n1))
         ema_s_arr = np.asarray(_ema(close, self.n2))
         ema_t_arr = np.asarray(_ema(close, self.trend_period))
-        atr_arr = np.asarray(
-            _atr(self.data.High, self.data.Low, self.data.Close, self.atr_period)
-        )
+        atr_arr = np.asarray(_atr(self.data.High, self.data.Low, self.data.Close, self.atr_period))
 
         ict_scores = _ict_confluence_array(
             self.data.df,
@@ -1365,12 +1292,11 @@ class ICTTrendEMA(Strategy):
 
         # --- Exit logic (same as TrendEMACross) ---
         if self.position:
-            if self.position.is_long and crossover(
-                list(self.ema_slow), list(self.ema_fast)
-            ):
-                self.position.close()
-            elif self.position.is_short and crossover(
-                list(self.ema_fast), list(self.ema_slow)
+            if (
+                self.position.is_long
+                and crossover(list(self.ema_slow), list(self.ema_fast))
+                or self.position.is_short
+                and crossover(list(self.ema_fast), list(self.ema_slow))
             ):
                 self.position.close()
             return
@@ -1517,9 +1443,7 @@ def suggest_params(trial, strategy_key: str) -> dict:
 
     elif strategy_key == "MACD":
         params["macd_fast"] = trial.suggest_int("macd_fast", 8, 16)
-        params["macd_slow"] = trial.suggest_int(
-            "macd_slow", max(params["macd_fast"] + 8, 20), 34
-        )
+        params["macd_slow"] = trial.suggest_int("macd_slow", max(params["macd_fast"] + 8, 20), 34)
         params["macd_signal"] = trial.suggest_int("macd_signal", 6, 12)
         params["trend_period"] = trial.suggest_int("trend_period", 40, 120)
         params["atr_period"] = trial.suggest_int("atr_period", 10, 20)
@@ -1529,12 +1453,8 @@ def suggest_params(trial, strategy_key: str) -> dict:
 
     elif strategy_key == "PullbackEMA":
         params["ema_fast"] = trial.suggest_int("ema_fast", 5, 15)
-        params["ema_mid"] = trial.suggest_int(
-            "ema_mid", max(params["ema_fast"] + 5, 15), 30
-        )
-        params["ema_slow"] = trial.suggest_int(
-            "ema_slow", max(params["ema_mid"] + 10, 40), 80
-        )
+        params["ema_mid"] = trial.suggest_int("ema_mid", max(params["ema_fast"] + 5, 15), 30)
+        params["ema_slow"] = trial.suggest_int("ema_slow", max(params["ema_mid"] + 10, 40), 80)
         params["rsi_period"] = trial.suggest_int("rsi_period", 7, 21)
         params["rsi_limit"] = trial.suggest_int("rsi_limit", 30, 60)
         params["atr_period"] = trial.suggest_int("atr_period", 10, 20)
@@ -1543,12 +1463,8 @@ def suggest_params(trial, strategy_key: str) -> dict:
         params["trade_size"] = trial.suggest_float("trade_size", 0.05, 0.30, step=0.05)
 
     elif strategy_key == "EventReaction":
-        params["vol_spike_mult"] = trial.suggest_float(
-            "vol_spike_mult", 1.5, 4.0, step=0.25
-        )
-        params["move_atr_mult"] = trial.suggest_float(
-            "move_atr_mult", 0.5, 2.0, step=0.25
-        )
+        params["vol_spike_mult"] = trial.suggest_float("vol_spike_mult", 1.5, 4.0, step=0.25)
+        params["move_atr_mult"] = trial.suggest_float("move_atr_mult", 0.5, 2.0, step=0.25)
         params["wait_bars"] = trial.suggest_int("wait_bars", 1, 5)
         params["vol_confirm"] = trial.suggest_float("vol_confirm", 1.0, 3.0, step=0.25)
         params["vol_sma_period"] = trial.suggest_int("vol_sma_period", 10, 30)
@@ -1564,12 +1480,8 @@ def suggest_params(trial, strategy_key: str) -> dict:
         params["atr_period"] = trial.suggest_int("atr_period", 10, 20)
         params["atr_sl_mult"] = trial.suggest_float("atr_sl_mult", 1.0, 3.0, step=0.25)
         params["atr_tp_mult"] = trial.suggest_float("atr_tp_mult", 1.5, 5.0, step=0.25)
-        params["ob_proximity"] = trial.suggest_float(
-            "ob_proximity", 0.5, 2.5, step=0.25
-        )
-        params["fvg_proximity"] = trial.suggest_float(
-            "fvg_proximity", 1.0, 3.0, step=0.25
-        )
+        params["ob_proximity"] = trial.suggest_float("ob_proximity", 0.5, 2.5, step=0.25)
+        params["fvg_proximity"] = trial.suggest_float("fvg_proximity", 1.0, 3.0, step=0.25)
         params["ict_mode"] = trial.suggest_int("ict_mode", 0, 2)
         params["trade_size"] = trial.suggest_float("trade_size", 0.05, 0.30, step=0.05)
 
