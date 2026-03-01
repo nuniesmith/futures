@@ -14,7 +14,6 @@ using NinjaTrader.Cbi;
 using NinjaTrader.Data;
 using NinjaTrader.Gui.Tools;
 using NinjaTrader.NinjaScript;
-using NinjaTrader.NinjaScript.Indicators;
 using NinjaTrader.NinjaScript.Strategies;
 #endregion
 
@@ -26,6 +25,9 @@ namespace NinjaTrader.NinjaScript.Strategies
         private HttpClient httpClient;
         private HttpListener listener;
         private Thread listenerThread;
+        private volatile bool listenerStopped;
+        private readonly ManualResetEventSlim listenerExited = new ManualResetEventSlim(false);
+        private bool cleanedUp = false;
         private bool lastPushSuccess = true;
         private DateTime lastErrorLog = DateTime.MinValue;
         private DateTime lastHeartbeat = DateTime.MinValue;
@@ -33,7 +35,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         // Ruby indicator reference — instantiated during Configure so that
         // Ruby.OnBarUpdate() runs on every bar, pushing signals into SignalBus.
         // This is what makes backtesting via Strategy Analyzer work.
-        private Ruby rubyIndicator;
+        private NinjaTrader.NinjaScript.Indicators.Ruby rubyIndicator;
 
         // Order queue: signals are queued here, then processed on the main
         // thread in OnBarUpdate to avoid cross-thread NinjaScript exceptions.
@@ -126,7 +128,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         // They mirror Ruby's ORB parameters so you can tune from Bridge's property grid.
         [NinjaScriptProperty]
         [Display(Name = "Ruby: Session Bias", GroupName = "5. Ruby ORB", Order = 1)]
-        public RubySessionBias RubySessionBias { get; set; } = RubySessionBias.Auto;
+        public NinjaTrader.NinjaScript.Indicators.RubySessionBias RubySessionBias { get; set; } = NinjaTrader.NinjaScript.Indicators.RubySessionBias.Auto;
 
         [NinjaScriptProperty]
         [Range(5, 120)]
@@ -281,6 +283,13 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
             else if (State == State.Terminated)
             {
+                if (cleanedUp) return;
+                cleanedUp = true;
+
+                // Stop HTTP listener first so the port is released before
+                // a new instance tries to bind.
+                StopSignalListener();
+
                 try
                 {
                     if (myAccount != null)
@@ -297,7 +306,6 @@ namespace NinjaTrader.NinjaScript.Strategies
                     Print($"[Bridge] SignalBus unregistered (total enqueued={SignalBus.TotalEnqueued}, drained={SignalBus.TotalDrained})");
                 }
 
-                StopSignalListener();
                 try { httpClient?.Dispose(); } catch { }
                 httpClient = null;
                 rubyIndicator = null;
@@ -1183,113 +1191,160 @@ namespace NinjaTrader.NinjaScript.Strategies
         private void StartSignalListener()
         {
             string prefix = $"http://localhost:{SignalListenerPort}/";
-            try
+            const int maxRetries = 5;
+            const int retryDelayMs = 1000;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
-                listener = new HttpListener();
-                listener.Prefixes.Add(prefix);
-                listener.Start();
-                listenerThread = new Thread(ListenLoop) { IsBackground = true };
-                listenerThread.Start();
-                Print($"[Bridge] Listening for signals on port {SignalListenerPort}");
-            }
-            catch (Exception ex)
-            {
-                Print($"[Bridge] Listener failed on port {SignalListenerPort}: {ex.Message}");
+                try
+                {
+                    listenerStopped = false;
+                    listenerExited.Reset();
+                    listener = new HttpListener();
+                    listener.Prefixes.Add(prefix);
+                    listener.Start();
+                    listenerThread = new Thread(ListenLoop) { IsBackground = true, Name = "BridgeListener" };
+                    listenerThread.Start();
+                    Print($"[Bridge] Listening for signals on port {SignalListenerPort}");
+                    return; // success
+                }
+                catch (Exception ex)
+                {
+                    Print($"[Bridge] Listener attempt {attempt}/{maxRetries} failed on port {SignalListenerPort}: {ex.Message}");
+                    try { listener?.Close(); } catch { }
+                    listener = null;
+
+                    if (attempt < maxRetries)
+                    {
+                        Print($"[Bridge] Retrying in {retryDelayMs}ms...");
+                        Thread.Sleep(retryDelayMs);
+                    }
+                    else
+                    {
+                        Print($"[Bridge] All {maxRetries} listener attempts failed — HTTP endpoints will be unavailable. SignalBus still works.");
+                    }
+                }
             }
         }
 
         private void StopSignalListener()
         {
+            listenerStopped = true;
+
+            // Close the listener — this aborts any blocking GetContext() call
             try { listener?.Stop(); } catch { }
+            try { listener?.Close(); } catch { }
+            listener = null;
+
+            // Wait for the listener thread to exit so the port is fully released
+            if (listenerThread != null && listenerThread.IsAlive)
+            {
+                if (!listenerExited.Wait(3000))
+                    Print("[Bridge] Warning: listener thread did not exit within 3 seconds");
+                listenerThread = null;
+            }
         }
 
         private void ListenLoop()
         {
             var serializer = new JavaScriptSerializer();
 
-            while (listener?.IsListening == true)
+            try
             {
-                try
+                while (!listenerStopped && listener?.IsListening == true)
                 {
-                    var context = listener.GetContext();
-
-                    // Add CORS headers to every response so the browser dashboard
-                    // (or Python proxy) can call the Bridge directly if needed.
-                    AddCorsHeaders(context.Response, context.Request);
-
-                    // Handle preflight OPTIONS requests
-                    if (context.Request.HttpMethod == "OPTIONS")
+                    try
                     {
-                        SendResponse(context.Response, 204, "");
-                        continue;
-                    }
+                        var context = listener.GetContext();
 
-                    string path = context.Request.Url.AbsolutePath;
-                    string method = context.Request.HttpMethod;
+                        // Add CORS headers to every response so the browser dashboard
+                        // (or Python proxy) can call the Bridge directly if needed.
+                        AddCorsHeaders(context.Response, context.Request);
 
-                    if (method == "POST" && path == "/execute_signal")
-                    {
-                        using (var reader = new System.IO.StreamReader(context.Request.InputStream))
+                        // Handle preflight OPTIONS requests
+                        if (context.Request.HttpMethod == "OPTIONS")
                         {
-                            string json = reader.ReadToEnd();
-                            var result = ProcessSignal(json);
-                            SendResponse(context.Response, 200, serializer.Serialize(result));
+                            SendResponse(context.Response, 204, "");
+                            continue;
                         }
-                    }
-                    else if (method == "POST" && path == "/flatten")
-                    {
-                        string reason = "dashboard";
-                        try
+
+                        string path = context.Request.Url.AbsolutePath;
+                        string method = context.Request.HttpMethod;
+
+                        if (method == "POST" && path == "/execute_signal")
                         {
                             using (var reader = new System.IO.StreamReader(context.Request.InputStream))
                             {
-                                string body = reader.ReadToEnd();
-                                if (!string.IsNullOrEmpty(body))
-                                {
-                                    var payload = serializer.Deserialize<Dictionary<string, object>>(body);
-                                    if (payload != null && payload.ContainsKey("reason"))
-                                        reason = payload["reason"].ToString();
-                                }
+                                string json = reader.ReadToEnd();
+                                var result = ProcessSignal(json);
+                                SendResponse(context.Response, 200, serializer.Serialize(result));
                             }
                         }
-                        catch { }
-                        var result = FlattenAll(reason);
-                        SendResponse(context.Response, 200, serializer.Serialize(result));
+                        else if (method == "POST" && path == "/flatten")
+                        {
+                            string reason = "dashboard";
+                            try
+                            {
+                                using (var reader = new System.IO.StreamReader(context.Request.InputStream))
+                                {
+                                    string body = reader.ReadToEnd();
+                                    if (!string.IsNullOrEmpty(body))
+                                    {
+                                        var payload = serializer.Deserialize<Dictionary<string, object>>(body);
+                                        if (payload != null && payload.ContainsKey("reason"))
+                                            reason = payload["reason"].ToString();
+                                    }
+                                }
+                            }
+                            catch { }
+                            var result = FlattenAll(reason);
+                            SendResponse(context.Response, 200, serializer.Serialize(result));
+                        }
+                        else if (method == "POST" && path == "/cancel_orders")
+                        {
+                            var result = CancelAllOrders();
+                            SendResponse(context.Response, 200, serializer.Serialize(result));
+                        }
+                        else if (method == "GET" && path == "/status")
+                        {
+                            string status = BuildStatusJson();
+                            SendResponse(context.Response, 200, status);
+                        }
+                        else if (method == "GET" && path == "/orders")
+                        {
+                            string ordersJson = BuildOrdersJson();
+                            SendResponse(context.Response, 200, ordersJson);
+                        }
+                        else if (method == "GET" && path == "/health")
+                        {
+                            // Lightweight health check — just returns 200 with minimal JSON
+                            SendResponse(context.Response, 200, "{\"status\":\"ok\",\"bridge_version\":\"2.0\"}");
+                        }
+                        else
+                        {
+                            SendResponse(context.Response, 404, "{\"error\":\"not found\",\"endpoints\":[\"/execute_signal\",\"/flatten\",\"/cancel_orders\",\"/status\",\"/orders\",\"/health\"]}");
+                        }
                     }
-                    else if (method == "POST" && path == "/cancel_orders")
+                    catch (HttpListenerException)
                     {
-                        var result = CancelAllOrders();
-                        SendResponse(context.Response, 200, serializer.Serialize(result));
+                        // Listener was stopped — exit cleanly
+                        break;
                     }
-                    else if (method == "GET" && path == "/status")
+                    catch (ObjectDisposedException)
                     {
-                        string status = BuildStatusJson();
-                        SendResponse(context.Response, 200, status);
+                        // Listener was closed/disposed — exit cleanly
+                        break;
                     }
-                    else if (method == "GET" && path == "/orders")
+                    catch (Exception ex)
                     {
-                        string ordersJson = BuildOrdersJson();
-                        SendResponse(context.Response, 200, ordersJson);
-                    }
-                    else if (method == "GET" && path == "/health")
-                    {
-                        // Lightweight health check — just returns 200 with minimal JSON
-                        SendResponse(context.Response, 200, "{\"status\":\"ok\",\"bridge_version\":\"2.0\"}");
-                    }
-                    else
-                    {
-                        SendResponse(context.Response, 404, "{\"error\":\"not found\",\"endpoints\":[\"/execute_signal\",\"/flatten\",\"/cancel_orders\",\"/status\",\"/orders\",\"/health\"]}");
+                        if (listenerStopped) break;
+                        ThrottledLog($"ListenLoop error: {ex.Message}");
                     }
                 }
-                catch (HttpListenerException)
-                {
-                    // Listener was stopped — exit cleanly
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    ThrottledLog($"ListenLoop error: {ex.Message}");
-                }
+            }
+            finally
+            {
+                listenerExited.Set();
             }
         }
 

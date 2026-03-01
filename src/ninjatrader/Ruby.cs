@@ -19,6 +19,11 @@ using NinjaTrader.NinjaScript.Indicators;
 using SharpDX;
 using SharpDX.Direct2D1;
 using SharpDX.DirectWrite;
+
+// Resolve ambiguity between System.Windows.Media and SharpDX types
+using WpfColor = System.Windows.Media.Color;
+using WpfBrush = System.Windows.Media.Brush;
+using WpfSolidColorBrush = System.Windows.Media.SolidColorBrush;
 #endregion
 
 // =============================================================================
@@ -735,42 +740,42 @@ namespace NinjaTrader.NinjaScript.Indicators
             return diff / stdev;
         }
 
-        private Color LerpColor(Color a, Color b, double t)
+        private WpfColor LerpColor(WpfColor a, WpfColor b, double t)
         {
             t = Math.Max(0, Math.Min(1, t));
             byte r = (byte)(a.R + (b.R - a.R) * t);
             byte g = (byte)(a.G + (b.G - a.G) * t);
             byte bl = (byte)(a.B + (b.B - a.B) * t);
-            return Color.FromRgb(r, g, bl);
+            return WpfColor.FromRgb(r, g, bl);
         }
 
-        private Brush GetHeatmapBrush(double colorLevel, double maxLevel, double minLevel)
+        private WpfBrush GetHeatmapBrush(double colorLevel, double maxLevel, double minLevel)
         {
             if (colorLevel >= 0)
             {
                 double range = maxLevel > 0.0001 ? maxLevel : 0.0001;
                 double t = Math.Min(1.0, colorLevel / range);
 
-                Color aqua = Color.FromRgb(0, 255, 255);
-                Color yellow = Color.FromRgb(255, 255, 0);
-                Color red = Color.FromRgb(255, 50, 50);
+                WpfColor aqua = WpfColor.FromRgb(0, 255, 255);
+                WpfColor yellow = WpfColor.FromRgb(255, 255, 0);
+                WpfColor red = WpfColor.FromRgb(255, 50, 50);
 
-                Color c = t < 0.5
+                WpfColor c = t < 0.5
                     ? LerpColor(aqua, yellow, t * 2.0)
                     : LerpColor(yellow, red, (t - 0.5) * 2.0);
 
-                return new SolidColorBrush(c);
+                return new WpfSolidColorBrush(c);
             }
             else
             {
                 double range = Math.Abs(minLevel) > 0.0001 ? Math.Abs(minLevel) : 0.0001;
                 double t = Math.Min(1.0, Math.Abs(colorLevel) / range);
 
-                Color aqua = Color.FromRgb(0, 255, 255);
-                Color deepBlue = Color.FromRgb(0, 50, 150);
+                WpfColor aqua = WpfColor.FromRgb(0, 255, 255);
+                WpfColor deepBlue = WpfColor.FromRgb(0, 50, 150);
 
-                Color c = LerpColor(aqua, deepBlue, t);
-                return new SolidColorBrush(c);
+                WpfColor c = LerpColor(aqua, deepBlue, t);
+                return new WpfSolidColorBrush(c);
             }
         }
 
@@ -1340,7 +1345,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 orbBreakoutBar = CurrentBar;
                 orbBreakoutPrice = Close[0];
 
-                Brush arrowBrush = signalDir == "long" ? Brushes.Lime : Brushes.Red;
+                WpfBrush arrowBrush = signalDir == "long" ? Brushes.Lime : Brushes.Red;
                 double arrowY = signalDir == "long" ? Low[0] - TickSize * 4 : High[0] + TickSize * 4;
                 string arrowTag = signalDir == "long" ? "BrkUp" : "BrkDn";
 
@@ -1395,7 +1400,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 {
                     string label = string.Format("ADD\nQ:{0:0}%", signalQuality * 100);
                     double lblY = signalDir == "long" ? Low[0] - TickSize * 12 : High[0] + TickSize * 12;
-                    Brush lblBrush = signalDir == "long" ? Brushes.Cyan : Brushes.Orange;
+                    WpfBrush lblBrush = signalDir == "long" ? Brushes.Cyan : Brushes.Orange;
                     Draw.Text(this, "AddLbl" + CurrentBar, label, 0, lblY, lblBrush);
                 }
 
@@ -1513,7 +1518,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 if (isAbsorption)
                 {
                     double midBar = (High[0] + Low[0]) / 2.0;
-                    Brush absBrush;
+                    WpfBrush absBrush;
                     double absY;
 
                     if (Close[0] >= midBar)
