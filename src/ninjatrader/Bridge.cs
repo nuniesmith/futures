@@ -82,12 +82,13 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         [NinjaScriptProperty]
         [Display(Name = "Dashboard Base URL", GroupName = "2. Web App", Order = 1,
-                 Description = "Base URL of the Python data service (e.g. http://localhost:8000)")]
-        public string DashboardBaseUrl { get; set; } = "http://localhost:8000";
+                 Description = "Base URL of the Python data service. Use Tailscale IP of the dev/WSL2 host (e.g. http://100.69.78.116:8000) or http://localhost:8000 if running locally.")]
+        public string DashboardBaseUrl { get; set; } = "http://100.69.78.116:8000";
 
         [NinjaScriptProperty]
-        [Display(Name = "Signal Listener Port", GroupName = "2. Web App", Order = 2)]
-        public int SignalListenerPort { get; set; } = 8080;
+        [Display(Name = "Signal Listener Port", GroupName = "2. Web App", Order = 2,
+                 Description = "HTTP port the Bridge listens on for signals, status, and metrics. Must match NT_BRIDGE_PORT in the data service .env file.")]
+        public int SignalListenerPort { get; set; } = 5680;
 
         [NinjaScriptProperty]
         [Display(Name = "Enable Position Push", GroupName = "3. Options", Order = 1)]
@@ -270,9 +271,9 @@ namespace NinjaTrader.NinjaScript.Strategies
                     rubyIndicator.ORB_AddPullbackATR = 0.5;
                     rubyIndicator.ORB_MaxAddBarsAfterBreakout = 30;
 
-                    // Signal Forwarding
+                    // Signal Forwarding — Ruby sends signals to Bridge on the same Windows host
                     rubyIndicator.SendSignalsToBridge = true;
-                    rubyIndicator.BridgeUrl = "http://localhost:" + SignalListenerPort;
+                    rubyIndicator.BridgeUrl = "http://127.0.0.1:" + SignalListenerPort;
                     rubyIndicator.ExitOnReversal = true;
                     rubyIndicator.ExitOnBBTouch = true;
                     rubyIndicator.ExitCooldownMinutes = 3;
@@ -1242,41 +1243,56 @@ namespace NinjaTrader.NinjaScript.Strategies
         #region Signal Listener (HTTP)
         private void StartSignalListener()
         {
-            string prefix = $"http://localhost:{SignalListenerPort}/";
-            const int maxRetries = 5;
-            const int retryDelayMs = 1000;
-
-            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            // Try binding to all interfaces first (http://+:port/) so the Bridge
+            // is reachable from Tailscale, WSL2, Docker, and other network hosts.
+            // Falls back to localhost-only if the wildcard bind fails (requires
+            // admin rights or a URL reservation:
+            //   netsh http add urlacl url=http://+:5680/ user=Everyone
+            string[] prefixes = new string[]
             {
-                try
-                {
-                    listenerStopped = false;
-                    listenerExited.Reset();
-                    listener = new HttpListener();
-                    listener.Prefixes.Add(prefix);
-                    listener.Start();
-                    listenerThread = new Thread(ListenLoop) { IsBackground = true, Name = "BridgeListener" };
-                    listenerThread.Start();
-                    Print($"[Bridge] Listening for signals on port {SignalListenerPort}");
-                    return; // success
-                }
-                catch (Exception ex)
-                {
-                    Print($"[Bridge] Listener attempt {attempt}/{maxRetries} failed on port {SignalListenerPort}: {ex.Message}");
-                    try { listener?.Close(); } catch { }
-                    listener = null;
+                $"http://+:{SignalListenerPort}/",         // all interfaces (preferred)
+                $"http://localhost:{SignalListenerPort}/",  // localhost fallback
+            };
 
-                    if (attempt < maxRetries)
+            foreach (string prefix in prefixes)
+            {
+                const int maxRetries = 3;
+                const int retryDelayMs = 1000;
+
+                for (int attempt = 1; attempt <= maxRetries; attempt++)
+                {
+                    try
                     {
-                        Print($"[Bridge] Retrying in {retryDelayMs}ms...");
-                        Thread.Sleep(retryDelayMs);
+                        listenerStopped = false;
+                        listenerExited.Reset();
+                        listener = new HttpListener();
+                        listener.Prefixes.Add(prefix);
+                        listener.Start();
+                        listenerThread = new Thread(ListenLoop) { IsBackground = true, Name = "BridgeListener" };
+                        listenerThread.Start();
+                        bool isWildcard = prefix.Contains("+");
+                        Print($"[Bridge] Listening for signals on port {SignalListenerPort}" +
+                              (isWildcard ? " (all interfaces — Tailscale/WSL2 reachable)" : " (localhost only)"));
+                        if (!isWildcard)
+                            Print("[Bridge] Tip: to enable remote access, run as admin or: netsh http add urlacl url=http://+:" + SignalListenerPort + "/ user=Everyone");
+                        return; // success
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        Print($"[Bridge] All {maxRetries} listener attempts failed — HTTP endpoints will be unavailable. SignalBus still works.");
+                        Print($"[Bridge] Listener attempt {attempt}/{maxRetries} on {prefix}: {ex.Message}");
+                        try { listener?.Close(); } catch { }
+                        listener = null;
+
+                        if (attempt < maxRetries)
+                        {
+                            Thread.Sleep(retryDelayMs);
+                        }
                     }
                 }
+                // If wildcard prefix failed all retries, try localhost fallback
+                Print($"[Bridge] {prefix} failed — trying next prefix...");
             }
+            Print($"[Bridge] All listener attempts failed — HTTP endpoints will be unavailable. SignalBus still works.");
         }
 
         private void StopSignalListener()

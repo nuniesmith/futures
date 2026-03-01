@@ -91,6 +91,8 @@ services:
             - DATA_SERVICE_HOST=0.0.0.0
             - DATA_SERVICE_PORT=8000
             - ENGINE_MODE=remote
+            - NT_BRIDGE_HOST=${NT_BRIDGE_HOST:-100.108.223.51}
+            - NT_BRIDGE_PORT=${NT_BRIDGE_PORT:-5680}
             - PYTHONPATH=/app/src
             - PYTHONUNBUFFERED=1
         volumes:

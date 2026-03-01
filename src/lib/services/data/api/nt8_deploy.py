@@ -97,9 +97,16 @@ def _get_positions_data() -> dict[str, Any] | None:
 
 
 def _compute_health() -> dict[str, Any]:
-    """Compute NT8 health status from all available cache sources.
+    """Compute full system health status from all available cache sources.
 
     Returns a dict with:
+        --- Service-level indicators ---
+        data_service_up: bool    — always True if this code is running
+        engine_up: bool          — engine status == "running"
+        redis_up: bool           — Redis ping succeeds
+        postgres_up: bool        — Postgres SELECT 1 succeeds
+
+        --- NT8 Bridge indicators ---
         bridge_connected: bool   — heartbeat received within TTL
         bridge_state: str        — "Realtime", "Historical", "disconnected", etc.
         bridge_version: str      — e.g. "2.0"
@@ -117,6 +124,12 @@ def _compute_health() -> dict[str, Any]:
     positions = _get_positions_data()
 
     result: dict[str, Any] = {
+        # Service-level health
+        "data_service_up": True,  # If we're computing this, the data service is up
+        "engine_up": False,
+        "redis_up": False,
+        "postgres_up": False,
+        # NT8 Bridge health
         "bridge_connected": False,
         "bridge_state": "disconnected",
         "bridge_version": "",
@@ -129,6 +142,45 @@ def _compute_health() -> dict[str, Any]:
         "risk_blocked": False,
         "last_heartbeat": None,
     }
+
+    # --- Service-level checks ---
+    # Redis
+    try:
+        from lib.core.cache import REDIS_AVAILABLE, _r
+
+        if REDIS_AVAILABLE and _r is not None:
+            _r.ping()
+            result["redis_up"] = True
+    except Exception:
+        pass
+
+    # Postgres
+    try:
+        import os
+
+        database_url = os.getenv("DATABASE_URL", "")
+        if database_url.startswith("postgresql"):
+            from lib.core.models import _get_conn
+
+            conn = _get_conn()
+            try:
+                conn.execute("SELECT 1")
+                result["postgres_up"] = True
+            finally:
+                conn.close()
+    except Exception:
+        pass
+
+    # Engine (check Redis-cached engine status)
+    try:
+        from lib.core.cache import cache_get as _cg
+
+        raw_status = _cg("engine:status")
+        if raw_status:
+            eng = json.loads(raw_status)
+            result["engine_up"] = eng.get("engine") == "running"
+    except Exception:
+        pass
 
     # --- From heartbeat (primary freshness signal) ---
     if heartbeat:
@@ -339,66 +391,101 @@ def _generate_bat_installer() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _render_health_bar(health: dict[str, Any]) -> str:
-    """Render the NT8 health indicators as a compact HTML fragment.
+def _render_health_dot(label: str, is_up: bool, title_up: str, title_down: str, pulse: bool = False) -> str:
+    """Render a single health indicator dot with label."""
+    if is_up:
+        color = "bg-green-500"
+        ring = "ring-green-500/30"
+        title = title_up
+        text_cls = "text-zinc-300"
+    else:
+        color = "bg-red-500"
+        ring = "ring-red-500/30"
+        title = title_down
+        text_cls = "text-zinc-500"
 
-    Shows colored dots for Bridge and Ruby connection status, plus
-    a tooltip with details. Designed to sit in the header toolbar.
+    ping_html = ""
+    if is_up and pulse:
+        ping_html = (
+            f"<span class='animate-ping absolute inline-flex h-full w-full rounded-full {color} opacity-40'></span>"
+        )
+
+    return f"""
+        <div class="flex items-center gap-1.5 cursor-default" title="{title}">
+            <span class="relative flex h-2.5 w-2.5">
+                {ping_html}
+                <span class="relative inline-flex rounded-full h-2.5 w-2.5 {color} ring-2 {ring}"></span>
+            </span>
+            <span class="text-[11px] {text_cls}">{label}</span>
+        </div>"""
+
+
+def _render_health_bar(health: dict[str, Any]) -> str:
+    """Render health indicators as a compact HTML fragment.
+
+    Shows colored dots for Data, Engine, Redis, Postgres (service-level)
+    and Bridge, Ruby, SignalBus (NT8-level) with tooltips. Designed to
+    sit in the header toolbar area.
     """
+    # --- Service-level indicators ---
+    data_ok = health.get("data_service_up", True)
+    engine_ok = health.get("engine_up", False)
+    redis_ok = health.get("redis_up", False)
+    postgres_ok = health.get("postgres_up", False)
+
+    # --- NT8 Bridge indicators ---
     bridge_ok = health.get("bridge_connected", False)
     ruby_ok = health.get("ruby_attached", False)
-    signalbus_ok = health.get("signalbus_active", False)
     risk_blocked = health.get("risk_blocked", False)
     age = health.get("bridge_age_seconds", -1)
     state = health.get("bridge_state", "disconnected")
     account = health.get("bridge_account", "")
     version = health.get("bridge_version", "")
     positions = health.get("positions_count", 0)
-    pending = health.get("signalbus_pending", 0)
 
-    # Bridge dot
-    if bridge_ok:
-        bridge_color = "bg-green-500"
-        bridge_ring = "ring-green-500/30"
-        bridge_title = f"Bridge: Connected ({state})"
-        if account:
-            bridge_title += f" — {account}"
-        if age >= 0:
-            bridge_title += f" — {age:.0f}s ago"
-    else:
-        bridge_color = "bg-red-500"
-        bridge_ring = "ring-red-500/30"
-        bridge_title = "Bridge: Disconnected"
-        if age >= 0:
-            bridge_title += f" — last seen {age:.0f}s ago"
+    # Service dots
+    data_dot = _render_health_dot("Data", data_ok, "Data Service: Running", "Data Service: Down")
+    engine_dot = _render_health_dot("Engine", engine_ok, "Engine: Running", "Engine: Not running")
+    redis_dot = _render_health_dot("Redis", redis_ok, "Redis: Connected", "Redis: Disconnected")
+    pg_dot = _render_health_dot("Postgres", postgres_ok, "Postgres: Connected", "Postgres: Disconnected")
+
+    # Bridge dot (with extra detail)
+    bridge_title_up = f"Bridge: Connected ({state})"
+    if account:
+        bridge_title_up += f" — {account}"
+    if age >= 0:
+        bridge_title_up += f" — {age:.0f}s ago"
+    bridge_title_down = "Bridge: Disconnected"
+    if age >= 0:
+        bridge_title_down += f" — last seen {age:.0f}s ago"
+    bridge_dot = _render_health_dot("Bridge", bridge_ok, bridge_title_up, bridge_title_down, pulse=bridge_ok)
 
     # Ruby dot
     if ruby_ok:
-        ruby_color = "bg-green-500"
-        ruby_ring = "ring-green-500/30"
         ruby_title = "Ruby: Attached to Bridge"
     elif bridge_ok:
-        ruby_color = "bg-yellow-500"
-        ruby_ring = "ring-yellow-500/30"
-        ruby_title = "Ruby: Not attached (Bridge running without Ruby indicator)"
+        ruby_title = "Ruby: Not attached (Bridge running without Ruby)"
     else:
-        ruby_color = "bg-zinc-600"
-        ruby_ring = "ring-zinc-600/30"
         ruby_title = "Ruby: Unknown (Bridge not connected)"
-
-    # SignalBus dot
-    if signalbus_ok:
-        sb_color = "bg-green-500"
-        sb_ring = "ring-green-500/30"
-        sb_title = f"SignalBus: Active ({pending} pending)"
+    # Ruby uses yellow when bridge is up but ruby isn't attached
+    if ruby_ok:
+        ruby_dot = _render_health_dot("Ruby", True, ruby_title, ruby_title, pulse=True)
     elif bridge_ok:
-        sb_color = "bg-yellow-500"
-        sb_ring = "ring-yellow-500/30"
-        sb_title = "SignalBus: Inactive (no consumer)"
+        ruby_dot = f"""
+        <div class="flex items-center gap-1.5 cursor-default" title="{ruby_title}">
+            <span class="relative flex h-2.5 w-2.5">
+                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-yellow-500 ring-2 ring-yellow-500/30"></span>
+            </span>
+            <span class="text-[11px] text-zinc-500">Ruby</span>
+        </div>"""
     else:
-        sb_color = "bg-zinc-600"
-        sb_ring = "ring-zinc-600/30"
-        sb_title = "SignalBus: Unknown"
+        ruby_dot = f"""
+        <div class="flex items-center gap-1.5 cursor-default" title="{ruby_title}">
+            <span class="relative flex h-2.5 w-2.5">
+                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
+            </span>
+            <span class="text-[11px] text-zinc-500">Ruby</span>
+        </div>"""
 
     # Risk badge
     risk_html = ""
@@ -425,37 +512,23 @@ def _render_health_bar(health: dict[str, Any]) -> str:
     # Version tag
     ver_html = ""
     if version and bridge_ok:
-        ver_html = f"""
-            <span class="text-[10px] text-zinc-600 ml-1" title="Bridge version {version}">v{version}</span>
-        """
+        ver_html = f"""<span class="text-[10px] text-zinc-600 ml-0.5" title="Bridge v{version}">v{version}</span>"""
 
     return f"""
-    <div class="flex items-center gap-3">
-        <!-- Bridge Status -->
-        <div class="flex items-center gap-1.5 cursor-default" title="{bridge_title}">
-            <span class="relative flex h-2.5 w-2.5">
-                {"<span class='animate-ping absolute inline-flex h-full w-full rounded-full " + bridge_color + " opacity-40'></span>" if bridge_ok else ""}
-                <span class="relative inline-flex rounded-full h-2.5 w-2.5 {bridge_color} ring-2 {bridge_ring}"></span>
-            </span>
-            <span class="text-[11px] {"text-zinc-300" if bridge_ok else "text-zinc-500"}">Bridge</span>
+    <div class="flex items-center gap-2">
+        <!-- Service Health -->
+        <div class="flex items-center gap-2 pr-2 border-r border-zinc-700">
+            {data_dot}
+            {engine_dot}
+            {redis_dot}
+            {pg_dot}
+        </div>
+
+        <!-- NT8 Bridge Health -->
+        <div class="flex items-center gap-2 pl-1">
+            {bridge_dot}
             {ver_html}
-        </div>
-
-        <!-- Ruby Status -->
-        <div class="flex items-center gap-1.5 cursor-default" title="{ruby_title}">
-            <span class="relative flex h-2.5 w-2.5">
-                {"<span class='animate-ping absolute inline-flex h-full w-full rounded-full " + ruby_color + " opacity-40'></span>" if ruby_ok else ""}
-                <span class="relative inline-flex rounded-full h-2.5 w-2.5 {ruby_color} ring-2 {ruby_ring}"></span>
-            </span>
-            <span class="text-[11px] {"text-zinc-300" if ruby_ok else "text-zinc-500"}">Ruby</span>
-        </div>
-
-        <!-- SignalBus Status -->
-        <div class="flex items-center gap-1.5 cursor-default" title="{sb_title}">
-            <span class="relative flex h-2.5 w-2.5">
-                <span class="relative inline-flex rounded-full h-2.5 w-2.5 {sb_color} ring-2 {sb_ring}"></span>
-            </span>
-            <span class="text-[11px] {"text-zinc-300" if signalbus_ok else "text-zinc-500"}">Bus</span>
+            {ruby_dot}
         </div>
 
         {pos_html}

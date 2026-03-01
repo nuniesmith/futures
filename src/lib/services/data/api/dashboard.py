@@ -786,30 +786,52 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                     </div>
                 </div>
 
-                <!-- Center: NT8 Health Indicators (polled every 10s) -->
+                <!-- Center: System Health Indicators (polled every 10s) -->
                 <div id="nt8-health-bar"
                      class="hidden md:flex items-center"
                      hx-get="/api/nt8/health/html"
                      hx-trigger="load, every 10s"
                      hx-swap="innerHTML">
-                    <div class="flex items-center gap-3">
-                        <div class="flex items-center gap-1.5 cursor-default" title="Bridge: checking...">
-                            <span class="relative flex h-2.5 w-2.5">
-                                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
-                            </span>
-                            <span class="text-[11px] text-zinc-500">Bridge</span>
+                    <div class="flex items-center gap-2">
+                        <div class="flex items-center gap-2 pr-2 border-r border-zinc-700">
+                            <div class="flex items-center gap-1.5 cursor-default" title="Data Service: checking...">
+                                <span class="relative flex h-2.5 w-2.5">
+                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
+                                </span>
+                                <span class="text-[11px] text-zinc-500">Data</span>
+                            </div>
+                            <div class="flex items-center gap-1.5 cursor-default" title="Engine: checking...">
+                                <span class="relative flex h-2.5 w-2.5">
+                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
+                                </span>
+                                <span class="text-[11px] text-zinc-500">Engine</span>
+                            </div>
+                            <div class="flex items-center gap-1.5 cursor-default" title="Redis: checking...">
+                                <span class="relative flex h-2.5 w-2.5">
+                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
+                                </span>
+                                <span class="text-[11px] text-zinc-500">Redis</span>
+                            </div>
+                            <div class="flex items-center gap-1.5 cursor-default" title="Postgres: checking...">
+                                <span class="relative flex h-2.5 w-2.5">
+                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
+                                </span>
+                                <span class="text-[11px] text-zinc-500">Postgres</span>
+                            </div>
                         </div>
-                        <div class="flex items-center gap-1.5 cursor-default" title="Ruby: checking...">
-                            <span class="relative flex h-2.5 w-2.5">
-                                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
-                            </span>
-                            <span class="text-[11px] text-zinc-500">Ruby</span>
-                        </div>
-                        <div class="flex items-center gap-1.5 cursor-default" title="SignalBus: checking...">
-                            <span class="relative flex h-2.5 w-2.5">
-                                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
-                            </span>
-                            <span class="text-[11px] text-zinc-500">Bus</span>
+                        <div class="flex items-center gap-2 pl-1">
+                            <div class="flex items-center gap-1.5 cursor-default" title="Bridge: checking...">
+                                <span class="relative flex h-2.5 w-2.5">
+                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
+                                </span>
+                                <span class="text-[11px] text-zinc-500">Bridge</span>
+                            </div>
+                            <div class="flex items-center gap-1.5 cursor-default" title="Ruby: checking...">
+                                <span class="relative flex h-2.5 w-2.5">
+                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
+                                </span>
+                                <span class="text-[11px] text-zinc-500">Ruby</span>
+                            </div>
                         </div>
                     </div>
                 </div>
