@@ -25,11 +25,12 @@ Usage:
     app.include_router(audit_router, prefix="/audit", tags=["Audit"])
 """
 
+import contextlib
 import json
 import logging
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
@@ -61,7 +62,7 @@ class RiskEventCreate(BaseModel):
     account_size: int = Field(0, ge=0, description="Account size")
     risk_pct: float = Field(0.0, ge=0, description="Risk as % of account")
     session: str = Field("", description="Session mode (pre_market, active, off_hours)")
-    metadata: Optional[dict] = Field(None, description="Optional extra data")
+    metadata: dict | None = Field(None, description="Optional extra data")
 
 
 class ORBEventCreate(BaseModel):
@@ -79,13 +80,13 @@ class ORBEventCreate(BaseModel):
     short_trigger: float = Field(0.0, description="Lower breakout level")
     bar_count: int = Field(0, ge=0, description="Bars in the opening range")
     session: str = Field("", description="Session mode")
-    metadata: Optional[dict] = Field(None, description="Optional extra data")
+    metadata: dict | None = Field(None, description="Optional extra data")
 
 
 class RiskEventResponse(BaseModel):
     """A single risk event from the audit trail."""
 
-    id: Optional[int] = None
+    id: int | None = None
     timestamp: str = ""
     event_type: str = ""
     symbol: str = ""
@@ -102,7 +103,7 @@ class RiskEventResponse(BaseModel):
 class ORBEventResponse(BaseModel):
     """A single ORB event from the audit trail."""
 
-    id: Optional[int] = None
+    id: int | None = None
     timestamp: str = ""
     symbol: str = ""
     or_high: float = 0.0
@@ -127,9 +128,9 @@ class ORBEventResponse(BaseModel):
 @router.get("/risk")
 def get_risk_events(
     limit: int = Query(50, ge=1, le=1000, description="Max events to return"),
-    event_type: Optional[str] = Query(None, description="Filter by event type (block, warning, clear)"),
-    symbol: Optional[str] = Query(None, description="Filter by symbol"),
-    since: Optional[str] = Query(None, description="ISO timestamp — only return events after this time"),
+    event_type: str | None = Query(None, description="Filter by event type (block, warning, clear)"),
+    symbol: str | None = Query(None, description="Filter by symbol"),
+    since: str | None = Query(None, description="ISO timestamp — only return events after this time"),
 ):
     """Query persisted risk events from the database.
 
@@ -170,15 +171,15 @@ def get_risk_events(
         }
     except Exception as exc:
         logger.error("Failed to query risk events: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to query risk events: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to query risk events: {exc}") from exc
 
 
 @router.get("/orb")
 def get_orb_events(
     limit: int = Query(50, ge=1, le=1000, description="Max events to return"),
-    symbol: Optional[str] = Query(None, description="Filter by symbol"),
+    symbol: str | None = Query(None, description="Filter by symbol"),
     breakout_only: bool = Query(False, description="Only return events where breakout was detected"),
-    since: Optional[str] = Query(None, description="ISO timestamp — only return events after this time"),
+    since: str | None = Query(None, description="ISO timestamp — only return events after this time"),
 ):
     """Query persisted ORB events from the database.
 
@@ -221,7 +222,7 @@ def get_orb_events(
         }
     except Exception as exc:
         logger.error("Failed to query ORB events: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to query ORB events: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to query ORB events: {exc}") from exc
 
 
 @router.get("/summary")
@@ -241,7 +242,7 @@ def get_audit_summary(
         return summary
     except Exception as exc:
         logger.error("Failed to build audit summary: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to build audit summary: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to build audit summary: {exc}") from exc
 
 
 @router.post("/risk", status_code=201)
@@ -288,7 +289,7 @@ def create_risk_event(req: RiskEventCreate):
         raise
     except Exception as exc:
         logger.error("Failed to record risk event: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to record risk event: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to record risk event: {exc}") from exc
 
 
 @router.post("/orb", status_code=201)
@@ -340,7 +341,7 @@ def create_orb_event(req: ORBEventCreate):
         raise
     except Exception as exc:
         logger.error("Failed to record ORB event: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to record ORB event: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to record ORB event: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -363,10 +364,7 @@ def _format_time_et(ts: str) -> str:
     """Extract HH:MM ET from an ISO timestamp string."""
     try:
         dt = datetime.fromisoformat(ts)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=_EST)
-        else:
-            dt = dt.astimezone(_EST)
+        dt = dt.replace(tzinfo=_EST) if dt.tzinfo is None else dt.astimezone(_EST)
         return dt.strftime("%H:%M ET")
     except Exception:
         return ts[:16] if len(ts) >= 16 else ts
@@ -436,7 +434,7 @@ def _get_model_info_for_report() -> dict[str, Any]:
                         header = lines[0].split(",")
                         last = lines[-1].split(",")
                         if len(header) == len(last):
-                            last_epoch = dict(zip(header, last))
+                            last_epoch = dict(zip(header, last, strict=False))
                             info["last_training"] = {
                                 k: v
                                 for k, v in last_epoch.items()
@@ -463,10 +461,8 @@ def _get_model_info_for_report() -> dict[str, Any]:
     for ddir in [Path("/app/dataset"), Path("dataset")]:
         stats_file = ddir / "dataset_stats.json"
         if stats_file.is_file():
-            try:
+            with contextlib.suppress(Exception):
                 info["dataset_stats"] = json.loads(stats_file.read_text())
-            except Exception:
-                pass
             break
         labels_file = ddir / "labels.csv"
         if labels_file.is_file():
@@ -508,10 +504,8 @@ def _build_daily_report(target_date: date) -> dict[str, Any]:
         meta = _parse_metadata_json(ev)
         prob = meta.get("cnn_prob")
         if prob is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 cnn_probs.append(float(prob))
-            except (TypeError, ValueError):
-                pass
         fp = meta.get("filter_passed")
         if fp is True:
             filter_passed_count += 1
@@ -610,12 +604,12 @@ def _build_daily_report(target_date: date) -> dict[str, Any]:
 
 @router.get("/daily-report")
 def get_daily_report(
-    target_date: Optional[str] = Query(
+    target_date: str | None = Query(
         None,
         alias="date",
         description="Target date (YYYY-MM-DD). Defaults to today (ET).",
     ),
-    days: Optional[int] = Query(
+    days: int | None = Query(
         None,
         ge=1,
         le=30,
@@ -638,11 +632,11 @@ def get_daily_report(
         if target_date:
             try:
                 td = date.fromisoformat(target_date)
-            except ValueError:
+            except ValueError as exc:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid date format: {target_date!r} (expected YYYY-MM-DD)",
-                )
+                ) from exc
         else:
             td = datetime.now(tz=_EST).date()
 
@@ -685,4 +679,4 @@ def get_daily_report(
         raise
     except Exception as exc:
         logger.error("Failed to build daily report: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to build daily report: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to build daily report: {exc}") from exc

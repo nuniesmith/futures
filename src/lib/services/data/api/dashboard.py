@@ -25,7 +25,7 @@ Endpoints:
 import json
 import logging
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request
@@ -43,7 +43,7 @@ router = APIRouter(tags=["Dashboard"])
 # ---------------------------------------------------------------------------
 
 
-def _get_focus_data() -> Optional[dict[str, Any]]:
+def _get_focus_data() -> dict[str, Any] | None:
     """Read daily focus payload from Redis."""
     try:
         from lib.core.cache import cache_get
@@ -116,7 +116,7 @@ def _get_positions() -> list[dict[str, Any]]:
     return []
 
 
-def _get_risk_status() -> Optional[dict[str, Any]]:
+def _get_risk_status() -> dict[str, Any] | None:
     """Read risk manager status from Redis."""
     try:
         from lib.core.cache import cache_get
@@ -129,7 +129,7 @@ def _get_risk_status() -> Optional[dict[str, Any]]:
     return None
 
 
-def _get_orb_data() -> Optional[dict[str, Any]]:
+def _get_orb_data() -> dict[str, Any] | None:
     """Read the latest ORB (Opening Range Breakout) result from cache (TASK-801)."""
     try:
         from lib.core.cache import cache_get
@@ -144,7 +144,7 @@ def _get_orb_data() -> Optional[dict[str, Any]]:
     return None
 
 
-def _get_grok_update() -> Optional[dict[str, Any]]:
+def _get_grok_update() -> dict[str, Any] | None:
     """Read latest Grok compact update from Redis."""
     try:
         from lib.core.cache import cache_get
@@ -299,7 +299,7 @@ def _render_no_trade_banner(reason: str) -> str:
 
 def _render_positions_panel(
     positions: list[dict[str, Any]],
-    risk_status: Optional[dict[str, Any]] = None,
+    risk_status: dict[str, Any] | None = None,
 ) -> str:
     """Render live positions panel with risk status as HTML fragment (TASK-501).
 
@@ -450,7 +450,7 @@ def _render_positions_panel(
     """
 
 
-def _render_risk_panel(risk_status: Optional[dict[str, Any]]) -> str:
+def _render_risk_panel(risk_status: dict[str, Any] | None) -> str:
     """Render standalone risk status panel as HTML fragment."""
     if not risk_status:
         return """
@@ -517,7 +517,7 @@ def _render_risk_panel(risk_status: Optional[dict[str, Any]]) -> str:
     """
 
 
-def _render_grok_panel(grok_data: Optional[dict[str, Any]]) -> str:
+def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
     """Render the Grok compact update panel as HTML fragment (TASK-601)."""
     if not grok_data:
         return """
@@ -566,7 +566,7 @@ def _render_grok_panel(grok_data: Optional[dict[str, Any]]) -> str:
     """
 
 
-def _render_orb_panel(orb_data: Optional[dict[str, Any]]) -> str:
+def _render_orb_panel(orb_data: dict[str, Any] | None) -> str:
     """Render the Opening Range Breakout panel as HTML fragment (TASK-801)."""
     if not orb_data:
         return """
@@ -667,7 +667,7 @@ def _render_orb_panel(orb_data: Optional[dict[str, Any]]) -> str:
     """
 
 
-def _render_full_dashboard(focus_data: Optional[dict[str, Any]], session: dict[str, str]) -> str:
+def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str, str]) -> str:
     """Render the complete dashboard HTML page."""
     # Asset cards grid
     cards_html = ""

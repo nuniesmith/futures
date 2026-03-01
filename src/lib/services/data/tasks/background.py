@@ -8,7 +8,6 @@ and periodic background tasks (data refresh, optimization, backtesting).
 
 import logging
 from contextlib import asynccontextmanager
-from typing import Optional
 
 logger = logging.getLogger("data_service.tasks")
 logger.setLevel(logging.INFO)
@@ -112,9 +111,9 @@ class BackgroundManager:
 
     def update_settings(
         self,
-        account_size: Optional[int] = None,
-        interval: Optional[str] = None,
-        period: Optional[str] = None,
+        account_size: int | None = None,
+        interval: str | None = None,
+        period: str | None = None,
     ) -> dict:
         """Update engine settings at runtime."""
         changed = {}
@@ -171,7 +170,7 @@ class BackgroundManager:
 # ---------------------------------------------------------------------------
 # Module-level singleton
 # ---------------------------------------------------------------------------
-_manager: Optional[BackgroundManager] = None
+_manager: BackgroundManager | None = None
 
 
 def get_background_manager(

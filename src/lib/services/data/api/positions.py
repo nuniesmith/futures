@@ -25,7 +25,7 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -78,10 +78,10 @@ class NTPosition(BaseModel):
     quantity: float = Field(..., description="Number of contracts")
     avgPrice: float = Field(..., description="Average fill price")
     unrealizedPnL: float = Field(0.0, description="Current unrealized P&L in USD")
-    instrument: Optional[str] = Field(None, description="Master instrument name, e.g. 'MES'")
-    tickSize: Optional[float] = Field(None, description="Tick size for this instrument")
-    pointValue: Optional[float] = Field(None, description="Point value for this instrument")
-    lastUpdate: Optional[str] = Field(None, description="ISO timestamp of last update")
+    instrument: str | None = Field(None, description="Master instrument name, e.g. 'MES'")
+    tickSize: float | None = Field(None, description="Tick size for this instrument")
+    pointValue: float | None = Field(None, description="Point value for this instrument")
+    lastUpdate: str | None = Field(None, description="ISO timestamp of last update")
 
 
 class NTPendingOrder(BaseModel):
@@ -106,9 +106,9 @@ class NTPositionsPayload(BaseModel):
     """
 
     account: str = Field(..., description="NinjaTrader account name, e.g. 'Sim101'")
-    positions: List[NTPosition] = Field(default_factory=list, description="List of open positions")
-    pendingOrders: List[NTPendingOrder] = Field(default_factory=list, description="Working/accepted orders")
-    timestamp: Optional[str] = Field(None, description="UTC timestamp from NT")
+    positions: list[NTPosition] = Field(default_factory=list, description="List of open positions")
+    pendingOrders: list[NTPendingOrder] = Field(default_factory=list, description="Working/accepted orders")
+    timestamp: str | None = Field(None, description="UTC timestamp from NT")
     cashBalance: float = Field(0.0, description="Account cash balance")
     realizedPnL: float = Field(0.0, description="Today's realized P&L")
     totalUnrealizedPnL: float = Field(0.0, description="Sum of all unrealized P&L")
@@ -128,21 +128,21 @@ class NTHeartbeatPayload(BaseModel):
     riskBlocked: bool = Field(False, description="Whether risk enforcement is blocking")
     bridge_version: str = Field("1.0", description="Bridge version")
     listenerPort: int = Field(8080, description="Bridge HTTP listener port")
-    timestamp: Optional[str] = Field(None, description="UTC timestamp")
+    timestamp: str | None = Field(None, description="UTC timestamp")
 
 
 class NTPositionsResponse(BaseModel):
     """Response returned by GET /."""
 
     account: str = ""
-    positions: List[NTPosition] = []
+    positions: list[NTPosition] = []
     timestamp: str = ""
     received_at: str = ""
     has_positions: bool = False
     total_unrealized_pnl: float = 0.0
     cash_balance: float = 0.0
     realized_pnl: float = 0.0
-    pending_orders: List[NTPendingOrder] = []
+    pending_orders: list[NTPendingOrder] = []
     bridge_connected: bool = False
     bridge_version: str = ""
 
@@ -270,7 +270,7 @@ def update_positions(payload: NTPositionsPayload):
     )
 
     # --- Risk evaluation ---
-    risk_status: Dict[str, Any] = {}
+    risk_status: dict[str, Any] = {}
     try:
         from lib.services.data.api.risk import evaluate_position_risk
 
@@ -402,21 +402,21 @@ def execute_signal(req: ExecuteSignalRequest):
             result = resp.json()
             result["forwarded_to"] = bridge_url
             return result
-    except httpx.ConnectError:
+    except httpx.ConnectError as exc:
         raise HTTPException(
             status_code=503,
             detail=f"Cannot connect to NinjaTrader Bridge at {bridge_url}",
-        )
-    except httpx.TimeoutException:
+        ) from exc
+    except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=504,
             detail=f"NinjaTrader Bridge at {bridge_url} timed out",
-        )
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=502,
             detail=f"Bridge communication error: {exc}",
-        )
+        ) from exc
 
 
 @router.post("/flatten")
@@ -444,16 +444,16 @@ def flatten_all(req: FlattenRequest):
             result["forwarded_to"] = bridge_url
             logger.warning("🔴 FLATTEN ALL sent to Bridge — reason: %s", req.reason)
             return result
-    except httpx.ConnectError:
+    except httpx.ConnectError as exc:
         raise HTTPException(
             status_code=503,
             detail=f"Cannot connect to NinjaTrader Bridge at {bridge_url}",
-        )
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=502,
             detail=f"Bridge communication error: {exc}",
-        )
+        ) from exc
 
 
 @router.post("/cancel_orders")
@@ -475,19 +475,19 @@ def cancel_orders():
             result["forwarded_to"] = bridge_url
             logger.info("Cancel all orders sent to Bridge")
             return result
-    except httpx.ConnectError:
+    except httpx.ConnectError as exc:
         raise HTTPException(
             status_code=503,
             detail=f"Cannot connect to NinjaTrader Bridge at {bridge_url}",
-        )
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=502,
             detail=f"Bridge communication error: {exc}",
-        )
+        ) from exc
 
 
-def _probe_bridge_status() -> Dict[str, Any]:
+def _probe_bridge_status() -> dict[str, Any]:
     """Fetch Bridge /status and cache the result for health indicators.
 
     Called by get_bridge_status() and can also be called by the
@@ -498,7 +498,7 @@ def _probe_bridge_status() -> Dict[str, Any]:
         return {}
 
     bridge_url = _get_bridge_url()
-    bridge_status: Dict[str, Any] = {}
+    bridge_status: dict[str, Any] = {}
     try:
         with httpx.Client(timeout=_BRIDGE_TIMEOUT) as client:
             resp = client.get(f"{bridge_url}/status")

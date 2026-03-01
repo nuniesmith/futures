@@ -19,7 +19,7 @@ Asset/account info endpoints are handled by analysis.py.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
@@ -54,8 +54,8 @@ class CreateTradeRequest(BaseModel):
     asset: str = Field(..., description="Asset name, e.g. 'Gold', 'E-mini S&P'")
     direction: str = Field(..., description="LONG or SHORT")
     entry: float = Field(..., description="Entry price")
-    sl: Optional[float] = Field(None, description="Stop loss price")
-    tp: Optional[float] = Field(None, description="Take profit price")
+    sl: float | None = Field(None, description="Stop loss price")
+    tp: float | None = Field(None, description="Take profit price")
     contracts: int = Field(1, ge=1, description="Number of contracts")
     strategy: str = Field("", description="Strategy name")
     notes: str = Field("", description="Trade notes")
@@ -92,14 +92,14 @@ class TradeResponse(BaseModel):
     asset: str
     direction: str
     entry: float
-    sl: Optional[float] = None
-    tp: Optional[float] = None
+    sl: float | None = None
+    tp: float | None = None
     contracts: int
     status: str
-    close_price: Optional[float] = None
-    close_time: Optional[str] = None
-    pnl: Optional[float] = None
-    rr: Optional[float] = None
+    close_price: float | None = None
+    close_time: str | None = None
+    pnl: float | None = None
+    rr: float | None = None
     notes: str = ""
     strategy: str = ""
     # Risk fields (populated on create only)
@@ -108,7 +108,7 @@ class TradeResponse(BaseModel):
         False, description="True if risk rules would block this trade"
     )
     risk_reason: str = Field("", description="Risk block reason (empty if allowed)")
-    risk_details: Optional[Dict[str, Any]] = Field(
+    risk_details: dict[str, Any] | None = Field(
         None, description="Full risk check details"
     )
 
@@ -144,7 +144,7 @@ def api_create_trade(req: CreateTradeRequest):
     risk_checked = False
     risk_blocked = False
     risk_reason = ""
-    risk_details: Optional[Dict[str, Any]] = None
+    risk_details: dict[str, Any] | None = None
 
     try:
         from lib.services.data.api.risk import check_trade_entry_risk
@@ -240,10 +240,10 @@ def api_cancel_trade(trade_id: int):
     }
 
 
-@router.get("/trades", response_model=List[TradeResponse])
+@router.get("/trades", response_model=list[TradeResponse])
 def api_list_trades(
-    status: Optional[str] = Query(None, description="Filter: open, closed"),
-    account_size: Optional[int] = Query(None, description="Filter by account size"),
+    status: str | None = Query(None, description="Filter: open, closed"),
+    account_size: int | None = Query(None, description="Filter by account size"),
 ):
     """List trades, optionally filtered by status and account size."""
     if status == "open":
@@ -258,7 +258,7 @@ def api_list_trades(
     return [TradeResponse(**t) for t in trades]
 
 
-@router.get("/trades/open", response_model=List[TradeResponse])
+@router.get("/trades/open", response_model=list[TradeResponse])
 def api_open_trades(
     account_size: int = Query(150_000, description="Account size"),
 ):

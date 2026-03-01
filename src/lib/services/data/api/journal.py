@@ -6,7 +6,6 @@ retrieving journal history, and computing journal statistics.
 """
 
 from datetime import date, datetime
-from typing import Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
@@ -105,15 +104,13 @@ def save_journal_entry(entry: JournalEntryRequest):
             timestamp=datetime.now(tz=_EST).isoformat(),
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to save journal: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to save journal: {exc}") from exc
 
 
 @router.get("/entries")
 def get_journal_entries(
     limit: int = Query(30, ge=1, le=365, description="Number of recent entries"),
-    account_size: Optional[int] = Query(
-        None, description="Filter by account size (50000, 100000, 150000)"
-    ),
+    account_size: int | None = Query(None, description="Filter by account size (50000, 100000, 150000)"),
 ):
     """Retrieve recent daily journal entries.
 
@@ -138,16 +135,12 @@ def get_journal_entries(
             "timestamp": datetime.now(tz=_EST).isoformat(),
         }
     except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to retrieve journal: {exc}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve journal: {exc}") from exc
 
 
 @router.get("/stats", response_model=JournalStatsResponse)
 def get_stats(
-    account_size: Optional[int] = Query(
-        None, description="Filter stats by account size"
-    ),
+    account_size: int | None = Query(None, description="Filter stats by account size"),
 ):
     """Get aggregated journal statistics.
 
@@ -158,9 +151,7 @@ def get_stats(
         stats = get_journal_stats()
         return JournalStatsResponse(**stats)
     except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to compute journal stats: {exc}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to compute journal stats: {exc}") from exc
 
 
 @router.get("/today")
@@ -194,6 +185,4 @@ def get_today_entry():
             "timestamp": datetime.now(tz=_EST).isoformat(),
         }
     except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to check today's journal: {exc}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to check today's journal: {exc}") from exc

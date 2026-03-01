@@ -11,9 +11,9 @@ Endpoints:
     POST /live_feed/downgrade — Downgrade feed to bars + trades only
 """
 
+import contextlib
 import logging
 from datetime import datetime
-from typing import Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
@@ -36,15 +36,15 @@ router = APIRouter(tags=["actions"])
 class UpdateSettingsRequest(BaseModel):
     """Request body for updating engine settings at runtime."""
 
-    account_size: Optional[int] = Field(
+    account_size: int | None = Field(
         None,
         description="New account size (50000, 100000, or 150000)",
     )
-    interval: Optional[str] = Field(
+    interval: str | None = Field(
         None,
         description="New primary interval (e.g. '5m', '15m')",
     )
-    period: Optional[str] = Field(
+    period: str | None = Field(
         None,
         description="New lookback period (e.g. '5d', '10d')",
     )
@@ -107,11 +107,9 @@ def optimize_now():
     engine = _get_engine()
 
     # Clear optimization cache so engine re-runs on next cycle
-    for name, ticker in ASSETS.items():
-        try:
+    for _name, ticker in ASSETS.items():
+        with contextlib.suppress(Exception):
             clear_cached_optimization(ticker, engine.interval, engine.period)
-        except Exception:
-            pass
 
     engine.force_refresh()
     return {

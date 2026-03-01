@@ -31,7 +31,6 @@ from __future__ import annotations
 import logging
 import os
 import secrets
-from typing import Optional
 
 from fastapi import HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader, APIKeyQuery
@@ -69,9 +68,9 @@ def _is_public(path: str) -> bool:
 
 async def require_api_key(
     request: Request,
-    header_key: Optional[str] = Security(_header_scheme),
-    query_key: Optional[str] = Security(_query_scheme),
-) -> Optional[str]:
+    header_key: str | None = Security(_header_scheme),
+    query_key: str | None = Security(_query_scheme),
+) -> str | None:
     """FastAPI dependency that enforces API key authentication.
 
     Returns the validated key (or ``None`` when auth is disabled).

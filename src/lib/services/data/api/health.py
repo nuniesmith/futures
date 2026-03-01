@@ -2,12 +2,13 @@
 Health check, metrics, and backfill status API router.
 
 Provides:
-    GET /health              — Service health check (Redis, engine, live feed)
+    GET /health              — Service health check (Redis, Postgres, engine, live feed)
     GET /metrics             — Lightweight operational metrics
     GET /backfill/status     — Historical data backfill status (bar counts, date ranges)
     GET /backfill/gaps/{sym} — Gap analysis for a specific symbol's stored bars
 """
 
+import contextlib
 import logging
 import os
 from datetime import datetime
@@ -35,6 +36,24 @@ def _check_redis() -> dict[str, Any]:
         return {"status": "error", "connected": False, "error": str(exc)}
 
 
+def _check_postgres() -> dict[str, Any]:
+    """Check Postgres connectivity."""
+    database_url = os.getenv("DATABASE_URL", "")
+    if not database_url.startswith("postgresql"):
+        return {"status": "not_configured", "connected": False}
+    try:
+        from lib.core.models import _get_conn
+
+        conn = _get_conn()
+        try:
+            conn.execute("SELECT 1")
+            return {"status": "ok", "connected": True}
+        finally:
+            conn.close()
+    except Exception as exc:
+        return {"status": "error", "connected": False, "error": str(exc)}
+
+
 def _get_engine_or_none():
     """Try to get the engine singleton without raising."""
     try:
@@ -51,16 +70,18 @@ def health():
 
     Returns the status of all critical subsystems:
     - Redis cache connectivity
+    - Postgres database connectivity
     - Engine running state
     - Massive WebSocket live feed
     - Data source (Massive vs yfinance)
     - Database path
     """
     redis_status = _check_redis()
+    postgres_status = _check_postgres()
     engine = _get_engine_or_none()
 
     engine_status = "not_initialized"
-    live_feed_status = {"status": "unknown"}
+    live_feed_status: dict[str, Any] = {"status": "unknown"}
     data_source = "unknown"
 
     if engine is not None:
@@ -74,11 +95,24 @@ def health():
 
     db_path = os.getenv("DB_PATH", "futures_journal.db")
 
+    # --- Update Prometheus gauges ---
+    with contextlib.suppress(Exception):
+        from lib.services.data.api.metrics import (
+            update_engine_up,
+            update_postgres_status,
+            update_redis_status,
+        )
+
+        update_redis_status(redis_status.get("connected", False))
+        update_postgres_status(postgres_status.get("connected", False))
+        update_engine_up(engine_status == "running")
+
     return {
         "status": "ok" if engine_status == "running" else "degraded",
         "timestamp": datetime.now(tz=_EST).isoformat(),
         "components": {
             "redis": redis_status,
+            "postgres": postgres_status,
             "engine": {"status": engine_status},
             "live_feed": live_feed_status,
             "data_source": data_source,
@@ -116,10 +150,8 @@ def metrics():
             result["backtest"] = status.get("backtest", {})
             result["live_feed"] = status.get("live_feed", {})
 
-            try:
+            with contextlib.suppress(Exception):
                 result["backtest_results_count"] = len(engine.get_backtest_results())
-            except Exception:
-                pass
 
             try:
                 from lib.core.models import ASSETS

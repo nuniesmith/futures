@@ -44,7 +44,6 @@ Endpoints:
 """
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -149,10 +148,8 @@ def get_ohlcv(
             "data": payload,
         }
     except Exception as exc:
-        logger.error(
-            "OHLCV fetch failed for %s %s/%s: %s", ticker, interval, period, exc
-        )
-        raise HTTPException(status_code=500, detail=f"Data fetch failed: {exc}")
+        logger.error("OHLCV fetch failed for %s %s/%s: %s", ticker, interval, period, exc)
+        raise HTTPException(status_code=500, detail=f"Data fetch failed: {exc}") from exc
 
 
 @router.post("/ohlcv/bulk")
@@ -206,7 +203,7 @@ def get_daily_bars(
         }
     except Exception as exc:
         logger.error("Daily fetch failed for %s/%s: %s", ticker, period, exc)
-        raise HTTPException(status_code=500, detail=f"Daily data fetch failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Daily data fetch failed: {exc}") from exc
 
 
 @router.post("/daily/bulk")
@@ -273,7 +270,7 @@ def get_contract_overview(ticker: str):
 @router.get("/contracts")
 def list_contracts(
     product_code: str = Query(..., description="Product code, e.g. ES, GC, CL"),
-    active: Optional[bool] = Query(None, description="Filter by active status"),
+    active: bool | None = Query(None, description="Filter by active status"),
     limit: int = Query(10, description="Max results", ge=1, le=100),
 ):
     """List/filter all available futures contracts for a product.
@@ -310,27 +307,19 @@ def get_product_overview(product_code: str):
     provider = _get_provider()
     product = provider.get_product(product_code)
     if product is None:
-        raise HTTPException(
-            status_code=404, detail=f"Product not found: {product_code}"
-        )
+        raise HTTPException(status_code=404, detail=f"Product not found: {product_code}")
     return product
 
 
 @router.get("/products")
 def list_products(
-    name: Optional[str] = Query(None, description="Filter by product name"),
-    product_code: Optional[str] = Query(None, description="Filter by product code"),
-    trading_venue: Optional[str] = Query(
-        None, description="Filter by exchange, e.g. CME, NYMEX"
-    ),
-    sector: Optional[str] = Query(None, description="Filter by sector"),
-    sub_sector: Optional[str] = Query(None, description="Filter by sub-sector"),
-    asset_class: Optional[str] = Query(
-        None, description="Filter by asset class, e.g. futures"
-    ),
-    asset_sub_class: Optional[str] = Query(
-        None, description="Filter by asset sub-class"
-    ),
+    name: str | None = Query(None, description="Filter by product name"),
+    product_code: str | None = Query(None, description="Filter by product code"),
+    trading_venue: str | None = Query(None, description="Filter by exchange, e.g. CME, NYMEX"),
+    sector: str | None = Query(None, description="Filter by sector"),
+    sub_sector: str | None = Query(None, description="Filter by sub-sector"),
+    asset_class: str | None = Query(None, description="Filter by asset class, e.g. futures"),
+    asset_sub_class: str | None = Query(None, description="Filter by asset sub-class"),
     limit: int = Query(100, description="Max results", ge=1, le=1000),
 ):
     """Filter through all available futures product specifications.
@@ -362,16 +351,12 @@ def list_products(
 
 @router.get("/schedules")
 def list_schedules(
-    product_code: Optional[str] = Query(
-        None, description="Filter by product code, e.g. ES"
-    ),
-    trading_date: Optional[str] = Query(
+    product_code: str | None = Query(None, description="Filter by product code, e.g. ES"),
+    trading_date: str | None = Query(
         None,
         description="Session end date YYYY-MM-DD. Defaults to today.",
     ),
-    trading_venue: Optional[str] = Query(
-        None, description="Filter by exchange, e.g. CME"
-    ),
+    trading_venue: str | None = Query(None, description="Filter by exchange, e.g. CME"),
     limit: int = Query(100, description="Max results", ge=1, le=1000),
 ):
     """Filter through trading schedules for futures contracts.
@@ -399,13 +384,11 @@ def list_schedules(
 
 @router.get("/snapshot")
 def get_snapshot(
-    ticker: Optional[str] = Query(
+    ticker: str | None = Query(
         None,
         description="Yahoo-style ticker, e.g. ES=F (provide ticker or product_code)",
     ),
-    product_code: Optional[str] = Query(
-        None, description="Massive product code, e.g. ES"
-    ),
+    product_code: str | None = Query(None, description="Massive product code, e.g. ES"),
 ):
     """Retrieve a real-time snapshot for a futures contract.
 
@@ -452,9 +435,7 @@ def get_snapshots_bulk(request: SnapshotBulkRequest):
 @router.get("/trades")
 def get_trades(
     ticker: str = Query(..., description="Yahoo-style ticker, e.g. ES=F"),
-    minutes_back: int = Query(
-        5, description="Minutes of history to fetch", ge=1, le=60
-    ),
+    minutes_back: int = Query(5, description="Minutes of history to fetch", ge=1, le=60),
     limit: int = Query(5000, description="Max trade records", ge=1, le=50000),
 ):
     """Find trade records with price, size, and timestamp for a futures contract.
@@ -464,9 +445,7 @@ def get_trades(
     Returns a JSON dict in pandas 'split' format.
     """
     provider = _get_provider()
-    df = provider.get_recent_trades(
-        yahoo_ticker=ticker, minutes_back=minutes_back, limit=limit
-    )
+    df = provider.get_recent_trades(yahoo_ticker=ticker, minutes_back=minutes_back, limit=limit)
     return {
         "ticker": ticker,
         "minutes_back": minutes_back,
@@ -484,9 +463,7 @@ def get_trades(
 @router.get("/quotes")
 def get_quotes(
     ticker: str = Query(..., description="Yahoo-style ticker, e.g. ES=F"),
-    minutes_back: int = Query(
-        5, description="Minutes of history to fetch", ge=1, le=60
-    ),
+    minutes_back: int = Query(5, description="Minutes of history to fetch", ge=1, le=60),
     limit: int = Query(5000, description="Max quote records", ge=1, le=50000),
 ):
     """Get top-of-book bid and ask prices for a futures contract.
@@ -496,9 +473,7 @@ def get_quotes(
     Returns a JSON dict in pandas 'split' format with bid, bid_size, ask, ask_size.
     """
     provider = _get_provider()
-    df = provider.get_quotes(
-        yahoo_ticker=ticker, minutes_back=minutes_back, limit=limit
-    )
+    df = provider.get_quotes(yahoo_ticker=ticker, minutes_back=minutes_back, limit=limit)
     return {
         "ticker": ticker,
         "minutes_back": minutes_back,
@@ -515,9 +490,7 @@ def get_quotes(
 
 @router.get("/market_status")
 def get_market_status(
-    product_code: Optional[str] = Query(
-        None, description="Filter by product code, e.g. ES"
-    ),
+    product_code: str | None = Query(None, description="Filter by product code, e.g. ES"),
 ):
     """Retrieve the current market status for futures products and exchanges.
 

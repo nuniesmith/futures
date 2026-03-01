@@ -27,8 +27,9 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import Any, AsyncGenerator, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request
@@ -63,9 +64,9 @@ def _should_throttle(event_key: str) -> bool:
 
 def _format_sse(
     data: str,
-    event: Optional[str] = None,
-    id: Optional[str] = None,
-    retry: Optional[int] = None,
+    event: str | None = None,
+    id: str | None = None,
+    retry: int | None = None,
 ) -> str:
     """Format a single SSE message according to the spec.
 
@@ -169,7 +170,7 @@ def _get_catchup_messages(count: int = _CATCHUP_COUNT) -> list[dict[str, str]]:
         return []
 
 
-def _get_focus_from_cache() -> Optional[str]:
+def _get_focus_from_cache() -> str | None:
     """Read the current focus JSON from Redis cache."""
     try:
         from lib.core.cache import cache_get
@@ -182,7 +183,7 @@ def _get_focus_from_cache() -> Optional[str]:
     return None
 
 
-def _get_positions_from_cache() -> Optional[str]:
+def _get_positions_from_cache() -> str | None:
     """Read current positions from Redis cache."""
     try:
         from lib.core.cache import _cache_key, cache_get
@@ -196,7 +197,7 @@ def _get_positions_from_cache() -> Optional[str]:
     return None
 
 
-def _get_engine_status() -> Optional[dict[str, Any]]:
+def _get_engine_status() -> dict[str, Any] | None:
     """Read engine status from Redis."""
     try:
         from lib.core.cache import cache_get
@@ -209,7 +210,7 @@ def _get_engine_status() -> Optional[dict[str, Any]]:
     return None
 
 
-def _get_grok_from_cache() -> Optional[str]:
+def _get_grok_from_cache() -> str | None:
     """Read the latest Grok compact update from Redis cache (TASK-602)."""
     try:
         from lib.core.cache import cache_get
@@ -222,7 +223,7 @@ def _get_grok_from_cache() -> Optional[str]:
     return None
 
 
-def _get_risk_from_cache() -> Optional[str]:
+def _get_risk_from_cache() -> str | None:
     """Read the latest risk status from Redis cache."""
     try:
         from lib.core.cache import cache_get
@@ -235,7 +236,7 @@ def _get_risk_from_cache() -> Optional[str]:
     return None
 
 
-def _get_orb_from_cache() -> Optional[str]:
+def _get_orb_from_cache() -> str | None:
     """Read the latest Opening Range Breakout result from Redis cache (TASK-801)."""
     try:
         from lib.core.cache import cache_get
@@ -380,22 +381,14 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
             if use_pubsub and pubsub is not None:
                 # ---- Pub/sub mode: check for messages ----
                 try:
-                    message = pubsub.get_message(
-                        ignore_subscribe_messages=True, timeout=0.1
-                    )
+                    message = pubsub.get_message(ignore_subscribe_messages=True, timeout=0.1)
                     if message and message["type"] in ("message", "pmessage"):
                         raw_channel = message.get("channel", b"")
                         channel: str = (
-                            raw_channel.decode()
-                            if isinstance(raw_channel, bytes)
-                            else str(raw_channel or "")
+                            raw_channel.decode() if isinstance(raw_channel, bytes) else str(raw_channel or "")
                         )
                         raw_data = message.get("data", b"")
-                        data: str = (
-                            raw_data.decode()
-                            if isinstance(raw_data, bytes)
-                            else str(raw_data or "")
-                        )
+                        data: str = raw_data.decode() if isinstance(raw_data, bytes) else str(raw_data or "")
 
                         if channel == "dashboard:live":
                             # Full focus update
@@ -406,14 +399,8 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                                 try:
                                     focus = json.loads(data)
                                     for asset in focus.get("assets", []):
-                                        symbol = (
-                                            asset.get("symbol", "")
-                                            .lower()
-                                            .replace(" ", "_")
-                                        )
-                                        if symbol and not _should_throttle(
-                                            f"{symbol}-update"
-                                        ):
+                                        symbol = asset.get("symbol", "").lower().replace(" ", "_")
+                                        if symbol and not _should_throttle(f"{symbol}-update"):
                                             asset_json = json.dumps(asset, default=str)
                                             yield _format_sse(
                                                 data=asset_json,
@@ -449,10 +436,9 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                             if not _should_throttle("risk-update"):
                                 yield _format_sse(data=data, event="risk-update")
 
-                        elif channel == "dashboard:orb":
+                        elif channel == "dashboard:orb" and not _should_throttle("orb-update"):
                             # Opening Range Breakout alert (TASK-801)
-                            if not _should_throttle("orb-update"):
-                                yield _format_sse(data=data, event="orb-update")
+                            yield _format_sse(data=data, event="orb-update")
 
                 except Exception as exc:
                     logger.debug("Pub/sub read error: %s", exc)
@@ -485,14 +471,8 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                                 try:
                                     focus = json.loads(cached)
                                     for asset in focus.get("assets", []):
-                                        symbol = (
-                                            asset.get("symbol", "")
-                                            .lower()
-                                            .replace(" ", "_")
-                                        )
-                                        if symbol and not _should_throttle(
-                                            f"{symbol}-update"
-                                        ):
+                                        symbol = asset.get("symbol", "").lower().replace(" ", "_")
+                                        if symbol and not _should_throttle(f"{symbol}-update"):
                                             asset_json = json.dumps(asset, default=str)
                                             yield _format_sse(
                                                 data=asset_json,
@@ -504,9 +484,7 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                                             data=json.dumps(
                                                 {
                                                     "no_trade": True,
-                                                    "reason": focus.get(
-                                                        "no_trade_reason", ""
-                                                    ),
+                                                    "reason": focus.get("no_trade_reason", ""),
                                                 }
                                             ),
                                             event="no-trade-alert",

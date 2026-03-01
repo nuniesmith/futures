@@ -16,6 +16,8 @@ Tracked metrics:
   - ``focus_quality_gauge``           — Gauge: latest focus quality per asset symbol
   - ``positions_open_count``          — Gauge: number of currently open positions
   - ``redis_connected``               — Gauge: 1 if Redis is connected, 0 otherwise
+  - ``postgres_connected``            — Gauge: 1 if Postgres is connected, 0 otherwise
+  - ``engine_up``                     — Gauge: 1 if engine is running and recently refreshed, 0 otherwise
 
 All metrics are collected in-process via ``prometheus_client`` and the ASGI
 middleware automatically instruments request count + latency.
@@ -149,6 +151,20 @@ REDIS_CONNECTED = Gauge(
     registry=_registry,
 )
 
+# -- Postgres connectivity --
+POSTGRES_CONNECTED = Gauge(
+    "postgres_connected",
+    "Whether Postgres is currently connected (1=yes, 0=no)",
+    registry=_registry,
+)
+
+# -- Engine liveness --
+ENGINE_UP = Gauge(
+    "engine_up",
+    "Whether the engine is running and recently refreshed (1=yes, 0=no)",
+    registry=_registry,
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers for recording metrics from other modules
@@ -210,6 +226,16 @@ def update_redis_status(connected: bool) -> None:
     REDIS_CONNECTED.set(1 if connected else 0)
 
 
+def update_postgres_status(connected: bool) -> None:
+    """Update the Postgres connectivity gauge."""
+    POSTGRES_CONNECTED.set(1 if connected else 0)
+
+
+def update_engine_up(is_up: bool) -> None:
+    """Update the engine liveness gauge."""
+    ENGINE_UP.set(1 if is_up else 0)
+
+
 # ---------------------------------------------------------------------------
 # Path normalization for HTTP metrics
 # ---------------------------------------------------------------------------
@@ -263,9 +289,7 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
     the full connection lifetime.
     """
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> StarletteResponse:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> StarletteResponse:
         method = request.method
         path = _normalize_path(request.url.path)
 
@@ -280,9 +304,7 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
             raise
         finally:
             duration = time.perf_counter() - start
-            HTTP_REQUESTS_TOTAL.labels(
-                method=method, path=path, status=status_code
-            ).inc()
+            HTTP_REQUESTS_TOTAL.labels(method=method, path=path, status=status_code).inc()
             HTTP_REQUEST_DURATION.labels(method=method, path=path).observe(duration)
 
         return response

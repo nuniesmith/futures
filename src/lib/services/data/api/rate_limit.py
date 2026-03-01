@@ -42,7 +42,6 @@ is installed but uses extremely permissive limits so it never blocks.
 
 import logging
 import os
-from typing import Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -139,7 +138,7 @@ def _get_storage_uri() -> str:
 # Limiter singleton
 # ---------------------------------------------------------------------------
 
-_limiter: Optional[Limiter] = None
+_limiter: Limiter | None = None
 
 
 def get_limiter() -> Limiter:

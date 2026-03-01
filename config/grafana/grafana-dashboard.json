@@ -62,7 +62,7 @@
                 },
                 "overrides": []
             },
-            "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+            "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
             "id": 1,
             "options": {
                 "colorMode": "background",
@@ -91,141 +91,38 @@
             "fieldConfig": {
                 "defaults": {
                     "color": { "mode": "thresholds" },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [{ "color": "blue", "value": null }]
-                    },
-                    "unit": "reqps"
-                },
-                "overrides": []
-            },
-            "gridPos": { "h": 4, "w": 5, "x": 4, "y": 1 },
-            "id": 2,
-            "options": {
-                "colorMode": "value",
-                "graphMode": "area",
-                "justifyMode": "auto",
-                "orientation": "auto",
-                "reduceOptions": {
-                    "calcs": ["lastNotNull"],
-                    "fields": "",
-                    "values": false
-                },
-                "textMode": "auto"
-            },
-            "title": "Request Rate",
-            "type": "stat",
-            "targets": [
-                {
-                    "expr": "sum(rate(http_requests_total{job=\"data-service\"}[5m]))",
-                    "legendFormat": "req/s",
-                    "refId": "A"
-                }
-            ]
-        },
-        {
-            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-            "fieldConfig": {
-                "defaults": {
-                    "color": { "mode": "thresholds" },
+                    "mappings": [
+                        {
+                            "options": {
+                                "0": {
+                                    "color": "red",
+                                    "index": 0,
+                                    "text": "DOWN"
+                                },
+                                "1": {
+                                    "color": "green",
+                                    "index": 1,
+                                    "text": "UP"
+                                }
+                            },
+                            "type": "value"
+                        }
+                    ],
                     "thresholds": {
                         "mode": "absolute",
                         "steps": [
-                            { "color": "green", "value": null },
-                            { "color": "yellow", "value": 0.5 },
-                            { "color": "red", "value": 1.0 }
-                        ]
-                    },
-                    "unit": "s"
-                },
-                "overrides": []
-            },
-            "gridPos": { "h": 4, "w": 5, "x": 9, "y": 1 },
-            "id": 3,
-            "options": {
-                "colorMode": "value",
-                "graphMode": "area",
-                "justifyMode": "auto",
-                "orientation": "auto",
-                "reduceOptions": {
-                    "calcs": ["lastNotNull"],
-                    "fields": "",
-                    "values": false
-                },
-                "textMode": "auto"
-            },
-            "title": "Avg Latency (p50)",
-            "type": "stat",
-            "targets": [
-                {
-                    "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=\"data-service\"}[5m])) by (le))",
-                    "legendFormat": "p50",
-                    "refId": "A"
-                }
-            ]
-        },
-        {
-            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-            "fieldConfig": {
-                "defaults": {
-                    "color": { "mode": "thresholds" },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            { "color": "green", "value": null },
-                            { "color": "yellow", "value": 1.0 },
-                            { "color": "red", "value": 3.0 }
-                        ]
-                    },
-                    "unit": "s"
-                },
-                "overrides": []
-            },
-            "gridPos": { "h": 4, "w": 5, "x": 14, "y": 1 },
-            "id": 4,
-            "options": {
-                "colorMode": "value",
-                "graphMode": "area",
-                "justifyMode": "auto",
-                "orientation": "auto",
-                "reduceOptions": {
-                    "calcs": ["lastNotNull"],
-                    "fields": "",
-                    "values": false
-                },
-                "textMode": "auto"
-            },
-            "title": "Tail Latency (p99)",
-            "type": "stat",
-            "targets": [
-                {
-                    "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"data-service\"}[5m])) by (le))",
-                    "legendFormat": "p99",
-                    "refId": "A"
-                }
-            ]
-        },
-        {
-            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-            "fieldConfig": {
-                "defaults": {
-                    "color": { "mode": "thresholds" },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            { "color": "green", "value": null },
-                            { "color": "orange", "value": 1 },
-                            { "color": "red", "value": 10 }
+                            { "color": "red", "value": null },
+                            { "color": "green", "value": 1 }
                         ]
                     }
                 },
                 "overrides": []
             },
-            "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
-            "id": 5,
+            "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+            "id": 2,
             "options": {
-                "colorMode": "value",
-                "graphMode": "area",
+                "colorMode": "background",
+                "graphMode": "none",
                 "justifyMode": "auto",
                 "orientation": "auto",
                 "reduceOptions": {
@@ -235,12 +132,124 @@
                 },
                 "textMode": "auto"
             },
-            "title": "Error Rate (5xx/min)",
+            "title": "Engine",
             "type": "stat",
             "targets": [
                 {
-                    "expr": "sum(rate(http_requests_total{job=\"data-service\", status=~\"5..\"}[5m])) * 60 or vector(0)",
-                    "legendFormat": "errors/min",
+                    "expr": "engine_up{job=\"data-service\"} or vector(0)",
+                    "legendFormat": "",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "mappings": [
+                        {
+                            "options": {
+                                "0": {
+                                    "color": "red",
+                                    "index": 0,
+                                    "text": "DOWN"
+                                },
+                                "1": {
+                                    "color": "green",
+                                    "index": 1,
+                                    "text": "UP"
+                                }
+                            },
+                            "type": "value"
+                        }
+                    ],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "red", "value": null },
+                            { "color": "green", "value": 1 }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+            "id": 3,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": {
+                    "calcs": ["lastNotNull"],
+                    "fields": "",
+                    "values": false
+                },
+                "textMode": "auto"
+            },
+            "title": "Redis",
+            "type": "stat",
+            "targets": [
+                {
+                    "expr": "redis_connected{job=\"data-service\"} or vector(0)",
+                    "legendFormat": "",
+                    "refId": "A"
+                }
+            ]
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "mappings": [
+                        {
+                            "options": {
+                                "0": {
+                                    "color": "red",
+                                    "index": 0,
+                                    "text": "DOWN"
+                                },
+                                "1": {
+                                    "color": "green",
+                                    "index": 1,
+                                    "text": "UP"
+                                }
+                            },
+                            "type": "value"
+                        }
+                    ],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "red", "value": null },
+                            { "color": "green", "value": 1 }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+            "id": 4,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": {
+                    "calcs": ["lastNotNull"],
+                    "fields": "",
+                    "values": false
+                },
+                "textMode": "auto"
+            },
+            "title": "Postgres",
+            "type": "stat",
+            "targets": [
+                {
+                    "expr": "postgres_connected{job=\"data-service\"} or vector(0)",
+                    "legendFormat": "",
                     "refId": "A"
                 }
             ]
