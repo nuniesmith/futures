@@ -12,6 +12,7 @@ Covers:
 """
 
 import asyncio
+import contextlib
 import json
 import sys
 import time
@@ -39,34 +40,32 @@ from lib.services.data.api.sse import (
 # We need to mock cache before importing sse module since it tries to connect to Redis
 # Build a mock cache module that the lazy `from cache import ...` calls will resolve to.
 # Since sse.py does `from cache import cache_get` inside function bodies, the mock must
-# live in sys.modules["src.lib.core.cache"] BEFORE sse is imported.
-_original_cache_module = sys.modules.get("src.lib.core.cache", None)
+# live in sys.modules["lib.core.cache"] BEFORE sse is imported.
+_original_cache_module = sys.modules.get("lib.core.cache", None)
 
 _mock_cache = MagicMock()
 _mock_cache.REDIS_AVAILABLE = False
 _mock_cache._r = None
 _mock_cache.cache_get = MagicMock(return_value=None)
 _mock_cache.cache_set = MagicMock()
-_mock_cache._cache_key = MagicMock(
-    side_effect=lambda *parts: "futures:mock:" + ":".join(str(p) for p in parts)
-)
+_mock_cache._cache_key = MagicMock(side_effect=lambda *parts: "futures:mock:" + ":".join(str(p) for p in parts))
 _mock_cache.get_data_source = MagicMock(return_value="mock")
 _mock_cache.flush_all = MagicMock()
 
-sys.modules["src.lib.core.cache"] = _mock_cache
+sys.modules["lib.core.cache"] = _mock_cache
 
 # Immediately restore the real cache module after importing SSE symbols.
 # The mock was only needed so that `api.sse` could be imported without a
-# live Redis connection.  Leaving the mock in sys.modules["src.lib.core.cache"] would
+# live Redis connection.  Leaving the mock in sys.modules["lib.core.cache"] would
 # pollute every test file that pytest collects *after* this module
 # (e.g. test_positions.py, test_data_service.py) because their fixtures
 # do `from cache import _mem_cache` at runtime, which resolves via
 # sys.modules.  The mock is re-installed by _reset_cache_mock() at the
 # start of each SSE test that needs it.
 if _original_cache_module is not None:
-    sys.modules["src.lib.core.cache"] = _original_cache_module
+    sys.modules["lib.core.cache"] = _original_cache_module
 else:
-    sys.modules.pop("src.lib.core.cache", None)
+    sys.modules.pop("lib.core.cache", None)
 
 _EST = ZoneInfo("America/New_York")
 
@@ -78,11 +77,11 @@ def _reset_cache_mock():
     _mock_cache attributes, we control behaviour by resetting
     the mock's return values here.
 
-    Re-installs the mock into sys.modules["src.lib.core.cache"] so that lazy
+    Re-installs the mock into sys.modules["lib.core.cache"] so that lazy
     ``from cache import ...`` inside sse.py function bodies picks up
     _mock_cache regardless of test ordering.
     """
-    sys.modules["src.lib.core.cache"] = _mock_cache
+    sys.modules["lib.core.cache"] = _mock_cache
 
     _mock_cache.REDIS_AVAILABLE = False
     _mock_cache._r = None
@@ -91,9 +90,7 @@ def _reset_cache_mock():
     _mock_cache.cache_get.side_effect = None
     _mock_cache.cache_set.reset_mock()
     _mock_cache._cache_key.reset_mock()
-    _mock_cache._cache_key.side_effect = lambda *parts: (
-        "futures:mock:" + ":".join(str(p) for p in parts)
-    )
+    _mock_cache._cache_key.side_effect = lambda *parts: "futures:mock:" + ":".join(str(p) for p in parts)
 
 
 def _restore_real_cache_module():
@@ -104,15 +101,15 @@ def _restore_real_cache_module():
     ``from cache import _mem_cache`` get the real module, not the mock.
     """
     if _original_cache_module is not None:
-        sys.modules["src.lib.core.cache"] = _original_cache_module
+        sys.modules["lib.core.cache"] = _original_cache_module
     else:
-        sys.modules.pop("src.lib.core.cache", None)
+        sys.modules.pop("lib.core.cache", None)
 
 
 @pytest.fixture(autouse=True, scope="module")
 def _sse_cache_mock_lifecycle():
     """Module-scoped fixture: install mock before SSE tests, restore after."""
-    sys.modules["src.lib.core.cache"] = _mock_cache
+    sys.modules["lib.core.cache"] = _mock_cache
     yield
     _restore_real_cache_module()
 
@@ -318,16 +315,14 @@ class TestGetRedis:
 
     def test_no_crash_on_import_error(self):
         """If cache module can't be imported, should return None gracefully."""
-        saved = sys.modules["src.lib.core.cache"]
-        sys.modules["src.lib.core.cache"] = None  # type: ignore[assignment]
+        saved = sys.modules["lib.core.cache"]
+        sys.modules["lib.core.cache"] = None  # type: ignore[assignment]
         try:
             # This might raise or return None — either way, no unhandled exception
-            try:
+            with contextlib.suppress(ImportError, TypeError):
                 _get_redis()
-            except (ImportError, TypeError):
-                pass  # acceptable
         finally:
-            sys.modules["src.lib.core.cache"] = saved
+            sys.modules["lib.core.cache"] = saved
 
 
 class TestCatchupMessages:
@@ -335,18 +330,14 @@ class TestCatchupMessages:
         _reset_cache_mock()
 
     def test_returns_empty_when_no_redis(self):
-        with patch(
-            "src.lib.services.data.api.sse._get_redis", return_value=None
-        ):
+        with patch("lib.services.data.api.sse._get_redis", return_value=None):
             result = _get_catchup_messages()
             assert result == []
 
     def test_returns_empty_when_stream_empty(self):
         mock_redis = MagicMock()
         mock_redis.xrevrange.return_value = []
-        with patch(
-            "src.lib.services.data.api.sse._get_redis", return_value=mock_redis
-        ):
+        with patch("lib.services.data.api.sse._get_redis", return_value=mock_redis):
             result = _get_catchup_messages()
             assert result == []
 
@@ -360,9 +351,7 @@ class TestCatchupMessages:
                 {b"data": b'{"assets":["MGC"]}', b"ts": b"2026-02-26T09:59:00"},
             ),
         ]
-        with patch(
-            "src.lib.services.data.api.sse._get_redis", return_value=mock_redis
-        ):
+        with patch("lib.services.data.api.sse._get_redis", return_value=mock_redis):
             result = _get_catchup_messages(count=8)
             # Should be reversed (oldest first)
             assert len(result) == 2
@@ -373,9 +362,7 @@ class TestCatchupMessages:
     def test_handles_xrevrange_exception(self):
         mock_redis = MagicMock()
         mock_redis.xrevrange.side_effect = Exception("Redis down")
-        with patch(
-            "src.lib.services.data.api.sse._get_redis", return_value=mock_redis
-        ):
+        with patch("lib.services.data.api.sse._get_redis", return_value=mock_redis):
             result = _get_catchup_messages()
             assert result == []
 
@@ -477,16 +464,12 @@ class TestSSEHealthEndpoint:
         return TestClient(app)
 
     def test_health_returns_200(self, client):
-        with patch(
-            "src.lib.services.data.api.sse._get_redis", return_value=None
-        ):
+        with patch("lib.services.data.api.sse._get_redis", return_value=None):
             resp = client.get("/sse/health")
             assert resp.status_code == 200
 
     def test_health_structure(self, client):
-        with patch(
-            "src.lib.services.data.api.sse._get_redis", return_value=None
-        ):
+        with patch("lib.services.data.api.sse._get_redis", return_value=None):
             data = client.get("/sse/health").json()
             assert "status" in data
             assert "redis_connected" in data
@@ -497,9 +480,7 @@ class TestSSEHealthEndpoint:
             assert "catchup_count" in data
 
     def test_health_degraded_without_redis(self, client):
-        with patch(
-            "src.lib.services.data.api.sse._get_redis", return_value=None
-        ):
+        with patch("lib.services.data.api.sse._get_redis", return_value=None):
             data = client.get("/sse/health").json()
             assert data["status"] == "degraded"
             assert data["redis_connected"] is False
@@ -509,9 +490,7 @@ class TestSSEHealthEndpoint:
     def test_health_ok_with_redis(self, client):
         mock_redis = MagicMock()
         mock_redis.xinfo_stream.return_value = {b"length": 42}
-        with patch(
-            "src.lib.services.data.api.sse._get_redis", return_value=mock_redis
-        ):
+        with patch("lib.services.data.api.sse._get_redis", return_value=mock_redis):
             data = client.get("/sse/health").json()
             assert data["status"] == "ok"
             assert data["redis_connected"] is True
@@ -521,18 +500,14 @@ class TestSSEHealthEndpoint:
         """Redis connected but stream doesn't exist yet."""
         mock_redis = MagicMock()
         mock_redis.xinfo_stream.side_effect = Exception("no such key")
-        with patch(
-            "src.lib.services.data.api.sse._get_redis", return_value=mock_redis
-        ):
+        with patch("lib.services.data.api.sse._get_redis", return_value=mock_redis):
             data = client.get("/sse/health").json()
             assert data["status"] == "ok"
             assert data["redis_connected"] is True
             assert data["stream_length"] == 0
 
     def test_health_reports_correct_constants(self, client):
-        with patch(
-            "src.lib.services.data.api.sse._get_redis", return_value=None
-        ):
+        with patch("lib.services.data.api.sse._get_redis", return_value=None):
             data = client.get("/sse/health").json()
             assert data["throttle_seconds"] == _THROTTLE_SECONDS
             assert data["heartbeat_interval"] == _HEARTBEAT_INTERVAL
@@ -589,30 +564,28 @@ class TestSSEDashboardEndpoint:
             raise asyncio.CancelledError("test: stop generator")
 
         stack = ExitStack()
-        stack.enter_context(
-            patch("src.lib.services.data.api.sse._get_redis", return_value=None)
-        )
+        stack.enter_context(patch("lib.services.data.api.sse._get_redis", return_value=None))
         stack.enter_context(
             patch(
-                "src.lib.services.data.api.sse._get_catchup_messages",
+                "lib.services.data.api.sse._get_catchup_messages",
                 return_value=[],
             )
         )
         stack.enter_context(
             patch(
-                "src.lib.services.data.api.sse._get_focus_from_cache",
+                "lib.services.data.api.sse._get_focus_from_cache",
                 return_value=None,
             )
         )
         stack.enter_context(
             patch(
-                "src.lib.services.data.api.sse._get_positions_from_cache",
+                "lib.services.data.api.sse._get_positions_from_cache",
                 return_value=None,
             )
         )
         stack.enter_context(
             patch(
-                "src.lib.services.data.api.sse._get_engine_status",
+                "lib.services.data.api.sse._get_engine_status",
                 return_value=None,
             )
         )
@@ -620,7 +593,7 @@ class TestSSEDashboardEndpoint:
         # terminates after emitting the initial events.
         stack.enter_context(
             patch(
-                "src.lib.services.data.api.sse.asyncio.sleep",
+                "lib.services.data.api.sse.asyncio.sleep",
                 side_effect=_instant_sleep,
             )
         )
@@ -646,40 +619,36 @@ class TestSSEDashboardEndpoint:
     @pytest.mark.timeout(10)
     def test_sse_content_type(self, client):
         """SSE endpoint must return text/event-stream content type."""
-        with self._sse_patches():
-            with client.stream("GET", "/sse/dashboard") as resp:
-                assert resp.status_code == 200
-                assert "text/event-stream" in resp.headers.get("content-type", "")
-                text = self._read_initial_events(resp)
-                assert "event: connected" in text
+        with self._sse_patches(), client.stream("GET", "/sse/dashboard") as resp:
+            assert resp.status_code == 200
+            assert "text/event-stream" in resp.headers.get("content-type", "")
+            text = self._read_initial_events(resp)
+            assert "event: connected" in text
 
     @pytest.mark.timeout(10)
     def test_sse_no_cache_headers(self, client):
         """SSE responses must not be cached."""
-        with self._sse_patches():
-            with client.stream("GET", "/sse/dashboard") as resp:
-                cache_control = resp.headers.get("cache-control", "")
-                assert "no-cache" in cache_control
-                # Consume at least one chunk so the connection is used
-                self._read_initial_events(resp)
+        with self._sse_patches(), client.stream("GET", "/sse/dashboard") as resp:
+            cache_control = resp.headers.get("cache-control", "")
+            assert "no-cache" in cache_control
+            # Consume at least one chunk so the connection is used
+            self._read_initial_events(resp)
 
     @pytest.mark.timeout(10)
     def test_sse_x_accel_buffering(self, client):
         """Should set X-Accel-Buffering: no for nginx compatibility."""
-        with self._sse_patches():
-            with client.stream("GET", "/sse/dashboard") as resp:
-                assert resp.headers.get("x-accel-buffering") == "no"
-                self._read_initial_events(resp)
+        with self._sse_patches(), client.stream("GET", "/sse/dashboard") as resp:
+            assert resp.headers.get("x-accel-buffering") == "no"
+            self._read_initial_events(resp)
 
     @pytest.mark.timeout(10)
     def test_sse_sends_connected_event_first(self, client):
         """First event must be `connected` with retry directive."""
-        with self._sse_patches():
-            with client.stream("GET", "/sse/dashboard") as resp:
-                text = self._read_initial_events(resp)
-                assert "event: connected" in text
-                assert "retry: 3000" in text
-                assert "data: connected" in text
+        with self._sse_patches(), client.stream("GET", "/sse/dashboard") as resp:
+            text = self._read_initial_events(resp)
+            assert "event: connected" in text
+            assert "retry: 3000" in text
+            assert "data: connected" in text
 
     @pytest.mark.timeout(10)
     def test_sse_sends_catchup_when_available(self, client):
@@ -696,35 +665,33 @@ class TestSSEDashboardEndpoint:
             raise asyncio.CancelledError("test: stop generator")
 
         with (
+            patch("lib.services.data.api.sse._get_redis", return_value=None),
             patch(
-                "src.lib.services.data.api.sse._get_redis", return_value=None
-            ),
-            patch(
-                "src.lib.services.data.api.sse._get_catchup_messages",
+                "lib.services.data.api.sse._get_catchup_messages",
                 return_value=catchup,
             ),
             patch(
-                "src.lib.services.data.api.sse._get_focus_from_cache",
+                "lib.services.data.api.sse._get_focus_from_cache",
                 return_value=None,
             ),
             patch(
-                "src.lib.services.data.api.sse._get_positions_from_cache",
+                "lib.services.data.api.sse._get_positions_from_cache",
                 return_value=None,
             ),
             patch(
-                "src.lib.services.data.api.sse._get_engine_status",
+                "lib.services.data.api.sse._get_engine_status",
                 return_value=None,
             ),
             patch(
-                "src.lib.services.data.api.sse.asyncio.sleep",
+                "lib.services.data.api.sse.asyncio.sleep",
                 side_effect=_instant_sleep,
             ),
+            client.stream("GET", "/sse/dashboard") as resp,
         ):
-            with client.stream("GET", "/sse/dashboard") as resp:
-                text = self._read_initial_events(resp)
-                assert "event: focus-update" in text
-                assert "id: 100-0" in text
-                assert "MGC" in text
+            text = self._read_initial_events(resp)
+            assert "event: focus-update" in text
+            assert "id: 100-0" in text
+            assert "MGC" in text
 
 
 # ===========================================================================

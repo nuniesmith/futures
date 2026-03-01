@@ -161,9 +161,7 @@ class TestCanEnterTrade:
         rm.register_open("MGC", "LONG", 1, 2700.0)
         rm.register_open("MNQ", "LONG", 1, 21000.0)
         # Stack on MGC — is_stack=True means we don't count it as a new trade
-        ok, reason = rm.can_enter_trade(
-            "MGC", "LONG", 1, is_stack=True, unrealized_r=1.0, wave_ratio=2.0
-        )
+        ok, reason = rm.can_enter_trade("MGC", "LONG", 1, is_stack=True, unrealized_r=1.0, wave_ratio=2.0)
         assert ok is True  # stacking bypasses open trade limit
 
     # --- Rule 3: Per-trade risk limit ---
@@ -221,35 +219,27 @@ class TestCanEnterTrade:
     def test_stack_requires_min_r(self):
         rm = _make_rm(hour=8)
         rm.register_open("MGC", "LONG", 1, 2700.0)
-        ok, reason = rm.can_enter_trade(
-            "MGC", "LONG", 1, is_stack=True, unrealized_r=0.3, wave_ratio=2.0
-        )
+        ok, reason = rm.can_enter_trade("MGC", "LONG", 1, is_stack=True, unrealized_r=0.3, wave_ratio=2.0)
         assert ok is False
         assert "unrealized" in reason.lower()
 
     def test_stack_requires_min_wave(self):
         rm = _make_rm(hour=8)
         rm.register_open("MGC", "LONG", 1, 2700.0)
-        ok, reason = rm.can_enter_trade(
-            "MGC", "LONG", 1, is_stack=True, unrealized_r=1.0, wave_ratio=1.2
-        )
+        ok, reason = rm.can_enter_trade("MGC", "LONG", 1, is_stack=True, unrealized_r=1.0, wave_ratio=1.2)
         assert ok is False
         assert "wave ratio" in reason.lower()
 
     def test_stack_both_conditions_met(self):
         rm = _make_rm(hour=8)
         rm.register_open("MGC", "LONG", 1, 2700.0)
-        ok, reason = rm.can_enter_trade(
-            "MGC", "LONG", 1, is_stack=True, unrealized_r=1.0, wave_ratio=2.0
-        )
+        ok, reason = rm.can_enter_trade("MGC", "LONG", 1, is_stack=True, unrealized_r=1.0, wave_ratio=2.0)
         assert ok is True
 
     def test_stack_both_conditions_failed(self):
         rm = _make_rm(hour=8)
         rm.register_open("MGC", "LONG", 1, 2700.0)
-        ok, reason = rm.can_enter_trade(
-            "MGC", "LONG", 1, is_stack=True, unrealized_r=0.1, wave_ratio=1.0
-        )
+        ok, reason = rm.can_enter_trade("MGC", "LONG", 1, is_stack=True, unrealized_r=0.1, wave_ratio=1.0)
         assert ok is False
         # Should have both reasons
         assert "unrealized" in reason.lower()
@@ -629,31 +619,28 @@ class TestPublishToRedis:
         mock_cache_set = MagicMock()
         _mock_r = MagicMock()
 
-        with patch.dict("sys.modules", {}):
-            with patch(
-                "src.lib.services.engine.risk.RiskManager.publish_to_redis",
+        cache_mod = MagicMock()
+        cache_mod.cache_set = mock_cache_set
+        cache_mod.REDIS_AVAILABLE = False
+        cache_mod._r = None
+
+        with (
+            patch.dict("sys.modules", {"lib.core.cache": cache_mod}),
+            patch(
+                "lib.services.engine.risk.RiskManager.publish_to_redis",
                 wraps=rm.publish_to_redis,
-            ):
-                # Patch the cache module imports inside publish_to_redis
+            ),
+        ):
+            result = rm.publish_to_redis()
 
-                cache_mod = MagicMock()
-                cache_mod.cache_set = mock_cache_set
-                cache_mod.REDIS_AVAILABLE = False
-                cache_mod._r = None
-
-                with patch.dict(
-                    "sys.modules", {"src.lib.core.cache": cache_mod}
-                ):
-                    result = rm.publish_to_redis()
-
-                assert result is True
-                mock_cache_set.assert_called_once()
-                call_args = mock_cache_set.call_args
-                assert call_args[0][0] == "engine:risk_status"
-                # Verify the payload is valid JSON
-                payload = json.loads(call_args[0][1])
-                assert "account_size" in payload
-                assert "can_trade" in payload
+            assert result is True
+            mock_cache_set.assert_called_once()
+            call_args = mock_cache_set.call_args
+            assert call_args[0][0] == "engine:risk_status"
+            # Verify the payload is valid JSON
+            payload = json.loads(call_args[0][1])
+            assert "account_size" in payload
+            assert "can_trade" in payload
 
     def test_publish_serializes_status(self):
         rm = _make_rm(hour=8)
@@ -670,7 +657,7 @@ class TestPublishToRedis:
         cache_mod.REDIS_AVAILABLE = False
         cache_mod._r = None
 
-        with patch.dict("sys.modules", {"src.lib.core.cache": cache_mod}):
+        with patch.dict("sys.modules", {"lib.core.cache": cache_mod}):
             rm.publish_to_redis()
 
         assert captured["key"] == "engine:risk_status"

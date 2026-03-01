@@ -171,9 +171,7 @@ class TestFormatLiveCompact:
         assert "DO NOW" in result
         do_now_line = [ln for ln in result.split("\n") if "DO NOW" in ln]
         assert len(do_now_line) == 1
-        assert (
-            "stand aside" in do_now_line[0].lower() or "wait" in do_now_line[0].lower()
-        )
+        assert "stand aside" in do_now_line[0].lower() or "wait" in do_now_line[0].lower()
 
     def test_do_now_auto_generated_single_tradeable(self):
         """Single tradeable asset → DO NOW references that specific asset."""
@@ -235,9 +233,7 @@ class TestEnforceCompactLimit:
         assert result == text.strip()
 
     def test_long_text_truncated(self):
-        lines = [
-            f"ASSET{i} 🟢 {1000 + i} | Bias VALID | Watch {1020 + i}" for i in range(10)
-        ]
+        lines = [f"ASSET{i} 🟢 {1000 + i} | Bias VALID | Watch {1020 + i}" for i in range(10)]
         lines.append("")
         lines.append("DO NOW: Do something.")
         text = "\n".join(lines)
@@ -312,7 +308,7 @@ class TestRunLiveAnalysisCompactRouting:
             "positions_text": "",
         }
         with patch(
-            "src.lib.integrations.grok_helper._run_live_compact",
+            "lib.integrations.grok_helper._run_live_compact",
             return_value="COMPACT OUTPUT",
         ) as mock_compact:
             result = run_live_analysis(context, "fake-key", compact=True)
@@ -336,7 +332,7 @@ class TestRunLiveAnalysisCompactRouting:
             "positions_text": "",
         }
         with patch(
-            "src.lib.integrations.grok_helper._run_live_verbose",
+            "lib.integrations.grok_helper._run_live_verbose",
             return_value="VERBOSE OUTPUT",
         ) as mock_verbose:
             result = run_live_analysis(context, "fake-key", compact=False)
@@ -360,7 +356,7 @@ class TestRunLiveAnalysisCompactRouting:
             "positions_text": "",
         }
         with patch(
-            "src.lib.integrations.grok_helper._run_live_compact",
+            "lib.integrations.grok_helper._run_live_compact",
             return_value="COMPACT",
         ) as mock:
             _result = run_live_analysis(context, "fake-key")
@@ -394,7 +390,7 @@ class TestGrokSessionCompact:
         }
 
         with patch(
-            "src.lib.integrations.grok_helper.run_live_analysis",
+            "lib.integrations.grok_helper.run_live_analysis",
             return_value="COMPACT RESULT",
         ) as mock_rla:
             _result = session.run_update(context, "fake-key", compact=True)
@@ -423,7 +419,7 @@ class TestGrokSessionCompact:
         }
 
         with patch(
-            "src.lib.integrations.grok_helper.run_live_analysis",
+            "lib.integrations.grok_helper.run_live_analysis",
             return_value="VERBOSE RESULT",
         ) as mock_rla:
             _result = session.run_update(context, "fake-key", compact=False)
@@ -452,7 +448,7 @@ class TestGrokSessionCompact:
         }
 
         with patch(
-            "src.lib.integrations.grok_helper.run_live_analysis",
+            "lib.integrations.grok_helper.run_live_analysis",
             return_value="MGC 🟢 2712\n\nDO NOW: Hold.",
         ):
             session.run_update(context, "fake-key", compact=True)
@@ -483,7 +479,7 @@ class TestGrokSessionCompact:
         }
 
         with patch(
-            "src.lib.integrations.grok_helper.run_live_analysis",
+            "lib.integrations.grok_helper.run_live_analysis",
             return_value="compact output",
         ):
             session.run_update(context, "fake-key", compact=True)
@@ -529,7 +525,7 @@ class TestRunLiveCompactPrompt:
             return "MGC 🟢 2712 (+4) | Bias VALID | Watch 2725\n\nDO NOW: Hold."
 
         with patch(
-            "src.lib.integrations.grok_helper._call_grok",
+            "lib.integrations.grok_helper._call_grok",
             side_effect=fake_call_grok,
         ):
             result = _run_live_compact(
@@ -561,7 +557,7 @@ class TestRunLiveCompactPrompt:
             return "DO NOW: Hold."
 
         with patch(
-            "src.lib.integrations.grok_helper._call_grok",
+            "lib.integrations.grok_helper._call_grok",
             side_effect=fake_call_grok,
         ):
             _run_live_compact(
@@ -592,7 +588,7 @@ class TestRunLiveCompactPrompt:
             return "DO NOW: Hold."
 
         with patch(
-            "src.lib.integrations.grok_helper._call_grok",
+            "lib.integrations.grok_helper._call_grok",
             side_effect=fake_call_grok,
         ):
             _run_live_compact(
@@ -623,7 +619,7 @@ class TestRunLiveCompactPrompt:
             return "DO NOW: Hold."
 
         with patch(
-            "src.lib.integrations.grok_helper._call_grok",
+            "lib.integrations.grok_helper._call_grok",
             side_effect=fake_call_grok,
         ):
             _run_live_compact(
@@ -649,12 +645,11 @@ class TestRunLiveCompactPrompt:
         from lib.integrations.grok_helper import _run_live_compact
 
         verbose_response = "\n".join(
-            [f"ASSET{i} 🟢 {1000 + i} | Bias VALID" for i in range(12)]
-            + ["", "DO NOW: Hold everything."]
+            [f"ASSET{i} 🟢 {1000 + i} | Bias VALID" for i in range(12)] + ["", "DO NOW: Hold everything."]
         )
 
         with patch(
-            "src.lib.integrations.grok_helper._call_grok",
+            "lib.integrations.grok_helper._call_grok",
             return_value=verbose_response,
         ):
             result = _run_live_compact(
@@ -682,9 +677,7 @@ class TestRunLiveCompactPrompt:
         """If API returns None, result should be None."""
         from lib.integrations.grok_helper import _run_live_compact
 
-        with patch(
-            "src.lib.integrations.grok_helper._call_grok", return_value=None
-        ):
+        with patch("lib.integrations.grok_helper._call_grok", return_value=None):
             result = _run_live_compact(
                 context={
                     "time": "now",
@@ -713,7 +706,7 @@ class TestRunLiveCompactPrompt:
             return "DO NOW: Hold."
 
         with patch(
-            "src.lib.integrations.grok_helper._call_grok",
+            "lib.integrations.grok_helper._call_grok",
             side_effect=fake_call_grok,
         ):
             _run_live_compact(

@@ -95,9 +95,7 @@ def _risk_status(
     return d
 
 
-def _now(
-    hour: int = 8, minute: int = 0, day: int = 15, month: int = 1, year: int = 2025
-) -> datetime:
+def _now(hour: int = 8, minute: int = 0, day: int = 15, month: int = 1, year: int = 2025) -> datetime:
     """Create a fixed Eastern Time datetime."""
     return datetime(year, month, day, hour, minute, 0, tzinfo=_EST)
 
@@ -443,9 +441,7 @@ class TestCheckDailyLoss:
         rs = _risk_status(daily_pnl=-100.0)
         check = _check_daily_loss(rs)
         assert "headroom" in check.details
-        assert check.details["headroom"] == pytest.approx(
-            150.0, abs=0.01
-        )  # -100 - (-250) = 150
+        assert check.details["headroom"] == pytest.approx(150.0, abs=0.01)  # -100 - (-250) = 150
 
     def test_details_include_trade_count(self):
         rs = _risk_status(daily_pnl=-300.0, daily_trade_count=5)
@@ -698,9 +694,7 @@ class TestEvaluateNoTrade:
         rs = _risk_status(daily_pnl=-300.0, consecutive_losses=4)
         result = evaluate_no_trade(assets, risk_status=rs, now=_now(hour=10, minute=30))
         assert result.should_skip is True
-        assert (
-            len(result.reasons) >= 3
-        )  # low quality + extreme vol + daily loss + consecutive + late
+        assert len(result.reasons) >= 3  # low quality + extreme vol + daily loss + consecutive + late
         triggered = [c for c in result.checks if c.triggered]
         assert len(triggered) >= 3
 
@@ -760,17 +754,9 @@ class TestEvaluateNoTrade:
         assets = [_asset("MGC", quality=0.70)]
         result = evaluate_no_trade(assets, risk_status=None, now=_now(hour=8))
         assert result.should_skip is False
-        loss_check = next(
-            c
-            for c in result.checks
-            if c.condition == NoTradeCondition.DAILY_LOSS_EXCEEDED
-        )
+        loss_check = next(c for c in result.checks if c.condition == NoTradeCondition.DAILY_LOSS_EXCEEDED)
         assert loss_check.triggered is False
-        streak_check = next(
-            c
-            for c in result.checks
-            if c.condition == NoTradeCondition.CONSECUTIVE_LOSSES
-        )
+        streak_check = next(c for c in result.checks if c.condition == NoTradeCondition.CONSECUTIVE_LOSSES)
         assert streak_check.triggered is False
 
     def test_custom_thresholds(self):
@@ -907,7 +893,7 @@ class TestPublishNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = False
         cache_mod._r = None
 
-        with patch.dict("sys.modules", {"src.lib.core.cache": cache_mod}):
+        with patch.dict("sys.modules", {"lib.core.cache": cache_mod}):
             ok = publish_no_trade_alert(result)
 
         assert ok is True
@@ -932,7 +918,7 @@ class TestPublishNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = True
         cache_mod._r = mock_redis
 
-        with patch.dict("sys.modules", {"src.lib.core.cache": cache_mod}):
+        with patch.dict("sys.modules", {"lib.core.cache": cache_mod}):
             ok = publish_no_trade_alert(result)
 
         assert ok is True
@@ -948,7 +934,7 @@ class TestPublishNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = False
         cache_mod._r = None
 
-        with patch.dict("sys.modules", {"src.lib.core.cache": cache_mod}):
+        with patch.dict("sys.modules", {"lib.core.cache": cache_mod}):
             ok = publish_no_trade_alert(result)
 
         assert ok is True
@@ -972,7 +958,7 @@ class TestClearNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = False
         cache_mod._r = None
 
-        with patch.dict("sys.modules", {"src.lib.core.cache": cache_mod}):
+        with patch.dict("sys.modules", {"lib.core.cache": cache_mod}):
             ok = clear_no_trade_alert()
 
         assert ok is True
@@ -987,7 +973,7 @@ class TestClearNoTradeAlert:
         cache_mod.REDIS_AVAILABLE = True
         cache_mod._r = mock_redis
 
-        with patch.dict("sys.modules", {"src.lib.core.cache": cache_mod}):
+        with patch.dict("sys.modules", {"lib.core.cache": cache_mod}):
             ok = clear_no_trade_alert()
 
         assert ok is True

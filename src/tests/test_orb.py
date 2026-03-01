@@ -82,9 +82,7 @@ def _make_breakout_bars(
     parts = []
 
     # Pre-market bars (09:20–09:29) — 10 bars
-    pre = _make_1m_bars(
-        n=10, start_price=or_price, start_time="2026-02-27 09:20:00", seed=1
-    )
+    pre = _make_1m_bars(n=10, start_price=or_price, start_time="2026-02-27 09:20:00", seed=1)
     parts.append(pre)
 
     # Opening range bars (09:30–09:59) — 30 bars, tight range
@@ -131,9 +129,7 @@ class TestComputeATR:
         from lib.services.engine.orb import compute_atr
 
         bars = _make_1m_bars(n=30, start_price=100.0, volatility=0.005)
-        atr = compute_atr(
-            bars["High"].values, bars["Low"].values, bars["Close"].values, period=14
-        )
+        atr = compute_atr(bars["High"].values, bars["Low"].values, bars["Close"].values, period=14)
         assert atr > 0
         assert isinstance(atr, float)
 
@@ -142,18 +138,14 @@ class TestComputeATR:
 
         # Only 3 bars — less than period, should still return something
         bars = _make_1m_bars(n=3, start_price=100.0)
-        atr = compute_atr(
-            bars["High"].values, bars["Low"].values, bars["Close"].values, period=14
-        )
+        atr = compute_atr(bars["High"].values, bars["Low"].values, bars["Close"].values, period=14)
         assert atr >= 0
 
     def test_atr_single_bar(self):
         from lib.services.engine.orb import compute_atr
 
         bars = _make_1m_bars(n=1, start_price=100.0)
-        atr = compute_atr(
-            bars["High"].values, bars["Low"].values, bars["Close"].values, period=14
-        )
+        atr = compute_atr(bars["High"].values, bars["Low"].values, bars["Close"].values, period=14)
         # Single bar: H-L
         assert atr >= 0
 
@@ -172,12 +164,8 @@ class TestComputeATR:
         low_vol = _make_1m_bars(n=30, start_price=100.0, volatility=0.001, seed=10)
         high_vol = _make_1m_bars(n=30, start_price=100.0, volatility=0.01, seed=10)
 
-        atr_low = compute_atr(
-            low_vol["High"].values, low_vol["Low"].values, low_vol["Close"].values
-        )
-        atr_high = compute_atr(
-            high_vol["High"].values, high_vol["Low"].values, high_vol["Close"].values
-        )
+        atr_low = compute_atr(low_vol["High"].values, low_vol["Low"].values, low_vol["Close"].values)
+        atr_high = compute_atr(high_vol["High"].values, high_vol["Low"].values, high_vol["Close"].values)
         assert atr_high > atr_low
 
 
@@ -230,16 +218,12 @@ class TestComputeOpeningRange:
         from lib.services.engine.orb import compute_opening_range
 
         # Bars from 09:30 to 09:50 — OR not complete
-        bars_early = _make_1m_bars(
-            n=20, start_price=2700.0, start_time="2026-02-27 09:30:00"
-        )
+        bars_early = _make_1m_bars(n=20, start_price=2700.0, start_time="2026-02-27 09:30:00")
         _, _, _, complete_early = compute_opening_range(bars_early)
         assert complete_early is False
 
         # Bars from 09:30 to 10:10 — OR complete
-        bars_full = _make_1m_bars(
-            n=45, start_price=2700.0, start_time="2026-02-27 09:30:00"
-        )
+        bars_full = _make_1m_bars(n=45, start_price=2700.0, start_time="2026-02-27 09:30:00")
         _, _, _, complete_full = compute_opening_range(bars_full)
         assert complete_full is True
 
@@ -297,9 +281,7 @@ class TestDetectOpeningRangeBreakout:
         """Clear upward breakout should be detected as LONG."""
         from lib.services.engine.orb import detect_opening_range_breakout
 
-        bars = _make_breakout_bars(
-            direction="LONG", or_price=2700.0, breakout_magnitude=20.0
-        )
+        bars = _make_breakout_bars(direction="LONG", or_price=2700.0, breakout_magnitude=20.0)
         result = detect_opening_range_breakout(bars, symbol="MGC")
 
         assert result.or_complete is True
@@ -317,9 +299,7 @@ class TestDetectOpeningRangeBreakout:
         """Clear downward breakout should be detected as SHORT."""
         from lib.services.engine.orb import detect_opening_range_breakout
 
-        bars = _make_breakout_bars(
-            direction="SHORT", or_price=2700.0, breakout_magnitude=20.0
-        )
+        bars = _make_breakout_bars(direction="SHORT", or_price=2700.0, breakout_magnitude=20.0)
         result = detect_opening_range_breakout(bars, symbol="MGC")
 
         assert result.or_complete is True
@@ -348,9 +328,7 @@ class TestDetectOpeningRangeBreakout:
         bars = _make_1m_bars(n=3, start_price=2700.0, start_time="2026-02-27 09:30:00")
         result = detect_opening_range_breakout(bars, symbol="TEST")
         assert result.breakout_detected is False
-        assert (
-            "Insufficient" in result.error or "Opening range has only" in result.error
-        )
+        assert "Insufficient" in result.error or "Opening range has only" in result.error
 
     def test_missing_columns(self):
         from lib.services.engine.orb import detect_opening_range_breakout
@@ -386,13 +364,9 @@ class TestDetectOpeningRangeBreakout:
         bars = _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00")
 
         # Very high multiplier — less likely to detect breakout
-        result_high = detect_opening_range_breakout(
-            bars, symbol="MGC", breakout_multiplier=5.0
-        )
+        result_high = detect_opening_range_breakout(bars, symbol="MGC", breakout_multiplier=5.0)
         # Very low multiplier — more likely to detect breakout
-        result_low = detect_opening_range_breakout(
-            bars, symbol="MGC", breakout_multiplier=0.01
-        )
+        result_low = detect_opening_range_breakout(bars, symbol="MGC", breakout_multiplier=0.01)
 
         assert result_high.long_trigger > result_low.long_trigger
 
@@ -401,9 +375,7 @@ class TestDetectOpeningRangeBreakout:
 
         fixed_time = datetime(2026, 2, 27, 10, 30, 0, tzinfo=_EST)
         bars = _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00")
-        result = detect_opening_range_breakout(
-            bars, symbol="MGC", now_fn=lambda: fixed_time
-        )
+        result = detect_opening_range_breakout(bars, symbol="MGC", now_fn=lambda: fixed_time)
         assert "2026-02-27" in result.evaluated_at
 
 
@@ -478,12 +450,8 @@ class TestScanORBAllAssets:
         from lib.services.engine.orb import scan_orb_all_assets
 
         bars_by_symbol = {
-            "MGC": _make_1m_bars(
-                n=70, start_price=2700.0, start_time="2026-02-27 09:20:00", seed=1
-            ),
-            "MNQ": _make_1m_bars(
-                n=70, start_price=20100.0, start_time="2026-02-27 09:20:00", seed=2
-            ),
+            "MGC": _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00", seed=1),
+            "MNQ": _make_1m_bars(n=70, start_price=20100.0, start_time="2026-02-27 09:20:00", seed=2),
         }
         results = scan_orb_all_assets(bars_by_symbol)
         assert len(results) == 2
@@ -501,9 +469,7 @@ class TestScanORBAllAssets:
         from lib.services.engine.orb import scan_orb_all_assets
 
         bars_by_symbol = {
-            "MGC": _make_1m_bars(
-                n=70, start_price=2700.0, start_time="2026-02-27 09:20:00"
-            ),
+            "MGC": _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00"),
             "BAD": pd.DataFrame(),  # empty
         }
         results = scan_orb_all_assets(bars_by_symbol)
@@ -534,7 +500,7 @@ class TestORBPublishing:
         mock_cache._r = None
         mock_cache.cache_set = MagicMock()
 
-        with patch.dict(sys.modules, {"src.lib.core.cache": mock_cache}):
+        with patch.dict(sys.modules, {"lib.core.cache": mock_cache}):
             success = publish_orb_alert(result)
             assert success is True
             assert mock_cache.cache_set.call_count >= 1
@@ -550,7 +516,7 @@ class TestORBPublishing:
 
         result = ORBResult(symbol="MGC", breakout_detected=True, direction="LONG")
 
-        with patch.dict(sys.modules, {"src.lib.core.cache": mock_cache}):
+        with patch.dict(sys.modules, {"lib.core.cache": mock_cache}):
             success = publish_orb_alert(result)
             assert success is True
             mock_r.publish.assert_called_once()
@@ -561,7 +527,7 @@ class TestORBPublishing:
         mock_cache = MagicMock()
         mock_cache.cache_set = MagicMock()
 
-        with patch.dict(sys.modules, {"src.lib.core.cache": mock_cache}):
+        with patch.dict(sys.modules, {"lib.core.cache": mock_cache}):
             success = clear_orb_alert()
             assert success is True
 
@@ -680,7 +646,7 @@ class TestRiskHelpers:
 
         # Patch the getter to return None
         with patch(
-            "src.lib.services.data.api.risk._get_local_risk_manager",
+            "lib.services.data.api.risk._get_local_risk_manager",
             return_value=None,
         ):
             result = evaluate_position_risk([])
@@ -695,7 +661,7 @@ class TestRiskHelpers:
 
         rm = RiskManager(account_size=50_000)
         with patch(
-            "src.lib.services.data.api.risk._get_local_risk_manager",
+            "lib.services.data.api.risk._get_local_risk_manager",
             return_value=rm,
         ):
             positions = [
@@ -716,7 +682,7 @@ class TestRiskHelpers:
         from lib.services.data.api.risk import check_trade_entry_risk
 
         with patch(
-            "src.lib.services.data.api.risk._get_local_risk_manager",
+            "lib.services.data.api.risk._get_local_risk_manager",
             return_value=None,
         ):
             allowed, reason, details = check_trade_entry_risk("MGC", "LONG")
@@ -733,17 +699,14 @@ class TestRiskHelpers:
             now_fn=lambda: datetime(2026, 2, 27, 8, 0, 0, tzinfo=_EST),
         )
 
-        with patch(
-            "src.lib.services.data.api.risk._get_local_risk_manager",
-            return_value=rm,
+        with (
+            patch("lib.services.data.api.risk._get_local_risk_manager", return_value=rm),
+            patch("lib.services.data.api.risk._sync_local_risk_manager"),
         ):
-            with patch(
-                "src.lib.services.data.api.risk._sync_local_risk_manager"
-            ):
-                allowed, reason, details = check_trade_entry_risk("MGC", "LONG", size=1)
-                assert allowed is True
-                assert reason == ""
-                assert details["risk_available"] is True
+            allowed, reason, details = check_trade_entry_risk("MGC", "LONG", size=1)
+            assert allowed is True
+            assert reason == ""
+            assert details["risk_available"] is True
 
     def test_check_trade_entry_risk_blocked_by_daily_loss(self):
         from lib.services.data.api.risk import check_trade_entry_risk
@@ -757,16 +720,13 @@ class TestRiskHelpers:
         # Simulate daily loss
         rm._daily_pnl = -600.0
 
-        with patch(
-            "src.lib.services.data.api.risk._get_local_risk_manager",
-            return_value=rm,
+        with (
+            patch("lib.services.data.api.risk._get_local_risk_manager", return_value=rm),
+            patch("lib.services.data.api.risk._sync_local_risk_manager"),
         ):
-            with patch(
-                "src.lib.services.data.api.risk._sync_local_risk_manager"
-            ):
-                allowed, reason, details = check_trade_entry_risk("MGC", "LONG", size=1)
-                assert allowed is False
-                assert "Daily loss limit" in reason
+            allowed, reason, details = check_trade_entry_risk("MGC", "LONG", size=1)
+            assert allowed is False
+            assert "Daily loss limit" in reason
 
 
 class TestRiskEventRecording:
@@ -997,26 +957,23 @@ class TestTradesRiskEnforcement:
         )
         rm._daily_pnl = -600.0
 
-        with patch(
-            "src.lib.services.data.api.risk._get_local_risk_manager",
-            return_value=rm,
+        with (
+            patch("lib.services.data.api.risk._get_local_risk_manager", return_value=rm),
+            patch("lib.services.data.api.risk._sync_local_risk_manager"),
         ):
-            with patch(
-                "src.lib.services.data.api.risk._sync_local_risk_manager"
-            ):
-                result = client.post(
-                    "/trades",
-                    json={
-                        "asset": "Gold",
-                        "direction": "LONG",
-                        "entry": 2700.0,
-                        "contracts": 1,
-                        "enforce_risk": True,
-                    },
-                )
-                assert result.status_code == 403
-                data = result.json()
-                assert "reason" in data["detail"]
+            result = client.post(
+                "/trades",
+                json={
+                    "asset": "Gold",
+                    "direction": "LONG",
+                    "entry": 2700.0,
+                    "contracts": 1,
+                    "enforce_risk": True,
+                },
+            )
+            assert result.status_code == 403
+            data = result.json()
+            assert "reason" in data["detail"]
 
 
 class TestTradesEnforceRiskField:
@@ -1031,9 +988,7 @@ class TestTradesEnforceRiskField:
     def test_enforce_risk_can_be_true(self):
         from lib.services.data.api.trades import CreateTradeRequest
 
-        req = CreateTradeRequest(
-            asset="Gold", direction="LONG", entry=2700.0, enforce_risk=True
-        )
+        req = CreateTradeRequest(asset="Gold", direction="LONG", entry=2700.0, enforce_risk=True)
         assert req.enforce_risk is True
 
 
@@ -1131,7 +1086,7 @@ class TestPositionsRiskEvaluation:
         }
 
         with patch(
-            "src.lib.services.data.api.risk._get_local_risk_manager",
+            "lib.services.data.api.risk._get_local_risk_manager",
             return_value=rm,
         ):
             result = client.post(
@@ -1260,25 +1215,23 @@ class TestSSEORBCache:
     _original_cache = None
 
     def setup_method(self):
-        self._original_cache = sys.modules.get("src.lib.core.cache", None)
+        self._original_cache = sys.modules.get("lib.core.cache", None)
         # Install mock cache for SSE module
         mock_cache = MagicMock()
         mock_cache.REDIS_AVAILABLE = False
         mock_cache._r = None
         mock_cache.cache_get = MagicMock(return_value=None)
         mock_cache.cache_set = MagicMock()
-        mock_cache._cache_key = MagicMock(
-            side_effect=lambda *parts: "futures:mock:" + ":".join(str(p) for p in parts)
-        )
+        mock_cache._cache_key = MagicMock(side_effect=lambda *parts: "futures:mock:" + ":".join(str(p) for p in parts))
         mock_cache.get_data_source = MagicMock(return_value="mock")
-        sys.modules["src.lib.core.cache"] = mock_cache
+        sys.modules["lib.core.cache"] = mock_cache
         self._mock_cache = mock_cache
 
     def teardown_method(self):
         if self._original_cache is not None:
-            sys.modules["src.lib.core.cache"] = self._original_cache
+            sys.modules["lib.core.cache"] = self._original_cache
         else:
-            sys.modules.pop("src.lib.core.cache", None)
+            sys.modules.pop("lib.core.cache", None)
 
     def test_get_orb_from_cache_none(self):
         from lib.services.data.api.sse import _get_orb_from_cache
@@ -1290,9 +1243,7 @@ class TestSSEORBCache:
     def test_get_orb_from_cache_with_data(self):
         from lib.services.data.api.sse import _get_orb_from_cache
 
-        orb_data = json.dumps(
-            {"type": "ORB", "symbol": "MGC", "breakout_detected": True}
-        )
+        orb_data = json.dumps({"type": "ORB", "symbol": "MGC", "breakout_detected": True})
         self._mock_cache.cache_get.return_value = orb_data.encode()
         result = _get_orb_from_cache()
         assert result is not None
@@ -1355,9 +1306,7 @@ class TestORBRiskIntegration:
         from lib.services.engine.orb import detect_opening_range_breakout
         from lib.services.engine.risk import RiskManager
 
-        bars = _make_breakout_bars(
-            direction="LONG", or_price=2700.0, breakout_magnitude=20.0
-        )
+        bars = _make_breakout_bars(direction="LONG", or_price=2700.0, breakout_magnitude=20.0)
         orb_result = detect_opening_range_breakout(bars, symbol="MGC")
 
         if orb_result.breakout_detected:
@@ -1369,8 +1318,7 @@ class TestORBRiskIntegration:
                 symbol="MGC",
                 side=orb_result.direction,
                 size=1,
-                risk_per_contract=orb_result.atr_value
-                * 10,  # point value of 10 for MGC
+                risk_per_contract=orb_result.atr_value * 10,  # point value of 10 for MGC
             )
             # Should either allow or give a reason
             assert isinstance(allowed, bool)
@@ -1381,9 +1329,7 @@ class TestORBRiskIntegration:
         from lib.services.engine.orb import detect_opening_range_breakout
         from lib.services.engine.risk import RiskManager
 
-        bars = _make_breakout_bars(
-            direction="LONG", or_price=2700.0, breakout_magnitude=20.0
-        )
+        bars = _make_breakout_bars(direction="LONG", or_price=2700.0, breakout_magnitude=20.0)
         _orb_result = detect_opening_range_breakout(bars, symbol="MGC")
 
         rm = RiskManager(
@@ -1392,9 +1338,7 @@ class TestORBRiskIntegration:
         )
 
         # Simulate position opened based on ORB signal
-        rm.register_open(
-            "MGC", "LONG", quantity=1, entry_price=2712.0, risk_dollars=100.0
-        )
+        rm.register_open("MGC", "LONG", quantity=1, entry_price=2712.0, risk_dollars=100.0)
         assert rm.open_trade_count == 1
 
         # Update unrealized P&L
@@ -1431,7 +1375,8 @@ class TestORBConstants:
     def test_breakout_multiplier(self):
         from lib.services.engine.orb import BREAKOUT_ATR_MULTIPLIER
 
-        assert 0 < BREAKOUT_ATR_MULTIPLIER <= 2.0
+        assert BREAKOUT_ATR_MULTIPLIER > 0
+        assert BREAKOUT_ATR_MULTIPLIER <= 2.0
 
     def test_min_or_bars(self):
         from lib.services.engine.orb import MIN_OR_BARS

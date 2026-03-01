@@ -23,7 +23,6 @@ import pytest
 # ---------------------------------------------------------------------------
 # Ensure src/ is importable
 # ---------------------------------------------------------------------------
-
 from lib.core.alerts import (  # noqa: E402
     AlertDispatcher,
 )
@@ -44,9 +43,7 @@ from lib.trading.strategies import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-def _make_timestamps(
-    n: int, freq: str = "5min", start: str = "2025-01-06 03:00"
-) -> pd.DatetimeIndex:
+def _make_timestamps(n: int, freq: str = "5min", start: str = "2025-01-06 03:00") -> pd.DatetimeIndex:
     return pd.date_range(start=start, periods=n, freq=freq, tz="America/New_York")
 
 
@@ -221,9 +218,7 @@ class TestICTTrendEMAFactory:
     def test_make_strategy_different_params_independent(self):
         """Two configured subclasses should not share param mutations."""
         cls1 = make_strategy("ICTTrendEMA", {"n1": 5, "ict_mode": 0, "trade_size": 0.1})
-        cls2 = make_strategy(
-            "ICTTrendEMA", {"n1": 15, "ict_mode": 2, "trade_size": 0.2}
-        )
+        cls2 = make_strategy("ICTTrendEMA", {"n1": 15, "ict_mode": 2, "trade_size": 0.2})
         assert cls1.n1 == 5
         assert cls2.n1 == 15
         assert cls1.ict_mode == 0
@@ -267,9 +262,7 @@ class TestICTTrendEMAFactory:
             "ict_mode",
             "trade_size",
         }
-        assert expected.issubset(set(params.keys())), (
-            f"Missing keys: {expected - set(params.keys())}"
-        )
+        assert expected.issubset(set(params.keys())), f"Missing keys: {expected - set(params.keys())}"
 
     def test_suggest_params_values_in_range(self):
         class MockTrial:
@@ -393,9 +386,7 @@ class TestICTTrendEMABacktest:
 
         trades_0 = int(stats0["# Trades"])
         trades_2 = int(stats2["# Trades"])
-        assert trades_2 <= trades_0, (
-            f"Mode 2 ({trades_2} trades) should have ≤ trades than mode 0 ({trades_0})"
-        )
+        assert trades_2 <= trades_0, f"Mode 2 ({trades_2} trades) should have ≤ trades than mode 0 ({trades_0})"
 
     def test_trending_data_produces_trades_mode_0(self, trending_data):
         """On trending data with mode 0, ICTTrendEMA should take some trades."""
@@ -515,9 +506,7 @@ class TestICTConfluenceArray:
     def test_empty_df_returns_zeros(self):
         from lib.trading.strategies import _ict_confluence_array
 
-        empty = pd.DataFrame(
-            columns=pd.Index(["Open", "High", "Low", "Close", "Volume"])
-        )
+        empty = pd.DataFrame(columns=pd.Index(["Open", "High", "Low", "Close", "Volume"]))
         result = _ict_confluence_array(
             empty,
             np.array([]),
@@ -607,9 +596,7 @@ class TestICTConfluencePerBar:
     def test_empty_df_returns_zero_score(self):
         from lib.trading.strategies import _compute_ict_confluence
 
-        empty = pd.DataFrame(
-            columns=pd.Index(["Open", "High", "Low", "Close", "Volume"])
-        )
+        empty = pd.DataFrame(columns=pd.Index(["Open", "High", "Low", "Close", "Volume"]))
         result = _compute_ict_confluence(empty, bar_index=0, direction="long")
         assert result["score"] == 0
 
@@ -669,7 +656,7 @@ class TestEngineAlertFlags:
         engine._alerts_regime_enabled = False
 
         # Should not raise and should not dispatch
-        with patch("src.lib.trading.engine.get_dispatcher") as mock_disp:
+        with patch("lib.trading.engine.get_dispatcher") as mock_disp:
             engine._dispatch_regime_alert("Gold", "trending", "volatile", 0.9)
             mock_disp.assert_not_called()
 
@@ -683,7 +670,7 @@ class TestEngineAlertFlags:
         mock_dispatcher.has_channels = True
         mock_dispatcher.send_regime_change = MagicMock(return_value=True)
 
-        with patch("src.lib.trading.engine.get_dispatcher", return_value=mock_dispatcher):
+        with patch("lib.trading.engine.get_dispatcher", return_value=mock_dispatcher):
             engine._dispatch_regime_alert("Gold", "trending", "volatile", 0.9)
             mock_dispatcher.send_regime_change.assert_called_once()
 
@@ -693,7 +680,7 @@ class TestEngineAlertFlags:
         engine = DashboardEngine(account_size=100_000)
         engine._alerts_confluence_enabled = False
 
-        with patch("src.lib.trading.engine.get_dispatcher") as mock_disp:
+        with patch("lib.trading.engine.get_dispatcher") as mock_disp:
             engine._check_confluence_alerts()
             mock_disp.assert_not_called()
 
@@ -707,7 +694,7 @@ class TestEngineFetchTFSafe:
         engine = DashboardEngine(account_size=100_000)
         fake_df = _random_walk_ohlcv(n=100, seed=42)
 
-        with patch("src.lib.trading.engine.get_data", return_value=fake_df):
+        with patch("lib.trading.engine.get_data", return_value=fake_df):
             result = engine._fetch_tf_safe("ES=F", "15m", "S&P", "HTF")
             assert isinstance(result, pd.DataFrame)
             assert not result.empty
@@ -717,7 +704,7 @@ class TestEngineFetchTFSafe:
 
         engine = DashboardEngine(account_size=100_000)
 
-        with patch("src.lib.trading.engine.get_data", side_effect=Exception("Network error")):
+        with patch("lib.trading.engine.get_data", side_effect=Exception("Network error")):
             result = engine._fetch_tf_safe("ES=F", "15m", "S&P", "HTF")
             assert isinstance(result, pd.DataFrame)
             assert result.empty
@@ -740,7 +727,7 @@ class TestEngineFetchTFSafe:
                 # Fallback call (5m) returns data
                 return fake_df
 
-        with patch("src.lib.trading.engine.get_data", side_effect=mock_get_data):
+        with patch("lib.trading.engine.get_data", side_effect=mock_get_data):
             result = engine._fetch_tf_safe("ES=F", "15m", "S&P", "HTF")
             # Should have fallen back to engine's default
             assert call_count[0] == 2
@@ -769,9 +756,9 @@ class TestEngineMultiTFConfluence:
         mock_dispatcher.send_confluence_alert = MagicMock(return_value=True)
 
         with (
-            patch("src.lib.trading.engine.get_data", side_effect=mock_get_data),
-            patch("src.lib.trading.engine.get_dispatcher", return_value=mock_dispatcher),
-            patch("src.lib.trading.engine.ASSETS", {"Gold": "GC=F"}),
+            patch("lib.trading.engine.get_data", side_effect=mock_get_data),
+            patch("lib.trading.engine.get_dispatcher", return_value=mock_dispatcher),
+            patch("lib.trading.engine.ASSETS", {"Gold": "GC=F"}),
         ):
             engine._check_confluence_alerts()
             # Gold's recommended TFs are 1h/15m/5m
@@ -850,12 +837,8 @@ class TestICTvsTrendEMAComparison:
         cls_ema = make_strategy("TrendEMA", base_params)
         cls_ict = make_strategy("ICTTrendEMA", {**base_params, "ict_mode": 0})
 
-        stats_ema = Backtest(
-            shared_data, cls_ema, cash=100_000, trade_on_close=True
-        ).run()
-        stats_ict = Backtest(
-            shared_data, cls_ict, cash=100_000, trade_on_close=True
-        ).run()
+        stats_ema = Backtest(shared_data, cls_ema, cash=100_000, trade_on_close=True).run()
+        stats_ict = Backtest(shared_data, cls_ict, cash=100_000, trade_on_close=True).run()
 
         assert stats_ema is not None
         assert stats_ict is not None
@@ -878,22 +861,12 @@ class TestICTvsTrendEMAComparison:
         cls_ema = make_strategy("TrendEMA", base_params)
         cls_ict = make_strategy("ICTTrendEMA", {**base_params, "ict_mode": 0})
 
-        trades_ema = int(
-            Backtest(shared_data, cls_ema, cash=100_000, trade_on_close=True).run()[
-                "# Trades"
-            ]
-        )
-        trades_ict = int(
-            Backtest(shared_data, cls_ict, cash=100_000, trade_on_close=True).run()[
-                "# Trades"
-            ]
-        )
+        trades_ema = int(Backtest(shared_data, cls_ema, cash=100_000, trade_on_close=True).run()["# Trades"])
+        trades_ict = int(Backtest(shared_data, cls_ict, cash=100_000, trade_on_close=True).run()["# Trades"])
 
         # With mode 0, ICT score doesn't gate entries, so trade counts
         # should be identical (same EMA crossover logic, same exits)
-        assert trades_ict == trades_ema, (
-            f"Mode 0 ICT trades ({trades_ict}) != TrendEMA trades ({trades_ema})"
-        )
+        assert trades_ict == trades_ema, f"Mode 0 ICT trades ({trades_ict}) != TrendEMA trades ({trades_ema})"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

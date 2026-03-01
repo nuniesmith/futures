@@ -276,12 +276,8 @@ class TestMetricRecordHelpers:
         record_no_trade_alert("consecutive_losses")
 
         vol = NO_TRADE_ALERTS_TOTAL.labels(condition="extreme_volatility")._value.get()
-        loss = NO_TRADE_ALERTS_TOTAL.labels(
-            condition="daily_loss_exceeded"
-        )._value.get()
-        streak = NO_TRADE_ALERTS_TOTAL.labels(
-            condition="consecutive_losses"
-        )._value.get()
+        loss = NO_TRADE_ALERTS_TOTAL.labels(condition="daily_loss_exceeded")._value.get()
+        streak = NO_TRADE_ALERTS_TOTAL.labels(condition="consecutive_losses")._value.get()
         assert vol >= 1
         assert loss >= 1
         assert streak >= 1
@@ -334,15 +330,9 @@ class TestMetricRecordHelpers:
         update_focus_quality("MNQ", 0.85)
         update_focus_quality("MES", 0.60)
 
-        assert FOCUS_QUALITY_GAUGE.labels(symbol="MGC")._value.get() == pytest.approx(
-            0.72
-        )
-        assert FOCUS_QUALITY_GAUGE.labels(symbol="MNQ")._value.get() == pytest.approx(
-            0.85
-        )
-        assert FOCUS_QUALITY_GAUGE.labels(symbol="MES")._value.get() == pytest.approx(
-            0.60
-        )
+        assert FOCUS_QUALITY_GAUGE.labels(symbol="MGC")._value.get() == pytest.approx(0.72)
+        assert FOCUS_QUALITY_GAUGE.labels(symbol="MNQ")._value.get() == pytest.approx(0.85)
+        assert FOCUS_QUALITY_GAUGE.labels(symbol="MES")._value.get() == pytest.approx(0.60)
 
     def test_update_positions_count(self):
         from lib.services.data.api.metrics import (
@@ -517,7 +507,7 @@ class TestCollectLiveGauges:
         """Should not crash when cache returns None for everything."""
         from lib.services.data.api.metrics import _collect_live_gauges
 
-        with patch("src.lib.services.data.api.metrics.update_redis_status") as mock_redis:
+        with patch("lib.services.data.api.metrics.update_redis_status") as mock_redis:
             _collect_live_gauges()
             # Should have been called (either True or False)
             mock_redis.assert_called()
@@ -537,14 +527,10 @@ class TestCollectLiveGauges:
             }
         ).encode()
 
-        with patch("src.lib.core.cache.cache_get", return_value=focus_data):
+        with patch("lib.core.cache.cache_get", return_value=focus_data):
             _collect_live_gauges()
-            assert FOCUS_QUALITY_GAUGE.labels(
-                symbol="Gold"
-            )._value.get() == pytest.approx(0.82)
-            assert FOCUS_QUALITY_GAUGE.labels(
-                symbol="Nasdaq"
-            )._value.get() == pytest.approx(0.67)
+            assert FOCUS_QUALITY_GAUGE.labels(symbol="Gold")._value.get() == pytest.approx(0.82)
+            assert FOCUS_QUALITY_GAUGE.labels(symbol="Nasdaq")._value.get() == pytest.approx(0.67)
 
     def test_collect_positions_updates_gauge(self):
         # We test update_positions_count directly since _collect_live_gauges
@@ -615,46 +601,34 @@ class TestPrometheusMiddleware:
     def test_middleware_records_successful_request(self, app_with_middleware):
         from lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
-        initial = HTTP_REQUESTS_TOTAL.labels(
-            method="GET", path="/test/hello", status="200"
-        )._value.get()
+        initial = HTTP_REQUESTS_TOTAL.labels(method="GET", path="/test/hello", status="200")._value.get()
 
         resp = app_with_middleware.get("/test/hello")
         assert resp.status_code == 200
 
-        after = HTTP_REQUESTS_TOTAL.labels(
-            method="GET", path="/test/hello", status="200"
-        )._value.get()
+        after = HTTP_REQUESTS_TOTAL.labels(method="GET", path="/test/hello", status="200")._value.get()
         assert after == initial + 1
 
     def test_middleware_records_404(self, app_with_middleware):
         from lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
-        initial = HTTP_REQUESTS_TOTAL.labels(
-            method="GET", path="/test/nonexistent", status="404"
-        )._value.get()
+        initial = HTTP_REQUESTS_TOTAL.labels(method="GET", path="/test/nonexistent", status="404")._value.get()
 
         resp = app_with_middleware.get("/test/nonexistent")
         assert resp.status_code == 404
 
-        after = HTTP_REQUESTS_TOTAL.labels(
-            method="GET", path="/test/nonexistent", status="404"
-        )._value.get()
+        after = HTTP_REQUESTS_TOTAL.labels(method="GET", path="/test/nonexistent", status="404")._value.get()
         assert after == initial + 1
 
     def test_middleware_records_duration(self, app_with_middleware):
         from lib.services.data.api.metrics import HTTP_REQUEST_DURATION
 
         # Record initial sum
-        initial_sum = HTTP_REQUEST_DURATION.labels(
-            method="GET", path="/test/slow"
-        )._sum.get()
+        initial_sum = HTTP_REQUEST_DURATION.labels(method="GET", path="/test/slow")._sum.get()
 
         app_with_middleware.get("/test/slow")
 
-        after_sum = HTTP_REQUEST_DURATION.labels(
-            method="GET", path="/test/slow"
-        )._sum.get()
+        after_sum = HTTP_REQUEST_DURATION.labels(method="GET", path="/test/slow")._sum.get()
 
         # Duration should have increased
         assert after_sum > initial_sum
@@ -662,16 +636,12 @@ class TestPrometheusMiddleware:
     def test_middleware_records_500_on_error(self, app_with_middleware):
         from lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
-        initial = HTTP_REQUESTS_TOTAL.labels(
-            method="GET", path="/test/error", status="500"
-        )._value.get()
+        initial = HTTP_REQUESTS_TOTAL.labels(method="GET", path="/test/error", status="500")._value.get()
 
         resp = app_with_middleware.get("/test/error")
         assert resp.status_code == 500
 
-        after = HTTP_REQUESTS_TOTAL.labels(
-            method="GET", path="/test/error", status="500"
-        )._value.get()
+        after = HTTP_REQUESTS_TOTAL.labels(method="GET", path="/test/error", status="500")._value.get()
         assert after == initial + 1
 
 
@@ -738,9 +708,7 @@ class TestPrometheusEndpoint:
 class TestClientKeyFunction:
     """Test _client_key_func key derivation."""
 
-    def _make_request(
-        self, headers: dict[str, str] | None = None, client_host: str = "127.0.0.1"
-    ) -> MagicMock:
+    def _make_request(self, headers: dict[str, str] | None = None, client_host: str = "127.0.0.1") -> MagicMock:
         """Create a mock Request with specified headers and client info."""
         req = MagicMock()
         req.headers = headers or {}
@@ -1212,15 +1180,11 @@ class TestCombinedIntegration:
     def test_metrics_track_normal_requests(self, full_client):
         from lib.services.data.api.metrics import HTTP_REQUESTS_TOTAL
 
-        initial = HTTP_REQUESTS_TOTAL.labels(
-            method="GET", path="/test/data", status="200"
-        )._value.get()
+        initial = HTTP_REQUESTS_TOTAL.labels(method="GET", path="/test/data", status="200")._value.get()
 
         full_client.get("/test/data")
 
-        after = HTTP_REQUESTS_TOTAL.labels(
-            method="GET", path="/test/data", status="200"
-        )._value.get()
+        after = HTTP_REQUESTS_TOTAL.labels(method="GET", path="/test/data", status="200")._value.get()
         assert after == initial + 1
 
     def test_metrics_track_429_responses(self, full_client):
@@ -1230,16 +1194,12 @@ class TestCombinedIntegration:
         full_client.post("/test/action")
         full_client.post("/test/action")
 
-        initial_429 = HTTP_REQUESTS_TOTAL.labels(
-            method="POST", path="/test/action", status="429"
-        )._value.get()
+        initial_429 = HTTP_REQUESTS_TOTAL.labels(method="POST", path="/test/action", status="429")._value.get()
 
         resp = full_client.post("/test/action")
         assert resp.status_code == 429
 
-        after_429 = HTTP_REQUESTS_TOTAL.labels(
-            method="POST", path="/test/action", status="429"
-        )._value.get()
+        after_429 = HTTP_REQUESTS_TOTAL.labels(method="POST", path="/test/action", status="429")._value.get()
         assert after_429 == initial_429 + 1
 
     def test_prometheus_endpoint_self_reports(self, full_client):
@@ -1300,9 +1260,7 @@ class TestMetricsEdgeCases:
         assert FOCUS_QUALITY_GAUGE.labels(symbol="TestAsset")._value.get() == 0.50
 
         update_focus_quality("TestAsset", 0.95)
-        assert FOCUS_QUALITY_GAUGE.labels(
-            symbol="TestAsset"
-        )._value.get() == pytest.approx(0.95)
+        assert FOCUS_QUALITY_GAUGE.labels(symbol="TestAsset")._value.get() == pytest.approx(0.95)
 
     def test_record_engine_cycle_zero_duration(self):
         """Zero-duration cycle should be observable."""
@@ -1472,9 +1430,7 @@ class TestShouldNotTradePatterns:
         risk_status = {"daily_pnl": -50.0, "consecutive_losses": 3}
         result = evaluate_no_trade(assets, risk_status=risk_status)
         assert result.should_skip is True
-        assert any(
-            "consecutive" in r.lower() or "losing" in r.lower() for r in result.reasons
-        )
+        assert any("consecutive" in r.lower() or "losing" in r.lower() for r in result.reasons)
 
     def test_good_conditions_allow_trading(self):
         from lib.services.engine.patterns import evaluate_no_trade
@@ -1536,9 +1492,7 @@ class TestShouldNotTradePatterns:
         late_time = datetime(2026, 1, 15, 14, 0, 0, tzinfo=_EST)
         result = evaluate_no_trade(assets, now=late_time)
         assert result.should_skip is True
-        assert any(
-            "session" in r.lower() or "ended" in r.lower() for r in result.reasons
-        )
+        assert any("session" in r.lower() or "ended" in r.lower() for r in result.reasons)
 
     def test_no_trade_conditions_enum(self):
         from lib.services.engine.patterns import NoTradeCondition

@@ -157,17 +157,13 @@ class TestAuditTableCreation:
 
     def test_risk_events_table_exists(self, tmp_db):
         conn = sqlite3.connect(tmp_db)
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='risk_events'"
-        )
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='risk_events'")
         assert cur.fetchone() is not None
         conn.close()
 
     def test_orb_events_table_exists(self, tmp_db):
         conn = sqlite3.connect(tmp_db)
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='orb_events'"
-        )
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='orb_events'")
         assert cur.fetchone() is not None
         conn.close()
 
@@ -218,9 +214,7 @@ class TestAuditTableCreation:
 
     def test_risk_events_indexes(self, tmp_db):
         conn = sqlite3.connect(tmp_db)
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='risk_events'"
-        )
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='risk_events'")
         indexes = {row[0] for row in cur.fetchall()}
         assert "idx_re_timestamp" in indexes
         assert "idx_re_event_type" in indexes
@@ -229,9 +223,7 @@ class TestAuditTableCreation:
 
     def test_orb_events_indexes(self, tmp_db):
         conn = sqlite3.connect(tmp_db)
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='orb_events'"
-        )
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='orb_events'")
         indexes = {row[0] for row in cur.fetchall()}
         assert "idx_orb_timestamp" in indexes
         assert "idx_orb_symbol" in indexes
@@ -250,13 +242,9 @@ class TestAuditTableCreation:
     def test_trades_v2_and_journal_still_exist(self, tmp_db):
         """Audit table creation doesn't break core tables."""
         conn = sqlite3.connect(tmp_db)
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='trades_v2'"
-        )
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades_v2'")
         assert cur.fetchone() is not None
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='daily_journal'"
-        )
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='daily_journal'")
         assert cur.fetchone() is not None
         conn.close()
 
@@ -876,19 +864,21 @@ class TestEngineAuditPersistence:
         mock_session.value = "active"
         mock_scheduler.return_value.get_session_mode.return_value = mock_session
 
-        with patch.dict("sys.modules", {}):  # clear cache if needed
-            with patch(
-                "src.lib.services.engine.main.ScheduleManager",
+        with (
+            patch.dict("sys.modules", {}),  # clear cache if needed
+            patch(
+                "lib.services.engine.main.ScheduleManager",
                 mock_scheduler,
                 create=True,
-            ):
-                # We need to mock both imports that happen inside _persist_risk_event
-                with patch(
-                    "src.lib.services.engine.main.record_risk_event",
-                    create=True,
-                ) as _mock_rec:
-                    # The function does a lazy import, so we test the real path
-                    pass
+            ),
+            # We need to mock both imports that happen inside _persist_risk_event
+            patch(
+                "lib.services.engine.main.record_risk_event",
+                create=True,
+            ) as _mock_rec,
+        ):
+            # The function does a lazy import, so we test the real path
+            pass
 
         # Instead, test the model function directly since the engine helper
         # is a thin wrapper
@@ -983,9 +973,7 @@ class TestAuditEdgeCases:
     def test_special_characters_in_reason(self, tmp_db):
         from lib.core import models
 
-        special = (
-            "Can't trade: $500 loss > $250 limit; consecutive losses = 3 & ratio < 0.5"
-        )
+        special = "Can't trade: $500 loss > $250 limit; consecutive losses = 3 & ratio < 0.5"
         row_id = models.record_risk_event(event_type="block", reason=special)
         assert row_id is not None
 
@@ -1037,9 +1025,7 @@ class TestAuditEdgeCases:
 
         ids = []
         for i in range(20):
-            row_id = models.record_risk_event(
-                event_type="block", reason=f"concurrent_{i}"
-            )
+            row_id = models.record_risk_event(event_type="block", reason=f"concurrent_{i}")
             ids.append(row_id)
 
         assert all(rid is not None for rid in ids)

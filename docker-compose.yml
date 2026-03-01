@@ -169,8 +169,6 @@ services:
         depends_on:
             data:
                 condition: service_healthy
-        profiles:
-            - monitoring
 
     # -------------------------------------------------------------------------
     # Grafana — Dashboards & visualization
@@ -193,8 +191,6 @@ services:
             - grafana_data:/var/lib/grafana
         depends_on:
             - prometheus
-        profiles:
-            - monitoring
 
 volumes:
     postgres_data:

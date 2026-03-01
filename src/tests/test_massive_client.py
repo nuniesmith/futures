@@ -158,9 +158,7 @@ def _make_futures_snapshot(
     return SimpleNamespace(
         ticker=ticker,
         product_code=product_code,
-        last_trade=SimpleNamespace(
-            price=last_price, size=5, last_updated=None, timeframe=None
-        ),
+        last_trade=SimpleNamespace(price=last_price, size=5, last_updated=None, timeframe=None),
         last_quote=SimpleNamespace(
             bid=bid,
             bid_size=100,
@@ -283,10 +281,9 @@ class TestProviderInit:
         assert not provider.is_available
 
     def test_api_key_from_env(self):
-        with patch.dict(os.environ, {"MASSIVE_API_KEY": "env_key_123"}):
-            with patch("massive.RESTClient"):
-                provider = MassiveDataProvider()
-                assert provider.api_key == "env_key_123"
+        with patch.dict(os.environ, {"MASSIVE_API_KEY": "env_key_123"}), patch("massive.RESTClient"):
+            provider = MassiveDataProvider()
+            assert provider.api_key == "env_key_123"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -857,11 +854,7 @@ class TestTimestampParsing:
         # Index should be in Eastern time
         assert getattr(result.index, "tz", None) is not None
         tz_name = str(getattr(result.index, "tz", ""))
-        assert (
-            "Eastern" in tz_name
-            or "US/Eastern" in tz_name
-            or "America/New_York" in tz_name
-        )
+        assert "Eastern" in tz_name or "US/Eastern" in tz_name or "America/New_York" in tz_name
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1621,7 +1614,7 @@ class TestFeedManager:
         )
         feed._resolve_tickers()
 
-        with patch("src.lib.core.cache.cache_set") as mock_cache:
+        with patch("lib.core.cache.cache_set") as mock_cache:
             feed._push_bar_to_cache(
                 "ESZ5",
                 {
@@ -1651,7 +1644,7 @@ class TestSingletonAndConvenience:
     """Test singleton provider and convenience functions."""
 
     def test_singleton_returns_same_instance(self):
-        with patch("src.lib.integrations.massive_client.MassiveDataProvider") as mock_cls:
+        with patch("lib.integrations.massive_client.MassiveDataProvider") as mock_cls:
             mock_cls.return_value = MagicMock(is_available=False, api_key="")
             p1 = get_massive_provider()
             p2 = get_massive_provider()
@@ -1659,7 +1652,7 @@ class TestSingletonAndConvenience:
             assert mock_cls.call_count == 1
 
     def test_reset_provider_clears_singleton(self):
-        with patch("src.lib.integrations.massive_client.MassiveDataProvider") as mock_cls:
+        with patch("lib.integrations.massive_client.MassiveDataProvider") as mock_cls:
             mock_cls.side_effect = [
                 MagicMock(is_available=False, api_key=""),
                 MagicMock(is_available=False, api_key=""),
@@ -1671,13 +1664,13 @@ class TestSingletonAndConvenience:
             assert mock_cls.call_count == 2
 
     def test_is_massive_available_false(self):
-        with patch("src.lib.integrations.massive_client.MassiveDataProvider") as mock_cls:
+        with patch("lib.integrations.massive_client.MassiveDataProvider") as mock_cls:
             mock_cls.return_value = MagicMock(is_available=False, api_key="")
             result = is_massive_available()
             assert result is False
 
     def test_is_massive_available_true(self):
-        with patch("src.lib.integrations.massive_client.MassiveDataProvider") as mock_cls:
+        with patch("lib.integrations.massive_client.MassiveDataProvider") as mock_cls:
             mock_cls.return_value = MagicMock(is_available=True, api_key="test")
             result = is_massive_available()
             assert result is True
@@ -1686,7 +1679,7 @@ class TestSingletonAndConvenience:
         mock_provider = MagicMock()
         mock_provider.is_available = True
         mock_provider.get_aggs.return_value = pd.DataFrame({"Close": [100]})
-        with patch("src.lib.integrations.massive_client.MassiveDataProvider", return_value=mock_provider):
+        with patch("lib.integrations.massive_client.MassiveDataProvider", return_value=mock_provider):
             _df = get_massive_aggs("ES=F", "5m", "5d")  # noqa: F841
             mock_provider.get_aggs.assert_called_once_with("ES=F", "5m", "5d")
 
@@ -1694,7 +1687,7 @@ class TestSingletonAndConvenience:
         mock_provider = MagicMock()
         mock_provider.is_available = True
         mock_provider.get_daily.return_value = pd.DataFrame({"Close": [100]})
-        with patch("src.lib.integrations.massive_client.MassiveDataProvider", return_value=mock_provider):
+        with patch("lib.integrations.massive_client.MassiveDataProvider", return_value=mock_provider):
             _df = get_massive_daily("ES=F", "10d")  # noqa: F841
             mock_provider.get_daily.assert_called_once_with("ES=F", "10d")
 
@@ -1702,7 +1695,7 @@ class TestSingletonAndConvenience:
         mock_provider = MagicMock()
         mock_provider.is_available = True
         mock_provider.get_snapshot.return_value = {"last_price": 5500}
-        with patch("src.lib.integrations.massive_client.MassiveDataProvider", return_value=mock_provider):
+        with patch("lib.integrations.massive_client.MassiveDataProvider", return_value=mock_provider):
             _result = get_massive_snapshot("ES=F")  # noqa: F841
             mock_provider.get_snapshot.assert_called_once_with(yahoo_ticker="ES=F")
 
@@ -1861,9 +1854,7 @@ class TestEdgeCases:
         snap = SimpleNamespace(
             ticker="ESZ5",
             product_code="ES",
-            last_trade=SimpleNamespace(
-                price=5500.0, size=None, last_updated=None, timeframe=None
-            ),
+            last_trade=SimpleNamespace(price=5500.0, size=None, last_updated=None, timeframe=None),
             last_quote=None,
             session=SimpleNamespace(
                 open=None,
@@ -2051,9 +2042,7 @@ class TestEdgeCases:
         """Unknown period string should default to 5 days."""
         contract = _make_futures_contract(ticker="ESZ5")
         mock_rest_client.list_futures_contracts.return_value = [contract]
-        mock_rest_client.list_futures_aggregates.return_value = [
-            _make_futures_agg(window_start=1736150400000000000)
-        ]
+        mock_rest_client.list_futures_aggregates.return_value = [_make_futures_agg(window_start=1736150400000000000)]
         provider = _make_provider_with_mock(mock_rest_client)
 
         # "weird_period" can't be parsed, should default to 5 days

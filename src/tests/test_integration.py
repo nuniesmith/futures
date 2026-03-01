@@ -59,9 +59,7 @@ class MockRedisStore:
     def publish(self, channel: str, data: str) -> None:
         self._published.append((channel, data))
 
-    def xadd(
-        self, stream: str, fields: dict, maxlen: int = 100, approximate: bool = True
-    ):
+    def xadd(self, stream: str, fields: dict, maxlen: int = 100, approximate: bool = True):
         if stream not in self._streams:
             self._streams[stream] = []
         msg_id = f"{int(time.time() * 1000)}-{len(self._streams[stream])}"
@@ -78,9 +76,7 @@ class MockRedisStore:
         for entry in reversed(entries[:count]):
             msg_id = entry["id"].encode()
             fields = {
-                k.encode() if isinstance(k, str) else k: v.encode()
-                if isinstance(v, str)
-                else v
+                k.encode() if isinstance(k, str) else k: v.encode() if isinstance(v, str) else v
                 for k, v in entry.items()
                 if k != "id"
             }
@@ -119,9 +115,7 @@ def _build_mock_cache_module(store: MockRedisStore) -> MagicMock:
     mock.cache_set = store.cache_set
     mock.get_data_source = MagicMock(return_value="mock")
     mock.flush_all = MagicMock()
-    mock._cache_key = MagicMock(
-        side_effect=lambda *parts: "futures:mock:" + ":".join(str(p) for p in parts)
-    )
+    mock._cache_key = MagicMock(side_effect=lambda *parts: "futures:mock:" + ":".join(str(p) for p in parts))
     return mock
 
 
@@ -140,13 +134,13 @@ def redis_store():
 def mock_cache(redis_store):
     """Install a mock cache module into sys.modules and restore after test."""
     mock = _build_mock_cache_module(redis_store)
-    saved = sys.modules.get("src.lib.core.cache")
-    sys.modules["src.lib.core.cache"] = mock
+    saved = sys.modules.get("lib.core.cache")
+    sys.modules["lib.core.cache"] = mock
     yield mock
     if saved is not None:
-        sys.modules["src.lib.core.cache"] = saved
+        sys.modules["lib.core.cache"] = saved
     else:
-        sys.modules.pop("src.lib.core.cache", None)
+        sys.modules.pop("lib.core.cache", None)
 
 
 def _make_focus_asset(
@@ -361,9 +355,7 @@ class TestSSEReadsEngineFocus:
 class TestRiskManagerIntegration:
     """End-to-end risk manager: create, register trades, check blocks."""
 
-    def _make_rm(
-        self, account_size: int = 50_000, now_fn=None, max_daily_loss: float = -250.0
-    ):
+    def _make_rm(self, account_size: int = 50_000, now_fn=None, max_daily_loss: float = -250.0):
         from lib.services.engine.risk import RiskManager
 
         if now_fn is None:
@@ -374,24 +366,18 @@ class TestRiskManagerIntegration:
                 return fixed
 
             now_fn = _fixed_now
-        return RiskManager(
-            account_size=account_size, max_daily_loss=max_daily_loss, now_fn=now_fn
-        )
+        return RiskManager(account_size=account_size, max_daily_loss=max_daily_loss, now_fn=now_fn)
 
     def test_fresh_rm_allows_trade(self):
         rm = self._make_rm()
-        allowed, reason = rm.can_enter_trade(
-            "MGC", "LONG", size=1, risk_per_contract=100
-        )
+        allowed, reason = rm.can_enter_trade("MGC", "LONG", size=1, risk_per_contract=100)
         assert allowed is True
         assert reason == ""
 
     def test_daily_loss_blocks_trade(self):
         rm = self._make_rm()
         # Register a losing trade that exceeds daily loss limit
-        rm.register_open(
-            "MGC", "LONG", quantity=2, entry_price=2700.0, risk_dollars=200.0
-        )
+        rm.register_open("MGC", "LONG", quantity=2, entry_price=2700.0, risk_dollars=200.0)
         rm.register_close("MGC", exit_price=2550.0, realized_pnl=-300.0)
         # Daily P&L is now -300, which exceeds -250 limit
         allowed, reason = rm.can_enter_trade("MNQ", "SHORT", size=1)
@@ -411,18 +397,14 @@ class TestRiskManagerIntegration:
         rm = self._make_rm()
         rm.register_open("MGC", "LONG", quantity=1, entry_price=2700.0)
         # Stack with good R and wave
-        allowed, reason = rm.can_enter_trade(
-            "MGC", "LONG", size=1, is_stack=True, unrealized_r=1.5, wave_ratio=1.8
-        )
+        allowed, reason = rm.can_enter_trade("MGC", "LONG", size=1, is_stack=True, unrealized_r=1.5, wave_ratio=1.8)
         assert allowed is True
 
     def test_stacking_blocked_insufficient_r(self):
         rm = self._make_rm()
         rm.register_open("MGC", "LONG", quantity=1, entry_price=2700.0)
         # Try stacking with bad R
-        allowed, reason = rm.can_enter_trade(
-            "MGC", "LONG", size=1, is_stack=True, unrealized_r=0.3, wave_ratio=1.8
-        )
+        allowed, reason = rm.can_enter_trade("MGC", "LONG", size=1, is_stack=True, unrealized_r=0.3, wave_ratio=1.8)
         assert allowed is False
         assert "unrealized" in reason.lower()
 
@@ -439,9 +421,7 @@ class TestRiskManagerIntegration:
 
     def test_risk_status_reflects_state(self):
         rm = self._make_rm()
-        rm.register_open(
-            "MGC", "LONG", quantity=2, entry_price=2700.0, risk_dollars=150.0
-        )
+        rm.register_open("MGC", "LONG", quantity=2, entry_price=2700.0, risk_dollars=150.0)
         status = rm.get_status()
         assert status["open_trade_count"] == 1
         assert status["can_trade"] is True
@@ -462,9 +442,7 @@ class TestRiskManagerIntegration:
         rm = self._make_rm(account_size=50_000)
         # Default risk is 2% = $1000 max per trade
         # Request a trade with $1500 risk
-        allowed, reason = rm.can_enter_trade(
-            "MGC", "LONG", size=3, risk_per_contract=500.0
-        )
+        allowed, reason = rm.can_enter_trade("MGC", "LONG", size=3, risk_per_contract=500.0)
         assert allowed is False
         assert "per-trade max" in reason.lower() or "exceeds" in reason.lower()
 
@@ -533,10 +511,7 @@ class TestNoTradeIntegration:
         }
         result = evaluate_no_trade(assets, risk_status=risk_status)
         assert result.should_skip is True
-        assert any(
-            "consecutive" in r.lower() or "streak" in r.lower() or "loss" in r.lower()
-            for r in result.reasons
-        )
+        assert any("consecutive" in r.lower() or "streak" in r.lower() or "loss" in r.lower() for r in result.reasons)
 
     def test_good_conditions_allow_trading(self):
         from lib.services.engine.patterns import evaluate_no_trade
@@ -623,11 +598,7 @@ class TestFocusHTMLRendering:
         from lib.services.data.api.dashboard import _render_no_trade_banner
 
         html = _render_no_trade_banner("All low quality — sit today out")
-        assert (
-            "NO TRADE" in html.upper()
-            or "no-trade" in html.lower()
-            or "no_trade" in html.lower()
-        )
+        assert "NO TRADE" in html.upper() or "no-trade" in html.lower() or "no_trade" in html.lower()
         assert "low quality" in html.lower()
 
     def test_render_positions_panel(self, mock_cache):
@@ -792,9 +763,7 @@ class TestRiskSSEWiring:
 
         fixed = datetime(2026, 1, 15, 9, 0, 0, tzinfo=_EST)
         rm = RiskManager(account_size=50_000, now_fn=lambda: fixed)
-        rm.register_open(
-            "MGC", "LONG", quantity=1, entry_price=2700.0, risk_dollars=150.0
-        )
+        rm.register_open("MGC", "LONG", quantity=1, entry_price=2700.0, risk_dollars=150.0)
         rm.publish_to_redis()
 
         from lib.services.data.api.sse import _get_risk_from_cache
@@ -870,9 +839,7 @@ class TestFullPipeline:
         from lib.services.engine.risk import RiskManager
 
         fixed = datetime(2026, 1, 15, 9, 0, 0, tzinfo=_EST)
-        rm = RiskManager(
-            account_size=50_000, max_daily_loss=-250.0, now_fn=lambda: fixed
-        )
+        rm = RiskManager(account_size=50_000, max_daily_loss=-250.0, now_fn=lambda: fixed)
         # Register large loss
         rm.register_open("MGC", "LONG", quantity=2, entry_price=2700.0)
         rm.register_close("MGC", exit_price=2550.0, realized_pnl=-300.0)
@@ -1110,9 +1077,7 @@ class TestSafeJSONResponse:
                     return [_sanitize(v) for v in obj]
                 return obj
 
-        result = _sanitize(
-            {"win_rate": float("nan"), "sharpe": float("inf"), "count": 5}
-        )
+        result = _sanitize({"win_rate": float("nan"), "sharpe": float("inf"), "count": 5})
         assert result["win_rate"] is None
         assert result["sharpe"] is None
         assert result["count"] == 5
@@ -1133,9 +1098,7 @@ class TestSafeJSONResponse:
                     return [_sanitize(v) for v in obj]
                 return obj
 
-        result = _sanitize(
-            {"data": [1.0, float("nan"), 3.0], "nested": {"x": float("-inf")}}
-        )
+        result = _sanitize({"data": [1.0, float("nan"), 3.0], "nested": {"x": float("-inf")}})
         assert result["data"] == [1.0, None, 3.0]
         assert result["nested"]["x"] is None
 
@@ -1148,9 +1111,9 @@ class TestDockerComposeConfig:
 
     def test_four_services_mentioned(self):
         """The compose file should reference postgres, redis, data, engine."""
-        compose_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "docker-compose.yml"
-        )
+        # __file__ is src/tests/test_integration.py → go up 3 levels to project root
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        compose_path = os.path.join(project_root, "docker-compose.yml")
         with open(compose_path) as f:
             content = f.read()
 
@@ -1166,10 +1129,9 @@ class TestRequirements:
 
     def test_core_deps_present(self):
         """Core dependencies should still be present."""
-        req_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "requirements.txt"
-        )
-        with open(req_path) as f:
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        pyproject_path = os.path.join(project_root, "pyproject.toml")
+        with open(pyproject_path) as f:
             content = f.read().lower()
 
         for dep in ("fastapi", "uvicorn", "redis", "pytest"):

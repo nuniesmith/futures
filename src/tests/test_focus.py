@@ -141,9 +141,7 @@ class TestDeriveBias:
 
 class TestComputeEntryZone:
     def test_long_entry_zone_structure(self):
-        zone = _compute_entry_zone(
-            last_price=5200.0, bias="LONG", atr=10.0, wave_ratio=2.0
-        )
+        zone = _compute_entry_zone(last_price=5200.0, bias="LONG", atr=10.0, wave_ratio=2.0)
         assert "entry_low" in zone
         assert "entry_high" in zone
         assert "stop" in zone
@@ -151,9 +149,7 @@ class TestComputeEntryZone:
         assert "tp2" in zone
 
     def test_long_entry_below_price(self):
-        zone = _compute_entry_zone(
-            last_price=5200.0, bias="LONG", atr=10.0, wave_ratio=2.0
-        )
+        zone = _compute_entry_zone(last_price=5200.0, bias="LONG", atr=10.0, wave_ratio=2.0)
         # Entry low should be below the current price
         assert zone["entry_low"] < 5200.0
         # Stop should be below entry
@@ -163,9 +159,7 @@ class TestComputeEntryZone:
         assert zone["tp2"] > zone["tp1"]
 
     def test_short_entry_above_price(self):
-        zone = _compute_entry_zone(
-            last_price=5200.0, bias="SHORT", atr=10.0, wave_ratio=2.0
-        )
+        zone = _compute_entry_zone(last_price=5200.0, bias="SHORT", atr=10.0, wave_ratio=2.0)
         # Entry high should be above current price
         assert zone["entry_high"] > 5200.0
         # Stop should be above entry
@@ -175,18 +169,14 @@ class TestComputeEntryZone:
         assert zone["tp2"] < zone["tp1"]
 
     def test_neutral_has_symmetric_zone(self):
-        zone = _compute_entry_zone(
-            last_price=5200.0, bias="NEUTRAL", atr=10.0, wave_ratio=1.0
-        )
+        zone = _compute_entry_zone(last_price=5200.0, bias="NEUTRAL", atr=10.0, wave_ratio=1.0)
         # Both entry boundaries should bracket the price
         assert zone["entry_low"] < 5200.0
         assert zone["entry_high"] > 5200.0
 
     def test_zero_atr_uses_fallback(self):
         """Should not crash on zero ATR."""
-        zone = _compute_entry_zone(
-            last_price=5200.0, bias="LONG", atr=0.0, wave_ratio=1.0
-        )
+        zone = _compute_entry_zone(last_price=5200.0, bias="LONG", atr=0.0, wave_ratio=1.0)
         # Fallback ATR is 0.5% of price = 26.0
         assert zone["entry_low"] < 5200.0
         assert zone["stop"] < zone["entry_low"]
@@ -320,7 +310,7 @@ class TestShouldNotTrade:
         ]
         # Mock the time to be 10:30 AM ET
         mock_now = datetime(2026, 2, 27, 10, 30, 0, tzinfo=_EST)
-        with patch("src.lib.services.engine.focus.datetime") as mock_dt:
+        with patch("lib.services.engine.focus.datetime") as mock_dt:
             mock_dt.now.return_value = mock_now
             mock_dt.fromisoformat = datetime.fromisoformat
             result, reason = should_not_trade(assets)
@@ -347,12 +337,8 @@ class TestShouldNotTrade:
 class TestEntryZoneEdgeCases:
     def test_strong_wave_tightens_entry(self):
         """Strong wave ratio (>1.5) should produce a tighter entry zone."""
-        zone_strong = _compute_entry_zone(
-            last_price=5200.0, bias="LONG", atr=10.0, wave_ratio=2.0
-        )
-        zone_weak = _compute_entry_zone(
-            last_price=5200.0, bias="LONG", atr=10.0, wave_ratio=1.0
-        )
+        zone_strong = _compute_entry_zone(last_price=5200.0, bias="LONG", atr=10.0, wave_ratio=2.0)
+        zone_weak = _compute_entry_zone(last_price=5200.0, bias="LONG", atr=10.0, wave_ratio=1.0)
         # Strong wave = tighter zone = smaller difference between entry_high and entry_low
         strong_width = zone_strong["entry_high"] - zone_strong["entry_low"]
         weak_width = zone_weak["entry_high"] - zone_weak["entry_low"]
@@ -361,9 +347,7 @@ class TestEntryZoneEdgeCases:
     def test_all_values_are_finite(self):
         """No NaN or Inf in output."""
         for bias in ("LONG", "SHORT", "NEUTRAL"):
-            zone = _compute_entry_zone(
-                last_price=100.0, bias=bias, atr=1.0, wave_ratio=1.5
-            )
+            zone = _compute_entry_zone(last_price=100.0, bias=bias, atr=1.0, wave_ratio=1.5)
             for key, val in zone.items():
                 assert math.isfinite(val), f"{key} is not finite for bias={bias}"
 
@@ -376,7 +360,7 @@ class TestEntryZoneEdgeCases:
 class TestComputeDailyFocusPayload:
     """Test that compute_daily_focus returns the expected payload shape."""
 
-    @patch("src.lib.services.engine.focus.compute_asset_focus")
+    @patch("lib.services.engine.focus.compute_asset_focus")
     def test_payload_structure(self, mock_asset_focus):
         """Verify the top-level focus payload has all required fields."""
         from lib.services.engine.focus import compute_daily_focus
@@ -425,7 +409,7 @@ class TestComputeDailyFocusPayload:
         assert result["total_assets"] == 1
         assert result["tradeable_assets"] == 1
 
-    @patch("src.lib.services.engine.focus.compute_asset_focus")
+    @patch("lib.services.engine.focus.compute_asset_focus")
     def test_sorts_by_quality_desc(self, mock_asset_focus):
         """Assets should be sorted by quality (best first)."""
         from lib.services.engine.focus import compute_daily_focus
@@ -465,9 +449,7 @@ class TestComputeDailyFocusPayload:
 
         mock_asset_focus.side_effect = side_effect
 
-        result = compute_daily_focus(
-            account_size=50_000, symbols=["Gold", "Nasdaq", "S&P"]
-        )
+        result = compute_daily_focus(account_size=50_000, symbols=["Gold", "Nasdaq", "S&P"])
 
         symbols = [a["symbol"] for a in result["assets"]]
         # S&P (0.9) should come first, then Gold (0.8), then Nasdaq (0.6)
@@ -475,7 +457,7 @@ class TestComputeDailyFocusPayload:
         assert symbols[1] == "Gold"
         assert symbols[2] == "Nasdaq"
 
-    @patch("src.lib.services.engine.focus.compute_asset_focus")
+    @patch("lib.services.engine.focus.compute_asset_focus")
     def test_no_trade_when_all_low_quality(self, mock_asset_focus):
         """Should flag no_trade when all assets are below quality threshold."""
         from lib.services.engine.focus import compute_daily_focus
@@ -527,7 +509,7 @@ class TestPublishFocusToRedis:
     publish_focus_to_redis does ``from cache import REDIS_AVAILABLE, _r, cache_set``
     inside the function body.  The real ``cache`` module imports ``yfinance`` at the
     top level, which may not be installed in the test venv.  To avoid that we
-    inject a lightweight mock into ``sys.modules["src.lib.core.cache"]`` *before* the function
+    inject a lightweight mock into ``sys.modules["lib.core.cache"]`` *before* the function
     runs its lazy import.
     """
 
@@ -535,14 +517,14 @@ class TestPublishFocusToRedis:
 
     def setup_method(self):
         """Save the real cache module before each test."""
-        self._original_cache_module = sys.modules.get("src.lib.core.cache", None)
+        self._original_cache_module = sys.modules.get("lib.core.cache", None)
 
     def teardown_method(self):
         """Restore the real cache module after each test."""
         if self._original_cache_module is not None:
-            sys.modules["src.lib.core.cache"] = self._original_cache_module
+            sys.modules["lib.core.cache"] = self._original_cache_module
         else:
-            sys.modules.pop("src.lib.core.cache", None)
+            sys.modules.pop("lib.core.cache", None)
 
     def _ensure_mock_cache(self):
         """Install (or refresh) a mock cache module in sys.modules.
@@ -554,7 +536,7 @@ class TestPublishFocusToRedis:
         mock_mod._r = None
         mock_mod.cache_set = MagicMock()
         mock_mod.cache_get = MagicMock(return_value=None)
-        sys.modules["src.lib.core.cache"] = mock_mod
+        sys.modules["lib.core.cache"] = mock_mod
         return mock_mod
 
     def test_publishes_to_cache_key(self):
