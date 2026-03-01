@@ -25,11 +25,11 @@ Usage:
     allowed, reason = rm.can_enter_trade("MGC", "LONG", 2)
     if not allowed:
         print(f"Trade blocked: {reason}")
-    """
+"""
 
-    from __future__ import annotations
+from __future__ import annotations
 
-    import json
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
