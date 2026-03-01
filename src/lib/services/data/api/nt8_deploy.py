@@ -83,6 +83,48 @@ def _get_bridge_status_from_cache() -> dict[str, Any] | None:
     return None
 
 
+def _probe_bridge_status() -> dict[str, Any] | None:
+    """Actively probe the Bridge /status endpoint over the network.
+
+    Uses ``NT_BRIDGE_HOST`` / ``NT_BRIDGE_PORT`` env vars (same ones
+    passed to the Docker container via docker-compose.yml).  Returns
+    the parsed JSON dict on success, or None on any failure.
+
+    The result is also written back to the Redis cache key
+    ``futures:bridge_status:latest`` (TTL 30s) so that subsequent
+    callers within the same polling window don't need to probe again.
+    """
+    import os
+    import urllib.request
+
+    host = os.getenv("NT_BRIDGE_HOST", "")
+    port = os.getenv("NT_BRIDGE_PORT", "5680")
+    if not host:
+        return None
+
+    url = f"http://{host}:{port}/status"
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode())
+                # Cache the result so the next poll doesn't need to probe
+                try:
+                    from lib.core.cache import cache_set
+
+                    cache_set(
+                        "futures:bridge_status:latest",
+                        json.dumps(data).encode(),
+                        ttl=30,
+                    )
+                except Exception:
+                    pass
+                return data
+    except Exception:
+        pass
+    return None
+
+
 def _get_positions_data() -> dict[str, Any] | None:
     """Read cached positions payload (contains bridge_version, rubyAttached etc.)."""
     try:
@@ -121,6 +163,9 @@ def _compute_health() -> dict[str, Any]:
     """
     heartbeat = _get_heartbeat()
     bridge_status = _get_bridge_status_from_cache()
+    # If no cached bridge status, actively probe the Bridge over the network
+    if not bridge_status:
+        bridge_status = _probe_bridge_status()
     positions = _get_positions_data()
 
     result: dict[str, Any] = {
@@ -212,6 +257,12 @@ def _compute_health() -> dict[str, Any]:
             result["bridge_version"] = bridge_status.get("bridge_version", "")
         if not result["bridge_account"]:
             result["bridge_account"] = bridge_status.get("account", "")
+        # If we got a live probe but no heartbeat, use the probe to mark
+        # the bridge as connected (the probe itself proves reachability).
+        if not heartbeat and bridge_status.get("connected"):
+            result["bridge_connected"] = True
+            result["bridge_state"] = bridge_status.get("state", "unknown")
+            result["bridge_age_seconds"] = 0
 
     # --- From positions data (fallback for bridge_version, account) ---
     if positions:

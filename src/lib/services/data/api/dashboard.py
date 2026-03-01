@@ -1051,22 +1051,33 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     <!-- SSE Event Handlers — process JSON events and update DOM -->
     <script>
         // ---------------------------------------------------------------
-        // Deferred SSE connection: wait until the full DOM + scripts are
-        // ready before opening the EventSource.  This prevents the
-        // "connection interrupted while the page was loading" error that
-        // Firefox (and sometimes Chrome) raises when the SSE stream
-        // starts before HTMX / sse.js are initialised.
+        // Deferred SSE connection: wait until window.load (all external
+        // scripts, stylesheets, and images fully loaded) plus a small
+        // delay before opening the EventSource.
+        //
+        // Firefox logs "The connection to …/sse/dashboard was interrupted
+        // while the page was loading" whenever an EventSource is opened
+        // before the page's `load` event fires.  DOMContentLoaded is NOT
+        // enough — external CDN scripts (htmx, sse.js, tailwind) are
+        // still being fetched/executed at that point.
+        //
+        // The 150ms setTimeout after `load` guarantees the browser has
+        // fully committed the page load, so EventSource is opened in a
+        // "post-load" state and Firefox no longer considers it an
+        // interrupted page-load resource.
         // ---------------------------------------------------------------
-        document.addEventListener('DOMContentLoaded', function() {{
-            var sseEl = document.getElementById('sse-container');
-            if (sseEl && !sseEl.getAttribute('sse-connect')) {{
-                sseEl.setAttribute('sse-connect', '/sse/dashboard');
-                // Tell HTMX to re-process the element so it picks up the
-                // newly-added sse-connect attribute.
-                if (typeof htmx !== 'undefined') {{
-                    htmx.process(sseEl);
+        window.addEventListener('load', function() {{
+            setTimeout(function() {{
+                var sseEl = document.getElementById('sse-container');
+                if (sseEl && !sseEl.getAttribute('sse-connect')) {{
+                    sseEl.setAttribute('sse-connect', '/sse/dashboard');
+                    // Tell HTMX to re-process the element so it picks up
+                    // the newly-added sse-connect attribute.
+                    if (typeof htmx !== 'undefined') {{
+                        htmx.process(sseEl);
+                    }}
                 }}
-            }}
+            }}, 150);
         }});
 
         // SSE connection status tracking
