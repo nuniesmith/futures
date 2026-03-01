@@ -42,7 +42,7 @@ desktop.ini
 *.db
 *.sqlite
 *.sqlite3
-data/
+/data/
 archive/
 
 # --- Logs ---
