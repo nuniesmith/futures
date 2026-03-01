@@ -11,7 +11,12 @@ WORKDIR /app
 # Copy dependency metadata + minimal package stub so hatchling can resolve
 COPY pyproject.toml .
 RUN mkdir -p src/lib && touch src/lib/__init__.py
-RUN pip install --no-cache-dir .
+
+# Install base deps + gpu extras (includes torch, torchvision, mplfinance, Pillow)
+# mplfinance and Pillow are in the base deps (pyproject.toml [project.dependencies])
+# torch/torchvision are in [project.optional-dependencies.gpu]
+# Using .[gpu] ensures chart rendering works inside Docker for CNN inference.
+RUN pip install --no-cache-dir ".[gpu]"
 
 # Stage 2: Copy app code and run
 FROM python:3.13-slim AS runtime
@@ -24,6 +29,9 @@ COPY --from=deps /usr/local/bin /usr/local/bin
 
 # Copy the full src/ tree (services + shared modules)
 COPY src/ ./src/
+
+# Copy scripts/ tree (retrain_overnight.py, train_gpu.py, etc.)
+COPY scripts/ ./scripts/
 
 # Create data directory
 RUN mkdir -p /app/data

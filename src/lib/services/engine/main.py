@@ -463,7 +463,8 @@ def _handle_check_orb(engine) -> None:
                 result = detect_opening_range_breakout(bars_1m, symbol=symbol)
 
                 # Persist every ORB evaluation to the audit trail
-                _persist_orb_event(result)
+                # (returns row_id so we can enrich with filter/CNN metadata later)
+                _orb_row_id = _persist_orb_event(result)
 
                 if result.breakout_detected:
                     breakouts_found += 1
@@ -556,6 +557,15 @@ def _handle_check_orb(engine) -> None:
                                     symbol,
                                     result.trigger_price,
                                     filter_summary,
+                                )
+                                # Enrich the audit row with filter rejection
+                                _persist_orb_enrichment(
+                                    _orb_row_id,
+                                    {
+                                        "filter_passed": False,
+                                        "filter_summary": filter_summary,
+                                        "published": False,
+                                    },
                                 )
                             else:
                                 logger.info(
@@ -663,6 +673,19 @@ def _handle_check_orb(engine) -> None:
                                 symbol,
                                 cnn_prob or 0.0,
                             )
+                            # Enrich the audit row — CNN gated
+                            _persist_orb_enrichment(
+                                _orb_row_id,
+                                {
+                                    "filter_passed": True,
+                                    "filter_summary": filter_summary,
+                                    "cnn_prob": cnn_prob,
+                                    "cnn_confidence": cnn_confidence,
+                                    "cnn_signal": cnn_signal,
+                                    "cnn_gated": True,
+                                    "published": False,
+                                },
+                            )
                         else:
                             publish_orb_alert(result)
 
@@ -680,6 +703,20 @@ def _handle_check_orb(engine) -> None:
                                 result.or_high,
                                 f" [{filter_summary}]" if filter_summary else "",
                                 cnn_line,
+                            )
+
+                            # Enrich the audit row — published
+                            _persist_orb_enrichment(
+                                _orb_row_id,
+                                {
+                                    "filter_passed": True,
+                                    "filter_summary": filter_summary,
+                                    "cnn_prob": cnn_prob,
+                                    "cnn_confidence": cnn_confidence,
+                                    "cnn_signal": cnn_signal,
+                                    "cnn_gated": False,
+                                    "published": True,
+                                },
                             )
 
                             # Send alert
@@ -726,14 +763,18 @@ def _handle_check_orb(engine) -> None:
         logger.debug("ORB check error (non-fatal): %s", exc)
 
 
-def _persist_orb_event(result) -> None:
-    """Persist an ORB evaluation result to the database audit trail (best-effort)."""
+def _persist_orb_event(result, metadata: dict | None = None) -> int | None:
+    """Persist an ORB evaluation result to the database audit trail (best-effort).
+
+    Returns the inserted row ID so callers can enrich the record later
+    with filter/CNN outcomes via ``_persist_orb_enrichment()``.
+    """
     try:
         from lib.core.models import record_orb_event
         from lib.services.engine.scheduler import ScheduleManager
 
         session = ScheduleManager().get_session_mode().value
-        record_orb_event(
+        row_id = record_orb_event(
             symbol=result.symbol,
             or_high=result.or_high,
             or_low=result.or_low,
@@ -746,9 +787,41 @@ def _persist_orb_event(result) -> None:
             short_trigger=result.short_trigger,
             bar_count=getattr(result, "bar_count", 0),
             session=session,
+            metadata=metadata,
         )
+        return row_id
     except Exception as exc:
         logger.debug("Failed to persist ORB event (non-fatal): %s", exc)
+        return None
+
+
+def _persist_orb_enrichment(row_id: int | None, metadata: dict) -> None:
+    """Update an existing ORB event row with filter/CNN enrichment metadata.
+
+    Called after the full filter + CNN pipeline completes so the audit
+    trail captures: filter_passed, filter_summary, cnn_prob,
+    cnn_confidence, cnn_signal, cnn_gated, published.
+
+    This is best-effort — failures are logged but never block trading.
+    """
+    if row_id is None:
+        return
+    try:
+        from lib.core.models import _get_conn, _is_using_postgres
+
+        pg = _is_using_postgres()
+        ph = "%s" if pg else "?"
+        meta_json = json.dumps(metadata, default=str)
+
+        conn = _get_conn()
+        conn.execute(
+            f"UPDATE orb_events SET metadata_json = {ph} WHERE id = {ph}",
+            (meta_json, row_id),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        logger.debug("Failed to enrich ORB event %s (non-fatal): %s", row_id, exc)
 
 
 def _handle_historical_backfill(engine) -> None:

@@ -38,7 +38,6 @@ LICENSE
 src/tests/
 
 # --- Scripts (host-only) ---
-scripts/
 run.sh
 
 # --- Data & logs ---
