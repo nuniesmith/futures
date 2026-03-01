@@ -72,8 +72,8 @@ strategy — targeting 1–3 high-conviction trades per day.
 | **Redis** | Hot cache — live bars, FKS metrics, positions, focus updates, SSE pub/sub | 6379 |
 | **Data Service** | FastAPI API + HTMX dashboard — thin read layer over Redis | 8000 |
 | **Engine** | Background worker — all heavy computation, analysis, training, scheduling | — |
-
-Optional monitoring stack (Prometheus + Grafana) available via `--profile monitoring`.
+| **Prometheus** | Metrics collection for monitoring | 9090 |
+| **Grafana** | Visualization of Prometheus metrics | 3000 |
 
 ---
 
