@@ -1,5 +1,5 @@
 """
-Engine Service — Background computation worker (TASK-202 rewrite)
+Engine Service — Background computation worker
 ==================================================================
 Runs the DashboardEngine as a standalone service, separate from data-service.
 
@@ -14,9 +14,9 @@ Now uses ScheduleManager for session-aware scheduling:
 The data-service becomes a thin API layer that reads from Redis.
 
 Day 4 additions:
-  - RiskManager (TASK-502) integrated into CHECK_RISK_RULES handler
-  - evaluate_no_trade (TASK-802) replaces basic should_not_trade check
-  - Grok compact output (TASK-601) in live update handler
+  - RiskManager integrated into CHECK_RISK_RULES handler
+  - evaluate_no_trade replaces basic should_not_trade check
+  - Grok compact output in live update handler
 
 Usage:
     python -m lib.services.engine.main
@@ -122,7 +122,7 @@ def _handle_publish_focus_update(engine, account_size: int) -> None:
 
 
 def _handle_check_no_trade(engine, account_size: int) -> None:
-    """Check should-not-trade conditions using the full TASK-802 detector."""
+    """Check should-not-trade conditions using the full detector."""
     from lib.core.cache import cache_get
 
     try:
@@ -195,7 +195,7 @@ def _handle_grok_morning_brief(engine) -> None:
 def _handle_grok_live_update(engine) -> None:
     """Run Grok 15-minute live market update (active hours).
 
-    Uses compact ≤8-line format (TASK-601) by default.
+    Uses compact ≤8-line format by default.
     Falls back to local format_live_compact() if API is unavailable.
     """
     logger.info("▶ Grok live update (compact)...")
@@ -233,7 +233,7 @@ def _handle_grok_live_update(engine) -> None:
 
 
 def _publish_grok_update(text: str) -> None:
-    """Publish a Grok update to Redis for SSE streaming (TASK-602 prep)."""
+    """Publish a Grok update to Redis for SSE streaming."""
     try:
         from lib.core.cache import REDIS_AVAILABLE, _r, cache_set
 
@@ -269,7 +269,7 @@ def _handle_prep_alerts(engine) -> None:
 
 
 def _handle_check_risk_rules(engine, account_size: int = 50_000) -> None:
-    """Check risk rules using the RiskManager (TASK-502).
+    """Check risk rules using the RiskManager.
 
     Syncs positions from NT8 bridge cache, evaluates all risk rules,
     publishes status to Redis, logs any warnings, and persists notable
@@ -377,7 +377,7 @@ def _persist_risk_event(
 
 
 def _handle_check_orb(engine) -> None:
-    """Check for Opening Range Breakout patterns (TASK-801).
+    """Check for Opening Range Breakout patterns.
 
     Runs ORB detection across all focus assets using 1-minute bar data.
     When a breakout is detected, applies quality filters (NR7, pre-market
@@ -834,7 +834,7 @@ def _handle_historical_backfill(engine) -> None:
       4. Stores bars idempotently via UPSERT
       5. Publishes summary to Redis for dashboard visibility
     """
-    logger.info("▶ Historical backfill starting (TASK-204)")
+    logger.info("▶ Historical backfill starting")
 
     try:
         from lib.services.engine.backfill import run_backfill

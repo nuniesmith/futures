@@ -1,5 +1,5 @@
 """
-"Should Not Trade" Detector (TASK-802)
+"Should Not Trade" Detector
 ========================================
 Rules-based filter that flags low-conviction days to prevent overtrading.
 

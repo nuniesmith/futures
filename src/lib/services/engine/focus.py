@@ -1,5 +1,5 @@
 """
-Daily Focus Computation (TASK-203)
+Daily Focus Computation
 ====================================
 Computes the daily trading focus — the core "what should I trade today" payload.
 
@@ -13,7 +13,7 @@ For each tracked asset (MGC, MNQ, MES, MCL, SIL, HG), computes:
 The result is written to Redis key `engine:daily_focus` as JSON and served
 by data-service via `GET /api/focus`.
 
-Risk rules (from todo.md TASK-203):
+Risk rules:
   - Risk per trade capped at 0.75% of account size (default $50k = $375)
   - Assets with quality < 55% flagged as NEUTRAL with "skip today" note
   - should_not_trade() returns True if ALL assets < 55% quality or
@@ -422,7 +422,7 @@ def should_not_trade(
 ) -> tuple[bool, str]:
     """Determine if today is a no-trade day.
 
-    Conditions (from TASK-802):
+    Conditions:
       1. ALL focus assets have quality < 55%
       2. Any focus asset has volatility percentile > 88%
       3. Daily loss already exceeds -$250 (placeholder — needs trade log)

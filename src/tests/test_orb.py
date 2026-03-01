@@ -1,5 +1,5 @@
 """
-Tests for Opening Range Breakout (ORB) detector (TASK-801),
+Tests for Opening Range Breakout (ORB) detector,
 Risk API router, and risk-wired trades/positions endpoints.
 
 Covers:

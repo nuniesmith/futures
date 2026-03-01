@@ -443,8 +443,8 @@ def run_live_analysis(
 ) -> str | None:
     """Generate a 15-minute market update during active trading.
 
-    When compact=True (default), uses the simplified ≤8-line format
-    per TASK-601. When compact=False, uses the original verbose format.
+    When compact=True (default), uses the simplified ≤8-line format. 
+    When compact=False, uses the original verbose format.
 
     This is designed to be cheap (~$0.007 per call) and fast.
     Returns formatted update text, or None on error.
@@ -467,7 +467,7 @@ def run_live_analysis(
 
 
 # ---------------------------------------------------------------------------
-# Compact live update (TASK-601) — ≤8 lines total
+# Compact live update — ≤8 lines total
 # ---------------------------------------------------------------------------
 
 _COMPACT_SYSTEM = (
@@ -492,7 +492,7 @@ def _run_live_compact(
     previous_briefing: str | None = None,
     update_number: int = 1,
 ) -> str | None:
-    """Generate a compact ≤8-line live update (TASK-601).
+    """Generate a compact ≤8-line live update.
 
     Format per asset:
         GOLD 🟢 2712 (+4) | Bias VALID | Watch 2725
@@ -773,7 +773,7 @@ class GrokSession:
         Args:
             context: Market context dict from format_market_context().
             api_key: Grok API key.
-            compact: If True (default), use ≤8-line compact format (TASK-601).
+            compact: If True (default), use ≤8-line compact format.
                      If False, use original verbose format.
 
         Returns the update text, or None if not yet time or on error.

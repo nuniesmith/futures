@@ -14,11 +14,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-# ---------------------------------------------------------------------------
-# Fixtures (local helpers reusing conftest generators)
-# ---------------------------------------------------------------------------
-from conftest import _random_walk_ohlcv, _trending_ohlcv
-
 from lib.analysis.cvd import (
     _estimate_buy_volume,
     compute_cvd,
@@ -27,6 +22,11 @@ from lib.analysis.cvd import (
     detect_absorption_candles,
     detect_cvd_divergences,
 )
+
+# ---------------------------------------------------------------------------
+# Fixtures (local helpers reusing conftest generators)
+# ---------------------------------------------------------------------------
+from tests.conftest import _random_walk_ohlcv, _trending_ohlcv
 
 
 @pytest.fixture()
@@ -61,20 +61,14 @@ def tiny_df():
 
 class TestEstimateBuyVolume:
     def test_returns_series(self, ohlcv_df):
-        bv = _estimate_buy_volume(
-            ohlcv_df["High"], ohlcv_df["Low"], ohlcv_df["Close"], ohlcv_df["Volume"]
-        )
+        bv = _estimate_buy_volume(ohlcv_df["High"], ohlcv_df["Low"], ohlcv_df["Close"], ohlcv_df["Volume"])
         assert isinstance(bv, pd.Series)
         assert len(bv) == len(ohlcv_df)
 
     def test_buy_volume_between_zero_and_total(self, ohlcv_df):
-        bv = _estimate_buy_volume(
-            ohlcv_df["High"], ohlcv_df["Low"], ohlcv_df["Close"], ohlcv_df["Volume"]
-        )
+        bv = _estimate_buy_volume(ohlcv_df["High"], ohlcv_df["Low"], ohlcv_df["Close"], ohlcv_df["Volume"])
         assert (bv >= 0).all(), "Buy volume should never be negative"
-        assert (bv <= ohlcv_df["Volume"] + 1e-9).all(), (
-            "Buy volume should not exceed total volume"
-        )
+        assert (bv <= ohlcv_df["Volume"] + 1e-9).all(), "Buy volume should not exceed total volume"
 
     def test_zero_range_bar_splits_fifty_fifty(self):
         """When High == Low (doji), buy volume should be 50% of total."""
@@ -129,24 +123,18 @@ class TestComputeCVD:
     def test_delta_equals_buy_minus_sell(self, ohlcv_df):
         result = compute_cvd(ohlcv_df)
         expected = result["buy_volume"] - result["sell_volume"]
-        np.testing.assert_allclose(
-            np.asarray(result["delta"]), np.asarray(expected), atol=1e-9
-        )
+        np.testing.assert_allclose(np.asarray(result["delta"]), np.asarray(expected), atol=1e-9)
 
     def test_buy_plus_sell_equals_volume(self, ohlcv_df):
         result = compute_cvd(ohlcv_df)
         total = result["buy_volume"] + result["sell_volume"]
-        np.testing.assert_allclose(
-            np.asarray(total), np.asarray(ohlcv_df["Volume"].astype(float)), atol=1e-9
-        )
+        np.testing.assert_allclose(np.asarray(total), np.asarray(ohlcv_df["Volume"].astype(float)), atol=1e-9)
 
     def test_cvd_is_cumulative_delta(self, ohlcv_df):
         """Without daily anchoring, CVD should equal cumsum of delta."""
         result = compute_cvd(ohlcv_df, anchor_daily=False)
         expected = result["delta"].cumsum()
-        np.testing.assert_allclose(
-            np.asarray(result["cvd"]), np.asarray(expected), atol=1e-6
-        )
+        np.testing.assert_allclose(np.asarray(result["cvd"]), np.asarray(expected), atol=1e-6)
 
     def test_daily_anchoring_resets(self, ohlcv_df):
         """With daily anchoring, CVD should reset at each new date."""
@@ -277,9 +265,7 @@ class TestCVDSummary:
             "delta_current",
             "cvd_slope",
         }
-        assert expected_keys.issubset(set(summary.keys())), (
-            f"Missing keys: {expected_keys - set(summary.keys())}"
-        )
+        assert expected_keys.issubset(set(summary.keys())), f"Missing keys: {expected_keys - set(summary.keys())}"
 
     def test_bias_is_valid_string(self, ohlcv_df):
         cvd_df = compute_cvd(ohlcv_df)
@@ -373,9 +359,7 @@ class TestCVDIntegration:
     def test_constant_price_doesnt_crash(self):
         """Flat price (all bars identical) should not produce NaN/error."""
         n = 100
-        idx = pd.date_range(
-            "2025-01-06 03:00", periods=n, freq="5min", tz="America/New_York"
-        )
+        idx = pd.date_range("2025-01-06 03:00", periods=n, freq="5min", tz="America/New_York")
         df = pd.DataFrame(
             {
                 "Open": [100.0] * n,

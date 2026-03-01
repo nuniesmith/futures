@@ -1,5 +1,5 @@
 """
-Risk Rules Engine (TASK-502)
+Risk Rules Engine
 ==============================
 Automated risk checks that feed into the dashboard and alerts.
 

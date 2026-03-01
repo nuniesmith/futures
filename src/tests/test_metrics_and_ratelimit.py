@@ -1,10 +1,10 @@
 """
-Tests for Prometheus Metrics (TASK-704) and Rate Limiting (TASK-703)
+Tests for Prometheus Metrics and Rate Limiting
 =====================================================================
 
 Covers:
 
-**Prometheus Metrics (TASK-704):**
+**Prometheus Metrics:**
   - Metric definitions: all expected metrics exist in registry
   - Counter increments: HTTP requests, SSE events, risk checks, ORB detections, no-trade alerts
   - Gauge updates: SSE connections, focus quality, positions count, Redis status, engine refresh
@@ -15,7 +15,7 @@ Covers:
   - Live gauge collection: reads from cache to update gauges on scrape
   - Registry isolation: get_registry() returns the correct instance
 
-**Rate Limiting (TASK-703):**
+**Rate Limiting:**
   - Client key derivation: from API key, X-Forwarded-For, or remote address
   - Path-based limit mapping: correct limits for public, SSE, mutation, heavy endpoints
   - Rate limit handler: returns structured 429 JSON
@@ -561,7 +561,7 @@ class TestCollectLiveGauges:
 def _can_patch_cache_get():
     """Check if we can patch cache_get in the metrics module."""
     try:
-        import src.lib.core.cache  # noqa: F401
+        import lib.core.cache  # noqa: F401
 
         return True
     except ImportError:
@@ -1403,9 +1403,8 @@ class TestRateLimitEdgeCases:
 
 
 # ===========================================================================
-# SECTION 8: Patterns module — "Should Not Trade" (TASK-802) verification
+# SECTION 8: Patterns module — "Should Not Trade" verification
 # ===========================================================================
-# (TASK-802 was already implemented but not marked done — verify it works)
 
 
 class TestShouldNotTradePatterns:

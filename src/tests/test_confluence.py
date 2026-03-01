@@ -15,7 +15,6 @@ Tests cover:
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import _random_walk_ohlcv, _trending_ohlcv
 
 from lib.analysis.confluence import (
     DEFAULT_EMA_FAST,
@@ -34,6 +33,7 @@ from lib.analysis.confluence import (
     get_instrument_ema_presets,
     get_recommended_timeframes,
 )
+from tests.conftest import _random_walk_ohlcv, _trending_ohlcv
 
 # ---------------------------------------------------------------------------
 # Local fixtures (reuse conftest generators)
@@ -154,9 +154,7 @@ class TestEvaluateHTFBias:
             "emas_stacked",
             "slope",
         }
-        assert required.issubset(set(result.keys())), (
-            f"Missing keys: {required - set(result.keys())}"
-        )
+        assert required.issubset(set(result.keys())), f"Missing keys: {required - set(result.keys())}"
 
     def test_direction_valid_value(self, ohlcv_df):
         result = evaluate_htf_bias(ohlcv_df)
@@ -168,16 +166,12 @@ class TestEvaluateHTFBias:
 
     def test_trending_up_is_bullish(self, trending_up_df):
         result = evaluate_htf_bias(trending_up_df)
-        assert result["direction"] == "bullish", (
-            f"Expected bullish for strong uptrend, got {result['direction']}"
-        )
+        assert result["direction"] == "bullish", f"Expected bullish for strong uptrend, got {result['direction']}"
         assert result["emas_stacked"] is True
 
     def test_trending_down_is_bearish(self, trending_down_df):
         result = evaluate_htf_bias(trending_down_df)
-        assert result["direction"] == "bearish", (
-            f"Expected bearish for strong downtrend, got {result['direction']}"
-        )
+        assert result["direction"] == "bearish", f"Expected bearish for strong downtrend, got {result['direction']}"
         assert result["emas_stacked"] is True
 
     def test_bullish_has_positive_confidence(self, trending_up_df):
@@ -449,9 +443,7 @@ class TestMultiTimeframeFilter:
         """All three layers on the same trending data should give score 3."""
         mtf = MultiTimeframeFilter()
         result = mtf.evaluate(trending_up_df, trending_up_df, trending_up_df)
-        assert result["score"] >= 2, (
-            f"Expected high confluence on strong uptrend, got score={result['score']}"
-        )
+        assert result["score"] >= 2, f"Expected high confluence on strong uptrend, got score={result['score']}"
         if result["score"] == 3:
             assert result["direction"] == "bullish"
 
@@ -701,9 +693,7 @@ class TestScoringEdgeCases:
     def test_constant_price_is_neutral(self):
         """Flat price should produce neutral on all layers."""
         n = 100
-        idx = pd.date_range(
-            "2025-01-06 03:00", periods=n, freq="5min", tz="America/New_York"
-        )
+        idx = pd.date_range("2025-01-06 03:00", periods=n, freq="5min", tz="America/New_York")
         df = pd.DataFrame(
             {
                 "Open": [100.0] * n,

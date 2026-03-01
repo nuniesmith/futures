@@ -1,7 +1,7 @@
 """
 Test that Gold price data uses the micro contract (MGC) with no scaling.
 
-Verifies TASK-101: the Gold symbol maps to MGC=F for data fetching,
+Verifies: the Gold symbol maps to MGC=F for data fetching,
 and no contract multiplier is applied to raw price data.
 """
 

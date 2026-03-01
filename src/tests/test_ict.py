@@ -21,7 +21,6 @@ Tests cover:
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import _gappy_ohlcv, _random_walk_ohlcv, _trending_ohlcv
 
 from lib.analysis.ict import (
     _swing_highs,
@@ -39,6 +38,7 @@ from lib.analysis.ict import (
     order_blocks_to_dataframe,
     sweeps_to_dataframe,
 )
+from tests.conftest import _gappy_ohlcv, _random_walk_ohlcv, _trending_ohlcv
 
 # ---------------------------------------------------------------------------
 # Local fixtures
@@ -85,9 +85,7 @@ def short_df():
 def constant_df():
     """All bars identical — flat price, no movement."""
     n = 100
-    idx = pd.date_range(
-        "2025-01-06 03:00", periods=n, freq="5min", tz="America/New_York"
-    )
+    idx = pd.date_range("2025-01-06 03:00", periods=n, freq="5min", tz="America/New_York")
     return pd.DataFrame(
         {
             "Open": [100.0] * n,
@@ -112,9 +110,7 @@ def impulsive_df():
       bar  80:   price rallies back through OB zone → mitigation
     """
     n = 150
-    idx = pd.date_range(
-        "2025-01-06 03:00", periods=n, freq="5min", tz="America/New_York"
-    )
+    idx = pd.date_range("2025-01-06 03:00", periods=n, freq="5min", tz="America/New_York")
     rng = np.random.default_rng(42)
 
     opn = np.full(n, 100.0)
@@ -239,9 +235,7 @@ class TestSwingHelpers:
         assert highs == []
 
     def test_swing_lows_empty_input(self, empty_df):
-        lows = _swing_lows(
-            empty_df["Low"] if "Low" in empty_df else pd.Series(dtype=float), lookback=5
-        )
+        lows = _swing_lows(empty_df["Low"] if "Low" in empty_df else pd.Series(dtype=float), lookback=5)
         assert lows == []
 
     def test_swing_highs_min_bars_between(self, ohlcv_df):
@@ -290,9 +284,7 @@ class TestDetectFVGs:
                 "filled",
                 "fill_pct",
             }
-            assert expected_keys.issubset(set(f.keys())), (
-                f"Missing keys: {expected_keys - set(f.keys())}"
-            )
+            assert expected_keys.issubset(set(f.keys())), f"Missing keys: {expected_keys - set(f.keys())}"
 
     def test_fvg_type_valid(self, ohlcv_df):
         fvgs = detect_fvgs(ohlcv_df)
@@ -302,9 +294,7 @@ class TestDetectFVGs:
     def test_fvg_top_greater_than_bottom(self, ohlcv_df):
         fvgs = detect_fvgs(ohlcv_df)
         for f in fvgs:
-            assert f["top"] > f["bottom"], (
-                f"FVG top ({f['top']}) should be > bottom ({f['bottom']})"
-            )
+            assert f["top"] > f["bottom"], f"FVG top ({f['top']}) should be > bottom ({f['bottom']})"
 
     def test_fvg_midpoint_between_top_and_bottom(self, ohlcv_df):
         fvgs = detect_fvgs(ohlcv_df)
@@ -441,9 +431,7 @@ class TestDetectOrderBlocks:
                 "mitigated",
                 "tested",
             }
-            assert expected_keys.issubset(set(ob.keys())), (
-                f"Missing keys: {expected_keys - set(ob.keys())}"
-            )
+            assert expected_keys.issubset(set(ob.keys())), f"Missing keys: {expected_keys - set(ob.keys())}"
 
     def test_ob_type_valid(self, ohlcv_df):
         obs = detect_order_blocks(ohlcv_df)
@@ -595,9 +583,7 @@ class TestDetectLiquiditySweeps:
                 "timestamp",
                 "swing_timestamp",
             }
-            assert expected_keys.issubset(set(s.keys())), (
-                f"Missing keys: {expected_keys - set(s.keys())}"
-            )
+            assert expected_keys.issubset(set(s.keys())), f"Missing keys: {expected_keys - set(s.keys())}"
 
     def test_sweep_type_valid(self, ohlcv_df):
         sweeps = detect_liquidity_sweeps(ohlcv_df)
@@ -709,9 +695,7 @@ class TestDetectBreakerBlocks:
                 "original_ob_type",
                 "retested",
             }
-            assert expected_keys.issubset(set(b.keys())), (
-                f"Missing keys: {expected_keys - set(b.keys())}"
-            )
+            assert expected_keys.issubset(set(b.keys())), f"Missing keys: {expected_keys - set(b.keys())}"
 
     def test_breaker_type_valid(self, ohlcv_df):
         breakers = detect_breaker_blocks(ohlcv_df)
@@ -800,9 +784,7 @@ class TestICTSummary:
             "nearest_levels",
             "current_price",
         }
-        assert required.issubset(set(summary.keys())), (
-            f"Missing keys: {required - set(summary.keys())}"
-        )
+        assert required.issubset(set(summary.keys())), f"Missing keys: {required - set(summary.keys())}"
 
     def test_stats_keys(self, ohlcv_df):
         summary = ict_summary(ohlcv_df)
@@ -833,18 +815,12 @@ class TestICTSummary:
     def test_bullish_plus_bearish_fvgs(self, ohlcv_df):
         summary = ict_summary(ohlcv_df)
         stats = summary["stats"]
-        assert (
-            stats.get("bullish_fvgs", 0) + stats.get("bearish_fvgs", 0)
-            == stats["unfilled_fvgs"]
-        )
+        assert stats.get("bullish_fvgs", 0) + stats.get("bearish_fvgs", 0) == stats["unfilled_fvgs"]
 
     def test_bullish_plus_bearish_obs(self, ohlcv_df):
         summary = ict_summary(ohlcv_df)
         stats = summary["stats"]
-        assert (
-            stats.get("bullish_obs", 0) + stats.get("bearish_obs", 0)
-            == stats["active_obs"]
-        )
+        assert stats.get("bullish_obs", 0) + stats.get("bearish_obs", 0) == stats["active_obs"]
 
     def test_current_price_positive(self, ohlcv_df):
         summary = ict_summary(ohlcv_df)
@@ -887,11 +863,7 @@ class TestICTSummary:
         summary = ict_summary(volatile_df)
         assert isinstance(summary, dict)
         # Volatile data should likely produce some detections
-        total = (
-            summary["stats"]["total_fvgs"]
-            + summary["stats"]["total_obs"]
-            + summary["stats"]["recent_sweeps"]
-        )
+        total = summary["stats"]["total_fvgs"] + summary["stats"]["total_obs"] + summary["stats"]["recent_sweeps"]
         assert total >= 0  # at minimum no crash
 
 
@@ -1051,9 +1023,7 @@ class TestLevelsToDataFrame:
         if len(df) >= 2:
             distances = df["Distance"].abs().values
             for i in range(1, len(distances)):
-                assert distances[i] >= distances[i - 1] - 1e-9, (
-                    "Levels should be sorted by ascending absolute distance"
-                )
+                assert distances[i] >= distances[i - 1] - 1e-9, "Levels should be sorted by ascending absolute distance"
 
     def test_excludes_filled_fvgs(self, ohlcv_df):
         """Filled FVGs should not appear in the levels table."""

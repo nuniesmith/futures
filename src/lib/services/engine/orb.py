@@ -1,5 +1,5 @@
 """
-Opening Range Breakout (ORB) Detector — TASK-801
+Opening Range Breakout (ORB) Detector
 ==================================================
 Detects the opening range (first 30 minutes after 9:30 ET equity open)
 and flags breakouts when price exceeds OR_high + 0.5×ATR or drops below

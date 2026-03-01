@@ -1,5 +1,5 @@
 """
-Tests for Historical Data Backfill — TASK-204
+Tests for Historical Data Backfill
 ================================================
 
 Covers:
@@ -75,10 +75,11 @@ Covers:
   - Idempotent inserts: storing same bars twice doesn't duplicate
 """
 
+import contextlib
 import json
 import os
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
@@ -89,7 +90,7 @@ import pytest
 os.environ.setdefault("DISABLE_REDIS", "1")
 
 _EST = ZoneInfo("America/New_York")
-_UTC = timezone.utc
+_UTC = UTC
 
 
 # ---------------------------------------------------------------------------
@@ -114,8 +115,8 @@ def _make_bars_df(
 
     opens = prices
     closes = [p + rng.randn() * 1.0 for p in prices]
-    highs = [max(o, c) + abs(rng.randn()) * 0.5 for o, c in zip(opens, closes)]
-    lows = [min(o, c) - abs(rng.randn()) * 0.5 for o, c in zip(opens, closes)]
+    highs = [max(o, c) + abs(rng.randn()) * 0.5 for o, c in zip(opens, closes, strict=True)]
+    lows = [min(o, c) - abs(rng.randn()) * 0.5 for o, c in zip(opens, closes, strict=True)]
     vols = rng.randint(100, 5000, size=n).tolist()
 
     return pd.DataFrame(
@@ -209,9 +210,7 @@ class TestInitBackfillTable:
         init_backfill_table()
 
         conn = sqlite3.connect(db_file)
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='historical_bars'"
-        )
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='historical_bars'")
         assert cur.fetchone() is not None
         conn.close()
 
@@ -235,9 +234,7 @@ class TestInitBackfillTable:
         init_backfill_table()  # Third time for good measure
 
         conn = sqlite3.connect(db_file)
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='historical_bars'"
-        )
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='historical_bars'")
         assert cur.fetchone() is not None
         conn.close()
 
@@ -259,9 +256,7 @@ class TestInitBackfillTable:
         init_backfill_table()
 
         conn = sqlite3.connect(db_file)
-        cur = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_hb_%'"
-        )
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_hb_%'")
         indexes = [row[0] for row in cur.fetchall()]
         assert "idx_hb_symbol_ts" in indexes
         assert "idx_hb_symbol_interval" in indexes
@@ -280,7 +275,7 @@ class TestSymbolResolution:
         monkeypatch.setenv("BACKFILL_SYMBOLS", "")
         # Force re-import to pick up env change
 
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         bf._SYMBOLS_OVERRIDE = ""
         symbols = bf._get_backfill_symbols()
@@ -289,12 +284,10 @@ class TestSymbolResolution:
         # Should contain known micro tickers
         tickers_str = ",".join(symbols)
         # At least one of these should be present
-        assert any(
-            t in tickers_str for t in ["MGC=F", "MNQ=F", "MES=F", "MCL=F", "SI=F"]
-        )
+        assert any(t in tickers_str for t in ["MGC=F", "MNQ=F", "MES=F", "MCL=F", "SI=F"])
 
     def test_get_backfill_symbols_from_env(self, monkeypatch):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         bf._SYMBOLS_OVERRIDE = "MGC=F,MNQ=F"
         symbols = bf._get_backfill_symbols()
@@ -514,9 +507,7 @@ class TestComputeDateRange:
 
         # Store bars that are very recent (simulating up-to-date)
         now = datetime.now(tz=_UTC)
-        idx = pd.date_range(
-            start=now - timedelta(minutes=5), periods=5, freq="1min", tz="UTC"
-        )
+        idx = pd.date_range(start=now - timedelta(minutes=5), periods=5, freq="1min", tz="UTC")
         df = pd.DataFrame(
             {
                 "Open": [100.0] * 5,
@@ -598,9 +589,7 @@ class TestGenerateChunks:
 
         # Verify chunks are contiguous
         for i in range(len(chunks) - 1):
-            assert chunks[i][1] == chunks[i + 1][0], (
-                f"Gap between chunk {i} and {i + 1}"
-            )
+            assert chunks[i][1] == chunks[i + 1][0], f"Gap between chunk {i} and {i + 1}"
 
 
 # ===========================================================================
@@ -612,7 +601,7 @@ class TestFetchBarsChunk:
     """Test the fetch_bars_chunk function with mocks."""
 
     def test_returns_massive_data_when_available(self):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         mock_df = _make_bars_df(n=10)
 
@@ -629,7 +618,7 @@ class TestFetchBarsChunk:
             bf._fetch_chunk_massive = original
 
     def test_falls_back_to_yfinance(self):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         mock_df = _make_bars_df(n=20)
 
@@ -649,7 +638,7 @@ class TestFetchBarsChunk:
             bf._fetch_chunk_yfinance = orig_yf
 
     def test_returns_empty_when_both_fail(self):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         orig_massive = bf._fetch_chunk_massive
         orig_yf = bf._fetch_chunk_yfinance
@@ -674,7 +663,7 @@ class TestFetchChunkMassive:
         from lib.services.engine.backfill import _fetch_chunk_massive
 
         # _get_massive_provider is imported from cache inside the function
-        with patch("src.lib.core.cache._get_massive_provider", return_value=None):
+        with patch("lib.core.cache._get_massive_provider", return_value=None):
             result = _fetch_chunk_massive(
                 "MGC=F",
                 datetime(2026, 1, 1),
@@ -690,7 +679,7 @@ class TestFetchChunkMassive:
         mock_provider.resolve_from_yahoo.side_effect = Exception("API error")
 
         # _get_massive_provider is imported from cache inside the function
-        with patch("src.lib.core.cache._get_massive_provider", return_value=mock_provider):
+        with patch("lib.core.cache._get_massive_provider", return_value=mock_provider):
             result = _fetch_chunk_massive(
                 "MGC=F",
                 datetime(2026, 1, 1),
@@ -733,7 +722,7 @@ class TestBackfillSymbol:
     """Test backfill_symbol function."""
 
     def test_returns_summary_dict(self, backfill_db):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         mock_df = _make_bars_df(n=50)
 
@@ -761,7 +750,7 @@ class TestBackfillSymbol:
         assert expected_keys.issubset(set(result.keys()))
 
     def test_counts_new_bars(self, backfill_db):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         mock_df = _make_bars_df(n=60)
 
@@ -778,7 +767,7 @@ class TestBackfillSymbol:
         assert result["error"] == ""
 
     def test_handles_fetch_failure(self, backfill_db):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         original = bf.fetch_bars_chunk
         bf.fetch_bars_chunk = lambda *a, **kw: pd.DataFrame()
@@ -794,7 +783,7 @@ class TestBackfillSymbol:
         from lib.services.engine.backfill import backfill_symbol
 
         with patch(
-            "src.lib.services.engine.backfill._get_conn",
+            "lib.services.engine.backfill._get_conn",
             side_effect=Exception("DB connection failed"),
         ):
             result = backfill_symbol("MGC=F", days_back=5)
@@ -803,7 +792,7 @@ class TestBackfillSymbol:
         assert "DB connection failed" in result["error"]
 
     def test_duration_recorded(self, backfill_db):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         original = bf.fetch_bars_chunk
         bf.fetch_bars_chunk = lambda *a, **kw: pd.DataFrame()
@@ -824,14 +813,12 @@ class TestRunBackfill:
     """Test the main run_backfill orchestrator."""
 
     def test_processes_specified_symbols(self, backfill_db):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         original = bf.fetch_bars_chunk
         bf.fetch_bars_chunk = lambda *a, **kw: _make_bars_df(n=10)
         try:
-            summary = bf.run_backfill(
-                symbols=["MGC=F", "MNQ=F"], days_back=5, chunk_days=5
-            )
+            summary = bf.run_backfill(symbols=["MGC=F", "MNQ=F"], days_back=5, chunk_days=5)
         finally:
             bf.fetch_bars_chunk = original
 
@@ -841,7 +828,7 @@ class TestRunBackfill:
         assert "MNQ=F" in symbols_processed
 
     def test_status_complete_on_success(self, backfill_db):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         original = bf.fetch_bars_chunk
         bf.fetch_bars_chunk = lambda *a, **kw: _make_bars_df(n=10)
@@ -854,7 +841,7 @@ class TestRunBackfill:
         assert len(summary["errors"]) == 0
 
     def test_status_partial_on_some_errors(self, backfill_db):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         def mock_backfill_symbol(symbol, **kwargs):
             if symbol == "BAD=F":
@@ -896,7 +883,7 @@ class TestRunBackfill:
         assert len(summary["errors"]) == 1
 
     def test_status_failed_on_table_init_error(self, tmp_path, monkeypatch):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         original = bf.init_backfill_table
         bf.init_backfill_table = MagicMock(side_effect=Exception("Permission denied"))
@@ -909,7 +896,7 @@ class TestRunBackfill:
         assert len(summary["errors"]) > 0
 
     def test_total_bars_added_is_sum(self, backfill_db):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         bars1 = _make_bars_df(n=20, seed=1)
         bars2 = _make_bars_df(n=30, seed=2)
@@ -925,9 +912,7 @@ class TestRunBackfill:
         original = bf.fetch_bars_chunk
         bf.fetch_bars_chunk = mock_fetch
         try:
-            summary = bf.run_backfill(
-                symbols=["MGC=F", "MNQ=F"], days_back=5, chunk_days=5
-            )
+            summary = bf.run_backfill(symbols=["MGC=F", "MNQ=F"], days_back=5, chunk_days=5)
         finally:
             bf.fetch_bars_chunk = original
 
@@ -935,7 +920,7 @@ class TestRunBackfill:
         assert summary["total_duration_seconds"] >= 0
 
     def test_publishes_status_to_redis(self, backfill_db):
-        import src.lib.services.engine.backfill as bf
+        import lib.services.engine.backfill as bf
 
         publish_calls = []
         orig_fetch = bf.fetch_bars_chunk
@@ -1200,9 +1185,7 @@ class TestFullRoundTrip:
         # Create bars with known values using recent timestamps
         now = datetime.now(tz=_EST)
         recent_start = now - timedelta(minutes=15)
-        idx = pd.date_range(
-            recent_start, periods=10, freq="1min", tz="America/New_York"
-        )
+        idx = pd.date_range(recent_start, periods=10, freq="1min", tz="America/New_York")
         df = pd.DataFrame(
             {
                 "Open": [100.0 + i for i in range(10)],
@@ -1302,7 +1285,7 @@ class TestPublishBackfillStatus:
             "status": "complete",
         }
 
-        with patch("src.lib.core.cache.cache_set") as mock_set:
+        with patch("lib.core.cache.cache_set") as mock_set:
             _publish_backfill_status(summary)
             if mock_set.called:
                 args = mock_set.call_args[0]
@@ -1331,7 +1314,7 @@ class TestEngineHandlerIntegration:
             "symbols": [],
         }
 
-        with patch("src.lib.services.engine.backfill.run_backfill", return_value=mock_summary) as mock_run:
+        with patch("lib.services.engine.backfill.run_backfill", return_value=mock_summary) as mock_run:
             _handle_historical_backfill(mock_engine)
             mock_run.assert_called_once()
 
@@ -1341,7 +1324,7 @@ class TestEngineHandlerIntegration:
         mock_engine = MagicMock()
 
         with patch(
-            "src.lib.services.engine.backfill.run_backfill",
+            "lib.services.engine.backfill.run_backfill",
             side_effect=ImportError("No module named 'backfill'"),
         ):
             # Should not raise
@@ -1353,7 +1336,7 @@ class TestEngineHandlerIntegration:
         mock_engine = MagicMock()
 
         with patch(
-            "src.lib.services.engine.backfill.run_backfill",
+            "lib.services.engine.backfill.run_backfill",
             side_effect=RuntimeError("Connection refused"),
         ):
             # Should not raise
@@ -1435,10 +1418,8 @@ class TestEdgeCases:
 
         conn = _get_conn()
         # NaN rows may cause issues but shouldn't crash
-        try:
+        with contextlib.suppress(Exception):
             _store_bars(conn, "TEST", df, "1m")
-        except Exception:
-            pass  # Some NaN handling may vary
         conn.close()
 
     def test_store_bars_with_negative_volume(self, backfill_db):

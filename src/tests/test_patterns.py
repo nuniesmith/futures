@@ -1,5 +1,5 @@
 """
-Tests for the "Should Not Trade" Detector (TASK-802).
+Tests for the "Should Not Trade" Detector.
 
 Covers:
   - evaluate_no_trade() — all 7 condition checks
@@ -1060,7 +1060,7 @@ class TestSerialization:
 
 
 # ===========================================================================
-# Test: Default thresholds match TASK-802 spec
+# Test: Default thresholds
 # ===========================================================================
 
 

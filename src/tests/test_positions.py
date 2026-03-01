@@ -28,7 +28,7 @@ def _clear_position_cache():
     Also temporarily disables Redis so that cache_get/cache_set use the
     in-memory ``_mem_cache`` dict, which the test controls.
     """
-    import src.lib.core.cache as _cache_mod
+    import lib.core.cache as _cache_mod
 
     # Save original state
     original_mem = dict(_cache_mod._mem_cache)

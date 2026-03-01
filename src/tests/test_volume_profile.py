@@ -15,7 +15,7 @@ Validates:
   - Edge cases: empty data, single bar, constant price, zero volume
 
 These tests mirror the logic implemented in the NT8 FKS_DynamicVolume.cs
-indicator (TASK-403) to ensure Python ↔ NinjaScript parity.
+indicator to ensure Python ↔ NinjaScript parity.
 """
 
 from datetime import datetime, timedelta

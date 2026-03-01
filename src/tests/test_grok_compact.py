@@ -1,5 +1,5 @@
 """
-Tests for the Grok Compact Live Update Output (TASK-601).
+Tests for the Grok Compact Live Update Output.
 
 Covers:
   - format_live_compact() — local ≤8-line formatter

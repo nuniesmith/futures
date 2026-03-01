@@ -1,5 +1,5 @@
 """
-Tests for the SSE (Server-Sent Events) endpoint — TASK-302
+Tests for the SSE (Server-Sent Events) endpoint
 ============================================================
 Covers:
   - SSE message formatting (spec compliance)

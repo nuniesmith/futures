@@ -1,5 +1,5 @@
 """
-Integration Tests for the Futures Trading Co-Pilot (TASK-901)
+Integration Tests for the Futures Trading Co-Pilot
 ===============================================================
 Verify cross-module wiring end-to-end:
 
@@ -704,7 +704,7 @@ class TestGrokCompactIntegration:
         result = format_live_compact(assets)
         assert isinstance(result, str)
         lines = [line for line in result.strip().split("\n") if line.strip()]
-        # Must be <= 8 lines per TASK-601
+        # Must be <= 8 lines
         assert len(lines) <= 8, f"Compact output has {len(lines)} lines, expected <= 8"
 
     def test_format_live_compact_mentions_symbols(self):
@@ -1001,7 +1001,7 @@ class TestSchedulerEngineWiring:
 # TEST 12: Grok update → SSE grok-update channel
 # ===========================================================================
 class TestGrokSSEChannel:
-    """Verify engine publishes Grok updates that SSE can read (TASK-602)."""
+    """Verify engine publishes Grok updates that SSE can read."""
 
     def test_grok_update_appears_in_sse_cache(self, redis_store, mock_cache):
         """Simulate _publish_grok_update writing to Redis."""

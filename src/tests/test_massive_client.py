@@ -1717,7 +1717,7 @@ class TestCacheIntegration:
 
     def test_get_data_source_yfinance_default(self):
         """Without Massive API key, data source should be yfinance."""
-        import src.lib.core.cache as cache
+        import lib.core.cache as cache
         from lib.core.cache import get_data_source
 
         # Directly inject a mock provider that reports unavailable
@@ -1734,7 +1734,7 @@ class TestCacheIntegration:
         cache._massive_provider = None
 
     def test_get_data_source_massive_when_available(self):
-        import src.lib.core.cache as cache
+        import lib.core.cache as cache
         from lib.core.cache import get_data_source
 
         # Directly inject a mock provider that reports available

@@ -1,5 +1,5 @@
 """
-Tests for the Daily Focus Computation module (TASK-203).
+Tests for the Daily Focus Computation module.
 
 Covers:
   - compute_asset_focus() returns correct structure

@@ -1,5 +1,5 @@
 """
-Tests for the Risk Rules Engine (TASK-502).
+Tests for the Risk Rules Engine.
 
 Covers:
   - RiskManager initialization and day-reset logic

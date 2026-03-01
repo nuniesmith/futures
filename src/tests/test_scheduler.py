@@ -1,5 +1,5 @@
 """
-Tests for the Session-Aware Engine Scheduler (TASK-202).
+Tests for the Session-Aware Engine Scheduler.
 
 Covers:
   - SessionMode detection by hour (pre-market, active, off-hours)

@@ -1,5 +1,5 @@
 """
-Historical Data Backfill — TASK-204
+Historical Data Backfill
 =====================================
 Fetches and stores up to 1 year of historical 1-minute OHLCV bars for all
 active micro futures contracts into the database (Postgres or SQLite).
@@ -38,11 +38,12 @@ Usage from engine:
     ``_handle_historical_backfill`` in ``main.py`` calls ``run_backfill()``.
 """
 
+import contextlib
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pandas as pd
 
@@ -222,16 +223,12 @@ def init_backfill_table() -> None:
         logger.info("historical_bars table ready")
     except Exception as exc:
         logger.error("Failed to create historical_bars table: %s", exc)
-        try:
+        with contextlib.suppress(Exception):
             conn.rollback()
-        except Exception:
-            pass
         raise
     finally:
-        try:
+        with contextlib.suppress(Exception):
             conn.close()
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +270,7 @@ def _symbol_display_name(ticker: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _fetch_chunk_massive(
-    ticker: str, start_dt: datetime, end_dt: datetime
-) -> pd.DataFrame:
+def _fetch_chunk_massive(ticker: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
     """Fetch 1-min bars from Massive for a date range.
 
     Returns a DataFrame with columns [Open, High, Low, Close, Volume]
@@ -343,9 +338,7 @@ def _fetch_chunk_massive(
         return pd.DataFrame()
 
 
-def _fetch_chunk_yfinance(
-    ticker: str, start_dt: datetime, end_dt: datetime
-) -> pd.DataFrame:
+def _fetch_chunk_yfinance(ticker: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
     """Fetch 1-min bars from yfinance for a date range.
 
     yfinance limits 1-min data to ~7 calendar days from today.
@@ -358,8 +351,8 @@ def _fetch_chunk_yfinance(
         from lib.core.cache import _flatten_columns
 
         # yfinance 1-min data only works for recent ~7 days
-        now = datetime.now(tz=timezone.utc)
-        if (now - start_dt.replace(tzinfo=timezone.utc)).days > 8:
+        now = datetime.now(tz=UTC)
+        if (now - start_dt.replace(tzinfo=UTC)).days > 8:
             logger.debug(
                 "yfinance: skipping chunk %s → %s for %s (>7 days ago)",
                 start_dt.date(),
@@ -425,9 +418,7 @@ def fetch_bars_chunk(ticker: str, start_dt: datetime, end_dt: datetime) -> pd.Da
 # ---------------------------------------------------------------------------
 
 
-def _get_latest_stored_timestamp(
-    conn, symbol: str, interval: str = "1m"
-) -> Optional[str]:
+def _get_latest_stored_timestamp(conn, symbol: str, interval: str = "1m") -> str | None:
     """Query the latest stored bar timestamp for a symbol.
 
     Returns ISO timestamp string or None if no bars stored.
@@ -474,10 +465,7 @@ def _store_bars(conn, symbol: str, df: pd.DataFrame, interval: str = "1m") -> in
     rows = []
     for idx, row in df.iterrows():
         # Get timestamp as ISO string
-        if hasattr(idx, "isoformat"):
-            ts = idx.isoformat()  # type: ignore[union-attr]
-        else:
-            ts = str(idx)
+        ts = idx.isoformat() if hasattr(idx, "isoformat") else str(idx)  # type: ignore[union-attr]
 
         try:
             o = float(row.get("Open", row.get("open", 0)))  # type: ignore[arg-type]
@@ -552,7 +540,7 @@ def _compute_date_range(
 
     Returns (start_dt, end_dt) as timezone-naive datetimes.
     """
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     end_dt = now
 
     latest_ts = _get_latest_stored_timestamp(conn, symbol, interval)
@@ -563,10 +551,11 @@ def _compute_date_range(
             if latest.tzinfo is None:
                 latest = latest.tz_localize("UTC")
             # Start from 1 minute after the latest bar
-            start_dt = latest.to_pydatetime() + timedelta(minutes=1)
-            # Ensure we don't go backwards
-            if start_dt >= end_dt:
-                return start_dt, end_dt  # Nothing to fetch
+            pdt = latest.to_pydatetime()
+            if not isinstance(pdt, datetime):
+                raise TypeError(f"Expected datetime, got {type(pdt)}")
+            start_dt = pdt + timedelta(minutes=1)
+            return start_dt, end_dt
         except Exception as exc:
             logger.debug(
                 "Failed to parse latest timestamp '%s' for %s: %s",
@@ -642,9 +631,7 @@ def backfill_symbol(
         result["bars_before"] = _get_bar_count(conn, symbol, interval)
 
         # Determine date range
-        start_dt, end_dt = _compute_date_range(
-            symbol, conn, days_back=days_back, interval=interval
-        )
+        start_dt, end_dt = _compute_date_range(symbol, conn, days_back=days_back, interval=interval)
         result["start_date"] = start_dt.strftime("%Y-%m-%d")
         result["end_date"] = end_dt.strftime("%Y-%m-%d")
 
@@ -718,17 +705,15 @@ def backfill_symbol(
         logger.error("❌ %s (%s): backfill failed — %s", name, symbol, exc)
     finally:
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
         result["duration_seconds"] = round(time.monotonic() - start_time, 2)
 
     return result
 
 
 def run_backfill(
-    symbols: Optional[list[str]] = None,
+    symbols: list[str] | None = None,
     days_back: int = DEFAULT_DAYS_BACK,
     chunk_days: int = CHUNK_DAYS,
     interval: str = "1m",
@@ -798,9 +783,7 @@ def run_backfill(
     total_duration = round(time.monotonic() - overall_start, 2)
 
     # Determine overall status
-    if not results:
-        status = "failed"
-    elif errors and len(errors) == len(results):
+    if not results or (errors and len(errors) == len(results)):
         status = "failed"
     elif errors:
         status = "partial"
@@ -860,7 +843,7 @@ def get_stored_bars(
     conn = None
     try:
         conn = _get_conn()
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         start_dt = now - timedelta(days=days_back)
 
         start_str = start_dt.isoformat()
@@ -914,10 +897,8 @@ def get_stored_bars(
         return pd.DataFrame()
     finally:
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
 
 
 def get_backfill_status() -> dict[str, Any]:
@@ -970,10 +951,8 @@ def get_backfill_status() -> dict[str, Any]:
         return {"symbols": [], "total_bars": 0, "error": str(exc)}
     finally:
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
 
 
 def get_gap_report(
@@ -1010,9 +989,7 @@ def get_gap_report(
     # CME futures trade ~23 hours/day, but most activity in ~8 hours
     expected_bars = est_trading_days * 23 * 60  # conservative: full session
 
-    coverage = (
-        min(100.0, (total_bars / expected_bars * 100)) if expected_bars > 0 else 0.0
-    )
+    coverage = min(100.0, (total_bars / expected_bars * 100)) if expected_bars > 0 else 0.0
 
     # Find gaps > 5 minutes (excluding overnight/weekend)
     gaps = []
@@ -1061,10 +1038,8 @@ def _publish_backfill_status(summary: dict[str, Any]) -> None:
         cache_set("engine:backfill_status", payload.encode(), ttl=86400)  # 24h TTL
 
         if REDIS_AVAILABLE and _r is not None:
-            try:
+            with contextlib.suppress(Exception):
                 _r.publish("dashboard:backfill", payload)
-            except Exception:
-                pass
 
     except Exception as exc:
         logger.debug("Failed to publish backfill status: %s", exc)

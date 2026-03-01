@@ -1,5 +1,5 @@
 """
-Session-Aware Engine Scheduler (TASK-202)
+Session-Aware Engine Scheduler
 ==========================================
 Manages the engine's behavior based on Eastern Time trading sessions:
 
