@@ -1,0 +1,761 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © nuniesmith
+
+//@version=6
+indicator("Ruby", overlay = true, max_labels_count = 500)
+
+// ==================================================================================
+// 📊 DASHBOARD SETTINGS
+// ==================================================================================
+var group_dashboard = "📊 Dashboard Settings"
+show_trend_info     = input.bool(true,  title = "Show Trend Info",            group = group_dashboard)
+show_wave_analysis  = input.bool(true,  title = "Show Wave Analysis",         group = group_dashboard)
+show_market_regime  = input.bool(true,  title = "Show Market Regime",         group = group_dashboard)
+show_sr_analysis    = input.bool(true,  title = "Show Support/Resistance",    group = group_dashboard)
+show_volatility     = input.bool(true,  title = "Show Volatility Analysis",   group = group_dashboard)
+dashboard_position  = input.string("top_right", title = "Dashboard Position", options = ["top_right", "top_left", "bottom_right", "bottom_left"], group = group_dashboard)
+color_theme         = input.string("dark", title = "Color Theme", options = ["dark", "light"], group = group_dashboard)
+show_plot_values    = input.bool(false, title = "Show Core Plots for Alerts", group = group_dashboard)
+
+// ==================================================================================
+// 📈 CORE INPUTS
+// ==================================================================================
+// Trend Speed (shared parameters - kept once)
+var group_trend_speed = "⚡ Trend Speed Analysis"
+asset_type          = input.string('Gold', title = 'Asset Type', options = ['Gold', 'Crypto', 'Stocks', 'Forex'], group = group_trend_speed)
+max_length          = input.int(20, minval = 1, title = 'Maximum Length', group = group_trend_speed)
+accel_multiplier    = input.float(0.02, minval = 0.01, step = 0.01, title = 'Accelerator Multiplier', group = group_trend_speed)
+lookback_period     = input.int(200, minval = 1, title = 'Lookback Period', group = group_trend_speed)
+min_wave_ratio      = input.float(1.5, minval = 0.1, step = 0.1, title = 'Minimum Wave Ratio', group = group_trend_speed)
+exit_momentum_threshold = input.float(0.7, minval = 0.1, maxval = 1.0, step = 0.1, title = 'Exit Momentum Threshold', group = group_trend_speed)
+collen              = input.int(100, minval = 5, title = 'Collection Period', group = group_trend_speed)
+
+// Visualization / Colors (from core)
+var group_trend_colors = "🎨 Trend Speed Colors"
+up_hist_col         = input.color(#82ffc3, title = 'Trend Speed Up', group = group_trend_colors)
+up_hist_col_bright  = input.color(color.lime, title = 'Trend Speed Up Strong', group = group_trend_colors)
+dn_hist_col         = input.color(color.red, title = 'Trend Speed Down', group = group_trend_colors)
+dn_hist_col_bright  = input.color(#f78c8c, title = 'Trend Speed Down Strong', group = group_trend_colors)
+
+// Pattern / Sentiment (from core)
+var group_patterns = "🔍 Pattern Detection"
+length              = input.int(200, title = "Support/Resistance Range Length", group = group_patterns)
+signal_sensitivity  = input.float(0.5, minval = 0.1, maxval = 2.0, step = 0.1, title = "Signal Sensitivity", group = group_patterns)
+
+// Trend & Momentum (from core)
+var group_sentiment_trend = "📉 Sentiment: Trend & Momentum"
+fastperiod          = input.int(5, title = "AO Fast Period", minval = 2, group = group_sentiment_trend)
+slowperiod          = input.int(34, title = "AO Slow Period", minval = 5, group = group_sentiment_trend)
+signalperiod        = input.int(7, title = "AO Signal Period", minval = 2, group = group_sentiment_trend)
+use_ao_zero         = input.bool(true, title = "Use AO Zero Cross", group = group_sentiment_trend)
+use_ao_signal       = input.bool(true, title = "Use AO Signal Cross", group = group_sentiment_trend)
+use_regime_filter   = input.bool(true, title = "Use Market Regime Analysis", group = group_sentiment_trend)
+regime_ma_length    = input.int(200, minval = 20, title = "Regime MA Length", group = group_sentiment_trend)
+regime_std_length   = input.int(100, minval = 20, title = "Regime Volatility Lookback", group = group_sentiment_trend)
+regime_threshold    = input.float(1.0, minval = 0.1, maxval = 2.0, step = 0.1, title = "Regime Change Threshold", group = group_sentiment_trend)
+use_multi_timeframe = input.bool(true, title = "Use Multi-Timeframe Trend Filter", group = group_sentiment_trend)
+higher_tf           = input.string("60", title = "Higher Timeframe", options = ["15", "30", "60", "120", "240", "D"], group = group_sentiment_trend)
+momentum_lookback   = input.int(3, minval = 1, title = "Momentum Lookback (ROC)", group = group_sentiment_trend)
+
+// Support/Resistance (shared)
+var group_sr = "🛡️ Support/Resistance Settings"
+sr_lookback     = input.int(20, minval = 5, title = 'S/R Lookback Periods', group = group_sr)
+sr_threshold    = input.float(0.3, minval = 0.1, maxval = 1.0, step = 0.1, title = 'S/R Sensitivity', group = group_sr)
+include_sr      = input.bool(true, title = 'Use Higher TF S/R Analysis', group = group_sr)
+
+// Visual Settings (from core)
+var group_visual = "🎨 Visual Settings"
+main_col            = input.color(color.blue, title = "Middle Band Color", group = group_visual)
+green_color         = input.color(#00ffbb, title = "Bullish Color", group = group_visual)
+red_color           = input.color(#ff1100, title = "Bearish Color", group = group_visual)
+heat_sensative      = input.int(70, minval = 10, title = "Weather Heatmap Sensitivity", group = group_visual)
+clean_chart_mode    = input.bool(false, title = "Clean Chart Mode", group = group_visual)
+show_potential_signals = input.bool(true, title = "Show Potential Signals", group = group_visual)
+show_market_phase   = input.bool(false, title = "Show Market Phase Label", group = group_visual)
+show_regime_labels  = input.bool(false, title = "Show Market Regime Label", group = group_visual)
+show_entry_labels   = input.bool(true, title = "Show Signal Labels", group = group_visual)
+show_session_marker = input.bool(false, title = "Show Optimal Session Area", group = group_visual)
+show_entry_zones    = input.bool(true, title = "Show Entry Zones", group = group_visual)
+show_atr_bands      = input.bool(false, title = "Show SMA-Based ATR Bands", group = group_visual)
+
+// Time Settings (shared)
+var group_time_settings = "⏰ Time Settings"
+start_date          = input.time(timestamp('1 Jan 2020'), "Start Date", group = group_time_settings)
+timer_option        = input.string('From start', title = 'Timer Option', options = ['Custom', 'From start'], group = group_time_settings)
+
+// Session Settings (from core)
+var group_session = "🕒 Session Settings"
+session_type        = input.string("Custom", title = "Session Type", options = ["US", "London", "Asia", "Custom"], group = group_session)
+use_session_filter  = input.bool(false, title = "Use Session Filter", group = group_session)
+custom_start_hour   = input.int(9, minval = 0, maxval = 23, title = "Custom Session Start Hour", group = group_session)
+custom_end_hour     = input.int(16, minval = 0, maxval = 23, title = "Custom Session End Hour", group = group_session)
+
+// Volatility Settings (full K-Means from core)
+var group_volatility = "🌡️ Volatility Settings"
+atr_len                 = input.int(14, minval = 1, title = "ATR Length", group = group_volatility)
+volatility_history      = input.int(200, minval = 20, title = "Volatility History Length", group = group_volatility)
+use_kmeans_atr          = input.bool(true, title = "Use K-Means Adaptive ATR", group = group_volatility)
+training_data_period    = input.int(250, minval = 50, title = "Training Data Period", group = group_volatility)
+recalculate_clusters    = input.int(20, minval = 1, title = "Recalculate Every N Bars", group = group_volatility)
+highvol                 = input.float(0.8, minval = 0.5, maxval = 1.0, step = 0.1, title = "High Volatility Centroid", group = group_volatility)
+midvol                  = input.float(0.5, minval = 0.3, maxval = 0.8, step = 0.1, title = "Medium Volatility Centroid", group = group_volatility)
+lowvol                  = input.float(0.2, minval = 0.1, maxval = 0.5, step = 0.1, title = "Low Volatility Centroid", group = group_volatility)
+max_iterations          = input.int(10, minval = 3, maxval = 50, title = "K-Means Max Iterations", group = group_volatility)
+require_atr_minimum     = input.bool(true, title = "Require Minimum Volatility", group = group_volatility)
+min_volatility_percentile = input.float(0.2, minval = 0.0, maxval = 0.5, step = 0.05, title = "Minimum Volatility Percentile", group = group_volatility)
+avoid_high_volatility   = input.bool(true, title = "Avoid Extreme Volatility", group = group_volatility)
+max_volatility_percentile = input.float(0.9, minval = 0.5, maxval = 1.0, step = 0.05, title = "Maximum Volatility Percentile", group = group_volatility)
+
+// Signal Settings (merged)
+var group_signal = "🚨 Signal Settings"
+signal_quality_threshold = input.float(0.6, minval = 0.1, maxval = 1.0, step = 0.05, title = "Signal Quality Threshold", group = group_signal)
+signal_cooldown         = input.int(5, minval = 1, title = "Bars Between Signals", group = group_signal)
+require_trend_alignment = input.bool(true, title = "Require Trend Alignment", group = group_signal)
+volume_filter           = input.bool(false, title = "Use Volume Filter", group = group_signal)
+min_volume_threshold    = input.float(1.2, minval = 0.5, maxval = 3.0, step = 0.1, title = "Minimum Volume Threshold", group = group_signal)
+
+// ==================================================================================
+// SESSION MANAGEMENT
+// ==================================================================================
+var int start_hour = 0
+var int end_hour = 0
+if session_type == "US"
+    start_hour := 9
+    end_hour := 16
+else if session_type == "London"
+    start_hour := 8
+    end_hour := 16
+else if session_type == "Asia"
+    start_hour := 1
+    end_hour := 7
+else
+    start_hour := custom_start_hour
+    end_hour := custom_end_hour
+
+in_session = (hour >= start_hour and hour <= end_hour) or not use_session_filter
+bgcolor(show_session_marker and in_session ? color.new(color.blue, 90) : na)
+
+bool session_started = in_session and not in_session[1] and barstate.isconfirmed
+bool session_ended   = not in_session and in_session[1] and barstate.isconfirmed
+
+// ==================================================================================
+// UTILITY FUNCTIONS (deduplicated - best version from both)
+// ==================================================================================
+safeDivide(numerator, denominator, defaultValue) =>
+    denominator == 0 or na(denominator) ? defaultValue : numerator / denominator
+
+StartTime() =>
+    timer_option == "Custom" ? time > start_date : true
+
+calc_accel_factor(float counts_diff, float prev_counts_diff) =>
+    delta_counts_diff = math.abs(counts_diff - prev_counts_diff)
+    float max_delta = ta.highest(delta_counts_diff, 200)
+    max_delta := max_delta == 0 ? 1 : max_delta
+    delta_counts_diff / max_delta
+
+adjust_alpha(float dyn_length, float accel_factor, float accel_multiplier) =>
+    alpha_base = 2 / (dyn_length + 1)
+    alpha = alpha_base * (1 + accel_factor * accel_multiplier * 0.8)
+    math.min(0.9, alpha)
+
+f_detect_bullish_candle_pattern() =>
+    body_size = math.abs(close - open)
+    candle_range = high - low == 0 ? 0.00001 : high - low
+    lower_wick = math.min(open, close) - low
+    upper_wick = high - math.max(open, close)
+    hammer = body_size < candle_range * 0.3 and lower_wick > body_size * 2 and upper_wick < body_size
+    bullish_engulfing = close > open and close[1] < open[1] and close > open[1] and open < close[1]
+    pin_bar = lower_wick > candle_range * 0.6 and body_size < candle_range * 0.3 and upper_wick < candle_range * 0.3
+    hammer or bullish_engulfing or pin_bar
+
+f_detect_bearish_candle_pattern() =>
+    body_size = math.abs(close - open)
+    candle_range = high - low == 0 ? 0.00001 : high - low
+    lower_wick = math.min(open, close) - low
+    upper_wick = high - math.max(open, close)
+    shooting_star = body_size < candle_range * 0.3 and upper_wick > body_size * 2 and lower_wick < body_size
+    bearish_engulfing = close < open and close[1] > open[1] and close < open[1] and open > close[1]
+    pin_bar = upper_wick > candle_range * 0.6 and body_size < candle_range * 0.3 and lower_wick < candle_range * 0.3
+    shooting_star or bearish_engulfing or pin_bar
+
+// Pre-compute ta.* calls outside functions for consistency
+swing_atr_val            = ta.atr(14)
+high_highest_len_minus1  = ta.highest(high, sr_lookback - 1)
+high_lowest_len_times2   = ta.lowest(high, sr_lookback * 2)
+low_lowest_len_minus1    = ta.lowest(low, sr_lookback - 1)
+low_highest_len_times2   = ta.highest(low, sr_lookback * 2)
+
+// Swing high/low (extracted ta.* calls to top-level scope)
+findSwingHighs(src, len, thresh, highest_val, lowest_val, atr_val) =>
+    var array<float> pivots = array.new_float()
+    if array.size(pivots) > 10
+        array.shift(pivots)
+    isHigh = src[len] > src[len+1] and src[len] > src[len-1] and src[len] > highest_val and (src[len] - lowest_val) / atr_val > thresh
+    if isHigh
+        array.unshift(pivots, src[len])
+    pivots
+
+findSwingLows(src, len, thresh, lowest_val, highest_val, atr_val) =>
+    var array<float> pivots = array.new_float()
+    if array.size(pivots) > 10
+        array.shift(pivots)
+    isLow = src[len] < src[len+1] and src[len] < src[len-1] and src[len] < lowest_val and (highest_val - src[len]) / atr_val > thresh
+    if isLow
+        array.unshift(pivots, src[len])
+    pivots
+
+getNearestLevel(price, levels) =>
+    float nearest = na
+    min_dist = 10000000.0
+    if array.size(levels) > 0
+        for i = 0 to math.min(array.size(levels) - 1, 5)
+            lvl = array.get(levels, i)
+            dist = math.abs(price - lvl)
+            if dist < min_dist
+                min_dist := dist
+                nearest := lvl
+    nearest
+
+getNearestSRLevels(tf) =>
+    highs = request.security(syminfo.tickerid, tf, findSwingHighs(high, sr_lookback, sr_threshold, high_highest_len_minus1, high_lowest_len_times2, swing_atr_val), lookahead = barmerge.lookahead_off)
+    lows  = request.security(syminfo.tickerid, tf, findSwingLows(low,  sr_lookback, sr_threshold, low_lowest_len_minus1, low_highest_len_times2, swing_atr_val), lookahead = barmerge.lookahead_off)
+    [getNearestLevel(close, highs), getNearestLevel(close, lows)]
+
+// ==================================================================================
+// TREND SPEED + WAVE ANALYSIS (core version - most complete)
+// ==================================================================================
+var int   max_length_eff       = 20
+var float accel_multiplier_eff = 0.02
+var int   lookback_period_eff  = 200
+
+if barstate.isfirst
+    switch asset_type
+        "Crypto" =>
+            max_length_eff       := 20
+            accel_multiplier_eff := 0.03
+            lookback_period_eff  := 100
+        "Gold" =>
+            max_length_eff       := 20
+            accel_multiplier_eff := 0.015
+            lookback_period_eff  := 200
+        "Stocks" =>
+            max_length_eff       := 20
+            accel_multiplier_eff := 0.01
+            lookback_period_eff  := 150
+        "Forex" =>
+            max_length_eff       := 20
+            accel_multiplier_eff := 0.02
+            lookback_period_eff  := 150
+
+counts_diff      = close
+max_abs          = ta.highest(math.abs(counts_diff), 200)
+counts_norm      = safeDivide(counts_diff + max_abs, 2 * max_abs, 0.5)
+dyn_length       = 5 + counts_norm * (max_length_eff - 5)
+
+accel_factor     = calc_accel_factor(counts_diff, nz(counts_diff[1]))
+alpha            = adjust_alpha(dyn_length, accel_factor, accel_multiplier_eff)
+
+var float dyn_ema = na
+dyn_ema := na(dyn_ema[1]) ? close : alpha * close + (1 - alpha) * dyn_ema[1]
+
+type TrendData
+    array<float> change
+    array<int>   t
+
+var bullish = TrendData.new(array.new<float>(), array.new<int>())
+var bearish = TrendData.new(array.new<float>(), array.new<int>())
+var int   x1 = na
+var float y1 = na
+var int   pos = 0
+var float speed = 0.0
+c = ta.rma(close, 10)
+o = ta.rma(open, 10)
+
+if na(x1) and StartTime()
+    x1 := bar_index
+    y1 := o
+
+speed_lowest  = ta.lowest(speed, math.max(1, bar_index - nz(x1, bar_index)))
+speed_highest = ta.highest(speed, math.max(1, bar_index - nz(x1, bar_index)))
+
+if StartTime()
+    if close > dyn_ema and close[1] <= dyn_ema
+        bearish.change.unshift(speed_lowest)
+        bearish.t.unshift(bar_index - x1)
+        x1 := bar_index
+        y1 := close
+        pos := 1
+        speed := c - o
+    if close < dyn_ema and close[1] >= dyn_ema
+        bullish.change.unshift(speed_highest)
+        bullish.t.unshift(bar_index - x1)
+        x1 := bar_index
+        y1 := close
+        pos := -1
+        speed := c - o
+
+speed := speed + c - o
+trendspeed = ta.hma(speed, 5)
+
+// Wave stats (updated every confirmed bar)
+var float bull_max = 0.0001
+var float bear_max = -0.0001
+var float bull_avg = 0.0001
+var float bear_avg = -0.0001
+var float wave_size_ratio_avg = 1.0
+var float wave_size_ratio_max = 1.0
+var float current_ratio_avg = 0.0
+var float current_ratio_max = 0.0
+var string wave_size_text_avg = "0.0x"
+var string wave_size_text_max = "0.0x"
+var string current_text_avg = "0.0x"
+var string current_text_max = "0.0x"
+var string dominance_avg_text = "Neutral"
+var string dominance_max_text = "Neutral"
+var string market_bias = "Neutral"
+var float dominance_avg_value = 0.0
+
+if barstate.isconfirmed
+    bullish_recent = array.size(bullish.change) > 0 ? array.slice(bullish.change, 0, math.min(lookback_period_eff, array.size(bullish.change))) : array.new<float>()
+    bearish_recent = array.size(bearish.change) > 0 ? array.slice(bearish.change, 0, math.min(lookback_period_eff, array.size(bearish.change))) : array.new<float>()
+
+    bull_max := array.size(bullish_recent) > 0 ? array.max(bullish_recent) : 0.0001
+    bear_max := array.size(bearish_recent) > 0 ? array.min(bearish_recent) : -0.0001
+    bull_avg := array.size(bullish_recent) > 0 ? array.avg(bullish_recent) : 0.0001
+    bear_avg := array.size(bearish_recent) > 0 ? array.avg(bearish_recent) : -0.0001
+
+    wave_size_ratio_avg := safeDivide(bull_avg, math.abs(bear_avg), 1)
+    wave_size_ratio_max := safeDivide(bull_max, math.abs(bear_max), 1)
+    wave_size_text_avg  := str.tostring(math.round(wave_size_ratio_avg, 2)) + "x"
+    wave_size_text_max  := str.tostring(math.round(wave_size_ratio_max, 2)) + "x"
+
+    dominance_avg_value := bull_avg - math.abs(bear_avg)
+    dominance_avg_text  := dominance_avg_value > 0 ? "Bullish +" + str.tostring(math.round(wave_size_ratio_avg, 2)) + "x" : "Bearish -" + str.tostring(math.round(safeDivide(1, wave_size_ratio_avg, 0), 2)) + "x"
+    market_bias         := dominance_avg_value > 0 ? "Bullish" : dominance_avg_value < 0 ? "Bearish" : "Neutral"
+
+    current_ratio_avg := speed > 0 ? safeDivide(speed, bull_avg, 1) : safeDivide(speed, math.abs(bear_avg), -1)
+    current_ratio_max := speed > 0 ? safeDivide(speed, bull_max, 1) : safeDivide(speed, math.abs(bear_max), -1)
+    current_text_avg  := str.tostring(math.round(math.abs(current_ratio_avg), 2)) + "x"
+    current_text_max  := str.tostring(math.round(math.abs(current_ratio_max), 2)) + "x"
+
+// ==================================================================================
+// SUPPORT/RESISTANCE + S/R BIAS (shared)
+// ==================================================================================
+var float nearest_resistance_1m = na
+var float nearest_support_1m    = na
+var float nearest_resistance_5m = na
+var float nearest_support_5m    = na
+
+if include_sr
+    [res1, sup1] = getNearestSRLevels("1")
+    [res5, sup5] = getNearestSRLevels("5")
+    nearest_resistance_1m := res1
+    nearest_support_1m    := sup1
+    nearest_resistance_5m := res5
+    nearest_support_5m    := sup5
+
+long_bias_1m  = include_sr and not na(nearest_support_1m) and not na(nearest_resistance_1m) ? close > nearest_support_1m and (nearest_resistance_1m - close > close - nearest_support_1m) : false
+short_bias_1m = include_sr and not na(nearest_support_1m) and not na(nearest_resistance_1m) ? close < nearest_resistance_1m and (nearest_resistance_1m - close < close - nearest_support_1m) : false
+long_bias_5m  = include_sr and not na(nearest_support_5m) and not na(nearest_resistance_5m) ? close > nearest_support_5m and (nearest_resistance_5m - close > close - nearest_support_5m) : false
+short_bias_5m = include_sr and not na(nearest_support_5m) and not na(nearest_resistance_5m) ? close < nearest_resistance_5m and (nearest_resistance_5m - close < close - nearest_support_5m) : false
+
+// ==================================================================================
+// VOLATILITY (full K-Means from core)
+// ==================================================================================
+volatility = nz(ta.atr(atr_len), 0.00001)
+volatility := volatility <= 0 ? 0.00001 : volatility
+atr_14     = nz(ta.atr(14), volatility)
+
+var float adaptive_atr = volatility
+var string vol_status = "MEDIUM"
+var int cluster = 1
+var float vol_multiplier = 1.0
+
+// Pre-compute ta.highest/ta.lowest for K-Means outside conditional scope
+vol_highest_training = ta.highest(volatility, training_data_period)
+vol_lowest_training  = ta.lowest(volatility, training_data_period)
+
+if use_kmeans_atr and (bar_index % recalculate_clusters == 0 or bar_index == training_data_period) and barstate.isconfirmed
+    // K-Means logic (kept as-is from core - works perfectly)
+    upper = nz(vol_highest_training, volatility * 1.5)
+    lower = nz(vol_lowest_training, volatility * 0.5)
+    atr_range = upper - lower <= 0 ? volatility : upper - lower
+
+    hv_init = lower + atr_range * highvol
+    mv_init = lower + atr_range * midvol
+    lv_init = lower + atr_range * lowvol
+
+    var array<float> hv = array.new_float()
+    var array<float> mv = array.new_float()
+    var array<float> lv = array.new_float()
+    var float a_mean = hv_init
+    var float b_mean = mv_init
+    var float c_mean = lv_init
+
+    int iters = 0
+    bool cont = true
+    while cont and iters < max_iterations and bar_index >= training_data_period - 1
+        array.clear(hv)
+        array.clear(mv)
+        array.clear(lv)
+        for i = 0 to training_data_period - 1
+            val = nz(volatility[i], volatility)
+            d1 = math.abs(val - a_mean)
+            d2 = math.abs(val - b_mean)
+            d3 = math.abs(val - c_mean)
+            if d1 <= d2 and d1 <= d3
+                array.push(hv, val)
+            else if d2 <= d1 and d2 <= d3
+                array.push(mv, val)
+            else
+                array.push(lv, val)
+        new_a = array.size(hv) > 0 ? array.avg(hv) : a_mean
+        new_b = array.size(mv) > 0 ? array.avg(mv) : b_mean
+        new_c = array.size(lv) > 0 ? array.avg(lv) : c_mean
+        new_a := nz(new_a, hv_init)
+        new_b := nz(new_b, mv_init)
+        new_c := nz(new_c, lv_init)
+
+        if math.abs(new_a - a_mean) < volatility * 0.001 and math.abs(new_b - b_mean) < volatility * 0.001 and math.abs(new_c - c_mean) < volatility * 0.001
+            cont := false
+        a_mean := new_a
+        b_mean := new_b
+        c_mean := new_c
+        iters += 1
+
+    dist_a = math.abs(volatility - a_mean)
+    dist_b = math.abs(volatility - b_mean)
+    dist_c = math.abs(volatility - c_mean)
+    cluster := dist_a <= dist_b and dist_a <= dist_c ? 0 : dist_b <= dist_a and dist_b <= dist_c ? 1 : 2
+    adaptive_atr := cluster == 0 ? a_mean : cluster == 1 ? b_mean : c_mean
+    adaptive_atr := nz(adaptive_atr, volatility)
+    vol_status := cluster == 0 ? "HIGH" : cluster == 1 ? "MEDIUM" : "LOW"
+    vol_multiplier := cluster == 0 ? 0.8 : cluster == 1 ? 1.0 : 1.2
+
+// Volatility percentile
+var array<float> vol_array = array.new_float(volatility_history, volatility)
+if barstate.isconfirmed
+    array.push(vol_array, volatility)
+    if array.size(vol_array) > volatility_history
+        array.shift(vol_array)
+
+vol_percentile = 0.5
+if array.size(vol_array) > 1
+    count = 0
+    for i = 0 to array.size(vol_array) - 1
+        if array.get(vol_array, i) < volatility
+            count += 1
+    vol_percentile := count / array.size(vol_array)
+
+vol_regime = vol_percentile < 0.2 ? "VERY LOW" :
+             vol_percentile < 0.4 ? "LOW" :
+             vol_percentile >= 0.8 ? "VERY HIGH" :
+             vol_percentile >= 0.6 ? "HIGH" : "MEDIUM"
+
+vol_within_range = not (require_atr_minimum and vol_percentile < min_volatility_percentile) and not (avoid_high_volatility and vol_percentile > max_volatility_percentile)
+
+// ==================================================================================
+// MARKET REGIME + PHASE (from core)
+// ==================================================================================
+higher_tf_ma = request.security(syminfo.tickerid, higher_tf, ta.sma(close, 50), lookahead = barmerge.lookahead_off)
+
+ma_cur   = ta.sma(close, regime_ma_length)
+ma_slope = (ma_cur - nz(ma_cur[20], ma_cur)) / 20
+avg_slope_abs = ta.sma(math.abs(ta.change(ma_cur)), regime_std_length)
+norm_slope = avg_slope_abs == 0 ? 0 : ma_slope / avg_slope_abs
+
+returns = ta.change(close) / nz(close[1], close)
+returns_stdev = ta.stdev(returns, regime_std_length)
+returns_stdev_sma = ta.sma(returns_stdev, 50)
+norm_vol = returns_stdev_sma == 0 ? 1 : returns_stdev / returns_stdev_sma
+
+market_regime = norm_slope > regime_threshold ? "TRENDING BULL" : norm_slope < -regime_threshold ? "TRENDING BEAR" : norm_vol > 1.5 ? "VOLATILE" : norm_vol < 0.8 ? "RANGING" : "NEUTRAL"
+
+var string prev_regime = market_regime
+regime_changed = market_regime != prev_regime and bar_index > 5
+prev_regime := market_regime
+
+// AO (must be defined before market phase detection uses it)
+fastMA = ta.sma(hl2, fastperiod)
+slowMA = ta.sma(hl2, slowperiod)
+AO = fastMA - slowMA
+signalAO = ta.sma(AO, signalperiod)
+
+// Market Phase
+var string market_phase = "ACCUMULATION"
+var color phase_color = color.yellow
+lowest_src  = ta.lowest(low, length)
+highest_src = ta.highest(high, length)
+mid         = ta.hma(math.avg(lowest_src, highest_src), 15)
+
+if ta.crossover(close, highest_src[10]) and AO > 0
+    market_phase := "UPTREND"
+    phase_color := color.green
+if ta.crossunder(close, lowest_src[10]) and AO < 0
+    market_phase := "DOWNTREND"
+    phase_color := color.red
+if close > highest_src[5] and close < highest_src and AO > 0 and AO < AO[10]
+    market_phase := "DISTRIBUTION"
+    phase_color := color.orange
+if close < lowest_src[5] and close > lowest_src and AO < 0 and AO > AO[10]
+    market_phase := "ACCUMULATION"
+    phase_color := color.yellow
+
+rsi_14 = ta.rsi(close, 14)
+in_uptrend   = market_phase == "UPTREND" or (market_phase == "ACCUMULATION" and AO > 0 and rsi_14 > 50)
+in_downtrend = market_phase == "DOWNTREND" or (market_phase == "DISTRIBUTION" and AO < 0 and rsi_14 < 50)
+
+// ==================================================================================
+// SIGNAL QUALITY + FINAL SIGNALS (core logic)
+// ==================================================================================
+rsi_value = rsi_14
+strong_trend_aligned = use_multi_timeframe ? (in_uptrend and close > higher_tf_ma) or (in_downtrend and close < higher_tf_ma) : true
+momentum_change = ta.change(close, momentum_lookback) / nz(close[momentum_lookback], close)
+momentum_stdev = ta.stdev(momentum_change, 100)
+normalized_velocity = momentum_stdev == 0 ? 0 : momentum_change / momentum_stdev
+
+bullish_candle = f_detect_bullish_candle_pattern()
+bearish_candle = f_detect_bearish_candle_pattern()
+
+trend_speed_factor = math.abs(current_ratio_avg) > min_wave_ratio ? 1.0 : math.abs(current_ratio_avg) > min_wave_ratio * 0.7 ? 0.7 : math.abs(current_ratio_avg) > min_wave_ratio * 0.5 ? 0.4 : 0.0
+htf_bias_factor = include_sr ? (in_uptrend and (long_bias_1m or long_bias_5m) ? (long_bias_1m and long_bias_5m ? 1.0 : 0.5) : in_downtrend and (short_bias_1m or short_bias_5m) ? (short_bias_1m and short_bias_5m ? 1.0 : 0.5) : 0.0) : 0.0
+
+velocity_change = ta.change(normalized_velocity, momentum_lookback)
+
+signal_quality_score = 0.0
+if in_uptrend
+    signal_quality_score := ((vol_percentile > 0.2 and vol_percentile < 0.7 ? 1.5 : 0.5) + (normalized_velocity > 0 ? 1.0 : 0) + (velocity_change > 0 ? 0.5 : 0) + trend_speed_factor * 0.5 + htf_bias_factor * 0.5) / 4.0
+else if in_downtrend
+    signal_quality_score := ((vol_percentile > 0.2 and vol_percentile < 0.7 ? 1.5 : 0.5) + (normalized_velocity < 0 ? 1.0 : 0) + (velocity_change < 0 ? 0.5 : 0) + trend_speed_factor * 0.5 + htf_bias_factor * 0.5) / 4.0
+else
+    signal_quality_score := ((vol_percentile < 0.3 ? 1.5 : 0.5) + (math.abs(normalized_velocity) < 0.5 ? 1.0 : 0) + (math.abs(velocity_change) < 0.2 ? 0.5 : 0) + trend_speed_factor * 0.5 + htf_bias_factor * 0.5) / 4.0
+
+high_quality = signal_quality_score >= signal_quality_threshold
+
+lowest_20  = ta.lowest(low[1], 20)
+lowest_30  = ta.lowest(low[1], 30)
+highest_20 = ta.highest(high[1], 20)
+highest_30 = ta.highest(high[1], 30)
+bottom = low <= lowest_20 and low > lowest_30
+top    = high >= highest_20 and high < highest_30
+
+volume_sma_20 = ta.sma(volume, 20)
+volume_ok = not volume_filter or volume > volume_sma_20 * min_volume_threshold
+
+lowest_low_length  = ta.lowest(low, length)
+highest_high_length = ta.highest(high, length)
+final_buy_raw  = (bottom or (lowest_low_length == low[1] and close > open)) and (in_uptrend or not require_trend_alignment) and high_quality and volume_ok and vol_within_range and strong_trend_aligned and math.abs(current_ratio_avg) >= min_wave_ratio * 0.7
+final_sell_raw = (top or (highest_high_length == high[1] and close < open)) and (in_downtrend or not require_trend_alignment) and high_quality and volume_ok and vol_within_range and strong_trend_aligned and math.abs(current_ratio_avg) >= min_wave_ratio * 0.7
+
+var int last_buy = 0
+var int last_sell = 0
+final_buy  = final_buy_raw  and (bar_index - last_buy  > signal_cooldown) and in_session
+final_sell = final_sell_raw and (bar_index - last_sell > signal_cooldown) and in_session
+
+if final_buy
+    last_buy := bar_index
+if final_sell
+    last_sell := bar_index
+
+// SL levels
+sl_phase_mult = market_phase == "UPTREND" or market_phase == "DOWNTREND" ? 1.5 : 1.2
+sl_phase_mult *= use_regime_filter ? (market_regime == "TRENDING BULL" or market_regime == "TRENDING BEAR" ? 1.2 : market_regime == "VOLATILE" ? 1.5 : market_regime == "RANGING" ? 0.8 : 1.0) : 1.0
+long_sl  = low  - volatility * vol_multiplier * sl_phase_mult
+short_sl = high + volatility * vol_multiplier * sl_phase_mult
+
+// ==================================================================================
+// VISUALS (plots, shapes, heatmap from core)
+// ==================================================================================
+// Weather heatmap barcolor
+regression_line_val = ta.sma(bar_index * ta.correlation(bar_index, hl2, length) * ta.stdev(hl2, length) / ta.stdev(bar_index, length) + ta.sma(hl2, length) - ta.sma(bar_index, length) * ta.correlation(bar_index, hl2, length) * ta.stdev(hl2, length) / ta.stdev(bar_index, length), length)  // simplified regression
+color_level = (close - regression_line_val) / ta.stdev(close - regression_line_val, 200)
+color_level := math.max(math.min(color_level, 5), -5)
+heatmap_color = color_level > 0 ?
+     color.from_gradient(color_level, 0, math.max(ta.highest(color_level, heat_sensative), 0.0001), color.yellow, color.red) :
+     color.from_gradient(color_level, math.min(ta.lowest(color_level, heat_sensative), -0.0001), 0, color.aqua, color.yellow)
+barcolor(heatmap_color)
+
+// Bands
+plot(highest_src, "Resistance", color = clean_chart_mode ? na : red_color, linewidth = 1)
+plot(mid, "Mid Band", color = clean_chart_mode ? na : main_col, linewidth = 1)
+plot(lowest_src, "Support", color = clean_chart_mode ? na : green_color, linewidth = 1)
+
+// ATR bands
+mid_price = ta.sma(close, 20)
+plot(show_atr_bands ? mid_price + adaptive_atr * 1 : na, "ATR+1", color.new(color.blue, 70))
+plot(show_atr_bands ? mid_price - adaptive_atr * 1 : na, "ATR-1", color.new(color.blue, 70))
+
+// Signals shapes
+plotshape(final_buy,  title="Buy",  style=shape.triangleup,   location=location.belowbar, color=color.green, size=size.large)
+plotshape(final_sell, title="Sell", style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.large)
+
+roc_3 = ta.roc(close, 3)
+plotshape(show_potential_signals and low <= lowest_src + adaptive_atr * 0.5 and roc_3 < -signal_sensitivity, title="Potential Buy",  style=shape.diamond, location=location.belowbar, color=color.new(green_color, 70), size=size.tiny)
+plotshape(show_potential_signals and high >= highest_src - adaptive_atr * 0.5 and roc_3 > signal_sensitivity, title="Potential Sell", style=shape.diamond, location=location.abovebar, color=color.new(red_color, 70), size=size.tiny)
+
+// Entry labels
+if show_entry_labels
+    if final_buy
+        label.new(x=bar_index, y=low - atr_14, text="BUY\nEntry: " + str.tostring(close, "#.####") + "\nSL: " + str.tostring(long_sl, "#.####") + "\nQuality: " + str.tostring(signal_quality_score * 100, "#.#") + "%\nWave: " + str.tostring(math.abs(current_ratio_avg), "#.##") + "x", color=color.new(color.green, 20), style=label.style_label_up, textcolor=color.black, size=size.normal)
+    if final_sell
+        label.new(x=bar_index, y=high + atr_14, text="SELL\nEntry: " + str.tostring(close, "#.####") + "\nSL: " + str.tostring(short_sl, "#.####") + "\nQuality: " + str.tostring(signal_quality_score * 100, "#.#") + "%\nWave: " + str.tostring(math.abs(current_ratio_avg), "#.##") + "x", color=color.new(color.red, 20), style=label.style_label_down, textcolor=color.black, size=size.normal)
+
+// Entry zones
+if show_entry_zones and barstate.islast
+    box.new(bar_index[20], lowest_src, bar_index, lowest_src + (highest_src - lowest_src) * 0.1, bgcolor = color.new(color.aqua, 90), border_color = color.new(color.green, 70))
+    box.new(bar_index[20], highest_src, bar_index, highest_src - (highest_src - lowest_src) * 0.1, bgcolor = color.new(color.yellow, 90), border_color = color.new(color.red, 70))
+
+// ==================================================================================
+// 📊 DASHBOARD TABLE
+// ==================================================================================
+if barstate.islast
+    dash_pos = dashboard_position == "top_right" ? position.top_right : dashboard_position == "top_left" ? position.top_left : dashboard_position == "bottom_right" ? position.bottom_right : position.bottom_left
+
+    bg_color   = color_theme == "dark" ? color.rgb(0,0,0,90)   : color.rgb(255,255,255,90)
+    text_color = color_theme == "dark" ? color.white : color.black
+    header_bg  = color_theme == "dark" ? color.rgb(40,40,40) : color.rgb(200,200,200)
+    label_col  = color_theme == "dark" ? color.silver : color.gray
+    up_c       = color.green
+    dn_c       = color.red
+    neu_c      = color.silver
+
+    var table dash = table.new(dash_pos, 4, 25, bgcolor = bg_color, border_width = 1, border_color = color.gray, frame_color = color.gray)
+
+    table.clear(dash, 0, 0, 3, 24)
+
+    // Header
+    table.cell(dash, 0, 0, "RUBY DASHBOARD", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center)
+    table.merge_cells(dash, 0, 0, 3, 0)
+    int row = 1
+
+    // TREND INFO
+    if show_trend_info
+        table.cell(dash, 0, row, "TREND INFORMATION", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center)
+        table.merge_cells(dash, 0, row, 3, row)
+        row += 1
+
+        trend_dir = trendspeed > 0 ? "BULLISH ↗️" : trendspeed < 0 ? "BEARISH ↘️" : "NEUTRAL ↔️"
+        table.cell(dash, 0, row, "Direction:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, trend_dir, bgcolor = bg_color, text_color = trendspeed > 0 ? up_c : trendspeed < 0 ? dn_c : neu_c)
+        table.cell(dash, 2, row, "Speed:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 3, row, str.tostring(math.round(trendspeed, 4)), bgcolor = bg_color, text_color = trendspeed > 0 ? up_c : trendspeed < 0 ? dn_c : neu_c)
+        row += 1
+
+        strength_cat = current_ratio_avg > 2.0 ? "Very Strong" : current_ratio_avg > 1.5 ? "Strong" : current_ratio_avg > 1.0 ? "Moderate" : current_ratio_avg > 0.5 ? "Weak" : "Very Weak"
+        table.cell(dash, 0, row, "Strength:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, strength_cat, bgcolor = bg_color, text_color = strength_cat == "Very Strong" ? up_c : strength_cat == "Strong" ? color.new(up_c,20) : strength_cat == "Moderate" ? color.orange : color.gray)
+        table.cell(dash, 2, row, "Signal:", bgcolor = bg_color, text_color = label_col)
+        sig_status = final_buy ? "BUY SIGNAL" : final_sell ? "SELL SIGNAL" : math.abs(current_ratio_avg) >= 1.3 ? (current_ratio_avg > 0 ? "BULLISH WAVE" : "BEARISH WAVE") : "NO SIGNAL"
+        table.cell(dash, 3, row, sig_status, bgcolor = bg_color, text_color = final_buy ? up_c : final_sell ? dn_c : math.abs(current_ratio_avg) >= 1.3 ? (current_ratio_avg > 0 ? color.new(up_c,40) : color.new(dn_c,40)) : neu_c)
+        row += 1
+
+        table.cell(dash, 0, row, "Quality:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, str.tostring(math.round(signal_quality_score * 100, 1)) + "%", bgcolor = bg_color, text_color = signal_quality_score > 0.7 ? up_c : signal_quality_score > 0.5 ? color.orange : dn_c)
+        table.cell(dash, 2, row, "Session:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 3, row, in_session ? "ACTIVE" : "INACTIVE", bgcolor = bg_color, text_color = in_session ? up_c : dn_c)
+        row += 1
+        table.cell(dash, 0, row, "", bgcolor = bg_color)
+        table.merge_cells(dash, 0, row, 3, row)
+        row += 1
+
+    // WAVE ANALYSIS
+    if show_wave_analysis
+        table.cell(dash, 0, row, "WAVE ANALYSIS", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center)
+        table.merge_cells(dash, 0, row, 3, row)
+        row += 1
+        table.cell(dash, 0, row, "Wave Ratio:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, wave_size_text_avg, bgcolor = bg_color, text_color = wave_size_ratio_avg > 1 ? color.lime : color.red)
+        table.cell(dash, 2, row, "Current:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 3, row, current_text_avg, bgcolor = bg_color, text_color = current_ratio_avg > 0 ? color.lime : color.red)
+        row += 1
+        table.cell(dash, 0, row, "Dominance:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, dominance_avg_text, bgcolor = bg_color, text_color = dominance_avg_value > 0 ? color.lime : color.red)
+        table.cell(dash, 2, row, "Bias:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 3, row, market_bias, bgcolor = bg_color, text_color = market_bias == "Bullish" ? up_c : market_bias == "Bearish" ? dn_c : neu_c)
+        row += 1
+        table.cell(dash, 0, row, "Bull Avg:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, str.tostring(math.round(bull_avg, 4)), bgcolor = bg_color, text_color = up_c)
+        table.cell(dash, 2, row, "Bear Avg:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 3, row, str.tostring(math.round(bear_avg, 4)), bgcolor = bg_color, text_color = dn_c)
+        row += 1
+        table.cell(dash, 0, row, "", bgcolor = bg_color)
+        table.merge_cells(dash, 0, row, 3, row)
+        row += 1
+
+    // MARKET REGIME
+    if show_market_regime
+        table.cell(dash, 0, row, "MARKET REGIME", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center)
+        table.merge_cells(dash, 0, row, 3, row)
+        row += 1
+        regime_emoji = market_regime == "TRENDING BULL" ? "🐂" : market_regime == "TRENDING BEAR" ? "🐻" : market_regime == "VOLATILE" ? "⚡" : market_regime == "RANGING" ? "↔️" : "⚖️"
+        table.cell(dash, 0, row, "Regime:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, regime_emoji + " " + market_regime, bgcolor = bg_color, text_color = market_regime == "TRENDING BULL" ? up_c : market_regime == "TRENDING BEAR" ? dn_c : market_regime == "VOLATILE" ? color.orange : market_regime == "RANGING" ? color.blue : neu_c)
+        phase_emoji = market_phase == "UPTREND" ? "🚀" : market_phase == "DOWNTREND" ? "🧸" : market_phase == "ACCUMULATION" ? "🏗️" : "📦"
+        table.cell(dash, 2, row, "Phase:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 3, row, phase_emoji + " " + market_phase, bgcolor = bg_color, text_color = phase_color)
+        row += 1
+        table.cell(dash, 0, row, "Momentum:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, (AO > 0 ? "BULLISH" : "BEARISH") + (AO > AO[5] ? " ↗️" : " ↘️"), bgcolor = bg_color, text_color = AO > 0 ? up_c : dn_c)
+        table.cell(dash, 2, row, "RSI:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 3, row, (rsi_value > 60 ? "BULLISH" : rsi_value < 40 ? "BEARISH" : "NEUTRAL") + " (" + str.tostring(math.round(rsi_value, 1)) + ")", bgcolor = bg_color, text_color = rsi_value > 60 ? up_c : rsi_value < 40 ? dn_c : neu_c)
+        row += 1
+        table.cell(dash, 0, row, "", bgcolor = bg_color)
+        table.merge_cells(dash, 0, row, 3, row)
+        row += 1
+
+    // S/R
+    if show_sr_analysis and include_sr
+        table.cell(dash, 0, row, "SUPPORT & RESISTANCE", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center)
+        table.merge_cells(dash, 0, row, 3, row)
+        row += 1
+        table.cell(dash, 0, row, "1m Bias:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, long_bias_1m ? "LONG" : short_bias_1m ? "SHORT" : "NEUTRAL", bgcolor = bg_color, text_color = long_bias_1m ? up_c : short_bias_1m ? dn_c : neu_c)
+        table.cell(dash, 2, row, "5m Bias:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 3, row, long_bias_5m ? "LONG" : short_bias_5m ? "SHORT" : "NEUTRAL", bgcolor = bg_color, text_color = long_bias_5m ? up_c : short_bias_5m ? dn_c : neu_c)
+        row += 1
+        table.cell(dash, 0, row, "1m Support:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, str.tostring(nearest_support_1m, format.mintick), bgcolor = bg_color, text_color = up_c)
+        table.cell(dash, 2, row, "5m Support:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 3, row, str.tostring(nearest_support_5m, format.mintick), bgcolor = bg_color, text_color = up_c)
+        row += 1
+        table.cell(dash, 0, row, "1m Resist:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, str.tostring(nearest_resistance_1m, format.mintick), bgcolor = bg_color, text_color = dn_c)
+        table.cell(dash, 2, row, "5m Resist:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 3, row, str.tostring(nearest_resistance_5m, format.mintick), bgcolor = bg_color, text_color = dn_c)
+        row += 1
+        table.cell(dash, 0, row, "", bgcolor = bg_color)
+        table.merge_cells(dash, 0, row, 3, row)
+        row += 1
+
+    // VOLATILITY
+    if show_volatility
+        table.cell(dash, 0, row, "VOLATILITY ANALYSIS", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center)
+        table.merge_cells(dash, 0, row, 3, row)
+        row += 1
+        table.cell(dash, 0, row, "ATR:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, str.tostring(math.round(atr_14, 5)), bgcolor = bg_color, text_color = text_color)
+        table.cell(dash, 2, row, "Percentile:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 3, row, str.tostring(math.round(vol_percentile * 100, 1)) + "%", bgcolor = bg_color, text_color = text_color)
+        row += 1
+        vol_emoji = vol_regime == "VERY HIGH" ? "⚡⚡" : vol_regime == "HIGH" ? "⚡" : vol_regime == "VERY LOW" ? "🧘🧘" : vol_regime == "LOW" ? "🧘" : "〰️"
+        table.cell(dash, 0, row, "Vol Regime:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 1, row, vol_emoji + " " + vol_regime, bgcolor = bg_color, text_color = vol_regime == "VERY HIGH" ? dn_c : vol_regime == "HIGH" ? color.orange : vol_regime == "VERY LOW" ? up_c : neu_c)
+        vol_strat = vol_percentile > 0.8 ? "AVOID TIGHT STOPS" : vol_percentile < 0.2 ? "BREAKOUT WATCH" : vol_percentile > 0.6 ? "WIDER STOPS" : vol_percentile < 0.4 ? "TIGHTER STOPS" : "NORMAL STOPS"
+        table.cell(dash, 2, row, "Strategy:", bgcolor = bg_color, text_color = label_col)
+        table.cell(dash, 3, row, vol_strat, bgcolor = bg_color, text_color = vol_percentile > 0.8 ? dn_c : vol_percentile < 0.2 ? up_c : vol_percentile > 0.6 ? color.orange : color.new(up_c, 40))
+        row += 1
+
+// ==================================================================================
+// ALERTS
+// ==================================================================================
+alertcondition(final_buy,  title = "Ruby BUY",  message = "{{ticker}} 🟢 RUBY BUY | Quality {{plot('Signal Quality')}}% | Wave {{plot('Wave Ratio')}}x | Regime {{plot('Market Regime')}}")
+alertcondition(final_sell, title = "Ruby SELL", message = "{{ticker}} 🔴 RUBY SELL | Quality {{plot('Signal Quality')}}% | Wave {{plot('Wave Ratio')}}x | Regime {{plot('Market Regime')}}")
+alertcondition(regime_changed, title = "Regime Change", message = "{{ticker}} 🔄 Regime Change Detected")
+alertcondition(session_started, title = "Session Start", message = "{{ticker}} ⏰ Session OPEN")
+alertcondition(session_ended,   title = "Session End",   message = "{{ticker}} ⏰ Session CLOSED")
+
+// Hidden plots for alerts
+plot(show_plot_values ? trendspeed : na, "Trend Speed", display = display.none)
+plot(show_plot_values ? current_ratio_avg : na, "Wave Ratio", display = display.none)
+plot(show_plot_values ? signal_quality_score * 100 : na, "Signal Quality", display = display.none)
+plot(show_plot_values ? (market_regime == "TRENDING BULL" ? 1 : market_regime == "TRENDING BEAR" ? 2 : market_regime == "VOLATILE" ? 3 : market_regime == "RANGING" ? 4 : 0) : na, "Market Regime", display = display.none)

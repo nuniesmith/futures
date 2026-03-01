@@ -1,0 +1,204 @@
+# =============================================================================
+# Futures Trading Co-Pilot — Docker Compose (4-Service Architecture)
+# =============================================================================
+#
+# Services:
+#   postgres       — durable storage (journal, historical opts, alerts)
+#   redis          — hot cache (latest FKS metrics, live positions, 1m bars)
+#   data-service   — FastAPI API layer + HTMX dashboard (reads from Redis)
+#   engine         — background computation (FKS, optimization, backtesting)
+#   prometheus     — metrics collection & alerting  (monitoring profile)
+#   grafana        — dashboards & visualization      (monitoring profile)
+#
+# Usage:
+#   docker compose up -d --build
+#   docker compose --profile monitoring up -d --build
+#   docker compose logs -f engine
+#   docker compose ps
+#
+# =============================================================================
+
+services:
+    # -------------------------------------------------------------------------
+    # PostgreSQL — durable storage
+    # -------------------------------------------------------------------------
+    postgres:
+        image: postgres:16-alpine
+        restart: unless-stopped
+        ports:
+            - "5432:5432"
+        environment:
+            POSTGRES_USER: ${POSTGRES_USER:-futures_user}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+            POSTGRES_DB: ${POSTGRES_DB:-futures_db}
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "pg_isready -U ${POSTGRES_USER:-futures_user} -d ${POSTGRES_DB:-futures_db}",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 10s
+
+    # -------------------------------------------------------------------------
+    # Redis — hot cache for real-time data
+    # -------------------------------------------------------------------------
+    redis:
+        image: redis:7-alpine
+        restart: unless-stopped
+        ports:
+            - "6379:6379"
+        volumes:
+            - redis_data:/data
+        command:
+            - redis-server
+            - --requirepass
+            - ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+            - --appendonly
+            - "yes"
+            - --maxmemory
+            - 256mb
+            - --maxmemory-policy
+            - allkeys-lru
+        healthcheck:
+            test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+            interval: 10s
+            timeout: 3s
+            retries: 3
+
+    # -------------------------------------------------------------------------
+    # Data Service — FastAPI API layer (thin)
+    # Serves REST API, reads computed results from Redis cache.
+    # ENGINE_MODE=remote means it does NOT run heavy computation itself.
+    # -------------------------------------------------------------------------
+    data:
+        build:
+            context: .
+            dockerfile: docker/data/Dockerfile
+        restart: unless-stopped
+        ports:
+            - "8000:8000"
+        env_file:
+            - .env
+        environment:
+            - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+            - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-futures_db}
+            - DB_PATH=/app/data/futures_journal.db
+            - DATA_SERVICE_HOST=0.0.0.0
+            - DATA_SERVICE_PORT=8000
+            - ENGINE_MODE=remote
+            - PYTHONPATH=/app/src
+            - PYTHONUNBUFFERED=1
+        volumes:
+            - app_data:/app/data
+        depends_on:
+            redis:
+                condition: service_healthy
+            postgres:
+                condition: service_healthy
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "python",
+                    "-c",
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+                ]
+            interval: 15s
+            timeout: 5s
+            start_period: 30s
+            retries: 3
+
+    # -------------------------------------------------------------------------
+    # Engine — Background computation worker
+    # Heavy: DashboardEngine, FKS modules, optimization, backtesting,
+    # Massive WebSocket, wave analysis, volatility, signal quality, regime,
+    # CVD, ICT. Reads data from Massive/Redis, writes results to Redis.
+    # -------------------------------------------------------------------------
+    engine:
+        build:
+            context: .
+            dockerfile: docker/engine/Dockerfile
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+            - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-futures_db}
+            - DB_PATH=/app/data/futures_journal.db
+            - ORB_FILTER_GATE=${ORB_FILTER_GATE:-majority}
+            - ORB_CNN_GATE=${ORB_CNN_GATE:-0}
+            - PYTHONPATH=/app/src
+            - PYTHONUNBUFFERED=1
+        volumes:
+            - app_data:/app/data
+            - ./models:/app/models
+            - ./dataset:/app/dataset
+        depends_on:
+            redis:
+                condition: service_healthy
+            postgres:
+                condition: service_healthy
+
+    # -------------------------------------------------------------------------
+    # Prometheus — Metrics collection & alerting
+    # Config is baked into the image via docker/monitoring/prometheus/Dockerfile.
+    # No host volume mounts for config files.
+    # UI at http://localhost:9090
+    # -------------------------------------------------------------------------
+    prometheus:
+        build:
+            context: .
+            dockerfile: docker/monitoring/prometheus/Dockerfile
+        restart: unless-stopped
+        ports:
+            - "9090:9090"
+        volumes:
+            - prometheus_data:/prometheus
+        command:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=30d"
+            - "--web.console.libraries=/etc/prometheus/console_libraries"
+            - "--web.console.templates=/etc/prometheus/consoles"
+            - "--web.enable-lifecycle"
+        depends_on:
+            data:
+                condition: service_healthy
+        profiles:
+            - monitoring
+
+    # -------------------------------------------------------------------------
+    # Grafana — Dashboards & visualization
+    # Provisioning configs and dashboards are baked into the image via
+    # docker/monitoring/grafana/Dockerfile. No host volume mounts for config.
+    # UI at http://localhost:3000  (admin / admin on first login)
+    # -------------------------------------------------------------------------
+    grafana:
+        build:
+            context: .
+            dockerfile: docker/monitoring/grafana/Dockerfile
+        restart: unless-stopped
+        ports:
+            - "3000:3000"
+        environment:
+            - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+            - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+            - GF_USERS_ALLOW_SIGN_UP=false
+        volumes:
+            - grafana_data:/var/lib/grafana
+        depends_on:
+            - prometheus
+        profiles:
+            - monitoring
+
+volumes:
+    postgres_data:
+    redis_data:
+    app_data:
+    prometheus_data:
+    grafana_data:

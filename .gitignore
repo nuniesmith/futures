@@ -1,0 +1,115 @@
+# =============================================================================
+# Futures Trading Co-Pilot — .gitignore
+# =============================================================================
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+.eggs/
+
+# --- Virtual environments ---
+.venv/
+venv/
+ENV/
+
+# --- Environment & secrets ---
+.env
+.env.*
+!.env.example
+
+# --- IDE / Editor ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Data & databases ---
+*.db
+*.sqlite
+*.sqlite3
+data/
+archive/
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Test / coverage artifacts ---
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+
+# --- Claude / AI ---
+.claude/
+
+# --- Docker volumes (local) ---
+postgres_data/
+redis_data/
+grafana_data/
+prometheus_data/
+
+# --- Analysis output ---
+codebase_summary.md
+
+# =============================================================================
+# CNN Dataset — Generated Images (ephemeral, regenerated from bar data)
+# =============================================================================
+# Chart images are rendered on-demand by the dataset generator from historical
+# bars.  They should NOT be committed — they bloat the repo and change every
+# retraining cycle.  The generator is deterministic given the same bars, so
+# any machine can recreate them.
+dataset/images/
+dataset/images/**
+
+# Dataset CSVs are also regenerated each cycle (labels, train/val splits).
+# Keep them out of git — the generator + split_dataset() recreate them.
+dataset/labels.csv
+dataset/train.csv
+dataset/val.csv
+dataset/dataset_stats.json
+
+# Keep the dataset/ directory itself (with a .gitkeep) so the path exists
+# after a fresh clone, but nothing inside it is tracked.
+!dataset/.gitkeep
+
+# =============================================================================
+# CNN Models — Only track the promoted champion + its metadata
+# =============================================================================
+# Training produces many intermediate checkpoints (acc*.pt, bestloss*.pt,
+# final*.pt).  These are large (~85 MB each) and ephemeral — only the
+# validated champion matters for live inference.
+#
+# What IS tracked (via Git LFS):
+#   models/breakout_cnn_best.pt        — the live champion model
+#   models/breakout_cnn_best_meta.json  — promotion metadata (accuracy, date, etc.)
+#
+# What is NOT tracked:
+#   models/breakout_cnn_*.pt            — all dated training checkpoints
+#   models/archive/                     — archived previous champions
+#   models/training_history.csv         — per-epoch metrics (regenerated each run)
+#   models/retrain_audit.jsonl          — retraining audit log (local only)
+#   models/.retrain_lock                — pipeline lock file
+
+# Ignore everything in models/ first...
+models/*
+
+# ...then allowlist only the champion and its metadata
+!models/.gitkeep
+!models/breakout_cnn_best.pt
+!models/breakout_cnn_best_meta.json
