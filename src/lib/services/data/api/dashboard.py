@@ -936,6 +936,16 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     <title>Futures Trading Co-Pilot</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
 
+    <!-- Suppress Tailwind CDN production warning before it loads -->
+    <script>
+        (function() {{
+            var origWarn = console.warn;
+            console.warn = function() {{
+                if (arguments.length > 0 && typeof arguments[0] === 'string' && arguments[0].includes('cdn.tailwindcss.com')) return;
+                origWarn.apply(console, arguments);
+            }};
+        }})();
+    </script>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
 
