@@ -29,6 +29,7 @@ import contextlib
 import json
 import os
 import signal
+import threading
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -72,6 +73,176 @@ def _get_risk_manager(account_size: int = 50_000):
         _risk_manager = RiskManager(account_size=account_size)
         logger.info("RiskManager initialised (account=$%s)", f"{account_size:,}")
     return _risk_manager
+
+
+# ---------------------------------------------------------------------------
+# Redis command queue — data service → engine communication
+# ---------------------------------------------------------------------------
+_RETRAIN_CMD_KEY = "engine:cmd:retrain_cnn"
+_RETRAIN_STATUS_KEY = "engine:retrain:status"
+_retrain_thread: threading.Thread | None = None
+
+
+def _check_redis_commands(action_handlers: dict) -> None:
+    """Check Redis for commands published by the data service.
+
+    Currently supports:
+      - engine:cmd:retrain_cnn  — trigger CNN retraining with parameters
+
+    The command key is consumed (deleted) after being read so it only
+    fires once.
+    """
+    global _retrain_thread
+
+    try:
+        from lib.core.cache import REDIS_AVAILABLE, cache_get
+
+        if not REDIS_AVAILABLE:
+            return
+
+        raw = cache_get(_RETRAIN_CMD_KEY)
+        if not raw:
+            return
+
+        # Consume the command immediately so it doesn't re-fire
+        try:
+            from lib.core.cache import _r
+
+            if _r:
+                _r.delete(_RETRAIN_CMD_KEY)
+        except Exception:
+            pass
+
+        # Parse the command
+        cmd = json.loads(raw if isinstance(raw, str) else raw.decode())
+        cmd_type = cmd.get("command", "")
+
+        if cmd_type != "retrain_cnn":
+            logger.warning("Unknown engine command: %s", cmd_type)
+            return
+
+        # Don't start if a retrain thread is already running
+        if _retrain_thread is not None and _retrain_thread.is_alive():
+            logger.warning("Retrain command received but a retrain job is already running — ignoring")
+            _publish_retrain_status("rejected", "A retrain job is already running")
+            return
+
+        session = cmd.get("session", "both")
+        skip_dataset = cmd.get("skip_dataset", False)
+        epochs = cmd.get("epochs")
+        batch_size = cmd.get("batch_size")
+
+        logger.info(
+            "📩 Received retrain command from dashboard: session=%s skip_dataset=%s epochs=%s",
+            session,
+            skip_dataset,
+            epochs,
+        )
+
+        # Run retraining in a background thread so it doesn't block the engine loop
+        _retrain_thread = threading.Thread(
+            target=_run_retrain_from_command,
+            args=(session, skip_dataset, epochs, batch_size),
+            daemon=True,
+            name="cnn-retrain-cmd",
+        )
+        _retrain_thread.start()
+
+    except Exception as exc:
+        logger.debug("Redis command check error (non-fatal): %s", exc)
+
+
+def _publish_retrain_status(status: str, message: str = "", **extras) -> None:
+    """Write retrain job status to Redis so the dashboard can poll it."""
+    try:
+        from lib.core.cache import cache_set
+
+        payload = json.dumps(
+            {
+                "status": status,
+                "message": message,
+                "timestamp": datetime.now(tz=_EST).isoformat(),
+                **extras,
+            }
+        )
+        cache_set(_RETRAIN_STATUS_KEY, payload.encode(), ttl=3600)
+    except Exception:
+        pass
+
+
+def _run_retrain_from_command(
+    session: str = "both",
+    skip_dataset: bool = False,
+    epochs: int | None = None,
+    batch_size: int | None = None,
+) -> None:
+    """Execute CNN retraining in a background thread (triggered by dashboard command)."""
+    _publish_retrain_status(
+        "running", "CNN retraining started via dashboard command", session=session, skip_dataset=skip_dataset
+    )
+    try:
+        import importlib.util
+        from pathlib import Path
+
+        _here = Path(__file__).resolve().parent
+        _project_root = _here
+        for _p in _here.parents:
+            if (_p / "scripts").is_dir() and (_p / "src").is_dir():
+                _project_root = _p
+                break
+
+        _pipeline_path = _project_root / "scripts" / "retrain_overnight.py"
+        if not _pipeline_path.is_file():
+            msg = f"Retrain script not found at {_pipeline_path}"
+            logger.error(msg)
+            _publish_retrain_status("failed", msg)
+            return
+
+        _spec = importlib.util.spec_from_file_location("retrain_overnight", str(_pipeline_path))
+        if _spec is None or _spec.loader is None:
+            msg = "Could not load retrain_overnight module spec"
+            logger.error(msg)
+            _publish_retrain_status("failed", msg)
+            return
+
+        _mod = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+
+        # Build config
+        cfg = _mod.RetrainConfig.from_env()
+        cfg.immediate = True
+        cfg.force = True
+        cfg.skip_dataset = skip_dataset
+        cfg.orb_session = session
+        if epochs is not None:
+            cfg.epochs = epochs
+        if batch_size is not None:
+            cfg.batch_size = batch_size
+
+        logger.info(
+            "🚀 Starting CNN retrain pipeline: session=%s skip_dataset=%s epochs=%s", session, skip_dataset, cfg.epochs
+        )
+
+        result = _mod.run_pipeline(cfg)
+
+        if result.status == "success":
+            logger.info(
+                "✅ CNN retrain (dashboard-triggered) succeeded — model promoted (acc=%.1f%%)", result.best_val_accuracy
+            )
+            _publish_retrain_status(
+                "success", f"Model promoted (acc={result.best_val_accuracy:.1f}%)", accuracy=result.best_val_accuracy
+            )
+        elif result.status == "gate_rejected":
+            logger.warning("🚫 CNN retrain candidate rejected: %s", result.gate_reason)
+            _publish_retrain_status("gate_rejected", result.gate_reason)
+        else:
+            errors = ", ".join(result.errors[:3]) or "unknown error"
+            logger.error("❌ CNN retrain failed: %s", errors)
+            _publish_retrain_status("failed", errors)
+
+    except Exception as exc:
+        logger.error("CNN retrain (dashboard-triggered) error: %s", exc, exc_info=True)
+        _publish_retrain_status("failed", str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -1249,6 +1420,9 @@ def main():
                 session=current_session.value,
                 pending_actions=len(pending),
             )
+
+            # Check for dashboard-triggered commands via Redis
+            _check_redis_commands(action_handlers)
 
             # Execute pending actions
             for action in pending:

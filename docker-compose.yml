@@ -100,6 +100,9 @@ services:
             - PYTHONUNBUFFERED=1
         volumes:
             - app_data:/app/data
+            - ./models:/app/models
+            - ./dataset:/app/dataset
+            - ./scripts:/app/scripts
         depends_on:
             redis:
                 condition: service_healthy
