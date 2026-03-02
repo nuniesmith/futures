@@ -406,7 +406,7 @@ def _detect_docker() -> bool:
     try:
         if os.path.exists("/.dockerenv"):
             return True
-        with open("/proc/1/cgroup", "r") as f:
+        with open("/proc/1/cgroup") as f:
             return any("docker" in line or "containerd" in line for line in f)
     except Exception:
         return False
