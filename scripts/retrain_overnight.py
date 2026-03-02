@@ -121,6 +121,8 @@ ARCHIVE_DIR = os.path.join(MODEL_DIR, "archive")
 AUDIT_LOG_PATH = os.path.join(MODEL_DIR, "retrain_audit.jsonl")
 LOCKFILE_PATH = os.path.join(MODEL_DIR, ".retrain_lock")
 
+import threading  # needed for lock heartbeat
+
 # Session boundaries (Eastern Time hours)
 ACTIVE_SESSION_START = 3  # 03:00 ET
 ACTIVE_SESSION_END = 12  # 12:00 ET
@@ -281,26 +283,145 @@ def _already_ran_today() -> bool:
     return False
 
 
+# Heartbeat: the lock holder touches this file periodically to prove it's alive.
+_LOCK_HEARTBEAT_PATH = LOCKFILE_PATH + ".heartbeat"
+_LOCK_HEARTBEAT_INTERVAL = 30  # seconds between heartbeat touches
+_lock_heartbeat_stop: threading.Event | None = None
+_lock_heartbeat_thread: threading.Thread | None = None
+
+# Stale thresholds
+_LOCK_STALE_AGE = timedelta(hours=2)  # absolute age of lock
+_LOCK_HEARTBEAT_STALE = timedelta(minutes=5)  # no heartbeat for this long → dead
+
+
+def _is_lock_holder_alive(lock_data: dict) -> bool:
+    """Determine whether the process that holds the lock is still actively training.
+
+    Checks in order:
+      1. Heartbeat file: if present and recently touched, holder is alive.
+      2. PID liveness: only meaningful if we're on the same host (not in
+         Docker where PID 1 is always the main entrypoint, not the trainer).
+      3. Lock age: if older than _LOCK_STALE_AGE, assume dead.
+    """
+    # --- Check heartbeat file (most reliable) ---
+    if os.path.isfile(_LOCK_HEARTBEAT_PATH):
+        try:
+            hb_mtime = datetime.fromtimestamp(os.path.getmtime(_LOCK_HEARTBEAT_PATH), tz=_EST)
+            age = datetime.now(tz=_EST) - hb_mtime
+            if age < _LOCK_HEARTBEAT_STALE:
+                return True  # heartbeat is fresh → holder is alive
+            else:
+                logger.warning(
+                    "Lock heartbeat stale (last beat %.0fs ago) — holder likely dead",
+                    age.total_seconds(),
+                )
+                return False
+        except Exception:
+            pass  # fall through to other checks
+
+    # --- Check PID (skip if PID 1 — Docker entrypoint, not the trainer) ---
+    lock_pid = lock_data.get("pid")
+    if lock_pid and lock_pid != 1:
+        try:
+            os.kill(lock_pid, 0)  # signal 0 = existence check
+            return True
+        except ProcessLookupError:
+            logger.warning("Lock holder PID %d no longer exists", lock_pid)
+            return False
+        except PermissionError:
+            return True  # process exists but we can't signal it
+
+    # --- Fall back to lock age ---
+    try:
+        lock_time = datetime.fromisoformat(lock_data.get("acquired_at", ""))
+        if datetime.now(tz=_EST) - lock_time > _LOCK_STALE_AGE:
+            return False
+    except Exception:
+        return False  # can't parse → treat as dead
+
+    # Lock is recent and we can't prove it's dead — assume alive
+    return True
+
+
+def _heartbeat_loop(stop_event: threading.Event) -> None:
+    """Background thread that periodically touches the heartbeat file."""
+    while not stop_event.is_set():
+        try:
+            with open(_LOCK_HEARTBEAT_PATH, "w") as f:
+                f.write(_now_et().isoformat())
+        except Exception:
+            pass
+        stop_event.wait(_LOCK_HEARTBEAT_INTERVAL)
+
+
+def _start_heartbeat() -> None:
+    """Start the lock heartbeat background thread."""
+    global _lock_heartbeat_stop, _lock_heartbeat_thread
+    _lock_heartbeat_stop = threading.Event()
+    _lock_heartbeat_thread = threading.Thread(
+        target=_heartbeat_loop,
+        args=(_lock_heartbeat_stop,),
+        daemon=True,
+        name="retrain-lock-heartbeat",
+    )
+    _lock_heartbeat_thread.start()
+
+
+def _stop_heartbeat() -> None:
+    """Stop the lock heartbeat background thread and clean up heartbeat file."""
+    global _lock_heartbeat_stop, _lock_heartbeat_thread
+    if _lock_heartbeat_stop is not None:
+        _lock_heartbeat_stop.set()
+    if _lock_heartbeat_thread is not None:
+        _lock_heartbeat_thread.join(timeout=5)
+        _lock_heartbeat_thread = None
+    _lock_heartbeat_stop = None
+    try:
+        if os.path.isfile(_LOCK_HEARTBEAT_PATH):
+            os.remove(_LOCK_HEARTBEAT_PATH)
+    except Exception:
+        pass
+
+
 def _acquire_lock() -> bool:
-    """Simple file-based lock to prevent concurrent retraining runs."""
+    """File-based lock with heartbeat to prevent concurrent retraining runs.
+
+    Improvements over simple age-based staleness:
+      - A background heartbeat thread proves the holder is alive.
+      - If the heartbeat goes stale (>5 min), the lock is broken.
+      - PID check is skipped for PID 1 (Docker entrypoint ≠ trainer).
+      - Absolute stale timeout reduced from 4h to 2h.
+    """
     if os.path.isfile(LOCKFILE_PATH):
         try:
             with open(LOCKFILE_PATH) as f:
                 lock_data = json.load(f)
-            lock_time = datetime.fromisoformat(lock_data.get("acquired_at", ""))
-            # If lock is older than 4 hours, assume stale
-            if datetime.now(tz=_EST) - lock_time > timedelta(hours=4):
-                logger.warning("Stale lock detected (>4h old) — breaking it")
-                os.remove(LOCKFILE_PATH)
-            else:
+
+            if _is_lock_holder_alive(lock_data):
                 logger.error(
                     "Retrain lock held since %s by PID %s — aborting",
                     lock_data.get("acquired_at"),
                     lock_data.get("pid"),
                 )
                 return False
+            else:
+                logger.warning(
+                    "Breaking stale/dead lock (acquired %s, PID %s)",
+                    lock_data.get("acquired_at"),
+                    lock_data.get("pid"),
+                )
+                os.remove(LOCKFILE_PATH)
+                try:
+                    os.remove(_LOCK_HEARTBEAT_PATH)
+                except FileNotFoundError:
+                    pass
         except Exception:
-            os.remove(LOCKFILE_PATH)
+            # Lock file is corrupt — remove it
+            logger.warning("Corrupt lock file — removing")
+            try:
+                os.remove(LOCKFILE_PATH)
+            except FileNotFoundError:
+                pass
 
     os.makedirs(os.path.dirname(LOCKFILE_PATH), exist_ok=True)
     with open(LOCKFILE_PATH, "w") as f:
@@ -311,11 +432,15 @@ def _acquire_lock() -> bool:
             },
             f,
         )
+
+    # Start the heartbeat so other processes can tell we're alive
+    _start_heartbeat()
     return True
 
 
 def _release_lock() -> None:
-    """Remove the lock file."""
+    """Stop heartbeat and remove the lock file."""
+    _stop_heartbeat()
     try:
         if os.path.isfile(LOCKFILE_PATH):
             os.remove(LOCKFILE_PATH)

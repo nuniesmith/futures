@@ -205,7 +205,11 @@ def _run_retrain_from_command(
         if _scripts_str not in _sys.path:
             _sys.path.insert(0, _scripts_str)
 
+        import importlib
+
         import retrain_overnight  # noqa: E402
+
+        importlib.reload(retrain_overnight)  # pick up code changes without engine restart
 
         # Build config
         cfg = retrain_overnight.RetrainConfig.from_env()
@@ -1235,7 +1239,11 @@ def _handle_train_breakout_cnn(engine) -> None:
                 _sys.path.insert(0, _scripts_str)
 
             # Use a direct import — much more reliable than importlib.util
+            import importlib
+
             import retrain_overnight  # noqa: E402
+
+            importlib.reload(retrain_overnight)  # pick up code changes without engine restart
 
             success = retrain_overnight.run_from_engine()
             if success:
