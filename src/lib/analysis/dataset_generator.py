@@ -434,7 +434,7 @@ def load_daily_bars(
     bars_1m = load_bars(symbol, source=source, csv_dir=csv_dir)
     if bars_1m is not None and len(bars_1m) > 100:
         try:
-            daily = (
+            _resampled = (
                 bars_1m.resample("1D")
                 .agg(
                     {
@@ -447,6 +447,7 @@ def load_daily_bars(
                 )
                 .dropna()
             )
+            daily = pd.DataFrame(_resampled) if not isinstance(_resampled, pd.DataFrame) else _resampled
             if len(daily) >= 7:
                 return daily
         except Exception as exc:
@@ -462,7 +463,7 @@ def load_daily_bars(
 
 def _bracket_configs_for_session(
     cfg: DatasetConfig,
-) -> list[tuple[str, "BracketConfig"]]:
+) -> list[tuple[str, Any]]:
     """Return (session_key, BracketConfig) pairs based on ``cfg.orb_session``.
 
     - ``"us"``     → single US config (OR 09:30–10:00, PM end 08:20)
@@ -531,7 +532,7 @@ def generate_dataset_for_symbol(
         (rows, stats) where rows is a list of dicts for the CSV, and
         stats is a DatasetStats for this symbol.
     """
-    from lib.analysis.orb_simulator import BracketConfig, simulate_batch
+    from lib.analysis.orb_simulator import simulate_batch
 
     cfg = config or DatasetConfig()
     stats = DatasetStats()
@@ -585,9 +586,11 @@ def generate_dataset_for_symbol(
     except ImportError:
         logger.warning("Chart renderer not available — generating tabular-only dataset")
         _can_render = False
+        RenderConfig = None  # type: ignore[assignment,misc]  # noqa: N806
+        render_ruby_snapshot = None  # type: ignore[assignment]  # noqa: N806
 
     render_cfg = None
-    if _can_render:
+    if _can_render and RenderConfig is not None:
         render_cfg = RenderConfig(
             dpi=cfg.chart_dpi,
             figsize=cfg.chart_figsize,
@@ -636,7 +639,7 @@ def generate_dataset_for_symbol(
                 window_bars = bars_1m.iloc[window_start:window_end].copy()
 
                 if len(window_bars) >= 10:
-                    rendered_path = render_ruby_snapshot(
+                    rendered_path = render_ruby_snapshot(  # type: ignore[misc]
                         bars=window_bars,
                         symbol=symbol,
                         orb_high=result.or_high if result.or_high > 0 else None,
@@ -798,7 +801,7 @@ def generate_dataset(
             try:
                 existing_df = pd.read_csv(csv_path)
                 # Deduplicate by image_path
-                existing_paths = set(existing_df["image_path"].tolist())
+                existing_paths = list(existing_df["image_path"].tolist())
                 new_rows = df[~df["image_path"].isin(existing_paths)]
                 if not new_rows.empty:
                     df = pd.concat([existing_df, new_rows], ignore_index=True)

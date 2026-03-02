@@ -53,7 +53,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from numpy.typing import ArrayLike
 
 logger = logging.getLogger("signal_quality")
 
@@ -64,10 +63,10 @@ logger = logging.getLogger("signal_quality")
 
 
 def _detect_bullish_candle(
-    open_: ArrayLike,
-    high: ArrayLike,
-    low: ArrayLike,
-    close: ArrayLike,
+    open_: np.ndarray,
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
     idx: int = -1,
 ) -> bool:
     """Detect bullish candlestick patterns at the given bar index.
@@ -108,10 +107,10 @@ def _detect_bullish_candle(
 
 
 def _detect_bearish_candle(
-    open_: ArrayLike,
-    high: ArrayLike,
-    low: ArrayLike,
-    close: ArrayLike,
+    open_: np.ndarray,
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
     idx: int = -1,
 ) -> bool:
     """Detect bearish candlestick patterns at the given bar index.
@@ -157,7 +156,7 @@ def _detect_bearish_candle(
 
 
 def _compute_normalized_velocity(
-    close: ArrayLike,
+    close: np.ndarray,
     momentum_lookback: int = 3,
     stdev_lookback: int = 100,
 ) -> float:
@@ -196,7 +195,7 @@ def _compute_normalized_velocity(
 
 
 def _compute_price_acceleration(
-    close: ArrayLike,
+    close: np.ndarray,
     momentum_lookback: int = 3,
     stdev_lookback: int = 100,
 ) -> float:
@@ -295,7 +294,7 @@ def _determine_trend_context(
 # ---------------------------------------------------------------------------
 
 
-def _compute_rsi(close: ArrayLike, period: int = 14) -> float:
+def _compute_rsi(close: np.ndarray, period: int = 14) -> float:
     """Compute RSI(period) for the latest bar. Uses Wilder's smoothing."""
     if len(close) < period + 1:
         return 50.0
@@ -325,7 +324,7 @@ def _compute_rsi(close: ArrayLike, period: int = 14) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _compute_ao(high: ArrayLike, low: ArrayLike, fast: int = 5, slow: int = 34) -> float:
+def _compute_ao(high: np.ndarray, low: np.ndarray, fast: int = 5, slow: int = 34) -> float:
     """Compute Awesome Oscillator: SMA(hl2, fast) - SMA(hl2, slow)."""
     if len(high) < slow:
         return 0.0
@@ -405,10 +404,10 @@ def compute_signal_quality(
         return default_result
 
     try:
-        close = df["Close"].astype(float).values
-        high = df["High"].astype(float).values
-        low = df["Low"].astype(float).values
-        open_ = df["Open"].astype(float).values
+        close = np.asarray(df["Close"].astype(float).values)
+        high = np.asarray(df["High"].astype(float).values)
+        low = np.asarray(df["Low"].astype(float).values)
+        open_ = np.asarray(df["Open"].astype(float).values)
     except (KeyError, ValueError) as exc:
         logger.warning("Signal quality failed — missing OHLC columns: %s", exc)
         return default_result

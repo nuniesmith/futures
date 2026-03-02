@@ -12,6 +12,7 @@ Endpoints:
 
 import json
 import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -67,7 +68,7 @@ def get_latest_analysis(
     into a single JSON response.  Returns whatever is available —
     missing components come back as null rather than raising errors.
     """
-    result = {
+    result: dict[str, Any] = {
         "ticker": ticker,
         "name": TICKER_TO_NAME.get(ticker, ticker),
         "interval": interval,
@@ -193,10 +194,7 @@ def list_assets():
     """List all tracked assets with their contract specifications."""
     return {
         "assets": ASSETS,
-        "contract_specs": {
-            name: {k: v for k, v in spec.items()}
-            for name, spec in CONTRACT_SPECS.items()
-        },
+        "contract_specs": {name: {k: v for k, v in spec.items()} for name, spec in CONTRACT_SPECS.items()},
     }
 
 

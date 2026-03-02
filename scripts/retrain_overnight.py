@@ -72,6 +72,7 @@ Environment variables:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -81,7 +82,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -138,6 +139,7 @@ class RetrainConfig:
     skip_existing_images: bool = True
     chart_dpi: int = 150
     bars_source: str = "cache"
+    orb_session: str = "both"  # "us", "london", or "both"
 
     # Train/val split
     val_fraction: float = 0.15
@@ -174,7 +176,7 @@ class RetrainConfig:
     force: bool = False  # run even if already ran today
 
     @classmethod
-    def from_env(cls) -> "RetrainConfig":
+    def from_env(cls) -> RetrainConfig:
         """Build config from environment variables with sensible defaults."""
         cfg = cls()
 
@@ -191,6 +193,7 @@ class RetrainConfig:
         cfg.min_precision = float(os.getenv("CNN_RETRAIN_MIN_PRECISION", str(cfg.min_precision)))
         cfg.min_recall = float(os.getenv("CNN_RETRAIN_MIN_RECALL", str(cfg.min_recall)))
         cfg.min_improvement = float(os.getenv("CNN_RETRAIN_IMPROVEMENT", str(cfg.min_improvement)))
+        cfg.orb_session = os.getenv("CNN_RETRAIN_ORB_SESSION", cfg.orb_session)
 
         return cfg
 
@@ -253,7 +256,7 @@ def _now_et() -> datetime:
     return datetime.now(tz=_EST)
 
 
-def _is_active_session(now: Optional[datetime] = None) -> bool:
+def _is_active_session(now: datetime | None = None) -> bool:
     """Return True if we're in the active trading session (03:00–12:00 ET)."""
     now = now or _now_et()
     return ACTIVE_SESSION_START <= now.hour < ACTIVE_SESSION_END
@@ -265,7 +268,7 @@ def _already_ran_today() -> bool:
         return False
     today_str = _now_et().strftime("%Y-%m-%d")
     try:
-        with open(AUDIT_LOG_PATH, "r") as f:
+        with open(AUDIT_LOG_PATH) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -282,7 +285,7 @@ def _acquire_lock() -> bool:
     """Simple file-based lock to prevent concurrent retraining runs."""
     if os.path.isfile(LOCKFILE_PATH):
         try:
-            with open(LOCKFILE_PATH, "r") as f:
+            with open(LOCKFILE_PATH) as f:
                 lock_data = json.load(f)
             lock_time = datetime.fromisoformat(lock_data.get("acquired_at", ""))
             # If lock is older than 4 hours, assume stale
@@ -380,10 +383,8 @@ def stage_dataset_refresh(cfg: RetrainConfig, result: RetrainResult) -> bool:
         logger.info("📂 Stage 1: Dataset refresh — SKIPPED (--skip-dataset)")
         # Still count existing rows
         if os.path.isfile(LABELS_CSV):
-            try:
+            with contextlib.suppress(Exception):
                 result.dataset_rows = len(pd.read_csv(LABELS_CSV))
-            except Exception:
-                pass
         return True
 
     logger.info("=" * 60)
@@ -402,6 +403,7 @@ def stage_dataset_refresh(cfg: RetrainConfig, result: RetrainResult) -> bool:
             bars_source=cfg.bars_source,
             skip_existing=cfg.skip_existing_images,
             chart_dpi=cfg.chart_dpi,
+            orb_session=cfg.orb_session,
         )
 
         stats = generate_dataset(
@@ -1228,6 +1230,12 @@ Examples:
         default=None,
         help="Data source for bars (default: cache)",
     )
+    parser.add_argument(
+        "--session",
+        choices=["us", "london", "both"],
+        default=None,
+        help="ORB session for dataset generation: 'us', 'london', or 'both' (default: both)",
+    )
 
     # Training options
     parser.add_argument("--epochs", type=int, default=None, help="Training epochs (default: 25)")
@@ -1280,6 +1288,8 @@ Examples:
         cfg.days_back = args.days_back
     if args.bars_source is not None:
         cfg.bars_source = args.bars_source
+    if args.session is not None:
+        cfg.orb_session = args.session
 
     # Training options
     if args.epochs is not None:

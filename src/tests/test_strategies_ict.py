@@ -1,4 +1,4 @@
-"""
+"""# pyright: reportArgumentType=false
 Tests for the ICT-enhanced strategy (ICTTrendEMA), engine multi-TF
 confluence wiring, and alert configuration integration.
 
@@ -381,8 +381,10 @@ class TestICTTrendEMABacktest:
         cls0 = make_strategy("ICTTrendEMA", {**base_params, "ict_mode": 0})
         cls2 = make_strategy("ICTTrendEMA", {**base_params, "ict_mode": 2})
 
-        stats0 = Backtest(bt_data, cls0, cash=100_000, trade_on_close=True).run()
-        stats2 = Backtest(bt_data, cls2, cash=100_000, trade_on_close=True).run()
+        from typing import Any
+
+        stats0: Any = Backtest(bt_data, cls0, cash=100_000, trade_on_close=True).run()
+        stats2: Any = Backtest(bt_data, cls2, cash=100_000, trade_on_close=True).run()
 
         trades_0 = int(stats0["# Trades"])
         trades_2 = int(stats2["# Trades"])
@@ -406,7 +408,9 @@ class TestICTTrendEMABacktest:
             },
         )
         bt = Backtest(trending_data, cls, cash=100_000, trade_on_close=True)
-        stats = bt.run()
+        from typing import Any
+
+        stats: Any = bt.run()
         # Mode 0 is permissive — equivalent to TrendEMA, should have trades
         assert int(stats["# Trades"]) >= 0  # at least doesn't crash
 
@@ -861,8 +865,12 @@ class TestICTvsTrendEMAComparison:
         cls_ema = make_strategy("TrendEMA", base_params)
         cls_ict = make_strategy("ICTTrendEMA", {**base_params, "ict_mode": 0})
 
-        trades_ema = int(Backtest(shared_data, cls_ema, cash=100_000, trade_on_close=True).run()["# Trades"])
-        trades_ict = int(Backtest(shared_data, cls_ict, cash=100_000, trade_on_close=True).run()["# Trades"])
+        from typing import Any
+
+        stats_ema: Any = Backtest(shared_data, cls_ema, cash=100_000, trade_on_close=True).run()
+        stats_ict: Any = Backtest(shared_data, cls_ict, cash=100_000, trade_on_close=True).run()
+        trades_ema = int(stats_ema["# Trades"])
+        trades_ict = int(stats_ict["# Trades"])
 
         # With mode 0, ICT score doesn't gate entries, so trade counts
         # should be identical (same EMA crossover logic, same exits)

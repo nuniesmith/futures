@@ -417,6 +417,7 @@ _PROXY_PREFIXES = (
     "/risk/",
     "/audit/",
     "/journal/",
+    "/cnn/",
     "/data/",
     "/metrics",
     "/docs",
@@ -513,6 +514,15 @@ async def proxy_audit(request: Request, path: str):
 async def proxy_journal(request: Request, path: str):
     """Proxy all /journal/* requests to the data service."""
     return await _proxy_request(request, f"/journal/{path}")
+
+
+@app.api_route(
+    "/cnn/{path:path}",
+    methods=["GET", "POST"],
+)
+async def proxy_cnn(request: Request, path: str):
+    """Proxy all /cnn/* requests to the data service (CNN model management)."""
+    return await _proxy_request(request, f"/cnn/{path}")
 
 
 @app.api_route(

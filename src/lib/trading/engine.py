@@ -2,6 +2,8 @@
 Background engine that keeps market data fresh, runs Optuna optimizations
 when cached results expire, and backtests all assets with optimal parameters.
 
+# pyright: reportArgumentType=false
+
 Improvements over the original:
   - Walk-forward validation (train/test split) to prevent overfitting
   - Session time filtering (only backtest during the 3 AM–noon EST window)
@@ -26,6 +28,7 @@ import logging
 import threading
 import time
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 _EST = ZoneInfo("America/New_York")
@@ -326,7 +329,7 @@ def run_optimization(ticker: str, interval: str, period: str, account_size: int)
                         exclusive_orders=True,
                         finalize_trades=True,
                     )
-                    stats = bt.run()
+                    stats: Any = bt.run()
                 except Exception:
                     return -100.0
                 return score_backtest(stats, min_trades=3)
@@ -380,7 +383,7 @@ def run_optimization(ticker: str, interval: str, period: str, account_size: int)
                     exclusive_orders=True,
                     finalize_trades=True,
                 )
-                stats = bt.run()
+                stats: Any = bt.run()
                 return_pct = round(float(stats["Return [%]"]), 2)
                 sharpe = _safe_float(stats["Sharpe Ratio"])
                 sortino = _safe_float(stats.get("Sortino Ratio", 0))
@@ -524,7 +527,7 @@ def run_backtest(
             exclusive_orders=True,
             finalize_trades=True,
         )
-        stats = bt.run()
+        stats: Any = bt.run()
     except Exception as exc:
         logger.warning("Backtest error for %s (%s): %s", name, used_strategy, exc)
         return None

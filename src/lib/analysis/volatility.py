@@ -298,9 +298,9 @@ def kmeans_volatility_clusters(
         return default_result
 
     try:
-        high = df["High"].astype(float).values
-        low = df["Low"].astype(float).values
-        close = df["Close"].astype(float).values
+        high = np.asarray(df["High"].astype(float).values)
+        low = np.asarray(df["Low"].astype(float).values)
+        close = np.asarray(df["Close"].astype(float).values)
     except (KeyError, ValueError) as exc:
         logger.warning("Volatility analysis failed — missing HLC columns: %s", exc)
         return default_result
@@ -313,7 +313,7 @@ def kmeans_volatility_clusters(
 
     # Guard against zero/negative ATR
     if current_atr <= 0:
-        current_atr = float(np.mean(np.abs(high - low)[-14:])) or 0.0001
+        current_atr = float(np.mean(np.abs(high - low)[-14:])) or 0.0001  # type: ignore[operator]
         default_result["raw_atr"] = round(current_atr, 6)
         return default_result
 

@@ -11,6 +11,7 @@ Covers:
   - sleep_interval varies by session
   - time_until_next_session calculations
 """
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -35,16 +36,16 @@ class TestSessionMode:
         now = datetime(2026, 2, 27, 0, 0, 0, tzinfo=_EST)
         assert ScheduleManager.get_session_mode(now) == SessionMode.PRE_MARKET
 
-    def test_3am_is_pre_market(self):
-        now = datetime(2026, 2, 27, 3, 30, 0, tzinfo=_EST)
+    def test_1am_is_pre_market(self):
+        now = datetime(2026, 2, 27, 1, 0, 0, tzinfo=_EST)
         assert ScheduleManager.get_session_mode(now) == SessionMode.PRE_MARKET
 
-    def test_4_59am_is_pre_market(self):
-        now = datetime(2026, 2, 27, 4, 59, 59, tzinfo=_EST)
+    def test_2_59am_is_pre_market(self):
+        now = datetime(2026, 2, 27, 2, 59, 59, tzinfo=_EST)
         assert ScheduleManager.get_session_mode(now) == SessionMode.PRE_MARKET
 
-    def test_5am_is_active(self):
-        now = datetime(2026, 2, 27, 5, 0, 0, tzinfo=_EST)
+    def test_3am_is_active(self):
+        now = datetime(2026, 2, 27, 3, 0, 0, tzinfo=_EST)
         assert ScheduleManager.get_session_mode(now) == SessionMode.ACTIVE
 
     def test_9_30am_is_active(self):
@@ -78,7 +79,7 @@ class TestPreMarketActions:
 
     def test_first_call_returns_all_premarket_actions(self):
         mgr = ScheduleManager()
-        now = datetime(2026, 2, 27, 3, 0, 0, tzinfo=_EST)
+        now = datetime(2026, 2, 27, 1, 0, 0, tzinfo=_EST)
         pending = mgr.get_pending_actions(now=now)
 
         action_types = {a.action for a in pending}
@@ -88,7 +89,7 @@ class TestPreMarketActions:
 
     def test_no_active_actions_during_premarket(self):
         mgr = ScheduleManager()
-        now = datetime(2026, 2, 27, 3, 0, 0, tzinfo=_EST)
+        now = datetime(2026, 2, 27, 1, 0, 0, tzinfo=_EST)
         pending = mgr.get_pending_actions(now=now)
 
         action_types = {a.action for a in pending}
@@ -97,7 +98,7 @@ class TestPreMarketActions:
 
     def test_no_off_hours_actions_during_premarket(self):
         mgr = ScheduleManager()
-        now = datetime(2026, 2, 27, 3, 0, 0, tzinfo=_EST)
+        now = datetime(2026, 2, 27, 1, 0, 0, tzinfo=_EST)
         pending = mgr.get_pending_actions(now=now)
 
         action_types = {a.action for a in pending}
@@ -107,7 +108,7 @@ class TestPreMarketActions:
 
     def test_premarket_actions_dont_repeat_after_done(self):
         mgr = ScheduleManager()
-        now = datetime(2026, 2, 27, 3, 0, 0, tzinfo=_EST)
+        now = datetime(2026, 2, 27, 1, 0, 0, tzinfo=_EST)
 
         # First call should include daily focus
         pending1 = mgr.get_pending_actions(now=now)
@@ -117,7 +118,7 @@ class TestPreMarketActions:
         mgr.mark_done(ActionType.COMPUTE_DAILY_FOCUS, now=now)
 
         # Second call should NOT include daily focus (already ran today)
-        now2 = datetime(2026, 2, 27, 3, 5, 0, tzinfo=_EST)
+        now2 = datetime(2026, 2, 27, 1, 5, 0, tzinfo=_EST)
         pending2 = mgr.get_pending_actions(now=now2)
         assert not any(a.action == ActionType.COMPUTE_DAILY_FOCUS for a in pending2)
 
@@ -225,12 +226,12 @@ class TestSessionTransitions:
     def test_premarket_to_active_transition(self):
         mgr = ScheduleManager()
         # Start in pre-market
-        now1 = datetime(2026, 2, 27, 4, 0, 0, tzinfo=_EST)
+        now1 = datetime(2026, 2, 27, 2, 0, 0, tzinfo=_EST)
         mgr.get_pending_actions(now=now1)
         assert mgr.current_session == SessionMode.PRE_MARKET
 
-        # Transition to active
-        now2 = datetime(2026, 2, 27, 5, 0, 0, tzinfo=_EST)
+        # Transition to active (03:00 ET — London open)
+        now2 = datetime(2026, 2, 27, 3, 0, 0, tzinfo=_EST)
         pending = mgr.get_pending_actions(now=now2)
         assert mgr.current_session == SessionMode.ACTIVE
 
@@ -264,18 +265,18 @@ class TestDayTransitions:
         mgr = ScheduleManager()
 
         # Day 1 pre-market — compute daily focus
-        now1 = datetime(2026, 2, 27, 3, 0, 0, tzinfo=_EST)
+        now1 = datetime(2026, 2, 27, 1, 0, 0, tzinfo=_EST)
         pending1 = mgr.get_pending_actions(now=now1)
         assert any(a.action == ActionType.COMPUTE_DAILY_FOCUS for a in pending1)
         mgr.mark_done(ActionType.COMPUTE_DAILY_FOCUS, now=now1)
 
         # Still Day 1 — should NOT be pending
-        now2 = datetime(2026, 2, 27, 4, 0, 0, tzinfo=_EST)
+        now2 = datetime(2026, 2, 27, 2, 0, 0, tzinfo=_EST)
         pending2 = mgr.get_pending_actions(now=now2)
         assert not any(a.action == ActionType.COMPUTE_DAILY_FOCUS for a in pending2)
 
         # Day 2 pre-market — should be pending again
-        now3 = datetime(2026, 2, 28, 3, 0, 0, tzinfo=_EST)
+        now3 = datetime(2026, 2, 28, 1, 0, 0, tzinfo=_EST)
         pending3 = mgr.get_pending_actions(now=now3)
         assert any(a.action == ActionType.COMPUTE_DAILY_FOCUS for a in pending3)
 
@@ -288,7 +289,7 @@ class TestDayTransitions:
 class TestSleepInterval:
     def test_premarket_sleep(self):
         mgr = ScheduleManager()
-        now = datetime(2026, 2, 27, 3, 0, 0, tzinfo=_EST)
+        now = datetime(2026, 2, 27, 1, 0, 0, tzinfo=_EST)
         mgr.get_pending_actions(now=now)
         assert mgr.sleep_interval == ScheduleManager.SLEEP_PRE_MARKET
 
@@ -330,9 +331,7 @@ class TestPriorityOrdering:
         now = datetime(2026, 2, 27, 3, 0, 0, tzinfo=_EST)
         pending = mgr.get_pending_actions(now=now)
 
-        focus_actions = [
-            a for a in pending if a.action == ActionType.COMPUTE_DAILY_FOCUS
-        ]
+        focus_actions = [a for a in pending if a.action == ActionType.COMPUTE_DAILY_FOCUS]
         assert len(focus_actions) == 1
         assert focus_actions[0].priority == 0
 

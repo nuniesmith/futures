@@ -1133,6 +1133,16 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                     {orb_html}
                 </div>
 
+                <!-- CNN Model Panel — always visible (retrain can run anytime) -->
+                <div id="cnn-panel"
+                     class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+                     hx-get="/cnn/status/html"
+                     hx-trigger="load, every 15s"
+                     hx-swap="innerHTML">
+                    <h3 class="text-sm font-semibold text-zinc-400 mb-2">🧠 CNN MODEL</h3>
+                    <div class="text-zinc-500 text-sm">Loading model status...</div>
+                </div>
+
                 <!-- Alerts Panel — hidden during off-hours -->
                 <div id="alerts-panel"
                      class="{"hidden" if is_off_hours else ""}"

@@ -100,6 +100,7 @@ from lib.services.data.api.analysis import (  # noqa: E402
 )
 from lib.services.data.api.audit import router as audit_router  # noqa: E402
 from lib.services.data.api.auth import require_api_key  # noqa: E402
+from lib.services.data.api.cnn import router as cnn_router  # noqa: E402
 from lib.services.data.api.dashboard import (  # noqa: E402
     router as dashboard_router,
 )
@@ -388,6 +389,10 @@ app.include_router(metrics_router, tags=["Metrics"])
 # NOTE: nt8_deploy_router is mounted WITHOUT a prefix — routes are defined with /api/nt8/ paths.
 app.include_router(nt8_deploy_router, tags=["NT8 Deploy"])
 
+# CNN: /cnn/status, /cnn/retrain, /cnn/retrain/status, /cnn/history, /cnn/status/html
+# NOTE: cnn_router is mounted WITHOUT a prefix — routes are defined with /cnn/ paths.
+app.include_router(cnn_router, tags=["CNN"])
+
 
 # ---------------------------------------------------------------------------
 # Root endpoint — now served by dashboard_router (GET / returns HTML dashboard)
@@ -423,6 +428,13 @@ def api_info():
             "nt8_deploy": "/api/nt8/deploy",
             "nt8_health": "/api/nt8/health",
             "nt8_health_html": "/api/nt8/health/html",
+            "cnn_status": "/cnn/status",
+            "cnn_status_html": "/cnn/status/html",
+            "cnn_retrain": "/cnn/retrain",
+            "cnn_retrain_status": "/cnn/retrain/status",
+            "cnn_retrain_log": "/cnn/retrain/log",
+            "cnn_retrain_cancel": "/cnn/retrain/cancel",
+            "cnn_history": "/cnn/history",
         },
     }
 

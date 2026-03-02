@@ -883,6 +883,8 @@ class TestLondonORBFilters:
 
         assert pm_high_london is not None
         assert pm_high_default is not None
+        assert pm_low_london is not None
+        assert pm_low_default is not None
         # The default window includes more bars (00:00–06:00) so its range
         # should be >= the London window (00:00–03:00)
         assert pm_high_default >= pm_high_london

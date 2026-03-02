@@ -186,9 +186,9 @@ def reset_limiter() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+def _rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
     """Return a structured JSON 429 response when rate limit is exceeded."""
-    retry_after = exc.detail or "unknown"
+    retry_after = exc.detail if isinstance(exc, RateLimitExceeded) and exc.detail else "unknown"
 
     logger.warning(
         "Rate limit exceeded: %s %s from %s — limit: %s",

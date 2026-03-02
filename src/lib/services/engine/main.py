@@ -445,6 +445,8 @@ def _handle_check_orb(engine, orb_session=None) -> None:
             _filters_available = True
         except ImportError:
             _filters_available = False
+            apply_all_filters = None  # type: ignore[assignment]
+            extract_premarket_range = None  # type: ignore[assignment]
             logger.debug("ORB filters module not available — breakouts will be unfiltered")
 
         breakouts_found = 0
@@ -456,6 +458,10 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                 continue
 
             try:
+                import io
+
+                import pandas as pd
+
                 # Try to get 1-minute bars from the engine's data
                 bars_1m = None
 
@@ -463,10 +469,6 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                 bars_key = f"engine:bars_1m:{ticker or symbol}"
                 raw_bars = cache_get(bars_key)
                 if raw_bars:
-                    import io
-
-                    import pandas as pd
-
                     raw_str = raw_bars.decode("utf-8") if isinstance(raw_bars, bytes) else raw_bars
                     bars_1m = pd.read_json(io.StringIO(raw_str))
 
@@ -527,7 +529,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                 logger.debug("ORB filters: US mode — windows 08:20–10:30, PM end 08:20, lunch ON")
 
                             # Extract pre-market range with session-aware end time
-                            pm_high, pm_low = extract_premarket_range(bars_1m, pm_end=_pm_end)
+                            pm_high, pm_low = extract_premarket_range(bars_1m, pm_end=_pm_end)  # type: ignore[possibly-unbound]
 
                             # Try to load daily bars for NR7 check
                             bars_daily = None
@@ -556,7 +558,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                             # If no dedicated 15m bars, try resampling from 1m
                             if (bars_htf is None or bars_htf.empty) and bars_1m is not None:
                                 with contextlib.suppress(Exception):
-                                    bars_htf = (
+                                    _resampled = (
                                         bars_1m.resample("15min")
                                         .agg(
                                             {
@@ -569,6 +571,11 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                         )
                                         .dropna()
                                     )
+                                    bars_htf = (
+                                        pd.DataFrame(_resampled)
+                                        if not isinstance(_resampled, pd.DataFrame)
+                                        else _resampled
+                                    )
 
                             from datetime import datetime as _dt
                             from zoneinfo import ZoneInfo as _ZI
@@ -578,7 +585,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                             # Gate mode: env var ORB_FILTER_GATE (default "majority")
                             _gate_mode = os.environ.get("ORB_FILTER_GATE", "majority")
 
-                            filter_result = apply_all_filters(
+                            filter_result = apply_all_filters(  # type: ignore[possibly-unbound]
                                 direction=result.direction,
                                 trigger_price=result.trigger_price,
                                 signal_time=signal_time,
@@ -988,6 +995,7 @@ def _handle_generate_chart_dataset(engine) -> None:
             bars_source="cache",
             skip_existing=True,
             chart_dpi=150,
+            orb_session="both",
         )
 
         stats = generate_dataset(

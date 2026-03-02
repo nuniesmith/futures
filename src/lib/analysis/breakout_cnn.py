@@ -59,6 +59,15 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    # Always visible to the type checker — these are never actually
+    # executed at runtime when TYPE_CHECKING is True.
+    import torch
+    import torch.nn as nn
+    import torchvision.models as models
+    import torchvision.transforms as T
+    from PIL import Image
+    from torch.utils.data import DataLoader, Dataset
+
 import numpy as np
 import pandas as pd
 
@@ -69,12 +78,12 @@ logger = logging.getLogger("analysis.breakout_cnn")
 # ---------------------------------------------------------------------------
 
 try:
-    import torch
-    import torch.nn as nn
-    import torchvision.models as models
-    import torchvision.transforms as T
-    from PIL import Image
-    from torch.utils.data import DataLoader, Dataset
+    import torch  # type: ignore[no-redef]
+    import torch.nn as nn  # type: ignore[no-redef]
+    import torchvision.models as models  # type: ignore[no-redef]
+    import torchvision.transforms as T  # type: ignore[no-redef]
+    from PIL import Image  # type: ignore[no-redef]
+    from torch.utils.data import DataLoader, Dataset  # type: ignore[no-redef]
 
     _TORCH_AVAILABLE = True
 except ImportError:
@@ -180,7 +189,7 @@ def get_device() -> str:
 
 if _TORCH_AVAILABLE:
 
-    class BreakoutDataset(Dataset):
+    class BreakoutDataset(Dataset):  # type: ignore[no-redef]
         """PyTorch Dataset for breakout chart images + tabular features.
 
         Expects a CSV with columns:
@@ -268,9 +277,17 @@ if _TORCH_AVAILABLE:
 
 else:
     # Stub when torch is not available
-    class BreakoutDataset:  # type: ignore[no-redef]
-        def __init__(self, *args, **kwargs):
+    class BreakoutDataset(Dataset):  # type: ignore[no-redef,misc]
+        """Stub for environments without PyTorch."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             raise RuntimeError("PyTorch is not installed — cannot create BreakoutDataset")
+
+        def __len__(self) -> int:
+            return 0
+
+        def __getitem__(self, idx: int) -> Any:
+            raise RuntimeError("PyTorch is not installed")
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +296,7 @@ else:
 
 if _TORCH_AVAILABLE:
 
-    class HybridBreakoutCNN(nn.Module):
+    class HybridBreakoutCNN(nn.Module):  # type: ignore[no-redef]
         """Hybrid image + tabular model for breakout classification.
 
         Architecture:
@@ -312,7 +329,7 @@ if _TORCH_AVAILABLE:
             # Remove the original classifier head → get 1280-dim features
             # EfficientNetV2-S: features → avgpool → classifier
             # We keep features + avgpool, replace classifier with Identity
-            backbone.classifier = nn.Identity()
+            backbone.classifier = nn.Identity()  # type: ignore[assignment]
             self.cnn = backbone
             self._cnn_out_dim = 1280  # EfficientNetV2-S feature dim
 
@@ -366,9 +383,17 @@ if _TORCH_AVAILABLE:
 
 else:
 
-    class HybridBreakoutCNN:  # type: ignore[no-redef]
-        def __init__(self, *args, **kwargs):
+    class HybridBreakoutCNN(nn.Module):  # type: ignore[no-redef,misc]
+        """Stub for environments without PyTorch."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             raise RuntimeError("PyTorch is not installed — cannot create HybridBreakoutCNN")
+
+        def freeze_backbone(self) -> None:
+            raise RuntimeError("PyTorch is not installed")
+
+        def unfreeze_backbone(self) -> None:
+            raise RuntimeError("PyTorch is not installed")
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +490,7 @@ def train_model(
 
     # --- Loss ---
     # Use label smoothing to prevent overconfident predictions
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
+    criterion: Any = nn.CrossEntropyLoss(label_smoothing=0.05)
 
     # --- Training loop ---
     best_val_acc = 0.0
@@ -736,7 +761,8 @@ def predict_breakout(
     try:
         # Load and transform image
         img = Image.open(image_path).convert("RGB")
-        img_tensor = transform(img).unsqueeze(0).to(device)  # (1, 3, 224, 224)
+        assert transform is not None, "Transform must not be None"
+        img_tensor = transform(img).unsqueeze(0).to(device)  # type: ignore[union-attr]  # (1, 3, 224, 224)
 
         # Normalise tabular features (same transforms as training dataset)
         tab_list = _normalise_tabular_for_inference(tabular_features)
@@ -823,6 +849,7 @@ def predict_breakout_batch(
         for i in batch_indices:
             try:
                 img = Image.open(image_paths[i]).convert("RGB")
+                assert transform is not None
                 img_t = transform(img)
                 tab_list = _normalise_tabular_for_inference(tabular_features_batch[i])
                 if len(tab_list) != NUM_TABULAR:

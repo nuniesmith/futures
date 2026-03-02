@@ -51,11 +51,10 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
+import pandas as pd
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-    import pandas as pd
 
 logger = logging.getLogger("analysis.orb_filters")
 
@@ -115,7 +114,7 @@ class ORBFilterResult:
 
 
 def check_nr7(
-    bars_daily: pd.DataFrame,
+    bars_daily: pd.DataFrame | None,
     lookback: int = 7,
     boost_pct: float = 0.20,
 ) -> FilterVerdict:
@@ -150,8 +149,8 @@ def check_nr7(
         )
 
     try:
-        highs = bars_daily["High"].astype(float).values
-        lows = bars_daily["Low"].astype(float).values
+        highs = np.asarray(bars_daily["High"].astype(float).values)
+        lows = np.asarray(bars_daily["Low"].astype(float).values)
     except (KeyError, ValueError) as exc:
         return FilterVerdict(name=name, passed=True, reason=f"Missing High/Low columns: {exc}")
 
@@ -384,7 +383,7 @@ def _ema(values: np.ndarray, span: int) -> np.ndarray:
 
 
 def check_multi_tf_bias(
-    bars_htf: pd.DataFrame,
+    bars_htf: pd.DataFrame | None,
     direction: str,
     ema_period: int = 34,
     slope_bars: int = 3,
@@ -424,11 +423,11 @@ def check_multi_tf_bias(
         )
 
     try:
-        closes = bars_htf["Close"].astype(float).values
+        closes = np.asarray(bars_htf["Close"].astype(float).values)
     except (KeyError, ValueError) as exc:
         return FilterVerdict(name=name, passed=True, reason=f"Missing Close column: {exc}")
 
-    ema_values = _ema(closes, ema_period)
+    ema_values = _ema(np.asarray(closes), ema_period)
 
     # Slope: change in EMA over last `slope_bars` periods, normalised by price
     ema_now = ema_values[-1]
@@ -483,7 +482,7 @@ def check_multi_tf_bias(
 # This is a simple but effective confluence check.
 
 
-def compute_session_vwap(bars_1m: pd.DataFrame) -> float | None:
+def compute_session_vwap(bars_1m: pd.DataFrame | None) -> float | None:
     """Compute the session VWAP from 1-minute bars.
 
     VWAP = cumsum(Typical_Price × Volume) / cumsum(Volume)
@@ -495,10 +494,10 @@ def compute_session_vwap(bars_1m: pd.DataFrame) -> float | None:
         return None
 
     try:
-        high = bars_1m["High"].astype(float).values
-        low = bars_1m["Low"].astype(float).values
-        close = bars_1m["Close"].astype(float).values
-        volume = bars_1m["Volume"].astype(float).values
+        high = np.asarray(bars_1m["High"].astype(float).values)
+        low = np.asarray(bars_1m["Low"].astype(float).values)
+        close = np.asarray(bars_1m["Close"].astype(float).values)
+        volume = np.asarray(bars_1m["Volume"].astype(float).values)
     except (KeyError, ValueError):
         return None
 
@@ -513,7 +512,7 @@ def compute_session_vwap(bars_1m: pd.DataFrame) -> float | None:
 
 
 def check_vwap_confluence(
-    bars_1m: pd.DataFrame,
+    bars_1m: pd.DataFrame | None,
     direction: str,
     trigger_price: float,
     vwap: float | None = None,
@@ -727,7 +726,7 @@ PM_END = dt_time(8, 20)
 
 
 def extract_premarket_range(
-    bars_1m: pd.DataFrame,
+    bars_1m: pd.DataFrame | None,
     pm_start: dt_time = PM_START,
     pm_end: dt_time = PM_END,
 ) -> tuple[float | None, float | None]:
@@ -751,15 +750,18 @@ def extract_premarket_range(
 
     # Ensure Eastern timezone
     idx = df.index
-    if hasattr(idx, "tz") and idx.tz is not None:
-        if str(idx.tz) != str(_EST):
+    if not isinstance(idx, pd.DatetimeIndex):
+        df.index = pd.to_datetime(idx)
+    dti = pd.DatetimeIndex(df.index)
+    if dti.tz is not None:
+        if str(dti.tz) != str(_EST):
             df = df.tz_convert(_EST)
     else:
         with contextlib.suppress(Exception):
-            df.index = idx.tz_localize(_EST)
+            df.index = dti.tz_localize(_EST)
 
     try:
-        times = df.index.time
+        times = pd.DatetimeIndex(df.index).time  # type: ignore[attr-defined]
         pm_mask = (times >= pm_start) & (times < pm_end)
         pm_bars = df[pm_mask]
     except Exception:
@@ -769,8 +771,8 @@ def extract_premarket_range(
         return None, None
 
     try:
-        pm_high = float(pm_bars["High"].max())
-        pm_low = float(pm_bars["Low"].min())
+        pm_high = float(pm_bars["High"].max())  # type: ignore[arg-type]
+        pm_low = float(pm_bars["Low"].min())  # type: ignore[arg-type]
         return pm_high, pm_low
     except (KeyError, ValueError):
         return None, None

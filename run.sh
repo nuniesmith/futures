@@ -168,28 +168,47 @@ run_lint() {
 }
 
 # ---------------------------------------------------------------------------
+# Tailscale IP
+# ---------------------------------------------------------------------------
+TAILSCALE_IP=100.69.78.116
+get_tailscale_ip() {
+    if command -v tailscale >/dev/null 2>&1; then
+        local ip
+        ip=$(tailscale ip -4)
+        if [ -n "$ip" ]; then
+            echo "$ip"
+        else
+            warn "Tailscale is running but no IP found"
+        fi
+    else
+        warn "Tailscale CLI not found; skipping Tailscale IP display"
+    fi
+}
+
+
+# ---------------------------------------------------------------------------
 # Docker Compose
 # ---------------------------------------------------------------------------
 
 run_docker() {
-    local profile_flag=""
-    if [ "${MONITORING:-false}" = "true" ]; then
-        profile_flag="--profile monitoring"
-    fi
-
     log "Building and starting Docker Compose services ..."
+
+    # Resolve Tailscale IP (prefer live lookup, fall back to hardcoded)
+    local ts_ip
+    ts_ip=$(get_tailscale_ip)
+    ts_ip="${ts_ip:-$TAILSCALE_IP}"
+
     # shellcheck disable=SC2086
-    docker compose $profile_flag up --build -d
+    docker compose up --build -d
 
     echo ""
     ok "Services are running:"
-    echo "    Dashboard:   http://localhost:8000"
-    echo "    Postgres:    localhost:5432"
-    echo "    Redis:       localhost:6379"
-    if [ "${MONITORING:-false}" = "true" ]; then
-        echo "    Prometheus:  http://localhost:9090"
-        echo "    Grafana:     http://localhost:3000"
-    fi
+    echo "    Dashboard:   http://${ts_ip}:8080"
+    echo "    Data API:    http://${ts_ip}:8000"
+    echo "    Postgres:    ${ts_ip}:5432"
+    echo "    Redis:       ${ts_ip}:6379"
+    echo "    Prometheus:  http://${ts_ip}:9090"
+    echo "    Grafana:     http://${ts_ip}:3000"
     echo ""
     echo "  Logs:  docker compose logs -f"
     echo "  Stop:  ./run.sh --down"
@@ -203,9 +222,16 @@ run_local() {
     ensure_venv
     ensure_env
 
-    log "Starting data service locally (http://localhost:8000) ..."
-    PYTHONPATH=src exec uvicorn lib.services.data.main:app \
-        --host 0.0.0.0 --port 8000 --reload
+    # Resolve Tailscale IP (prefer live lookup, fall back to hardcoded)
+    local ts_ip
+    ts_ip=$(get_tailscale_ip)
+    ts_ip="${ts_ip:-$TAILSCALE_IP}"
+
+    log "Starting web service locally (http://${ts_ip}:8080) ..."
+    log "  (data API on http://${ts_ip}:8000)"
+    DATA_SERVICE_URL="http://${ts_ip}:8000" \
+    PYTHONPATH=src exec uvicorn lib.services.web.main:app \
+        --host 0.0.0.0 --port 8080 --reload
 }
 
 # ---------------------------------------------------------------------------

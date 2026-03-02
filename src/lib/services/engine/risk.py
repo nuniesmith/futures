@@ -34,7 +34,10 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import time as dt_time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("engine.risk")
@@ -44,9 +47,9 @@ _EST = ZoneInfo("America/New_York")
 # ---------------------------------------------------------------------------
 # Default risk parameters
 # ---------------------------------------------------------------------------
-DEFAULT_ACCOUNT_SIZE = 50_000
+DEFAULT_ACCOUNT_SIZE = 150_000
 DEFAULT_RISK_PCT_PER_TRADE = 0.0075  # 0.75%
-DEFAULT_MAX_DAILY_LOSS = -500.0
+DEFAULT_MAX_DAILY_LOSS = -1500.0  # 1% of 150k
 DEFAULT_MAX_OPEN_TRADES = 2
 DEFAULT_NO_ENTRY_AFTER = dt_time(10, 0)  # 10:00 AM ET
 DEFAULT_OVERNIGHT_WARNING = dt_time(11, 30)  # 11:30 AM ET — warn about overnight
@@ -127,7 +130,7 @@ class RiskManager:
         session_end: dt_time = DEFAULT_SESSION_END,
         stack_min_r: float = DEFAULT_STACK_MIN_R,
         stack_min_wave: float = DEFAULT_STACK_MIN_WAVE,
-        now_fn: callable | None = None,
+        now_fn: Callable[[], datetime] | None = None,
     ):
         self.account_size = account_size
         self.risk_pct_per_trade = risk_pct_per_trade

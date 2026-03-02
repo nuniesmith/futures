@@ -45,11 +45,11 @@ import argparse
 import logging
 import os
 import sys
-from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime
 from datetime import time as dt_time
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 from zoneinfo import ZoneInfo
 
 # ---------------------------------------------------------------------------
@@ -60,27 +60,19 @@ _src_dir = _project_root / "src"
 if str(_src_dir) not in sys.path:
     sys.path.insert(0, str(_src_dir))
 
-import numpy as np
 import pandas as pd
 
 from lib.analysis.orb_filters import (
     ORBFilterResult,
     apply_all_filters,
-    check_lunch_filter,
-    check_multi_tf_bias,
-    check_nr7,
-    check_premarket_range,
-    check_session_window,
-    check_vwap_confluence,
     extract_premarket_range,
 )
 from lib.analysis.orb_simulator import (
     BracketConfig,
     ORBSimResult,
     simulate_orb_outcome,
-    summarise_results,
 )
-from lib.services.engine.orb import LONDON_SESSION, US_SESSION, ORBSession
+from lib.services.engine.orb import US_SESSION, ORBSession
 
 logger = logging.getLogger("backtest_filters")
 
@@ -97,7 +89,7 @@ def _load_bars(
     source: str = "csv",
     days: int = 90,
     csv_dir: str = "data/bars",
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """Load 1-minute bars with a fallback chain.
 
     Tries the dataset_generator's ``load_bars`` first (which has its own
@@ -137,7 +129,7 @@ def _load_daily_bars(
     symbol: str,
     source: str = "csv",
     csv_dir: str = "data/bars",
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """Load or derive daily bars for NR7 detection."""
     try:
         from lib.analysis.dataset_generator import load_daily_bars
@@ -183,7 +175,7 @@ def _ensure_est(df: pd.DataFrame) -> pd.DataFrame:
     idx = out.index
     if not isinstance(idx, pd.DatetimeIndex):
         out.index = pd.to_datetime(idx)
-        idx = out.index
+    idx = pd.DatetimeIndex(out.index)
     if idx.tz is None:
         try:
             out.index = idx.tz_localize(_EST)
@@ -207,9 +199,10 @@ def split_into_sessions(
     df = _ensure_est(bars_1m).sort_index()
     sessions: dict[date, pd.DataFrame] = {}
 
-    for day_date, group in df.groupby(df.index.date):
+    dti = pd.DatetimeIndex(df.index)
+    for day_date, group in df.groupby(dti.date):  # type: ignore[attr-defined]
         if len(group) >= 30:
-            sessions[day_date] = group
+            sessions[day_date] = group  # type: ignore[index]
 
     return dict(sorted(sessions.items()))
 
@@ -227,10 +220,10 @@ class DayResult:
     symbol: str
 
     # Simulation result (always present if a trade was detected)
-    sim: Optional[ORBSimResult] = None
+    sim: ORBSimResult | None = None
 
     # Filter evaluation (None if sim produced no trade)
-    filter_result: Optional[ORBFilterResult] = None
+    filter_result: ORBFilterResult | None = None
 
     @property
     def has_trade(self) -> bool:
@@ -238,7 +231,7 @@ class DayResult:
 
     @property
     def is_winner(self) -> bool:
-        return self.has_trade and self.sim.is_winner
+        return self.has_trade and self.sim is not None and self.sim.is_winner
 
     @property
     def filter_passed(self) -> bool:
@@ -248,25 +241,27 @@ class DayResult:
 
     @property
     def pnl_r(self) -> float:
-        return self.sim.pnl_r if self.has_trade else 0.0
+        return self.sim.pnl_r if self.sim is not None and self.has_trade else 0.0
 
     def to_dict(self) -> dict[str, Any]:
+        _sim = self.sim
+        _has = self.has_trade and _sim is not None
         d: dict[str, Any] = {
             "date": str(self.day),
             "symbol": self.symbol,
-            "has_trade": self.has_trade,
-            "direction": self.sim.direction if self.has_trade else "",
-            "label": self.sim.label if self.sim else "no_trade",
-            "outcome": self.sim.outcome if self.sim else "",
+            "has_trade": _has,
+            "direction": _sim.direction if _has and _sim else "",
+            "label": _sim.label if _sim is not None else "no_trade",
+            "outcome": _sim.outcome if _sim is not None else "",
             "pnl_r": self.pnl_r,
-            "quality_pct": self.sim.quality_pct if self.has_trade else 0,
-            "hold_bars": self.sim.hold_bars if self.has_trade else 0,
-            "entry": self.sim.entry if self.has_trade else 0.0,
-            "or_high": self.sim.or_high if self.sim else 0.0,
-            "or_low": self.sim.or_low if self.sim else 0.0,
-            "atr": self.sim.atr if self.sim else 0.0,
-            "nr7": self.sim.nr7 if self.sim else False,
-            "breakout_volume_ratio": self.sim.breakout_volume_ratio if self.has_trade else 0.0,
+            "quality_pct": _sim.quality_pct if _has and _sim else 0,
+            "hold_bars": _sim.hold_bars if _has and _sim else 0,
+            "entry": _sim.entry if _has and _sim else 0.0,
+            "or_high": _sim.or_high if _sim is not None else 0.0,
+            "or_low": _sim.or_low if _sim is not None else 0.0,
+            "atr": _sim.atr if _sim is not None else 0.0,
+            "nr7": _sim.nr7 if _sim is not None else False,
+            "breakout_volume_ratio": _sim.breakout_volume_ratio if _has and _sim else 0.0,
             "filter_passed": self.filter_passed,
             "filter_summary": self.filter_result.summary if self.filter_result else "",
             "filters_passed_count": self.filter_result.filters_passed if self.filter_result else 0,
@@ -285,9 +280,9 @@ def backtest_day(
     symbol: str,
     day_date: date,
     bracket_config: BracketConfig,
-    bars_daily: Optional[pd.DataFrame] = None,
+    bars_daily: pd.DataFrame | None = None,
     gate_mode: str = "all",
-    orb_session: Optional[ORBSession] = None,
+    orb_session: ORBSession | None = None,
 ) -> DayResult:
     """Run ORB simulation + filter evaluation on one day's data.
 
@@ -344,9 +339,9 @@ def backtest_day(
     pm_high, pm_low = extract_premarket_range(day_bars, pm_end=_pm_end)
 
     # Derive HTF bars (15m) by resampling
-    bars_htf = None
+    bars_htf: pd.DataFrame | None = None
     try:
-        bars_htf = (
+        _resampled = (
             day_bars.resample("15min")
             .agg(
                 {
@@ -359,19 +354,23 @@ def backtest_day(
             )
             .dropna()
         )
+        bars_htf = pd.DataFrame(_resampled) if not isinstance(_resampled, pd.DataFrame) else _resampled
         if bars_htf.empty:
             bars_htf = None
     except Exception:
         pass
 
     # Determine signal time from breakout
-    signal_time = datetime.now(tz=_EST)
+    signal_time: datetime = datetime.now(tz=_EST)
     if sim.breakout_time:
         try:
             parsed = pd.Timestamp(sim.breakout_time)
             if parsed.tzinfo is None:
                 parsed = parsed.tz_localize(_EST)
-            signal_time = parsed.to_pydatetime()
+            _pdt = parsed.to_pydatetime()
+            # Guard against NaT — to_pydatetime() can return NaTType
+            if isinstance(_pdt, datetime):
+                signal_time = _pdt
         except Exception:
             pass
 
@@ -452,13 +451,13 @@ def compute_stats(results: list[DayResult], label: str = "") -> BacktestStats:
     total_loss_r = abs(sum(r.pnl_r for r in losers))
     stats.profit_factor = round(total_win_r / total_loss_r, 2) if total_loss_r > 0 else float("inf")
 
-    stats.avg_hold_bars = round(sum(r.sim.hold_bars for r in trades) / len(trades), 1)
-    stats.avg_quality = round(sum(r.sim.quality_pct for r in trades) / len(trades), 1)
+    stats.avg_hold_bars = round(sum(r.sim.hold_bars for r in trades if r.sim is not None) / len(trades), 1)
+    stats.avg_quality = round(sum(r.sim.quality_pct for r in trades if r.sim is not None) / len(trades), 1)
 
-    stats.long_trades = sum(1 for r in trades if r.sim.direction == "LONG")
-    stats.short_trades = sum(1 for r in trades if r.sim.direction == "SHORT")
-    stats.nr7_trades = sum(1 for r in trades if r.sim.nr7)
-    stats.nr7_winners = sum(1 for r in trades if r.sim.nr7 and r.is_winner)
+    stats.long_trades = sum(1 for r in trades if r.sim is not None and r.sim.direction == "LONG")
+    stats.short_trades = sum(1 for r in trades if r.sim is not None and r.sim.direction == "SHORT")
+    stats.nr7_trades = sum(1 for r in trades if r.sim is not None and r.sim.nr7)
+    stats.nr7_winners = sum(1 for r in trades if r.sim is not None and r.sim.nr7 and r.is_winner)
 
     # Consecutive streaks
     streak_w = 0
@@ -738,9 +737,9 @@ def run_backtest(
     days: int = 90,
     csv_dir: str = "data/bars",
     gate_mode: str = "all",
-    bracket_config: Optional[BracketConfig] = None,
+    bracket_config: BracketConfig | None = None,
     verbose: bool = False,
-    export_path: Optional[str] = None,
+    export_path: str | None = None,
 ) -> dict[str, tuple[BacktestStats, BacktestStats]]:
     """Run the full filter backtest comparison for the given symbols.
 
@@ -769,24 +768,25 @@ def run_backtest(
         if bars_daily is not None:
             print(f"  Daily bars: {len(bars_daily)} days (for NR7)")
         else:
-            print(f"  No daily bars — NR7 will be skipped")
+            print("  No daily bars — NR7 will be skipped")
 
         # Split into per-day sessions
         sessions = split_into_sessions(bars_1m)
         print(f"  Sessions: {len(sessions)} trading days")
 
         if not sessions:
-            print(f"  ⚠️  No valid sessions — skipping")
+            print("  ⚠️  No valid sessions — skipping")
             continue
 
         # Run backtest for each day
         day_results: list[DayResult] = []
         for day_date, day_bars in sessions.items():
             # Derive daily bars up to this day for rolling NR7
-            daily_slice = None
+            daily_slice: pd.DataFrame | None = None
             if bars_daily is not None:
                 try:
-                    daily_slice = bars_daily[bars_daily.index.date <= day_date].tail(10)
+                    _daily_dti = pd.DatetimeIndex(bars_daily.index)
+                    daily_slice = bars_daily[_daily_dti.date <= day_date].tail(10)
                     if len(daily_slice) < 7:
                         daily_slice = None
                 except Exception:
@@ -797,12 +797,12 @@ def run_backtest(
                 symbol=symbol,
                 day_date=day_date,
                 bracket_config=cfg,
-                bars_daily=daily_slice,
+                bars_daily=daily_slice,  # type: ignore[arg-type]
                 gate_mode=gate_mode,
             )
             day_results.append(dr)
 
-            if verbose and dr.has_trade:
+            if verbose and dr.has_trade and dr.sim is not None:
                 status = "✅" if dr.is_winner else "❌"
                 filt = "PASS" if dr.filter_passed else "REJECT"
                 print(

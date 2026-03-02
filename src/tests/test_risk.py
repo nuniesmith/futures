@@ -74,7 +74,7 @@ class TestRiskManagerInit:
         rm = _make_rm()
         assert rm.account_size == 50_000
         assert rm.max_risk_per_trade == 50_000 * 0.0075  # $375
-        assert rm.max_daily_loss == -500.0
+        assert rm.max_daily_loss == -1500.0  # updated default for 150k
         assert rm.max_open_trades == 2
 
     def test_custom_params(self):
@@ -127,7 +127,7 @@ class TestCanEnterTrade:
         rm, clock = _make_rm_fn()
         # Simulate losses
         rm.register_open("MGC", "LONG", 1, 2700.0)
-        rm.register_close("MGC", 2650.0, -600.0)  # -$600 > -$500 limit
+        rm.register_close("MGC", 2650.0, -1600.0)  # -$1600 > -$1500 limit
         ok, reason = rm.can_enter_trade("MNQ", "LONG", 1)
         assert ok is False
         assert "Daily loss limit" in reason
@@ -279,7 +279,7 @@ class TestCanEnterTrade:
         rm = _make_rm(hour=10, minute=30)
         rm.register_open("MGC", "LONG", 1, 2700.0)
         rm.register_open("MNQ", "LONG", 1, 21000.0)
-        rm._daily_pnl = -600.0
+        rm._daily_pnl = -1600.0  # exceeds -$1500 limit
         ok, reason = rm.can_enter_trade("MES", "LONG", 1)
         assert ok is False
         assert "cutoff" in reason.lower()
@@ -516,7 +516,7 @@ class TestGetStatus:
 
     def test_status_blocked_daily_loss(self):
         rm = _make_rm(hour=8)
-        rm._daily_pnl = -600.0
+        rm._daily_pnl = -1600.0  # exceeds -$1500 limit
         status = rm.get_status()
         assert status["can_trade"] is False
         assert "daily loss" in status["block_reason"]

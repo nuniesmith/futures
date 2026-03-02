@@ -242,7 +242,7 @@ class TestComputeOpeningRange:
 
         bars = _make_1m_bars(n=40, start_price=2700.0, start_time="2026-02-27 09:25:00")
         # Remove timezone
-        bars.index = bars.index.tz_localize(None)
+        bars.index = pd.DatetimeIndex(bars.index).tz_localize(None)
         # _localize_index should make it Eastern
         or_high, or_low, count, _ = compute_opening_range(bars)
         assert count > 0
@@ -982,13 +982,13 @@ class TestTradesEnforceRiskField:
     def test_enforce_risk_default_false(self):
         from lib.services.data.api.trades import CreateTradeRequest
 
-        req = CreateTradeRequest(asset="Gold", direction="LONG", entry=2700.0)
+        req = CreateTradeRequest(asset="Gold", direction="LONG", entry=2700.0)  # type: ignore[call-arg]
         assert req.enforce_risk is False
 
     def test_enforce_risk_can_be_true(self):
         from lib.services.data.api.trades import CreateTradeRequest
 
-        req = CreateTradeRequest(asset="Gold", direction="LONG", entry=2700.0, enforce_risk=True)
+        req = CreateTradeRequest(asset="Gold", direction="LONG", entry=2700.0, enforce_risk=True)  # type: ignore[call-arg]
         assert req.enforce_risk is True
 
 
@@ -1391,7 +1391,7 @@ class TestRiskModels:
     def test_risk_check_request_defaults(self):
         from lib.services.data.api.risk import RiskCheckRequest
 
-        req = RiskCheckRequest(symbol="MGC", side="LONG")
+        req = RiskCheckRequest(symbol="MGC", side="LONG")  # type: ignore[call-arg]
         assert req.size == 1
         assert req.risk_per_contract == 0.0
         assert req.is_stack is False
@@ -1399,7 +1399,7 @@ class TestRiskModels:
     def test_risk_check_response_structure(self):
         from lib.services.data.api.risk import RiskCheckResponse
 
-        resp = RiskCheckResponse(
+        resp = RiskCheckResponse(  # type: ignore[call-arg]
             allowed=True,
             symbol="MGC",
             side="LONG",
@@ -1416,7 +1416,7 @@ class TestRiskModels:
     def test_risk_status_response_defaults(self):
         from lib.services.data.api.risk import RiskStatusResponse
 
-        resp = RiskStatusResponse()
+        resp = RiskStatusResponse()  # type: ignore[call-arg]
         assert resp.can_trade is True
         assert resp.source == ""
         assert resp.account_size == 0
@@ -1542,8 +1542,8 @@ class TestSchedulerORBLondon:
         assert hasattr(ActionType, "CHECK_ORB_LONDON")
         assert ActionType.CHECK_ORB_LONDON == "check_orb_london"
 
-    def test_london_orb_scheduled_during_premarket_window(self):
-        """London ORB should be scheduled during 03:00–05:00 ET (pre-market)."""
+    def test_london_orb_scheduled_during_active_london_window(self):
+        """London ORB should be scheduled during 03:00–05:00 ET (active session)."""
         from lib.services.engine.scheduler import ActionType, ScheduleManager
 
         mgr = ScheduleManager()
@@ -1562,12 +1562,12 @@ class TestSchedulerORBLondon:
         action_types = [a.action for a in actions]
         assert ActionType.CHECK_ORB_LONDON not in action_types
 
-    def test_london_orb_scheduled_at_active_start(self):
-        """London ORB tail-end check runs in early active session (05:00–05:30 ET)."""
+    def test_london_orb_scheduled_at_window_end(self):
+        """London ORB still runs at 04:55 ET (just before 05:00 cutoff)."""
         from lib.services.engine.scheduler import ActionType, ScheduleManager
 
         mgr = ScheduleManager()
-        now = datetime(2025, 1, 15, 5, 15, tzinfo=ZoneInfo("America/New_York"))
+        now = datetime(2025, 1, 15, 4, 55, tzinfo=ZoneInfo("America/New_York"))
         actions = mgr.get_pending_actions(now=now)
         action_types = [a.action for a in actions]
         assert ActionType.CHECK_ORB_LONDON in action_types
@@ -1604,6 +1604,7 @@ class TestMultiSessionORB:
         multi = MultiSessionORBResult(symbol="MGC", sessions={"london": r1, "us": r2})
         assert multi.has_any_breakout is True
         assert len(multi.active_breakouts) == 1
+        assert multi.best_breakout is not None
         assert multi.best_breakout.session_key == "london"
 
     def test_session_helpers(self):

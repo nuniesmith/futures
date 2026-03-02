@@ -921,7 +921,7 @@ def get_today_pnl(account_size: int | None = None) -> float:
     if hasattr(row, "values"):
         vals = list(row.values())
         return float(vals[0]) if vals else 0.0
-    return float(row[0]) if row else 0.0
+    return float(row[0]) if row else 0.0  # type: ignore[index]
 
 
 def get_today_trades(account_size: int | None = None) -> list[dict]:
@@ -1143,16 +1143,16 @@ def get_journal_stats(account_size: int | None = None) -> dict:
         }
 
     total_days = len(df)
-    total_gross = float(df["gross_pnl"].sum())
-    total_net = float(df["net_pnl"].sum())
-    total_commissions = float(df["commissions"].sum())
+    total_gross = float(df["gross_pnl"].sum())  # type: ignore[arg-type]
+    total_net = float(df["net_pnl"].sum())  # type: ignore[arg-type]
+    total_commissions = float(df["commissions"].sum())  # type: ignore[arg-type]
     win_days = int((df["net_pnl"] > 0).sum())
     loss_days = int((df["net_pnl"] < 0).sum())
     break_even_days = int((df["net_pnl"] == 0).sum())
     win_rate = win_days / total_days * 100 if total_days > 0 else 0.0
     avg_daily_net = total_net / total_days if total_days > 0 else 0.0
-    best_day = float(df["net_pnl"].max())
-    worst_day = float(df["net_pnl"].min())
+    best_day = float(df["net_pnl"].max())  # type: ignore[arg-type]
+    worst_day = float(df["net_pnl"].min())  # type: ignore[arg-type]
 
     # Current streak (sorted by date ascending for streak calc)
     sorted_df = df.sort_values("trade_date", ascending=True)

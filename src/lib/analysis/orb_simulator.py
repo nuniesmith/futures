@@ -237,13 +237,15 @@ def _compute_atr(
 def _localize_to_est(df: pd.DataFrame) -> pd.DataFrame:
     """Ensure the DataFrame index is tz-aware in Eastern Time."""
     df = df.copy()
-    idx = df.index
-    if hasattr(idx, "tz") and idx.tz is not None:
-        if str(idx.tz) != str(_EST):
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    dti = pd.DatetimeIndex(df.index)
+    if dti.tz is not None:
+        if str(dti.tz) != str(_EST):
             df = df.tz_convert(_EST)
     else:
         with contextlib.suppress(Exception):
-            df.index = idx.tz_localize(_EST)
+            df.index = dti.tz_localize(_EST)
     return df
 
 
@@ -312,18 +314,19 @@ def simulate_orb_outcome(
     df = df.sort_index()
 
     # Cast to float
-    highs = df["High"].astype(float).values
-    lows = df["Low"].astype(float).values
-    closes = df["Close"].astype(float).values
+    highs = np.asarray(df["High"].astype(float).values)
+    lows = np.asarray(df["Low"].astype(float).values)
+    closes = np.asarray(df["Close"].astype(float).values)
     has_volume = "Volume" in df.columns
-    volumes = df["Volume"].astype(float).values if has_volume else np.ones(len(df))
+    volumes = np.asarray(df["Volume"].astype(float).values) if has_volume else np.ones(len(df))
     has_open = "Open" in df.columns
-    opens = df["Open"].astype(float).values if has_open else closes.copy()
+    opens = np.asarray(df["Open"].astype(float).values) if has_open else closes.copy()
 
     # --- Step 1: Identify Opening Range ---
-    times = None
-    with contextlib.suppress(Exception):
-        times = df.index.time
+    try:
+        times = pd.DatetimeIndex(df.index).time  # type: ignore[attr-defined]
+    except Exception:
+        times = None
 
     if times is None:
         result.error = "Cannot extract time from index"
@@ -337,8 +340,8 @@ def simulate_orb_outcome(
         result.outcome = "insufficient_or_bars"
         return result
 
-    or_high = float(highs[or_indices].max())
-    or_low = float(lows[or_indices].min())
+    or_high = float(np.max(highs[or_indices]))
+    or_low = float(np.min(lows[or_indices]))
     or_range = or_high - or_low
 
     result.or_high = or_high
@@ -354,7 +357,7 @@ def simulate_orb_outcome(
         return result
 
     # --- Step 2: Compute ATR ---
-    atr = _compute_atr(highs, lows, closes, period=cfg.atr_period)
+    atr = _compute_atr(np.asarray(highs), np.asarray(lows), np.asarray(closes), period=cfg.atr_period)
     result.atr = atr
 
     if atr <= 0:
@@ -372,14 +375,14 @@ def simulate_orb_outcome(
     pm_mask = (times >= cfg.pm_start) & (times < cfg.pm_end)
     pm_indices = np.where(pm_mask)[0]
     if len(pm_indices) > 0:
-        result.pm_high = float(highs[pm_indices].max())
-        result.pm_low = float(lows[pm_indices].min())
+        result.pm_high = float(np.max(highs[pm_indices]))
+        result.pm_low = float(np.min(lows[pm_indices]))
 
     # --- NR7 detection ---
     if bars_daily is not None and len(bars_daily) >= 7:
         try:
-            d_highs = bars_daily["High"].astype(float).values[-7:]
-            d_lows = bars_daily["Low"].astype(float).values[-7:]
+            d_highs = np.asarray(bars_daily["High"].astype(float).values[-7:])
+            d_lows = np.asarray(bars_daily["Low"].astype(float).values[-7:])
             daily_ranges = d_highs - d_lows
             today_range = daily_ranges[-1]
             result.nr7 = bool(today_range <= np.min(daily_ranges))
@@ -398,26 +401,29 @@ def simulate_orb_outcome(
     direction: str | None = None
     breakout_idx: int | None = None
     entry_price: float = 0.0
+    bar_val: float = 0.0
+    bar_val_high: float = 0.0
+    bar_val_low: float = 0.0
 
     for idx in post_or_indices:
         if cfg.require_close_break:
-            bar_val = closes[idx]
+            bar_val = float(closes[idx])
         else:
-            bar_val_high = highs[idx]
-            bar_val_low = lows[idx]
+            bar_val_high = float(highs[idx])
+            bar_val_low = float(lows[idx])
 
         # Long breakout: bar breaks above OR high
         if cfg.require_close_break:
             if bar_val > or_high:
                 direction = "LONG"
                 # Entry is the worse of OR high and bar open (simulate fill)
-                entry_price = max(or_high, opens[idx])
+                entry_price = max(or_high, float(opens[idx]))
                 breakout_idx = idx
                 break
         else:
             if bar_val_high > or_high:
                 direction = "LONG"
-                entry_price = max(or_high, opens[idx])
+                entry_price = max(or_high, float(opens[idx]))
                 breakout_idx = idx
                 break
 
@@ -425,13 +431,13 @@ def simulate_orb_outcome(
         if cfg.require_close_break:
             if bar_val < or_low:
                 direction = "SHORT"
-                entry_price = min(or_low, opens[idx])
+                entry_price = min(or_low, float(opens[idx]))
                 breakout_idx = idx
                 break
         else:
             if bar_val_low < or_low:
                 direction = "SHORT"
-                entry_price = min(or_low, opens[idx])
+                entry_price = min(or_low, float(opens[idx]))
                 breakout_idx = idx
                 break
 
@@ -447,7 +453,7 @@ def simulate_orb_outcome(
         result.breakout_time = str(df.index[breakout_idx])
 
     # Volume ratio at breakout bar
-    avg_vol = float(np.mean(volumes[max(0, breakout_idx - 20) : breakout_idx])) if breakout_idx > 0 else 1.0
+    avg_vol = float(np.mean(np.asarray(volumes[max(0, breakout_idx - 20) : breakout_idx]))) if breakout_idx > 0 else 1.0
     if avg_vol > 0:
         result.breakout_volume_ratio = float(volumes[breakout_idx] / avg_vol)
 

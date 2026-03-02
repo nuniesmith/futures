@@ -160,7 +160,10 @@ def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
 
 def _compute_ema(series: pd.Series, span: int) -> pd.Series:
     """Compute EMA using pandas ewm (matches Ruby's EMA calculation)."""
-    return series.ewm(span=span, adjust=False).mean()
+    result = series.ewm(span=span, adjust=False).mean()
+    if isinstance(result, pd.DataFrame):
+        return result.iloc[:, 0]  # type: ignore[return-value]
+    return result  # type: ignore[return-value]
 
 
 def _compute_vwap(df: pd.DataFrame) -> pd.Series:
@@ -171,12 +174,13 @@ def _compute_vwap(df: pd.DataFrame) -> pd.Series:
     typical = (df["High"] + df["Low"] + df["Close"]) / 3.0
     cum_tp_vol = (typical * df["Volume"]).cumsum()
     cum_vol = df["Volume"].cumsum().replace(0, np.nan)
-    return cum_tp_vol / cum_vol
+    result = cum_tp_vol / cum_vol
+    return result  # type: ignore[return-value]
 
 
 def _build_style(config: RenderConfig, direction: str | None = None) -> Any:
     """Build an mplfinance style matching the Ruby dark theme."""
-    mc = mpf.make_marketcolors(
+    mc = mpf.make_marketcolors(  # type: ignore[possibly-unbound]
         up=config.candle_up,
         down=config.candle_down,
         edge=config.candle_edge,
@@ -185,7 +189,7 @@ def _build_style(config: RenderConfig, direction: str | None = None) -> Any:
         ohlc=config.candle_edge,
     )
 
-    style = mpf.make_mpf_style(
+    style = mpf.make_mpf_style(  # type: ignore[possibly-unbound]
         base_mpf_style=config.base_style,
         marketcolors=mc,
         facecolor=config.background_color,
@@ -327,10 +331,11 @@ def render_ruby_snapshot(
     addplots = []
 
     # EMA9
-    ema_series = ema9.reindex(df.index) if ema9 is not None else _compute_ema(df["Close"], span=9)
+    _close_series: pd.Series = df["Close"]  # type: ignore[assignment]
+    ema_series = ema9.reindex(df.index) if ema9 is not None else _compute_ema(_close_series, span=9)
 
     addplots.append(
-        mpf.make_addplot(
+        mpf.make_addplot(  # type: ignore[possibly-unbound]
             ema_series,
             color=cfg.ema9_color,
             width=2.0,
@@ -345,7 +350,7 @@ def render_ruby_snapshot(
         vwap_series = _compute_vwap(df)
 
     addplots.append(
-        mpf.make_addplot(
+        mpf.make_addplot(  # type: ignore[possibly-unbound]
             vwap_series,
             color=cfg.vwap_color,
             width=2.0,
@@ -358,7 +363,7 @@ def render_ruby_snapshot(
     if orb_high is not None and orb_high > 0:
         orb_h_series = pd.Series(orb_high, index=df.index, dtype=float)
         addplots.append(
-            mpf.make_addplot(
+            mpf.make_addplot(  # type: ignore[possibly-unbound]
                 orb_h_series,
                 color=cfg.orb_line_color,
                 width=1.5,
@@ -370,7 +375,7 @@ def render_ruby_snapshot(
     if orb_low is not None and orb_low > 0:
         orb_l_series = pd.Series(orb_low, index=df.index, dtype=float)
         addplots.append(
-            mpf.make_addplot(
+            mpf.make_addplot(  # type: ignore[possibly-unbound]
                 orb_l_series,
                 color=cfg.orb_line_color,
                 width=1.5,
@@ -384,7 +389,7 @@ def render_ruby_snapshot(
         for level in extra_hlines:
             hline_series = pd.Series(level, index=df.index, dtype=float)
             addplots.append(
-                mpf.make_addplot(
+                mpf.make_addplot(  # type: ignore[possibly-unbound]
                     hline_series,
                     color="#888888",
                     width=1.0,
@@ -406,7 +411,7 @@ def render_ruby_snapshot(
         os.makedirs(cfg.output_dir, exist_ok=True)
         # Use the last bar's timestamp if available
         try:
-            last_ts = df.index[-1].to_pydatetime()
+            last_ts = pd.Timestamp(df.index[-1]).to_pydatetime()  # type: ignore[arg-type]
         except Exception:
             last_ts = datetime.utcnow()
         save_path = _generate_filename(symbol, last_ts, label=label, output_dir=cfg.output_dir)
@@ -415,7 +420,7 @@ def render_ruby_snapshot(
 
     # --- Render ---
     try:
-        fig, axes = mpf.plot(
+        fig, axes = mpf.plot(  # type: ignore[possibly-unbound]
             df,
             type="candle",
             volume=True,
@@ -488,11 +493,11 @@ def render_ruby_snapshot(
 
         # --- Legend for overlays (compact, top-center) ---
         legend_handles = [
-            mpatches.Patch(color=cfg.ema9_color, label="EMA9"),
-            mpatches.Patch(color=cfg.vwap_color, label="VWAP"),
+            mpatches.Patch(color=cfg.ema9_color, label="EMA9"),  # type: ignore[possibly-unbound]
+            mpatches.Patch(color=cfg.vwap_color, label="VWAP"),  # type: ignore[possibly-unbound]
         ]
         if orb_high is not None:
-            legend_handles.append(mpatches.Patch(color=cfg.orb_line_color, label="ORB"))
+            legend_handles.append(mpatches.Patch(color=cfg.orb_line_color, label="ORB Range"))  # type: ignore[possibly-unbound]
         ax_price.legend(
             handles=legend_handles,
             loc="upper center",
@@ -512,7 +517,7 @@ def render_ruby_snapshot(
             pad_inches=cfg.pad_inches,
             facecolor=cfg.background_color,
         )
-        plt.close(fig)
+        plt.close(fig)  # type: ignore[possibly-unbound]
 
         logger.debug("Chart rendered: %s", save_path)
         return save_path
@@ -521,7 +526,7 @@ def render_ruby_snapshot(
         logger.error("Chart rendering failed: %s", exc, exc_info=True)
         # Ensure we don't leak figures
         with contextlib.suppress(Exception):
-            plt.close("all")
+            plt.close("all")  # type: ignore[possibly-unbound]
         return None
 
 

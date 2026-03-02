@@ -260,9 +260,7 @@ def _compute_trend_speed(close: np.ndarray, dyn_ema: np.ndarray) -> np.ndarray:
     wma_half = speed_series.rolling(half_period).apply(
         lambda x: np.average(x, weights=np.arange(1, len(x) + 1)), raw=True
     )
-    wma_full = speed_series.rolling(5).apply(
-        lambda x: np.average(x, weights=np.arange(1, len(x) + 1)), raw=True
-    )
+    wma_full = speed_series.rolling(5).apply(lambda x: np.average(x, weights=np.arange(1, len(x) + 1)), raw=True)
     hull_input = 2 * wma_half - wma_full
     trend_speed = hull_input.rolling(sqrt_period).apply(
         lambda x: np.average(x, weights=np.arange(1, len(x) + 1)), raw=True
@@ -427,9 +425,7 @@ def calculate_wave_analysis(
         return default_result
 
     # Get asset-specific parameters
-    params = (
-        ASSET_PARAMS.get(asset_name, DEFAULT_PARAMS) if asset_name else DEFAULT_PARAMS
-    )
+    params = ASSET_PARAMS.get(asset_name, DEFAULT_PARAMS) if asset_name else DEFAULT_PARAMS
     max_length = int(params["max_length"])
     accel_mult = float(params["accel_multiplier"])
     lookback_period = lookback_waves or int(params["lookback_period"])
@@ -438,7 +434,6 @@ def calculate_wave_analysis(
         close = np.asarray(df["Close"].astype(float))
         high = np.asarray(df["High"].astype(float))
         low = np.asarray(df["Low"].astype(float))
-        _open = np.asarray(df["Open"].astype(float))  # noqa: F841
     except (KeyError, ValueError) as exc:
         logger.warning("Wave analysis failed — missing OHLC columns: %s", exc)
         return default_result
@@ -451,9 +446,7 @@ def calculate_wave_analysis(
     dyn_ema = _compute_dynamic_ema(close, max_length, accel_mult)
 
     # Step 2: Detect waves
-    bull_changes, bear_changes, bull_durations, bear_durations = _detect_waves(
-        close, dyn_ema
-    )
+    bull_changes, bear_changes, _bull_durations, _bear_durations = _detect_waves(close, dyn_ema)
 
     # Limit to recent waves (lookback_period controls how many waves to consider)
     bull_recent = bull_changes[-lookback_period:]
@@ -487,9 +480,7 @@ def calculate_wave_analysis(
     min_speed = float(np.min(speed_window))
     max_speed = float(np.max(speed_window))
     speed_range = max_speed - min_speed
-    speed_normalized = (
-        (current_speed - min_speed) / speed_range if speed_range > 0 else 0.5
-    )
+    speed_normalized = (current_speed - min_speed) / speed_range if speed_range > 0 else 0.5
 
     # Step 5: Current ratio — how extended is the current wave vs historical avg
     if current_speed > 0:
@@ -526,9 +517,9 @@ def calculate_wave_analysis(
     # AO = SMA(hl2, 5) - SMA(hl2, 34)
     hl2 = (high + low) / 2.0
     hl2_series = pd.Series(hl2)
-    ao = np.asarray(
-        (hl2_series.rolling(5).mean() - hl2_series.rolling(34).mean()).fillna(0)
-    )
+    ao_fast = hl2_series.rolling(5).mean()
+    ao_slow = hl2_series.rolling(34).mean()
+    ao = np.asarray(pd.Series(ao_fast - ao_slow).fillna(0).values)
     market_phase = _detect_market_phase(close, high, low, ao)
 
     # Step 10: Momentum state

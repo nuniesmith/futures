@@ -702,6 +702,9 @@ class TestModelValidation:
             quantity=5,
             avgPrice=6045.25,
             unrealizedPnL=125.0,
+            instrument=None,
+            tickSize=None,
+            pointValue=None,
             lastUpdate="2025-01-15T14:30:00Z",
         )
         assert pos.symbol == "MESZ5"
@@ -718,6 +721,11 @@ class TestModelValidation:
             side="Long",
             quantity=1,
             avgPrice=6000.0,
+            unrealizedPnL=0.0,
+            instrument=None,
+            tickSize=None,
+            pointValue=None,
+            lastUpdate=None,
         )
         assert pos.unrealizedPnL == 0.0
         assert pos.lastUpdate is None
@@ -734,9 +742,20 @@ class TestModelValidation:
                     side="Long",
                     quantity=5,
                     avgPrice=6045.25,
+                    unrealizedPnL=0.0,
+                    instrument=None,
+                    tickSize=None,
+                    pointValue=None,
+                    lastUpdate=None,
                 ),
             ],
             timestamp="2025-01-15T14:30:00Z",
+            cashBalance=0.0,
+            realizedPnL=0.0,
+            totalUnrealizedPnL=0.0,
+            riskBlocked=False,
+            riskBlockReason="",
+            bridge_version="1.0",
         )
         assert payload.account == "Sim101"
         assert len(payload.positions) == 1
@@ -748,6 +767,13 @@ class TestModelValidation:
         payload = NTPositionsPayload(
             account="Sim101",
             positions=[],
+            timestamp=None,
+            cashBalance=0.0,
+            realizedPnL=0.0,
+            totalUnrealizedPnL=0.0,
+            riskBlocked=False,
+            riskBlockReason="",
+            bridge_version="1.0",
         )
         assert payload.account == "Sim101"
         assert len(payload.positions) == 0

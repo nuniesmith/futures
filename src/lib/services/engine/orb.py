@@ -274,9 +274,9 @@ class MultiSessionORBResult:
 
 
 def compute_atr(
-    highs: np.ndarray,
-    lows: np.ndarray,
-    closes: np.ndarray,
+    highs: "np.ndarray | Any",
+    lows: "np.ndarray | Any",
+    closes: "np.ndarray | Any",
     period: int = ATR_PERIOD,
 ) -> float:
     """Compute the Average True Range for the given bar data.
@@ -372,7 +372,7 @@ def compute_opening_range(
 
 
 def detect_opening_range_breakout(
-    bars_1m: pd.DataFrame,
+    bars_1m: pd.DataFrame | None,
     symbol: str = "",
     session: ORBSession | None = None,
     atr_period: int | None = None,
