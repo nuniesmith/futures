@@ -80,6 +80,7 @@ from lib.analysis.orb_simulator import (
     simulate_orb_outcome,
     summarise_results,
 )
+from lib.services.engine.orb import LONDON_SESSION, US_SESSION, ORBSession
 
 logger = logging.getLogger("backtest_filters")
 
@@ -286,6 +287,7 @@ def backtest_day(
     bracket_config: BracketConfig,
     bars_daily: Optional[pd.DataFrame] = None,
     gate_mode: str = "all",
+    orb_session: Optional[ORBSession] = None,
 ) -> DayResult:
     """Run ORB simulation + filter evaluation on one day's data.
 
@@ -296,10 +298,15 @@ def backtest_day(
         bracket_config: Bridge-style bracket parameters.
         bars_daily: Daily bars for NR7 detection (at least 7 rows).
         gate_mode: Filter gate mode — "all" or "majority".
+        orb_session: ORBSession to evaluate (LONDON_SESSION or US_SESSION).
+                     Defaults to US_SESSION if None.  Controls the session-aware
+                     filter windows and pre-market extraction end time.
 
     Returns:
         DayResult with both simulation and filter outcomes.
     """
+    if orb_session is None:
+        orb_session = US_SESSION
     result = DayResult(day=day_date, symbol=symbol)
 
     # --- Run ORB simulation ---
@@ -315,8 +322,26 @@ def backtest_day(
         return result
 
     # --- Run filter evaluation ---
-    # Extract pre-market range from the same day's bars
-    pm_high, pm_low = extract_premarket_range(day_bars)
+    # Session-aware filter configuration:
+    #   London (03:00–05:00 ET): premarket 00:00–03:00, no lunch filter.
+    #   US     (08:20–10:30 ET): premarket 00:00–08:20, lunch filter active.
+    _session_key = orb_session.key if orb_session else "us"
+
+    if _session_key == "london":
+        _filter_allowed_windows: list[tuple[dt_time, dt_time]] = [
+            (dt_time(3, 0), dt_time(5, 0)),
+        ]
+        _pm_end = dt_time(3, 0)
+        _enable_lunch = False
+    else:
+        _filter_allowed_windows = [
+            (dt_time(8, 20), dt_time(10, 30)),
+        ]
+        _pm_end = dt_time(8, 20)
+        _enable_lunch = True
+
+    # Extract pre-market range with session-aware end time
+    pm_high, pm_low = extract_premarket_range(day_bars, pm_end=_pm_end)
 
     # Derive HTF bars (15m) by resampling
     bars_htf = None
@@ -362,6 +387,8 @@ def backtest_day(
         orb_high=sim.or_high,
         orb_low=sim.or_low,
         gate_mode=gate_mode,
+        allowed_windows=_filter_allowed_windows,
+        enable_lunch_filter=_enable_lunch,
     )
     result.filter_result = filter_result
 

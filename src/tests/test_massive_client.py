@@ -94,7 +94,7 @@ def _make_futures_agg(
     low: float = 99.0,
     close: float = 103.0,
     volume: int = 1000,
-    window_start: str | int = "2025-01-06T08:00:00-05:00",
+    window_start: str | int = "2025-01-06T08:00:00-03:00",
     ticker: str = "ESZ5",
 ) -> SimpleNamespace:
     """Create a mock FuturesAgg object."""
@@ -557,8 +557,8 @@ class TestAggregates:
         contract = _make_futures_contract(ticker="ESZ5")
         mock_rest_client.list_futures_contracts.return_value = [contract]
         mock_rest_client.list_futures_aggregates.return_value = [
-            _make_futures_agg(window_start="2025-01-06T08:00:00-05:00"),
-            _make_futures_agg(window_start="2025-01-06T08:01:00-05:00"),
+            _make_futures_agg(window_start="2025-01-06T08:00:00-03:00"),
+            _make_futures_agg(window_start="2025-01-06T08:01:00-03:00"),
         ]
         provider = _make_provider_with_mock(mock_rest_client)
 
@@ -826,7 +826,7 @@ class TestTimestampParsing:
             {
                 "Open": [100, 101],
                 "Close": [102, 103],
-                "timestamp": ["2025-01-06T08:00:00-05:00", "2025-01-06T08:01:00-05:00"],
+                "timestamp": ["2025-01-06T08:00:00-03:00", "2025-01-06T08:01:00-03:00"],
             }
         )
         result = _parse_timestamp_index(df)

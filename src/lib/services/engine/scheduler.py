@@ -3,10 +3,11 @@ Session-Aware Engine Scheduler
 ==========================================
 Manages the engine's behavior based on Eastern Time trading sessions:
 
-  - **Pre-market (00:00–05:00 ET):** Compute daily focus once, run Grok
+  - **Pre-market (00:00–03:00 ET):** Compute daily focus once, run Grok
     morning briefing, prepare alerts for the trading day.
-  - **Active (05:00–12:00 ET):** Live Ruby recomputation every 5 min,
-    publish focus updates to Redis, run Grok updates every 15 min.
+  - **Active (03:00–12:00 ET):** London Open (03:00–08:00) + US Open
+    (08:00–12:00). Live Ruby recomputation every 5 min, publish focus
+    updates to Redis, run Grok updates every 15 min, ORB detection.
   - **Off-hours (12:00–00:00 ET):** Historical data backfill, full
     optimization runs, backtesting, next-day prep.
 
@@ -53,12 +54,15 @@ class ActionType(StrEnum):
     PREP_ALERTS = "prep_alerts"
 
     # Active session actions (recurring)
-    FKS_RECOMPUTE = "fks_recompute"
+    RUBY_RECOMPUTE = "fks_recompute"
     PUBLISH_FOCUS_UPDATE = "publish_focus_update"
     GROK_LIVE_UPDATE = "grok_live_update"
     CHECK_RISK_RULES = "check_risk_rules"
     CHECK_NO_TRADE = "check_no_trade"
     CHECK_ORB = "check_orb"
+
+    # London Open ORB — runs during pre-market (03:00–05:00 ET)
+    CHECK_ORB_LONDON = "check_orb_london"
 
     # Off-hours actions (run once per session)
     HISTORICAL_BACKFILL = "historical_backfill"
@@ -101,11 +105,12 @@ class ScheduleManager:
     """
 
     # Recurring interval configuration (seconds)
-    FKS_INTERVAL = 5 * 60  # 5 minutes during active
+    RUBY_INTERVAL = 5 * 60  # 5 minutes during active
     GROK_INTERVAL = 15 * 60  # 15 minutes during active
     RISK_CHECK_INTERVAL = 60  # 1 minute during active
     NO_TRADE_INTERVAL = 2 * 60  # 2 minutes during active
     ORB_CHECK_INTERVAL = 2 * 60  # 2 minutes during active (09:30–11:00 window)
+    ORB_LONDON_CHECK_INTERVAL = 2 * 60  # 2 minutes during pre-market (03:00–05:00 window)
     FOCUS_PUBLISH_INTERVAL = 30  # 30 seconds during active (throttled downstream)
     STATUS_PUBLISH_INTERVAL = 10  # 10 seconds always
 
@@ -127,13 +132,19 @@ class ScheduleManager:
 
     @staticmethod
     def get_session_mode(now: datetime | None = None) -> SessionMode:
-        """Determine current trading session based on ET time."""
+        """Determine current trading session based on ET time.
+
+        Boundaries:
+          - Pre-market:  00:00–03:00 ET
+          - Active:      03:00–12:00 ET  (London 03–08, US 08–12)
+          - Off-hours:   12:00–00:00 ET
+        """
         if now is None:
             now = datetime.now(tz=_EST)
         hour = now.hour
-        if 0 <= hour < 5:
+        if 0 <= hour < 3:
             return SessionMode.PRE_MARKET
-        elif 5 <= hour < 12:
+        elif 3 <= hour < 12:
             return SessionMode.ACTIVE
         else:
             return SessionMode.OFF_HOURS
@@ -189,7 +200,7 @@ class ScheduleManager:
         pending: list[ScheduledAction] = []
 
         if session == SessionMode.PRE_MARKET:
-            pending.extend(self._get_pre_market_actions(ts, today))
+            pending.extend(self._get_pre_market_actions(ts, today, now=now))
         elif session == SessionMode.ACTIVE:
             pending.extend(self._get_active_actions(ts, now))
         else:
@@ -263,7 +274,7 @@ class ScheduleManager:
         hour = now.hour
 
         if 0 <= hour < 5:
-            # In pre-market, next is active at 05:00
+            # In pre-market, next is active at 03:00
             next_session = SessionMode.ACTIVE
             target_hour = 5
         elif 5 <= hour < 12:
@@ -292,8 +303,9 @@ class ScheduleManager:
         self,
         ts: float,
         today: date,
+        now: datetime | None = None,
     ) -> list[ScheduledAction]:
-        """Pre-market (00:00–05:00 ET): focus computation + morning prep."""
+        """Pre-market (00:00–03:00 ET): focus computation + morning prep."""
         actions: list[ScheduledAction] = []
 
         # Daily focus — run once per day
@@ -333,9 +345,17 @@ class ScheduleManager:
         ts: float,
         now: datetime,
     ) -> list[ScheduledAction]:
-        """Active (05:00–12:00 ET): live recomputation + updates."""
+        """Active (03:00–12:00 ET): live recomputation + updates.
+
+        Sub-sessions:
+          - London Open  03:00–08:00 ET  (primary ORB window)
+          - US Open      08:00–12:00 ET  (equity ORB window)
+        """
         actions: list[ScheduledAction] = []
         today = now.date()
+        now_time = now.time()
+
+        from datetime import time as _dt_time
 
         # Daily focus — also compute at start of active if missed in pre-market
         if not self._ran_today(ActionType.COMPUTE_DAILY_FOCUS, today):
@@ -348,10 +368,10 @@ class ScheduleManager:
             )
 
         # Ruby recomputation — every 5 minutes
-        if self._interval_elapsed(ActionType.FKS_RECOMPUTE, ts, self.FKS_INTERVAL):
+        if self._interval_elapsed(ActionType.RUBY_RECOMPUTE, ts, self.RUBY_INTERVAL):
             actions.append(
                 ScheduledAction(
-                    action=ActionType.FKS_RECOMPUTE,
+                    action=ActionType.RUBY_RECOMPUTE,
                     priority=1,
                     description="Recompute Ruby wave/vol/quality for all assets",
                 )
@@ -397,10 +417,23 @@ class ScheduleManager:
                 )
             )
 
-        # Opening Range Breakout check — every 2 minutes during 09:30–11:00 ET
-        now_time = now.time()
-        from datetime import time as _dt_time
+        # --- London Open ORB check — every 2 minutes during 03:00–05:00 ET ---
+        # London opens at 08:00 UTC = 03:00 ET. The opening range forms
+        # 03:00–03:30 ET, then we scan for breakouts until 05:00 ET.
+        _london_orb_start = _dt_time(3, 0)
+        _london_orb_end = _dt_time(5, 0)
+        if _london_orb_start <= now_time <= _london_orb_end and self._interval_elapsed(
+            ActionType.CHECK_ORB_LONDON, ts, self.ORB_LONDON_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB_LONDON,
+                    priority=6,
+                    description="Check London Open ORB (03:00–03:30 ET opening range)",
+                )
+            )
 
+        # --- US Equity Open ORB check — every 2 minutes during 09:30–11:00 ET ---
         _orb_start = _dt_time(9, 30)
         _orb_end = _dt_time(11, 0)
         if _orb_start <= now_time <= _orb_end and self._interval_elapsed(
@@ -410,7 +443,7 @@ class ScheduleManager:
                 ScheduledAction(
                     action=ActionType.CHECK_ORB,
                     priority=6,
-                    description="Check Opening Range Breakout (09:30–10:00 OR)",
+                    description="Check US Equity Open ORB (09:30–10:00 OR)",
                 )
             )
 

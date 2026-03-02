@@ -5,20 +5,20 @@
 The breakout CNN is a hybrid **EfficientNetV2-S + tabular** model that classifies
 Ruby-style chart snapshots as "good breakout" (high follow-through probability)
 or "bad breakout" (likely to chop/fail).  It runs as an advisory or hard gate
-on ORB signals during the active trading session (05:00–12:00 ET).
+on ORB signals during the active trading session (03:00–12:00 ET).
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     CNN Pipeline Lifecycle                          │
 │                                                                     │
-│  OFF-HOURS (12:00–00:00 ET)          PRE-MARKET (00:00–05:00 ET)   │
+│  OFF-HOURS (12:00–00:00 ET)          PRE-MARKET (00:00–03:00 ET)   │
 │  ┌──────────────┐                    ┌─────────────────────┐       │
 │  │ 1. Generate   │  historical bars  │ 4. Morning briefing │       │
 │  │    dataset    │──────────────────▶│    includes model   │       │
 │  │    images     │  render charts    │    health check     │       │
 │  └──────┬───────┘                    └─────────────────────┘       │
 │         │                                                           │
-│  ┌──────▼───────┐                    ACTIVE (05:00–12:00 ET)       │
+│  ┌──────▼───────┐                    ACTIVE (03:00–12:00 ET)       │
 │  │ 2. Train on  │  GPU (RTX 2070)   ┌─────────────────────┐       │
 │  │    GPU with   │──────────────────▶│ 5. Live inference   │       │
 │  │    val gate   │  promote if pass  │    predict_breakout │       │

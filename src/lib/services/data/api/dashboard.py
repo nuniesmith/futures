@@ -22,6 +22,7 @@ Endpoints:
     GET /api/no-trade         — No-trade banner HTML (if applicable)
 """
 
+import contextlib
 import json
 import logging
 from datetime import datetime
@@ -29,7 +30,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 logger = logging.getLogger("api.dashboard")
 
@@ -57,22 +58,44 @@ def _get_focus_data() -> dict[str, Any] | None:
 
         raw = cache_get("engine:daily_focus")
         if raw:
-            return json.loads(raw)
+            parsed: object = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed  # type: ignore[return-value]
     except Exception as exc:
         logger.debug("Failed to read focus from Redis key: %s", exc)
 
     # 2. Fallback: read the latest entry from the Redis Stream
     try:
-        from lib.core.cache import REDIS_AVAILABLE, _r
+        from lib.core.cache import REDIS_AVAILABLE
 
-        if REDIS_AVAILABLE and _r is not None:
-            entries = _r.xrevrange("dashboard:stream:focus", count=1)
-            if entries:
-                _msg_id, fields = entries[0]
-                raw_data = fields.get(b"data") or fields.get("data")
-                if raw_data:
-                    decoded = raw_data.decode() if isinstance(raw_data, bytes) else str(raw_data)
-                    return json.loads(decoded)
+        if not REDIS_AVAILABLE:
+            return None
+
+        # Try to get a Redis client; the function may not exist in all versions
+        client: Any = None
+        try:
+            from lib.core.cache import get_redis_client as _get_client  # type: ignore[attr-defined]
+
+            client = _get_client()
+        except (ImportError, AttributeError):
+            pass
+
+        if client is None:
+            return None
+
+        entries_raw: Any = client.xrevrange("dashboard:stream:focus", count=1)
+        if not entries_raw:
+            return None
+
+        entry: Any = entries_raw[0]
+        fields: Any = entry[1]
+        raw_data: Any = fields.get(b"data") if fields else None
+        if raw_data is not None:
+            decoded: str = raw_data.decode() if isinstance(raw_data, bytes) else str(raw_data)
+            parsed_stream: object = json.loads(decoded)
+            if isinstance(parsed_stream, dict):
+                return parsed_stream  # type: ignore[return-value]
+
     except Exception as exc:
         logger.debug("Failed to read focus from Redis stream: %s", exc)
 
@@ -80,19 +103,31 @@ def _get_focus_data() -> dict[str, Any] | None:
 
 
 def _get_session_info() -> dict[str, str]:
-    """Get current session mode and display info."""
+    """Get current session mode and display info.
+
+    Boundaries (all Eastern Time):
+      - Pre-market:          00:00–03:00
+      - Active / London Open: 03:00–08:00
+      - Active / US Open:     08:00–12:00
+      - Off-hours:           12:00–00:00
+    """
     now = datetime.now(tz=_EST)
     hour = now.hour
 
-    if 0 <= hour < 5:
+    if 0 <= hour < 3:
         mode = "pre-market"
         emoji = "🌙"
         label = "PRE-MARKET"
         css_class = "text-purple-400"
-    elif 5 <= hour < 12:
+    elif 3 <= hour < 8:
         mode = "active"
         emoji = "🟢"
-        label = "ACTIVE"
+        label = "LONDON OPEN"
+        css_class = "text-green-400"
+    elif 8 <= hour < 12:
+        mode = "active"
+        emoji = "🟢"
+        label = "US OPEN"
         css_class = "text-green-400"
     else:
         mode = "off-hours"
@@ -153,15 +188,77 @@ def _get_risk_status() -> dict[str, Any] | None:
 
 
 def _get_orb_data() -> dict[str, Any] | None:
-    """Read the latest ORB (Opening Range Breakout) result from cache (TASK-801)."""
+    """Read the latest ORB (Opening Range Breakout) result from cache (TASK-801).
+
+    Returns a dict with keys:
+      - "london": dict | None  — London Open ORB result (03:00–03:30 ET)
+      - "us": dict | None      — US Equity Open ORB result (09:30–10:00 ET)
+      - "best": dict | None    — whichever session has a breakout (or latest)
+    """
     try:
         from lib.core.cache import cache_get
 
-        raw = cache_get("engine:orb")
-        if raw:
-            data = raw.decode() if isinstance(raw, bytes) else str(raw)
+        sessions: dict[str, Any] = {}
+
+        # Fetch London Open ORB
+        raw_london = cache_get("engine:orb:london")
+        if raw_london:
+            data = raw_london.decode() if isinstance(raw_london, bytes) else str(raw_london)
             if data:
-                return json.loads(data)
+                with contextlib.suppress(json.JSONDecodeError, TypeError):
+                    sessions["london"] = json.loads(data)
+
+        # Fetch US Equity Open ORB
+        raw_us = cache_get("engine:orb:us")
+        if raw_us:
+            data = raw_us.decode() if isinstance(raw_us, bytes) else str(raw_us)
+            if data:
+                with contextlib.suppress(json.JSONDecodeError, TypeError):
+                    sessions["us"] = json.loads(data)
+
+        # Fallback: try the legacy combined key
+        if not sessions:
+            raw = cache_get("engine:orb")
+            if raw:
+                data = raw.decode() if isinstance(raw, bytes) else str(raw)
+                if data:
+                    try:
+                        legacy = json.loads(data)
+                        # Slot into the appropriate session based on session_key
+                        sk = legacy.get("session_key", "us")
+                        sessions[sk] = legacy
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+        if not sessions:
+            return None
+
+        # Determine the "best" result: prefer one with a breakout
+        best = None
+        for key in ("london", "us"):
+            s = sessions.get(key)
+            if s and s.get("breakout_detected"):
+                best = s
+                break
+        # If no breakout, pick the first non-empty, non-error session
+        if best is None:
+            for key in ("london", "us"):
+                s = sessions.get(key)
+                if s and not s.get("error"):
+                    best = s
+                    break
+        # Last resort: any session
+        if best is None:
+            for s in sessions.values():
+                if s:
+                    best = s
+                    break
+
+        return {
+            "london": sessions.get("london"),
+            "us": sessions.get("us"),
+            "best": best,
+        }
     except Exception:
         pass
     return None
@@ -589,65 +686,171 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
     """
 
 
+def _render_orb_session_card(session_data: dict[str, Any] | None, session_label: str, session_times: str) -> str:
+    """Render a single ORB session sub-card (London or US)."""
+    if not session_data:
+        return f"""
+        <div class="bg-zinc-800/40 rounded px-3 py-2">
+            <div class="flex items-center justify-between mb-1">
+                <span class="text-zinc-400 text-xs font-semibold">{session_label}</span>
+                <span class="text-zinc-600 text-[10px]">{session_times}</span>
+            </div>
+            <div class="text-zinc-600 text-xs">Waiting for opening range...</div>
+        </div>
+        """
+
+    or_high = session_data.get("or_high", 0)
+    or_low = session_data.get("or_low", 0)
+    or_range = session_data.get("or_range", 0)
+    atr_value = session_data.get("atr_value", 0)
+    long_trigger = session_data.get("long_trigger", 0)
+    short_trigger = session_data.get("short_trigger", 0)
+    breakout = session_data.get("breakout_detected", False)
+    direction = session_data.get("direction", "")
+    trigger_price = session_data.get("trigger_price", 0)
+    symbol = session_data.get("symbol", "")
+    or_complete = session_data.get("or_complete", False)
+    error = session_data.get("error", "")
+    cnn_prob = session_data.get("cnn_prob")
+    cnn_confidence = session_data.get("cnn_confidence", "")
+    filter_passed = session_data.get("filter_passed")
+    filter_summary = session_data.get("filter_summary", "")
+
+    if error:
+        return f"""
+        <div class="bg-zinc-800/40 rounded px-3 py-2">
+            <div class="flex items-center justify-between mb-1">
+                <span class="text-zinc-400 text-xs font-semibold">{session_label}</span>
+                <span class="text-zinc-600 text-[10px]">{session_times}</span>
+            </div>
+            <div class="text-zinc-500 text-xs">{error}</div>
+        </div>
+        """
+
+    # Status for this session
+    if breakout:
+        if direction == "LONG":
+            s_emoji = "🟢"
+            s_color = "text-green-400"
+            border = "border-green-600/40"
+        else:
+            s_emoji = "🔴"
+            s_color = "text-red-400"
+            border = "border-red-600/40"
+    elif or_complete:
+        s_emoji = "⏳"
+        s_color = "text-yellow-400"
+        border = "border-zinc-700/40"
+    else:
+        s_emoji = "🔄"
+        s_color = "text-zinc-500"
+        border = "border-zinc-700/40"
+
+    # Breakout banner
+    breakout_html = ""
+    if breakout:
+        bo_color = "green" if direction == "LONG" else "red"
+        breakout_html = f"""
+            <div class="bg-{bo_color}-900/40 border border-{bo_color}-600/50 rounded px-2 py-1 mb-1.5 text-center animate-pulse">
+                <span class="{s_color} text-xs font-bold">
+                    {s_emoji} {direction} @ {trigger_price:,.2f} — {symbol}
+                </span>
+            </div>
+        """
+
+    # CNN badge
+    cnn_html = ""
+    if cnn_prob is not None:
+        cnn_pct = cnn_prob * 100
+        if cnn_pct >= 65:
+            cnn_color = "text-green-400"
+        elif cnn_pct >= 45:
+            cnn_color = "text-yellow-400"
+        else:
+            cnn_color = "text-red-400"
+        cnn_html = f"""<span class="{cnn_color} text-[10px] font-mono ml-1" title="CNN P(good)={cnn_prob:.3f} ({cnn_confidence})">🧠 {cnn_pct:.0f}%</span>"""
+
+    # Filter badge
+    filter_html = ""
+    if filter_passed is not None:
+        if filter_passed:
+            filter_html = f"""<span class="text-green-500 text-[10px] ml-1" title="{filter_summary}">✅</span>"""
+        else:
+            filter_html = f"""<span class="text-red-500 text-[10px] ml-1" title="{filter_summary}">🚫</span>"""
+
+    # Status text
+    if breakout:
+        status_text = f"{direction} BREAKOUT"
+    elif or_complete:
+        status_text = "Watching"
+    elif or_high > 0:
+        status_text = "Forming"
+    else:
+        status_text = "Waiting"
+
+    return f"""
+    <div class="bg-zinc-800/40 border {border} rounded px-3 py-2">
+        <div class="flex items-center justify-between mb-1">
+            <span class="text-zinc-400 text-xs font-semibold">{session_label}{cnn_html}{filter_html}</span>
+            <span class="{s_color} text-[10px] font-bold">{s_emoji} {status_text}</span>
+        </div>
+        {breakout_html}
+        <div class="grid grid-cols-3 gap-x-2 gap-y-0.5 text-[10px]">
+            <div class="text-zinc-500">High: <span class="text-green-300 font-mono">{or_high:,.2f}</span></div>
+            <div class="text-zinc-500">Low: <span class="text-red-300 font-mono">{or_low:,.2f}</span></div>
+            <div class="text-zinc-500">Range: <span class="text-zinc-300 font-mono">{or_range:,.2f}</span></div>
+            <div class="text-zinc-500">ATR: <span class="text-zinc-300 font-mono">{atr_value:,.2f}</span></div>
+            <div class="text-zinc-500">L↑: <span class="text-green-400 font-mono">{long_trigger:,.2f}</span></div>
+            <div class="text-zinc-500">S↓: <span class="text-red-400 font-mono">{short_trigger:,.2f}</span></div>
+        </div>
+    </div>
+    """
+
+
 def _render_orb_panel(orb_data: dict[str, Any] | None) -> str:
-    """Render the Opening Range Breakout panel as HTML fragment (TASK-801)."""
+    """Render the Opening Range Breakout panel as HTML fragment (TASK-801).
+
+    Now supports multi-session display: London Open (03:00 ET) and
+    US Equity Open (09:30 ET) are shown as separate sub-cards within
+    the same panel.
+    """
     if not orb_data:
         return """
         <div id="orb-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
              hx-swap-oob="true">
             <h3 class="text-sm font-semibold text-zinc-400 mb-2">📊 OPENING RANGE</h3>
-            <div class="text-zinc-500 text-sm">Waiting for 09:30 ET opening range...</div>
+            <div class="text-zinc-500 text-sm">Waiting for ORB sessions...</div>
+            <div class="text-zinc-600 text-xs mt-1">London 03:00 ET · US 09:30 ET</div>
         </div>
         """
 
-    or_high = orb_data.get("or_high", 0)
-    or_low = orb_data.get("or_low", 0)
-    or_range = orb_data.get("or_range", 0)
-    atr_value = orb_data.get("atr_value", 0)
-    long_trigger = orb_data.get("long_trigger", 0)
-    short_trigger = orb_data.get("short_trigger", 0)
-    breakout = orb_data.get("breakout_detected", False)
-    direction = orb_data.get("direction", "")
-    trigger_price = orb_data.get("trigger_price", 0)
-    symbol = orb_data.get("symbol", "")
-    or_complete = orb_data.get("or_complete", False)
-    evaluated_at = orb_data.get("evaluated_at", "")
-    error = orb_data.get("error", "")
+    # Multi-session format: orb_data has "london", "us", "best" keys
+    london_data = orb_data.get("london") if isinstance(orb_data, dict) else None
+    us_data = orb_data.get("us") if isinstance(orb_data, dict) else None
+    best = orb_data.get("best") if isinstance(orb_data, dict) else None
 
-    if error:
-        return f"""
-        <div id="orb-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
-             hx-swap-oob="true">
-            <h3 class="text-sm font-semibold text-zinc-400 mb-2">📊 OPENING RANGE</h3>
-            <div class="text-zinc-500 text-sm">{error}</div>
-        </div>
-        """
-
-    # Status indicators
-    if breakout:
-        if direction == "LONG":
-            status_emoji = "🟢"
-            status_text = f"LONG BREAKOUT — {symbol}"
-            status_color = "text-green-400"
-            border_color = "border-green-500"
+    # Backward compat: if orb_data doesn't have session keys, treat it as
+    # a single legacy result and slot it based on session_key
+    if london_data is None and us_data is None and best is None:
+        sk = orb_data.get("session_key", "us")
+        if sk == "london":
+            london_data = orb_data
         else:
-            status_emoji = "🔴"
-            status_text = f"SHORT BREAKOUT — {symbol}"
-            status_color = "text-red-400"
-            border_color = "border-red-500"
-    elif or_complete:
-        status_emoji = "⏳"
-        status_text = "OR Set — Watching for breakout"
-        status_color = "text-yellow-400"
-        border_color = "border-zinc-700"
+            us_data = orb_data
+        best = orb_data
+
+    # Determine overall panel status from the best result
+    has_breakout = best.get("breakout_detected", False) if best else False
+    direction = best.get("direction", "") if best else ""
+
+    if has_breakout:
+        border_color = "border-green-500" if direction == "LONG" else "border-red-500"
     else:
-        status_emoji = "🔄"
-        status_text = "Opening range forming..."
-        status_color = "text-zinc-400"
         border_color = "border-zinc-700"
 
-    # Time display
+    # Time display from best result
     time_str = ""
+    evaluated_at = best.get("evaluated_at", "") if best else ""
     if evaluated_at and "T" in evaluated_at:
         try:
             dt = datetime.fromisoformat(evaluated_at)
@@ -655,37 +858,21 @@ def _render_orb_panel(orb_data: dict[str, Any] | None) -> str:
         except Exception:
             time_str = evaluated_at
 
-    breakout_html = ""
-    if breakout:
-        breakout_html = f"""
-        <div class="bg-{"green" if direction == "LONG" else "red"}-900/40 border border-{"green" if direction == "LONG" else "red"}-600 rounded px-3 py-2 mb-2 text-center animate-pulse">
-            <span class="{status_color} text-sm font-bold">
-                {status_emoji} {direction} BREAKOUT @ {trigger_price:,.2f}
-            </span>
-        </div>
-        """
+    # Render session sub-cards
+    london_html = _render_orb_session_card(london_data, "🇬🇧 London Open", "03:00–03:30 ET")
+    us_html = _render_orb_session_card(us_data, "🇺🇸 US Equity Open", "09:30–10:00 ET")
 
     return f"""
     <div id="orb-panel" class="bg-zinc-900/60 border {border_color} rounded-lg p-4"
          hx-swap-oob="true">
         <div class="flex items-center justify-between mb-2">
             <h3 class="text-sm font-semibold text-zinc-400">📊 OPENING RANGE</h3>
-            <span class="{status_color} text-xs font-bold">{status_emoji} {status_text}</span>
+            <span class="text-zinc-600 text-xs">{time_str}</span>
         </div>
-
-        {breakout_html}
-
-        <div class="space-y-2 text-xs">
-            <div class="grid grid-cols-2 gap-2">
-                <div class="text-zinc-400">OR High: <span class="text-green-300 font-mono">{or_high:,.2f}</span></div>
-                <div class="text-zinc-400">OR Low: <span class="text-red-300 font-mono">{or_low:,.2f}</span></div>
-                <div class="text-zinc-400">OR Range: <span class="text-zinc-200 font-mono">{or_range:,.2f}</span></div>
-                <div class="text-zinc-400">ATR(14): <span class="text-zinc-200 font-mono">{atr_value:,.2f}</span></div>
-                <div class="text-zinc-400">Long Trigger: <span class="text-green-400 font-mono">{long_trigger:,.2f}</span></div>
-                <div class="text-zinc-400">Short Trigger: <span class="text-red-400 font-mono">{short_trigger:,.2f}</span></div>
-            </div>
+        <div class="space-y-2">
+            {london_html}
+            {us_html}
         </div>
-        <div class="text-right text-zinc-600 text-xs mt-1">{time_str}</div>
     </div>
     """
 
@@ -709,7 +896,10 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     # No-trade banner
     no_trade_html = ""
     if focus_data and focus_data.get("no_trade"):
-        no_trade_html = _render_no_trade_banner(focus_data.get("no_trade_reason", "Low-conviction day"))
+        no_trade_html = _render_no_trade_banner(str(focus_data.get("no_trade_reason", "Low-conviction day")))
+
+    # Determine if we're in off-hours (hide trading panels)
+    is_off_hours = session.get("mode") == "off-hours"
 
     # Positions panel with risk status (TASK-501)
     positions = _get_positions()
@@ -738,16 +928,6 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         except Exception:
             pass
 
-    # Build per-asset SSE swap targets for granular live updates
-    asset_sse_targets = ""
-    if focus_data and focus_data.get("assets"):
-        for asset in focus_data["assets"]:
-            sym = asset.get("symbol", "").lower().replace(" ", "_").replace("&", "")
-            if sym:
-                asset_sse_targets += (
-                    f"<!-- {sym} updates handled by JS htmx:sseMessage handler -->\n                    "
-                )
-
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -759,9 +939,8 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- HTMX + SSE Extension + Idiomorph (smooth DOM merge) -->
+    <!-- HTMX (polling/ajax only — SSE is handled by native EventSource below) -->
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-    <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
 
     <!-- Hyperscript -->
     <script src="https://unpkg.com/hyperscript.org@0.9.14"></script>
@@ -787,13 +966,8 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 </head>
 <body class="bg-zinc-950 text-white min-h-screen">
 
-    <!-- SSE Connection Wrapper — streams live events from engine via data-service.
-         NOTE: sse-connect is set by JS after DOMContentLoaded so the EventSource
-         doesn't fire before HTMX + sse.js are loaded (avoids "connection
-         interrupted while the page was loading" in Firefox). -->
-    <div id="sse-container"
-         hx-ext="sse"
-         sse-close="close">
+    <!-- Main content container (SSE managed by native JS EventSource below) -->
+    <div id="sse-container">
 
     <div class="max-w-7xl mx-auto px-4 py-4">
         <!-- Header — 3-column: title | NT8 health | clock + NT8 tools -->
@@ -932,32 +1106,36 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                     {positions_html}
                 </div>
 
-                <!-- Risk Status Panel (TASK-502) -->
+                <!-- Risk Status Panel (TASK-502) — hidden during off-hours -->
                 <div id="risk-container"
+                     class="{"hidden" if is_off_hours else ""}"
                      hx-get="/api/risk/html"
                      hx-trigger="every 15s"
                      hx-swap="innerHTML">
                     {risk_html}
                 </div>
 
-                <!-- Grok Compact Update Panel (TASK-601) -->
+                <!-- Grok Compact Update Panel (TASK-601) — hidden during off-hours -->
                 <div id="grok-container"
+                     class="{"hidden" if is_off_hours else ""}"
                      hx-get="/api/grok/html"
                      hx-trigger="every 60s"
                      hx-swap="innerHTML">
                     {grok_html}
                 </div>
 
-                <!-- Opening Range Breakout Panel (TASK-801) -->
+                <!-- Opening Range Breakout Panel (TASK-801) — hidden during off-hours -->
                 <div id="orb-container"
+                     class="{"hidden" if is_off_hours else ""}"
                      hx-get="/api/orb/html"
                      hx-trigger="every 30s"
                      hx-swap="innerHTML">
                     {orb_html}
                 </div>
 
-                <!-- Alerts Panel -->
+                <!-- Alerts Panel — hidden during off-hours -->
                 <div id="alerts-panel"
+                     class="{"hidden" if is_off_hours else ""}"
                      hx-get="/api/alerts/html"
                      hx-trigger="every 30s"
                      hx-swap="innerHTML">
@@ -990,21 +1168,36 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                     </div>
                 </div>
 
+                <!-- Off-Hours Info Panel — only shown during off-hours -->
+                {
+        ""
+        if not is_off_hours
+        else '''
+                <div class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4">
+                    <h3 class="text-sm font-semibold text-zinc-400 mb-2">📅 NEXT SESSION</h3>
+                    <div class="text-xs text-zinc-500 space-y-1">
+                        <div>🌙 Pre-market: <span class="text-purple-400">00:00–03:00 ET</span></div>
+                        <div>🟢 London Open: <span class="text-green-400">03:00–08:00 ET</span></div>
+                        <div>🟢 US Open: <span class="text-green-400">08:00–12:00 ET</span></div>
+                        <div>⚙️ Off-hours: <span class="text-zinc-400">12:00–00:00 ET</span></div>
+                        <div class="mt-2 pt-2 border-t border-zinc-700 text-zinc-400">
+                            Engine is running backfill, optimization, and next-day prep.
+                            Trading panels will appear when the next session begins.
+                        </div>
+                    </div>
+                </div>
+                '''
+    }
 
             </div>
         </div>
 
         <!-- Footer -->
         <footer class="mt-8 pt-4 border-t border-zinc-800 text-center text-xs text-zinc-600">
-            Futures Trading Co-Pilot v1.0 — Session rules: Pre-market 00–05 | Active 05–12 | Off-hours 12–00 ET
+            Pilot v1.0 — Session rules: Pre-market 00–03 | Active 03–12 | Off-hours 12–00 ET
             | <a href="/sse/health" class="underline hover:text-zinc-400">SSE Health</a>
             | <a href="/api/info" class="underline hover:text-zinc-400">API Info</a>
         </footer>
-    </div>
-
-    <!-- Hidden SSE swap targets for per-asset events -->
-    <div style="display:none;">
-        {asset_sse_targets}
     </div>
 
     </div><!-- end sse-container -->
@@ -1029,12 +1222,16 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             }}));
             const badge = document.getElementById('session-badge');
             if (badge) {{
-                if (etHour >= 0 && etHour < 5) {{
+                if (etHour >= 0 && etHour < 3) {{
                     badge.innerHTML = '🌙 PRE-MARKET';
                     badge.className = 'text-sm font-semibold mt-1 text-purple-400';
                     if (el) el.className = 'text-2xl font-mono font-bold text-purple-400';
-                }} else if (etHour >= 5 && etHour < 12) {{
-                    badge.innerHTML = '🟢 ACTIVE';
+                }} else if (etHour >= 3 && etHour < 8) {{
+                    badge.innerHTML = '🟢 LONDON OPEN';
+                    badge.className = 'text-sm font-semibold mt-1 text-green-400';
+                    if (el) el.className = 'text-2xl font-mono font-bold text-green-400';
+                }} else if (etHour >= 8 && etHour < 12) {{
+                    badge.innerHTML = '🟢 US OPEN';
                     badge.className = 'text-sm font-semibold mt-1 text-green-400';
                     if (el) el.className = 'text-2xl font-mono font-bold text-green-400';
                 }} else {{
@@ -1048,195 +1245,216 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         updateClock();
     </script>
 
-    <!-- SSE Event Handlers — process JSON events and update DOM -->
+    <!-- SSE via native EventSource — no htmx-ext-sse needed.
+         Opening the EventSource AFTER window.load guarantees Firefox
+         won't log "connection interrupted while the page was loading". -->
     <script>
-        // ---------------------------------------------------------------
-        // Deferred SSE connection: wait until window.load (all external
-        // scripts, stylesheets, and images fully loaded) plus a small
-        // delay before opening the EventSource.
-        //
-        // Firefox logs "The connection to …/sse/dashboard was interrupted
-        // while the page was loading" whenever an EventSource is opened
-        // before the page's `load` event fires.  DOMContentLoaded is NOT
-        // enough — external CDN scripts (htmx, sse.js, tailwind) are
-        // still being fetched/executed at that point.
-        //
-        // The 150ms setTimeout after `load` guarantees the browser has
-        // fully committed the page load, so EventSource is opened in a
-        // "post-load" state and Firefox no longer considers it an
-        // interrupted page-load resource.
-        // ---------------------------------------------------------------
-        window.addEventListener('load', function() {{
-            setTimeout(function() {{
-                var sseEl = document.getElementById('sse-container');
-                if (sseEl && !sseEl.getAttribute('sse-connect')) {{
-                    sseEl.setAttribute('sse-connect', '/sse/dashboard');
-                    // Tell HTMX to re-process the element so it picks up
-                    // the newly-added sse-connect attribute.
+        (function() {{
+            var _es = null;           // current EventSource instance
+            var _reconnectMs = 3000;  // base reconnect delay
+            var _maxReconnect = 30000;
+            var _curDelay = _reconnectMs;
+
+            function _setStatus(state) {{
+                var dot = document.getElementById('sse-status-dot');
+                var txt = document.getElementById('sse-status-text');
+                if (state === 'connected') {{
+                    if (dot) {{ dot.className = 'connected ml-2'; dot.title = 'SSE: connected'; }}
+                    if (txt) {{ txt.textContent = 'live'; txt.className = 'text-xs text-green-600'; }}
+                }} else if (state === 'connecting') {{
+                    if (dot) {{ dot.className = 'connecting ml-2'; dot.title = 'SSE: connecting...'; }}
+                    if (txt) {{ txt.textContent = 'connecting'; txt.className = 'text-xs text-yellow-600'; }}
+                }} else {{
+                    if (dot) {{ dot.className = 'disconnected ml-2'; dot.title = 'SSE: disconnected'; }}
+                    if (txt) {{ txt.textContent = 'reconnecting...'; txt.className = 'text-xs text-red-600'; }}
+                }}
+            }}
+
+            function _connect() {{
+                if (_es) {{
+                    try {{ _es.close(); }} catch(e) {{}}
+                }}
+                _setStatus('connecting');
+                _es = new EventSource('/sse/dashboard');
+
+                _es.onopen = function() {{
+                    _setStatus('connected');
+                    _curDelay = _reconnectMs;  // reset backoff on success
+                }};
+
+                _es.onerror = function() {{
+                    _setStatus('disconnected');
+                    // EventSource auto-reconnects, but if it moves to CLOSED
+                    // state we need to manually reconnect with backoff.
+                    if (_es && _es.readyState === EventSource.CLOSED) {{
+                        setTimeout(function() {{
+                            _curDelay = Math.min(_curDelay * 1.5, _maxReconnect);
+                            _connect();
+                        }}, _curDelay);
+                    }}
+                }};
+
+                // --- Connected confirmation ---
+                _es.addEventListener('connected', function() {{
+                    _setStatus('connected');
+                }});
+
+                // --- Focus update: refresh summary bar + cards ---
+                _es.addEventListener('focus-update', function(e) {{
+                    try {{
+                        var focus = JSON.parse(e.data);
+                        var countEl = document.getElementById('focus-count');
+                        if (countEl) {{
+                            var tradeable = focus.tradeable_assets || 0;
+                            var total = focus.total_assets || 0;
+                            countEl.textContent = tradeable + '/' + total + ' tradeable';
+                        }}
+                        var updEl = document.getElementById('focus-updated');
+                        if (updEl) {{
+                            var ts = focus.computed_at || '';
+                            if (ts) {{
+                                var d = new Date(ts);
+                                updEl.textContent = 'Updated: ' + d.toLocaleTimeString('en-US', {{
+                                    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true
+                                }}) + ' ET';
+                            }}
+                        }}
+                        var lastUpd = document.getElementById('sse-last-update');
+                        if (lastUpd) {{
+                            lastUpd.textContent = 'Last focus: ' + new Date().toLocaleTimeString();
+                        }}
+                        // Refresh focus grid HTML via HTMX
+                        if (typeof htmx !== 'undefined') {{
+                            htmx.ajax('GET', '/api/focus/html', {{target: '#focus-grid', swap: 'innerHTML'}});
+                        }}
+                    }} catch(err) {{ /* ignore parse errors */ }}
+                }});
+
+                // --- Heartbeat ---
+                _es.addEventListener('heartbeat', function(e) {{
+                    try {{
+                        var hb = JSON.parse(e.data);
+                        var hbEl = document.getElementById('sse-heartbeat');
+                        if (hbEl) {{
+                            hbEl.innerHTML = '<span class="text-green-500">●</span> Connected — ' + (hb.time_et || '');
+                        }}
+                    }} catch(err) {{}}
                     if (typeof htmx !== 'undefined') {{
-                        htmx.process(sseEl);
+                        htmx.ajax('GET', '/api/nt8/health/html', {{target: '#nt8-health-bar', swap: 'innerHTML'}});
                     }}
-                }}
-            }}, 150);
-        }});
+                }});
 
-        // SSE connection status tracking
-        const sseContainer = document.getElementById('sse-container');
-        if (sseContainer) {{
-            // HTMX fires these events for SSE connections
-            sseContainer.addEventListener('htmx:sseOpen', function() {{
-                const dot = document.getElementById('sse-status-dot');
-                const txt = document.getElementById('sse-status-text');
-                if (dot) {{ dot.className = 'connected ml-2'; dot.title = 'SSE: connected'; }}
-                if (txt) {{ txt.textContent = 'live'; txt.className = 'text-xs text-green-600'; }}
-            }});
-            sseContainer.addEventListener('htmx:sseError', function() {{
-                const dot = document.getElementById('sse-status-dot');
-                const txt = document.getElementById('sse-status-text');
-                if (dot) {{ dot.className = 'disconnected ml-2'; dot.title = 'SSE: disconnected'; }}
-                if (txt) {{ txt.textContent = 'reconnecting...'; txt.className = 'text-xs text-red-600'; }}
-            }});
-            sseContainer.addEventListener('htmx:sseClose', function() {{
-                const dot = document.getElementById('sse-status-dot');
-                const txt = document.getElementById('sse-status-text');
-                if (dot) {{ dot.className = 'disconnected ml-2'; dot.title = 'SSE: closed'; }}
-                if (txt) {{ txt.textContent = 'disconnected'; txt.className = 'text-xs text-red-600'; }}
-            }});
-        }}
-
-        // Listen for SSE events via the native EventSource (backup for custom processing)
-        // HTMX handles the actual SSE connection; we use custom event listeners for
-        // processing JSON payloads into DOM updates.
-        document.body.addEventListener('htmx:sseMessage', function(evt) {{
-            const eventName = evt.detail.type || '';
-            const data = evt.detail.data || '';
-
-            // --- Focus update: refresh summary bar + flash cards ---
-            if (eventName === 'focus-update') {{
-                try {{
-                    const focus = JSON.parse(data);
-                    // Update summary counts
-                    const countEl = document.getElementById('focus-count');
-                    if (countEl) {{
-                        const tradeable = focus.tradeable_assets || 0;
-                        const total = focus.total_assets || 0;
-                        countEl.textContent = tradeable + '/' + total + ' tradeable';
-                    }}
-                    // Update timestamp
-                    const updEl = document.getElementById('focus-updated');
-                    if (updEl) {{
-                        const ts = focus.computed_at || '';
-                        if (ts) {{
-                            const d = new Date(ts);
-                            updEl.textContent = 'Updated: ' + d.toLocaleTimeString('en-US', {{
-                                timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true
-                            }}) + ' ET';
+                // --- Session change ---
+                _es.addEventListener('session-change', function(e) {{
+                    try {{
+                        var sc = JSON.parse(e.data);
+                        var badge = document.getElementById('session-badge');
+                        if (badge && sc.emoji && sc.session) {{
+                            var label = sc.session.replace('_', '-').toUpperCase();
+                            badge.innerHTML = sc.emoji + ' ' + label;
                         }}
+                    }} catch(err) {{}}
+                }});
+
+                // --- No-trade alert ---
+                _es.addEventListener('no-trade-alert', function(e) {{
+                    try {{
+                        var nt = JSON.parse(e.data);
+                        if (nt.no_trade && typeof htmx !== 'undefined') {{
+                            htmx.ajax('GET', '/api/no-trade', {{target: '#no-trade-container', swap: 'innerHTML'}});
+                            var ntc = document.getElementById('no-trade-container');
+                            if (ntc) {{ ntc.dispatchEvent(new CustomEvent('no-trade-alert', {{bubbles: false}})); }}
+                        }}
+                    }} catch(err) {{}}
+                }});
+
+                // --- Positions update ---
+                _es.addEventListener('positions-update', function() {{
+                    if (typeof htmx !== 'undefined') {{
+                        htmx.ajax('GET', '/api/positions/html', {{target: '#positions-container', swap: 'innerHTML'}});
+                        htmx.ajax('GET', '/api/nt8/health/html', {{target: '#nt8-health-bar', swap: 'innerHTML'}});
                     }}
-                    // Update last-update indicator
-                    const lastUpd = document.getElementById('sse-last-update');
+                }});
+
+                // --- Grok update (TASK-602) ---
+                _es.addEventListener('grok-update', function() {{
+                    if (typeof htmx !== 'undefined') {{
+                        htmx.ajax('GET', '/api/grok/html', {{target: '#grok-container', swap: 'innerHTML'}});
+                    }}
+                    var lastUpd = document.getElementById('sse-last-update');
                     if (lastUpd) {{
-                        lastUpd.textContent = 'Last focus: ' + new Date().toLocaleTimeString();
+                        lastUpd.textContent = 'Last Grok: ' + new Date().toLocaleTimeString();
                     }}
-                    // Trigger HTMX refresh of focus grid to pick up new HTML
-                    htmx.trigger('#focus-grid', 'htmx:load');
-                    htmx.ajax('GET', '/api/focus/html', {{target: '#focus-grid', swap: 'innerHTML'}});
-                }} catch(e) {{ /* ignore parse errors */ }}
-            }}
+                }});
 
-            // --- Heartbeat: update heartbeat display + NT8 health bar ---
-            if (eventName === 'heartbeat') {{
-                try {{
-                    const hb = JSON.parse(data);
-                    const hbEl = document.getElementById('sse-heartbeat');
-                    if (hbEl) {{
-                        hbEl.innerHTML = '<span class="text-green-500">●</span> Connected — ' + (hb.time_et || '');
+                // --- Risk update ---
+                _es.addEventListener('risk-update', function() {{
+                    if (typeof htmx !== 'undefined') {{
+                        htmx.ajax('GET', '/api/risk/html', {{target: '#risk-container', swap: 'innerHTML'}});
                     }}
-                }} catch(e) {{}}
-                // Refresh NT8 health indicators on every heartbeat
-                htmx.ajax('GET', '/api/nt8/health/html', {{target: '#nt8-health-bar', swap: 'innerHTML'}});
-            }}
+                }});
 
-            // --- Session change: update badge ---
-            if (eventName === 'session-change') {{
-                try {{
-                    const sc = JSON.parse(data);
-                    const badge = document.getElementById('session-badge');
-                    if (badge && sc.emoji && sc.session) {{
-                        const label = sc.session.replace('_', '-').toUpperCase();
-                        badge.innerHTML = sc.emoji + ' ' + label;
+                // --- ORB update (TASK-801) ---
+                _es.addEventListener('orb-update', function(e) {{
+                    if (typeof htmx !== 'undefined') {{
+                        htmx.ajax('GET', '/api/orb/html', {{target: '#orb-container', swap: 'innerHTML'}});
                     }}
-                }} catch(e) {{}}
-            }}
-
-            // --- No-trade alert: show banner ---
-            if (eventName === 'no-trade-alert') {{
-                try {{
-                    const nt = JSON.parse(data);
-                    if (nt.no_trade) {{
-                        // Fetch rendered banner HTML from server
-                        htmx.ajax('GET', '/api/no-trade', {{target: '#no-trade-container', swap: 'innerHTML'}});
-                        // Dispatch custom event so hyperscript glow-red animation triggers
-                        const ntc = document.getElementById('no-trade-container');
-                        if (ntc) {{ ntc.dispatchEvent(new CustomEvent('no-trade-alert', {{bubbles: false}})); }}
-                    }}
-                }} catch(e) {{}}
-            }}
-
-            // --- Positions update: refresh panel + NT8 health bar ---
-            if (eventName === 'positions-update') {{
-                htmx.ajax('GET', '/api/positions/html', {{target: '#positions-container', swap: 'innerHTML'}});
-                htmx.ajax('GET', '/api/nt8/health/html', {{target: '#nt8-health-bar', swap: 'innerHTML'}});
-            }}
-
-            // --- Grok compact update: refresh panel (TASK-602) ---
-            if (eventName === 'grok-update') {{
-                htmx.ajax('GET', '/api/grok/html', {{target: '#grok-container', swap: 'innerHTML'}});
-                const lastUpd = document.getElementById('sse-last-update');
-                if (lastUpd) {{
-                    lastUpd.textContent = 'Last Grok: ' + new Date().toLocaleTimeString();
-                }}
-            }}
-
-            // --- Risk status update: refresh panel ---
-            if (eventName === 'risk-update') {{
-                htmx.ajax('GET', '/api/risk/html', {{target: '#risk-container', swap: 'innerHTML'}});
-            }}
-
-            // --- ORB update: refresh Opening Range Breakout panel (TASK-801) ---
-            if (eventName === 'orb-update') {{
-                htmx.ajax('GET', '/api/orb/html', {{target: '#orb-container', swap: 'innerHTML'}});
-                // Flash the ORB container on breakout
-                try {{
-                    const orbData = JSON.parse(data);
-                    if (orbData.breakout_detected) {{
-                        const orbPanel = document.getElementById('orb-container');
-                        if (orbPanel) {{
-                            orbPanel.classList.add('sse-updated');
-                            setTimeout(function() {{ orbPanel.classList.remove('sse-updated'); }}, 2000);
+                    try {{
+                        var orbData = JSON.parse(e.data);
+                        if (orbData.breakout_detected) {{
+                            var orbPanel = document.getElementById('orb-container');
+                            if (orbPanel) {{
+                                orbPanel.classList.add('sse-updated');
+                                setTimeout(function() {{ orbPanel.classList.remove('sse-updated'); }}, 2000);
+                            }}
                         }}
-                    }}
-                }} catch(e) {{}}
+                    }} catch(err) {{}}
+                }});
+
+                // --- Per-asset updates (e.g. gold-update, nasdaq-update) ---
+                // We listen for any message event and check the type
+                _es.onmessage = function(e) {{
+                    // onmessage only fires for events without a named type,
+                    // which shouldn't happen here. Ignore.
+                }};
             }}
 
-            // --- Per-asset updates: flash the specific card ---
-            if (eventName.endsWith('-update') && eventName !== 'focus-update' && eventName !== 'positions-update' && eventName !== 'grok-update' && eventName !== 'risk-update' && eventName !== 'orb-update') {{
-                const symbol = eventName.replace('-update', '').replace(' ', '_').replace('&', '');
-                const card = document.getElementById('asset-card-' + symbol);
-                if (card) {{
-                    // Fetch updated card HTML from server
-                    htmx.ajax('GET', '/api/focus/' + encodeURIComponent(symbol), {{target: card, swap: 'outerHTML'}});
-                    // Flash animation
-                    setTimeout(function() {{
-                        const updated = document.getElementById('asset-card-' + symbol);
-                        if (updated) {{
-                            updated.classList.add('sse-updated');
-                            setTimeout(function() {{ updated.classList.remove('sse-updated'); }}, 1500);
-                        }}
-                    }}, 100);
-                }}
+            // Helper: register per-asset listeners after we know which
+            // assets exist (read from DOM).  Called once after connect.
+            function _registerAssetListeners() {{
+                var cards = document.querySelectorAll('[id^="asset-card-"]');
+                cards.forEach(function(card) {{
+                    var sym = card.id.replace('asset-card-', '');
+                    if (sym && _es) {{
+                        _es.addEventListener(sym + '-update', function() {{
+                            if (typeof htmx !== 'undefined') {{
+                                htmx.ajax('GET', '/api/focus/' + encodeURIComponent(sym), {{target: card, swap: 'outerHTML'}});
+                            }}
+                            setTimeout(function() {{
+                                var updated = document.getElementById('asset-card-' + sym);
+                                if (updated) {{
+                                    updated.classList.add('sse-updated');
+                                    setTimeout(function() {{ updated.classList.remove('sse-updated'); }}, 1500);
+                                }}
+                            }}, 100);
+                        }});
+                    }}
+                }});
             }}
-        }});
+
+            // ---------------------------------------------------------------
+            // Wait for window.load to guarantee all external scripts are done
+            // and Firefox considers the page fully loaded.  Only THEN open
+            // the EventSource — this eliminates the "connection interrupted
+            // while the page was loading" console error.
+            // ---------------------------------------------------------------
+            window.addEventListener('load', function() {{
+                setTimeout(function() {{
+                    _connect();
+                    _registerAssetListeners();
+                }}, 100);
+            }});
+        }})();
     </script>
 </body>
 </html>"""
@@ -1274,10 +1492,20 @@ def get_focus():
 
 
 @router.get("/api/focus/html", response_class=HTMLResponse)
-def get_focus_html():
-    """Return all asset cards as HTML fragments (for HTMX swap)."""
+def get_focus_html(request: Request):
+    """Return all asset cards as HTML fragments (for HTMX swap).
+
+    When called by HTMX polling and there is no data (Redis key expired),
+    return 204 No Content so HTMX keeps the existing DOM intact instead
+    of replacing visible cards with a "waiting" placeholder.
+    """
     focus_data = _get_focus_data()
+    is_htmx = request.headers.get("HX-Request") == "true"
+
     if not focus_data or not focus_data.get("assets"):
+        if is_htmx:
+            # 204 tells HTMX "nothing new, keep what you have"
+            return Response(status_code=204)
         return HTMLResponse(
             content="""
             <div class="col-span-2 text-center py-12 text-zinc-500">
@@ -1295,10 +1523,13 @@ def get_focus_html():
 
 
 @router.get("/api/focus/{symbol}", response_class=HTMLResponse)
-def get_focus_symbol(symbol: str):
+def get_focus_symbol(request: Request, symbol: str):
     """Return a single asset card as HTML fragment."""
     focus_data = _get_focus_data()
+    is_htmx = request.headers.get("HX-Request") == "true"
     if not focus_data:
+        if is_htmx:
+            return Response(status_code=204)
         return HTMLResponse(content="<div class='text-zinc-500'>No data</div>")
 
     # Find matching asset (case-insensitive)
@@ -1312,7 +1543,11 @@ def get_focus_symbol(symbol: str):
 
 @router.get("/api/positions/html", response_class=HTMLResponse)
 def get_positions_html():
-    """Return live positions panel with risk status as HTML fragment."""
+    """Return live positions panel with risk status as HTML fragment.
+
+    Always returns content (positions panel renders even when empty),
+    so no 204 guard needed here.
+    """
     positions = _get_positions()
     risk_status = _get_risk_status()
     return HTMLResponse(content=_render_positions_panel(positions, risk_status=risk_status))
@@ -1320,7 +1555,11 @@ def get_positions_html():
 
 @router.get("/api/risk/html", response_class=HTMLResponse)
 def get_risk_html():
-    """Return risk status panel as HTML fragment (TASK-502)."""
+    """Return risk status panel as HTML fragment (TASK-502).
+
+    The risk panel always renders a container even when status is None
+    (shows 'Waiting for risk engine...'), so always return HTML.
+    """
     risk_status = _get_risk_status()
     return HTMLResponse(content=_render_risk_panel(risk_status))
 
@@ -1430,5 +1669,7 @@ def get_no_trade():
     """Return no-trade banner HTML if applicable, empty otherwise."""
     focus_data = _get_focus_data()
     if focus_data and focus_data.get("no_trade"):
-        return HTMLResponse(content=_render_no_trade_banner(focus_data.get("no_trade_reason", "Low-conviction day")))
+        return HTMLResponse(
+            content=_render_no_trade_banner(str(focus_data.get("no_trade_reason", "Low-conviction day")))
+        )
     return HTMLResponse(content='<div id="no-trade-banner"></div>')

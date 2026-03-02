@@ -91,6 +91,12 @@ class DatasetConfig:
     max_hold_bars: int = 120
     atr_period: int = 14
 
+    # ORB session: "us" (default, OR 09:30–10:00) or "london" (OR 03:00–03:30).
+    # When "london", the bracket config is automatically adjusted to use
+    # London OR times and a narrower pre-market window (00:00–03:00).
+    # When "both", dataset generation runs both sessions per day (combined).
+    orb_session: str = "us"
+
     # Chart rendering
     chart_dpi: int = 150  # lower than live for disk space savings
     chart_figsize: tuple[float, float] = (12, 8)
@@ -454,6 +460,50 @@ def load_daily_bars(
 # ---------------------------------------------------------------------------
 
 
+def _bracket_configs_for_session(
+    cfg: DatasetConfig,
+) -> list[tuple[str, "BracketConfig"]]:
+    """Return (session_key, BracketConfig) pairs based on ``cfg.orb_session``.
+
+    - ``"us"``     → single US config (OR 09:30–10:00, PM end 08:20)
+    - ``"london"`` → single London config (OR 03:00–03:30, PM end 03:00)
+    - ``"both"``   → both configs so the generator runs each session per day
+    """
+    from datetime import time as dt_time
+
+    from lib.analysis.orb_simulator import BracketConfig
+
+    us_cfg = BracketConfig(
+        sl_atr_mult=cfg.sl_atr_mult,
+        tp1_atr_mult=cfg.tp1_atr_mult,
+        tp2_atr_mult=cfg.tp2_atr_mult,
+        max_hold_bars=cfg.max_hold_bars,
+        atr_period=cfg.atr_period,
+        or_start=dt_time(9, 30),
+        or_end=dt_time(10, 0),
+        pm_end=dt_time(8, 20),
+    )
+
+    london_cfg = BracketConfig(
+        sl_atr_mult=cfg.sl_atr_mult,
+        tp1_atr_mult=cfg.tp1_atr_mult,
+        tp2_atr_mult=cfg.tp2_atr_mult,
+        max_hold_bars=cfg.max_hold_bars,
+        atr_period=cfg.atr_period,
+        or_start=dt_time(3, 0),
+        or_end=dt_time(3, 30),
+        pm_end=dt_time(3, 0),
+    )
+
+    session = cfg.orb_session.lower().strip()
+    if session == "london":
+        return [("london", london_cfg)]
+    elif session == "both":
+        return [("london", london_cfg), ("us", us_cfg)]
+    else:
+        return [("us", us_cfg)]
+
+
 def generate_dataset_for_symbol(
     symbol: str,
     bars_1m: pd.DataFrame,
@@ -467,6 +517,9 @@ def generate_dataset_for_symbol(
       2. For each result that is a trade (or no_trade if enabled), renders
          a Ruby-style chart snapshot.
       3. Collects rows for the CSV manifest.
+
+    When ``config.orb_session`` is ``"both"``, the function runs simulation
+    for both London and US sessions, producing training data from each.
 
     Args:
         symbol: Instrument symbol.
@@ -485,35 +538,43 @@ def generate_dataset_for_symbol(
     stats.symbols_processed.append(symbol)
     rows: list[dict[str, Any]] = []
 
-    # Configure bracket simulation to match dataset config
-    bracket_cfg = BracketConfig(
-        sl_atr_mult=cfg.sl_atr_mult,
-        tp1_atr_mult=cfg.tp1_atr_mult,
-        tp2_atr_mult=cfg.tp2_atr_mult,
-        max_hold_bars=cfg.max_hold_bars,
-        atr_period=cfg.atr_period,
-    )
+    # Build session-aware bracket configs
+    session_configs = _bracket_configs_for_session(cfg)
 
-    # Run batch simulation
-    logger.info("Simulating ORB trades for %s (%d bars)...", symbol, len(bars_1m))
-    sim_results = simulate_batch(
-        bars_1m=bars_1m,
-        symbol=symbol,
-        config=bracket_cfg,
-        bars_daily=bars_daily,
-        window_size=cfg.window_size,
-        step_size=cfg.step_size,
-        min_window_bars=cfg.min_window_bars,
-    )
+    all_sim_results = []
+    for session_key, bracket_cfg in session_configs:
+        session_label = f"{symbol}/{session_key}"
+        logger.info(
+            "Simulating ORB trades for %s (OR %s–%s, %d bars)...",
+            session_label,
+            bracket_cfg.or_start.strftime("%H:%M"),
+            bracket_cfg.or_end.strftime("%H:%M"),
+            len(bars_1m),
+        )
+        sim_results = simulate_batch(
+            bars_1m=bars_1m,
+            symbol=symbol,
+            config=bracket_cfg,
+            bars_daily=bars_daily,
+            window_size=cfg.window_size,
+            step_size=cfg.step_size,
+            min_window_bars=cfg.min_window_bars,
+        )
+        # Tag each result with session_key for downstream traceability
+        for r in sim_results:
+            r._session_key = session_key  # type: ignore[attr-defined]
+        all_sim_results.extend(sim_results)
+        logger.info(
+            "%s: %d windows → %d trades",
+            session_label,
+            len(sim_results),
+            sum(1 for r in sim_results if r.is_trade),
+        )
 
-    stats.total_windows = len(sim_results)
-    stats.total_trades = sum(1 for r in sim_results if r.is_trade)
-    logger.info(
-        "%s: %d windows → %d trades",
-        symbol,
-        stats.total_windows,
-        stats.total_trades,
-    )
+    stats.total_windows = len(all_sim_results)
+    stats.total_trades = sum(1 for r in all_sim_results if r.is_trade)
+
+    sim_results = all_sim_results
 
     # Try to import chart renderer (optional — dataset can be generated
     # without images for tabular-only models)
@@ -912,6 +973,12 @@ def _cli():
     gen_parser.add_argument("--max-per-label", type=int, default=0, help="Max samples per label (0=unlimited)")
     gen_parser.add_argument("--dpi", type=int, default=150)
     gen_parser.add_argument("--no-skip", action="store_true", help="Re-render existing images")
+    gen_parser.add_argument(
+        "--session",
+        default="us",
+        choices=["us", "london", "both"],
+        help="ORB session: 'us' (OR 09:30–10:00), 'london' (OR 03:00–03:30), or 'both'",
+    )
 
     # Split
     split_parser = sub.add_parser("split", help="Split dataset into train/val")
@@ -942,6 +1009,7 @@ def _cli():
             skip_existing=not args.no_skip,
             bars_source=args.source,
             csv_bars_dir=args.csv_bars_dir,
+            orb_session=args.session,
         )
         stats = generate_dataset(
             symbols=args.symbols,

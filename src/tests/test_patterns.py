@@ -189,7 +189,7 @@ class TestDataStructures:
             should_skip=True,
             reasons=["All assets low quality"],
             checks=[check],
-            checked_at="2025-01-15T08:00:00-05:00",
+            checked_at="2025-01-15T08:00:00-03:00",
             primary_reason="All assets low quality",
             severity="critical",
         )
@@ -877,7 +877,7 @@ class TestPublishNoTradeAlert:
             should_skip=True,
             reasons=["All low quality"],
             checks=[check],
-            checked_at="2025-01-15T08:00:00-05:00",
+            checked_at="2025-01-15T08:00:00-03:00",
             primary_reason="All low quality",
             severity="critical",
         )
@@ -907,7 +907,7 @@ class TestPublishNoTradeAlert:
             should_skip=True,
             reasons=["Test reason"],
             checks=[],
-            checked_at="2025-01-15T08:00:00-05:00",
+            checked_at="2025-01-15T08:00:00-03:00",
             primary_reason="Test reason",
             severity="warning",
         )
@@ -1012,7 +1012,7 @@ class TestSerialization:
             should_skip=True,
             reasons=["Low quality"],
             checks=checks,
-            checked_at="2025-01-15T08:00:00-05:00",
+            checked_at="2025-01-15T08:00:00-03:00",
             primary_reason="Low quality",
             severity="critical",
         )

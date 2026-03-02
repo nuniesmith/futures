@@ -796,3 +796,150 @@ class TestDataclasses:
         assert len(d["verdicts"]) == 1
         assert d["verdicts"][0]["name"] == "NR7"
         assert d["quality_boost"] == 0.2
+
+
+# ============================================================================
+# 11. London ORB Session — Filter Pipeline
+# ============================================================================
+
+
+class TestLondonORBFilters:
+    """Verify the filter pipeline works correctly for London Open ORBs.
+
+    London ORB breakouts occur at ~03:00–05:00 ET.  The default session
+    window (08:20–10:30 ET) would reject them, so callers must pass
+    ``allowed_windows=[(03:00, 05:00)]`` and ``enable_lunch_filter=False``.
+    Pre-market extraction should use ``pm_end=03:00`` (not the default 08:20).
+    """
+
+    # -- helpers --
+
+    def _london_params(self) -> dict:
+        """Return params simulating a London ORB LONG breakout at 03:35 ET."""
+        return dict(
+            direction="LONG",
+            trigger_price=2352.0,
+            signal_time=_et_time(3, 35),
+            bars_daily=_make_daily_bars([5, 6, 4.5, 7, 3.8, 4.2, 2.0]),
+            # Bars start at 00:00 ET (overnight) and cover through the OR
+            bars_1m=_make_1m_bars(240, start_hour=0, base_price=2340.0),
+            bars_htf=_make_htf_bars(50, trend="up", base_price=2340.0),
+            premarket_high=2348.0,  # PM high from 00:00–03:00
+            premarket_low=2330.0,
+            vwap=2345.0,
+        )
+
+    def _london_windows(self) -> list[tuple[dt_time, dt_time]]:
+        return [(dt_time(3, 0), dt_time(5, 0))]
+
+    # -- tests --
+
+    def test_london_breakout_passes_with_correct_windows(self):
+        """A London ORB at 03:35 ET should PASS when allowed_windows is 03:00–05:00."""
+        params = self._london_params()
+        result = apply_all_filters(
+            **params,
+            allowed_windows=self._london_windows(),
+            enable_lunch_filter=False,
+        )
+        assert result.passed is True
+        # Session Window should explicitly pass
+        sw = [v for v in result.verdicts if v.name == "Session Window"]
+        assert len(sw) == 1
+        assert sw[0].passed is True
+        assert "03:00" in sw[0].reason or "03:35" in sw[0].reason
+
+    def test_london_breakout_rejected_by_default_windows(self):
+        """With DEFAULT_SESSION_WINDOWS (08:20–10:30), a 03:35 signal is rejected."""
+        params = self._london_params()
+        result = apply_all_filters(**params)  # no custom windows → default
+        assert result.passed is False
+        failed_names = [v.name for v in result.verdicts if not v.passed]
+        assert "Session Window" in failed_names
+
+    def test_london_lunch_filter_disabled(self):
+        """Lunch filter should be absent from verdicts when disabled."""
+        params = self._london_params()
+        result = apply_all_filters(
+            **params,
+            allowed_windows=self._london_windows(),
+            enable_lunch_filter=False,
+        )
+        lunch = [v for v in result.verdicts if v.name == "Lunch Filter"]
+        assert len(lunch) == 0
+
+    def test_london_premarket_extraction_narrow(self):
+        """Pre-market range for London should use 00:00–03:00, not 00:00–08:20."""
+        # Create bars spanning 00:00–06:00 ET with a known spike at 02:30
+        bars = _make_1m_bars(360, start_hour=0, base_price=2340.0)
+
+        # Extract with London pm_end=03:00 — only bars 00:00–03:00
+        pm_high_london, pm_low_london = extract_premarket_range(
+            bars,
+            pm_end=dt_time(3, 0),
+        )
+        # Extract with default pm_end=08:20 — bars 00:00–06:00 (all of them)
+        pm_high_default, pm_low_default = extract_premarket_range(bars)
+
+        assert pm_high_london is not None
+        assert pm_high_default is not None
+        # The default window includes more bars (00:00–06:00) so its range
+        # should be >= the London window (00:00–03:00)
+        assert pm_high_default >= pm_high_london
+        assert pm_low_default <= pm_low_london
+
+    def test_london_short_breakout_passes(self):
+        """A London SHORT breakout should also pass with correct config."""
+        result = apply_all_filters(
+            direction="SHORT",
+            trigger_price=2328.0,
+            signal_time=_et_time(3, 42),
+            bars_daily=_make_daily_bars([5, 6, 4.5, 7, 3.8, 4.2, 2.0]),
+            bars_1m=_make_1m_bars(240, start_hour=0, base_price=2340.0),
+            bars_htf=_make_htf_bars(50, trend="down", base_price=2340.0),
+            premarket_high=2348.0,
+            premarket_low=2330.0,
+            vwap=2340.0,
+            allowed_windows=self._london_windows(),
+            enable_lunch_filter=False,
+        )
+        assert result.passed is True
+
+    def test_london_after_scan_end_rejected(self):
+        """A signal at 05:30 ET (after London scan_end 05:00) should be rejected."""
+        params = self._london_params()
+        params["signal_time"] = _et_time(5, 30)  # past London scan window
+        result = apply_all_filters(
+            **params,
+            allowed_windows=self._london_windows(),
+            enable_lunch_filter=False,
+        )
+        assert result.passed is False
+        failed_names = [v.name for v in result.verdicts if not v.passed]
+        assert "Session Window" in failed_names
+
+    def test_london_majority_gate_passes_with_one_failure(self):
+        """In majority mode, one hard filter failing shouldn't block London ORB."""
+        params = self._london_params()
+        params["vwap"] = 2360.0  # LONG at 2352 < VWAP 2360 → VWAP fails
+        result = apply_all_filters(
+            **params,
+            allowed_windows=self._london_windows(),
+            enable_lunch_filter=False,
+            gate_mode="majority",
+        )
+        # Session Window passes, PM Range passes, Multi-TF passes, VWAP fails
+        # 3/4 hard filters pass → majority passes
+        assert result.passed is True
+
+    def test_london_premarket_range_excludes_or_bars(self):
+        """Pre-market extraction with pm_end=03:00 must NOT include 03:00+ bars."""
+        # Create bars from 02:00 to 04:00 ET
+        bars = _make_1m_bars(120, start_hour=2, base_price=2340.0)
+        # Inject a massive spike at 03:15 (bar index ~75) to make it obvious
+        bars.iloc[75:80, bars.columns.get_loc("High")] = 9999.0
+
+        pm_high, _ = extract_premarket_range(bars, pm_end=dt_time(3, 0))
+        # The spike at 03:15 must NOT appear in the premarket range
+        assert pm_high is not None
+        assert pm_high < 9000.0, f"PM high {pm_high} includes post-03:00 spike!"

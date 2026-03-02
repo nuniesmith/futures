@@ -549,7 +549,7 @@ class TestPublishFocusToRedis:
             "assets": [],
             "no_trade": False,
             "no_trade_reason": "",
-            "computed_at": "2026-02-27T08:00:00-05:00",
+            "computed_at": "2026-02-27T08:00:00-03:00",
         }
 
         result = publish_focus_to_redis(data)

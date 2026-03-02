@@ -85,8 +85,9 @@ The engine operates on three Eastern Time sessions, each with different responsi
 
 | Session | Hours (ET) | What Happens |
 |---|---|---|
-| 🌙 **Pre-Market** | 00:00–05:00 | Compute daily focus, Grok morning briefing, prep alerts |
-| 🟢 **Active** | 05:00–12:00 | Live Ruby recompute (5 min), ORB detection (2 min), risk checks (1 min), Grok updates (15 min) |
+| 🌙 **Pre-Market** | 
+| Compute daily focus, Grok morning briefing, prep alerts |
+| 🟢 **Active** | 03:00–12:00 | Live Ruby recompute (5 min), ORB detection (2 min), risk checks (1 min), Grok updates (15 min) |
 | ⚙️ **Off-Hours** | 12:00–00:00 | Historical backfill, strategy optimization, backtesting, CNN dataset generation + retraining |
 
 ### The Trade Pipeline
@@ -608,7 +609,7 @@ bash scripts/migrate_git_lfs.sh
 | Max drawdown | < 8% on micro sizing | — |
 | CNN validation accuracy | > 82% | 84.7% ✅ |
 | CNN inference latency | < 50ms per chart (GPU) | ~30ms |
-| Daily retrain | Complete before 05:00 ET | ~23 min |
+| Daily retrain | Complete before 03:00 ET | ~23 min |
 
 ---
 

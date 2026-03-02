@@ -1,11 +1,12 @@
 # =============================================================================
-# Futures Trading Co-Pilot — Docker Compose (4-Service Architecture)
+# Futures Trading Co-Pilot — Docker Compose (5-Service Architecture)
 # =============================================================================
 #
 # Services:
 #   postgres       — durable storage (journal, historical opts, alerts)
 #   redis          — hot cache (latest Ruby metrics, live positions, 1m bars)
-#   data-service   — FastAPI API layer + HTMX dashboard (reads from Redis)
+#   data           — FastAPI API layer (reads from Redis, serves REST + SSE)
+#   web            — HTMX dashboard frontend (reverse-proxies to data service)
 #   engine         — background computation (Ruby, optimization, backtesting)
 #   prometheus     — metrics collection & alerting  (monitoring profile)
 #   grafana        — dashboards & visualization      (monitoring profile)
@@ -14,6 +15,7 @@
 #   docker compose up -d --build
 #   docker compose --profile monitoring up -d --build
 #   docker compose logs -f engine
+#   docker compose logs -f web
 #   docker compose ps
 #
 # =============================================================================
@@ -72,8 +74,9 @@ services:
 
     # -------------------------------------------------------------------------
     # Data Service — FastAPI API layer (thin)
-    # Serves REST API, reads computed results from Redis cache.
+    # Serves REST API + SSE, reads computed results from Redis cache.
     # ENGINE_MODE=remote means it does NOT run heavy computation itself.
+    # The web service proxies to this — not exposed to users directly.
     # -------------------------------------------------------------------------
     data:
         build:
@@ -113,6 +116,42 @@ services:
             interval: 15s
             timeout: 5s
             start_period: 30s
+            retries: 3
+
+    # -------------------------------------------------------------------------
+    # Web Service — HTMX Dashboard Frontend
+    # Stateless reverse-proxy that serves the dashboard HTML and proxies
+    # all API/SSE requests to the data service. No Redis or Postgres access.
+    # This is the user-facing entry point (port 8080).
+    # -------------------------------------------------------------------------
+    web:
+        build:
+            context: .
+            dockerfile: docker/web/Dockerfile
+        restart: unless-stopped
+        ports:
+            - "8080:8080"
+        environment:
+            - DATA_SERVICE_URL=http://data:8000
+            - WEB_HOST=0.0.0.0
+            - WEB_PORT=8080
+            - LOG_LEVEL=info
+            - PYTHONPATH=/app/src
+            - PYTHONUNBUFFERED=1
+        depends_on:
+            data:
+                condition: service_healthy
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "python",
+                    "-c",
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+                ]
+            interval: 15s
+            timeout: 5s
+            start_period: 15s
             retries: 3
 
     # -------------------------------------------------------------------------

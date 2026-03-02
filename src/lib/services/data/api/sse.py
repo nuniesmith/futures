@@ -24,6 +24,7 @@ Event types sent to browser:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -152,7 +153,7 @@ def _get_catchup_messages(count: int = _CATCHUP_COUNT) -> list[dict[str, str]]:
             return []
 
         messages: list[dict[str, str]] = []
-        for msg_id, fields in reversed(list(raw)):
+        for msg_id, fields in reversed(list(raw)):  # type: ignore[arg-type]
             # msg_id is bytes, fields is dict of bytes
             entry = {
                 "id": msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id),
@@ -237,13 +238,77 @@ def _get_risk_from_cache() -> str | None:
 
 
 def _get_orb_from_cache() -> str | None:
-    """Read the latest Opening Range Breakout result from Redis cache (TASK-801)."""
+    """Read multi-session ORB results from Redis cache (TASK-801).
+
+    Fetches both London Open (engine:orb:london) and US Equity Open
+    (engine:orb:us) session results and combines them into a single
+    JSON payload with keys: london, us, best.
+
+    Falls back to the legacy engine:orb key if session-specific keys
+    are not present.
+    """
     try:
         from lib.core.cache import cache_get
 
-        raw = cache_get("engine:orb")
-        if raw:
-            return raw.decode() if isinstance(raw, bytes) else str(raw)
+        sessions: dict[str, Any] = {}
+
+        # Fetch London Open ORB
+        raw_london = cache_get("engine:orb:london")
+        if raw_london:
+            data = raw_london.decode() if isinstance(raw_london, bytes) else str(raw_london)
+            if data:
+                with contextlib.suppress(json.JSONDecodeError, TypeError):
+                    sessions["london"] = json.loads(data)
+
+        # Fetch US Equity Open ORB
+        raw_us = cache_get("engine:orb:us")
+        if raw_us:
+            data = raw_us.decode() if isinstance(raw_us, bytes) else str(raw_us)
+            if data:
+                with contextlib.suppress(json.JSONDecodeError, TypeError):
+                    sessions["us"] = json.loads(data)
+
+        # Fallback: legacy combined key
+        if not sessions:
+            raw = cache_get("engine:orb")
+            if raw:
+                data = raw.decode() if isinstance(raw, bytes) else str(raw)
+                if data:
+                    try:
+                        legacy = json.loads(data)
+                        sk = legacy.get("session_key", "us")
+                        sessions[sk] = legacy
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+        if not sessions:
+            return None
+
+        # Determine "best" result: prefer one with a breakout
+        best = None
+        for key in ("london", "us"):
+            s = sessions.get(key)
+            if s and s.get("breakout_detected"):
+                best = s
+                break
+        if best is None:
+            for key in ("london", "us"):
+                s = sessions.get(key)
+                if s and not s.get("error"):
+                    best = s
+                    break
+        if best is None:
+            for s in sessions.values():
+                if s:
+                    best = s
+                    break
+
+        combined = {
+            "london": sessions.get("london"),
+            "us": sessions.get("us"),
+            "best": best,
+        }
+        return json.dumps(combined, default=str)
     except Exception:
         pass
     return None
@@ -444,9 +509,16 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                             if not _should_throttle("risk-update"):
                                 yield _format_sse(data=data, event="risk-update")
 
-                        elif channel == "dashboard:orb" and not _should_throttle("orb-update"):
+                        elif channel.startswith("dashboard:orb") and not _should_throttle("orb-update"):
                             # Opening Range Breakout alert (TASK-801)
-                            yield _format_sse(data=data, event="orb-update")
+                            # Channels: dashboard:orb, dashboard:orb:london, dashboard:orb:us
+                            # Re-fetch the combined multi-session data from cache
+                            # so the dashboard always gets a complete picture.
+                            combined = _get_orb_from_cache()
+                            if combined:
+                                yield _format_sse(data=combined, event="orb-update")
+                            else:
+                                yield _format_sse(data=data, event="orb-update")
 
                 except Exception as exc:
                     logger.debug("Pub/sub read error: %s", exc)

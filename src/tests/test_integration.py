@@ -636,7 +636,7 @@ class TestFocusHTMLRendering:
 
         grok_data = {
             "text": "MGC: LONG bias, 72% quality\nMNQ: SHORT bias, 68% quality",
-            "timestamp": "2026-01-15T09:00:00-05:00",
+            "timestamp": "2026-01-15T09:00:00-03:00",
             "time_et": "09:00 AM ET",
             "compact": True,
         }
@@ -975,7 +975,7 @@ class TestGrokSSEChannel:
         payload = json.dumps(
             {
                 "text": "MGC: LONG bias, nice setup\nMNQ: fading momentum",
-                "timestamp": "2026-01-15T09:15:00-05:00",
+                "timestamp": "2026-01-15T09:15:00-03:00",
                 "time_et": "09:15 AM ET",
                 "compact": True,
             }

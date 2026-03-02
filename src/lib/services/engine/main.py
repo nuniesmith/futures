@@ -4,9 +4,9 @@ Engine Service — Background computation worker
 Runs the DashboardEngine as a standalone service, separate from data-service.
 
 Now uses ScheduleManager for session-aware scheduling:
-  - **Pre-market (00:00–05:00 ET):** Compute daily focus once, Grok morning
+  - **Pre-market (00:00–03:00 ET):** Compute daily focus once, Grok morning
     briefing, prepare alerts for the trading day.
-  - **Active (05:00–12:00 ET):** Live Ruby recomputation every 5 min,
+  - **Active (03:00–12:00 ET):** Live Ruby recomputation every 5 min,
     publish focus updates to Redis, Grok updates every 15 min.
   - **Off-hours (12:00–00:00 ET):** Historical data backfill, full
     optimization runs, backtesting, next-day prep.
@@ -375,7 +375,19 @@ def _persist_risk_event(
         logger.debug("Failed to persist risk event (non-fatal): %s", exc)
 
 
-def _handle_check_orb(engine) -> None:
+def _handle_check_orb_london(engine) -> None:
+    """Check for London Open ORB patterns (03:00–03:30 ET / 08:00–08:30 UTC).
+
+    Delegates to the shared ORB handler with the London session config.
+    London open is the primary ORB session — institutional order flow
+    drives range establishment for metals, indices, and energy futures.
+    """
+    from lib.services.engine.orb import LONDON_SESSION
+
+    _handle_check_orb(engine, orb_session=LONDON_SESSION)
+
+
+def _handle_check_orb(engine, orb_session=None) -> None:
     """Check for Opening Range Breakout patterns.
 
     Runs ORB detection across all focus assets using 1-minute bar data.
@@ -388,10 +400,20 @@ def _handle_check_orb(engine) -> None:
         Recommended for live use: balances quality and trade volume.
       - ``"all"`` — every hard filter must pass (strictest).
 
+    Args:
+        engine: The engine instance.
+        orb_session: ORBSession to check. Defaults to US_SESSION if None.
+
     Publishes breakout alerts to Redis when detected AND filtered.
     Persists every evaluation result to the database for permanent audit trail.
     """
-    logger.debug("▶ Opening Range Breakout check...")
+    from lib.services.engine.orb import US_SESSION
+
+    if orb_session is None:
+        orb_session = US_SESSION
+
+    session_label = orb_session.name
+    logger.debug("▶ Opening Range Breakout check [%s]...", session_label)
     try:
         from lib.services.engine.orb import (
             detect_opening_range_breakout,
@@ -457,11 +479,14 @@ def _handle_check_orb(engine) -> None:
                     logger.debug("No 1m bars for %s — skipping ORB", symbol)
                     continue
 
-                result = detect_opening_range_breakout(bars_1m, symbol=symbol)
+                result = detect_opening_range_breakout(bars_1m, symbol=symbol, session=orb_session)
 
                 # Persist every ORB evaluation to the audit trail
                 # (returns row_id so we can enrich with filter/CNN metadata later)
-                _orb_row_id = _persist_orb_event(result)
+                _orb_row_id = _persist_orb_event(
+                    result,
+                    metadata={"orb_session": getattr(orb_session, "key", "us")},
+                )
 
                 if result.breakout_detected:
                     breakouts_found += 1
@@ -475,8 +500,34 @@ def _handle_check_orb(engine) -> None:
 
                     if _filters_available:
                         try:
-                            # Extract pre-market range from the same 1m bars
-                            pm_high, pm_low = extract_premarket_range(bars_1m)
+                            # ── Session-aware filter configuration ────────
+                            # Each ORB session needs its own filter windows:
+                            #   London (03:00–05:00 ET): premarket is 00:00–03:00,
+                            #     session window 03:00–05:00, no lunch filter needed.
+                            #   US (09:30–11:00 ET): premarket is 00:00–08:20,
+                            #     session window 08:20–10:30, lunch filter active.
+                            from datetime import time as _dt_time
+
+                            _session_key = getattr(orb_session, "key", "us")
+
+                            if _session_key == "london":
+                                _filter_allowed_windows = [
+                                    (_dt_time(3, 0), _dt_time(5, 0)),
+                                ]
+                                _pm_end = _dt_time(3, 0)  # premarket ends at OR start
+                                _enable_lunch = False  # irrelevant at 03:00–05:00 ET
+                                logger.debug("ORB filters: London mode — windows 03:00–05:00, PM end 03:00, lunch OFF")
+                            else:
+                                # US session (default)
+                                _filter_allowed_windows = [
+                                    (_dt_time(8, 20), _dt_time(10, 30)),
+                                ]
+                                _pm_end = _dt_time(8, 20)
+                                _enable_lunch = True
+                                logger.debug("ORB filters: US mode — windows 08:20–10:30, PM end 08:20, lunch ON")
+
+                            # Extract pre-market range with session-aware end time
+                            pm_high, pm_low = extract_premarket_range(bars_1m, pm_end=_pm_end)
 
                             # Try to load daily bars for NR7 check
                             bars_daily = None
@@ -539,6 +590,8 @@ def _handle_check_orb(engine) -> None:
                                 orb_high=result.or_high,
                                 orb_low=result.or_low,
                                 gate_mode=_gate_mode,
+                                allowed_windows=_filter_allowed_windows,
+                                enable_lunch_filter=_enable_lunch,
                             )
 
                             filter_passed = filter_result.passed
@@ -557,6 +610,7 @@ def _handle_check_orb(engine) -> None:
                                 _persist_orb_enrichment(
                                     _orb_row_id,
                                     {
+                                        "orb_session": _session_key,
                                         "filter_passed": False,
                                         "filter_summary": filter_summary,
                                         "published": False,
@@ -672,6 +726,7 @@ def _handle_check_orb(engine) -> None:
                             _persist_orb_enrichment(
                                 _orb_row_id,
                                 {
+                                    "orb_session": getattr(orb_session, "key", "us"),
                                     "filter_passed": True,
                                     "filter_summary": filter_summary,
                                     "cnn_prob": cnn_prob,
@@ -704,6 +759,7 @@ def _handle_check_orb(engine) -> None:
                             _persist_orb_enrichment(
                                 _orb_row_id,
                                 {
+                                    "orb_session": getattr(orb_session, "key", "us"),
                                     "filter_passed": True,
                                     "filter_summary": filter_summary,
                                     "cnn_prob": cnn_prob,
@@ -746,16 +802,17 @@ def _handle_check_orb(engine) -> None:
 
         if breakouts_found:
             logger.info(
-                "✅ ORB check complete: %d breakout(s) found, %d filtered out, %d published",
+                "✅ ORB [%s] check complete: %d breakout(s) found, %d filtered out, %d published",
+                session_label,
                 breakouts_found,
                 breakouts_filtered,
                 breakouts_found - breakouts_filtered,
             )
         else:
-            logger.debug("✅ ORB check complete: no breakouts")
+            logger.debug("✅ ORB [%s] check complete: no breakouts", session_label)
 
     except Exception as exc:
-        logger.debug("ORB check error (non-fatal): %s", exc)
+        logger.debug("ORB [%s] check error (non-fatal): %s", session_label, exc)
 
 
 def _persist_orb_event(result, metadata: dict | None = None) -> int | None:
@@ -1136,12 +1193,13 @@ def main():
         ActionType.COMPUTE_DAILY_FOCUS: lambda: _handle_compute_daily_focus(engine, account_size),
         ActionType.GROK_MORNING_BRIEF: lambda: _handle_grok_morning_brief(engine),
         ActionType.PREP_ALERTS: lambda: _handle_prep_alerts(engine),
-        ActionType.FKS_RECOMPUTE: lambda: _handle_fks_recompute(engine),
+        ActionType.RUBY_RECOMPUTE: lambda: _handle_fks_recompute(engine),
         ActionType.PUBLISH_FOCUS_UPDATE: lambda: _handle_publish_focus_update(engine, account_size),
         ActionType.GROK_LIVE_UPDATE: lambda: _handle_grok_live_update(engine),
         ActionType.CHECK_RISK_RULES: lambda: _handle_check_risk_rules(engine, account_size),
         ActionType.CHECK_NO_TRADE: lambda: _handle_check_no_trade(engine, account_size),
         ActionType.CHECK_ORB: lambda: _handle_check_orb(engine),
+        ActionType.CHECK_ORB_LONDON: lambda: _handle_check_orb_london(engine),
         ActionType.HISTORICAL_BACKFILL: lambda: _handle_historical_backfill(engine),
         ActionType.RUN_OPTIMIZATION: lambda: _handle_run_optimization(engine),
         ActionType.RUN_BACKTEST: lambda: _handle_run_backtest(engine),

@@ -96,6 +96,13 @@ class BracketConfig:
 
 DEFAULT_BRACKET = BracketConfig()
 
+# London Open: OR 03:00–03:30 ET, premarket 00:00–03:00
+LONDON_BRACKET = BracketConfig(
+    or_start=dt_time(3, 0),
+    or_end=dt_time(3, 30),
+    pm_end=dt_time(3, 0),
+)
+
 
 # ---------------------------------------------------------------------------
 # Result dataclass

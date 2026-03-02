@@ -570,7 +570,7 @@ class TestSchedulerORB:
 
         sm = ScheduleManager()
 
-        # 08:00 ET — before ORB window (but in active session 05:00–12:00)
+        # 08:00 ET — before ORB window (but in active session 03:00–12:00)
         now_early = datetime(2026, 2, 27, 8, 0, 0, tzinfo=_EST)
         actions_early = sm.get_pending_actions(now=now_early)
         early_types = [a.action for a in actions_early]
@@ -1122,16 +1122,64 @@ class TestPositionsRiskEvaluation:
 
 
 class TestDashboardORBPanel:
-    """Test the ORB panel HTML rendering."""
+    """Test the ORB panel HTML rendering (multi-session format)."""
 
     def test_render_orb_panel_none(self):
         from lib.services.data.api.dashboard import _render_orb_panel
 
         html = _render_orb_panel(None)
         assert "orb-panel" in html
-        assert "Waiting for" in html
+        assert "Waiting for ORB sessions" in html
+        assert "London 03:00 ET" in html
+        assert "US 09:30 ET" in html
 
-    def test_render_orb_panel_with_data(self):
+    def test_render_orb_panel_with_multi_session_data(self):
+        """Multi-session format with london + us keys."""
+        from lib.services.data.api.dashboard import _render_orb_panel
+
+        data = {
+            "london": {
+                "or_high": 2710.5,
+                "or_low": 2695.3,
+                "or_range": 15.2,
+                "atr_value": 3.5,
+                "long_trigger": 2712.25,
+                "short_trigger": 2693.55,
+                "breakout_detected": False,
+                "direction": "",
+                "trigger_price": 0,
+                "symbol": "MGC",
+                "or_complete": True,
+                "evaluated_at": "2026-02-27T04:05:00-03:00",
+                "error": "",
+            },
+            "us": None,
+            "best": {
+                "or_high": 2710.5,
+                "or_low": 2695.3,
+                "or_range": 15.2,
+                "atr_value": 3.5,
+                "long_trigger": 2712.25,
+                "short_trigger": 2693.55,
+                "breakout_detected": False,
+                "direction": "",
+                "trigger_price": 0,
+                "symbol": "MGC",
+                "or_complete": True,
+                "evaluated_at": "2026-02-27T04:05:00-03:00",
+                "error": "",
+            },
+        }
+        html = _render_orb_panel(data)
+        assert "orb-panel" in html
+        assert "2710.5" in html or "2,710.5" in html
+        assert "OPENING RANGE" in html
+        # Both session sub-cards should be present
+        assert "London Open" in html
+        assert "US Equity Open" in html
+
+    def test_render_orb_panel_with_legacy_data(self):
+        """Backward compat: single-session data without london/us/best keys."""
         from lib.services.data.api.dashboard import _render_orb_panel
 
         data = {
@@ -1146,7 +1194,7 @@ class TestDashboardORBPanel:
             "trigger_price": 0,
             "symbol": "MGC",
             "or_complete": True,
-            "evaluated_at": "2026-02-27T10:05:00-05:00",
+            "evaluated_at": "2026-02-27T10:05:00-03:00",
             "error": "",
         }
         html = _render_orb_panel(data)
@@ -1157,7 +1205,7 @@ class TestDashboardORBPanel:
     def test_render_orb_panel_with_breakout(self):
         from lib.services.data.api.dashboard import _render_orb_panel
 
-        data = {
+        us_session = {
             "or_high": 2710.0,
             "or_low": 2695.0,
             "or_range": 15.0,
@@ -1169,17 +1217,28 @@ class TestDashboardORBPanel:
             "trigger_price": 2715.0,
             "symbol": "MGC",
             "or_complete": True,
-            "evaluated_at": "2026-02-27T10:15:00-05:00",
+            "evaluated_at": "2026-02-27T10:15:00-03:00",
             "error": "",
         }
+        data = {
+            "london": None,
+            "us": us_session,
+            "best": us_session,
+        }
         html = _render_orb_panel(data)
-        assert "LONG BREAKOUT" in html
+        # Breakout shows in the session sub-card
+        assert "LONG" in html
+        assert "2,715.00" in html or "2715.0" in html
         assert "animate-pulse" in html
 
     def test_render_orb_panel_with_error(self):
         from lib.services.data.api.dashboard import _render_orb_panel
 
-        data = {"error": "No bar data provided", "or_high": 0, "or_low": 0}
+        data = {
+            "london": None,
+            "us": {"error": "No bar data provided", "or_high": 0, "or_low": 0},
+            "best": {"error": "No bar data provided", "or_high": 0, "or_low": 0},
+        }
         html = _render_orb_panel(data)
         assert "No bar data" in html
 
@@ -1243,12 +1302,82 @@ class TestSSEORBCache:
     def test_get_orb_from_cache_with_data(self):
         from lib.services.data.api.sse import _get_orb_from_cache
 
-        orb_data = json.dumps({"type": "ORB", "symbol": "MGC", "breakout_detected": True})
-        self._mock_cache.cache_get.return_value = orb_data.encode()
+        orb_data = {"type": "ORB", "symbol": "MGC", "breakout_detected": True, "session_key": "us"}
+
+        # Mock cache_get to return session-specific data:
+        # First call is engine:orb:london (return None), second is engine:orb:us (return data)
+        def _mock_get(key):
+            if key == "engine:orb:us":
+                return json.dumps(orb_data).encode()
+            return None
+
+        self._mock_cache.cache_get.side_effect = _mock_get
         result = _get_orb_from_cache()
         assert result is not None
         parsed = json.loads(result)
-        assert parsed["symbol"] == "MGC"
+        # Multi-session format: result has "london", "us", "best" keys
+        assert "us" in parsed
+        assert parsed["us"]["symbol"] == "MGC"
+        assert parsed["best"]["symbol"] == "MGC"
+
+    def test_get_orb_from_cache_london_session(self):
+        from lib.services.data.api.sse import _get_orb_from_cache
+
+        london_data = {"type": "ORB", "symbol": "MGC", "session_key": "london", "breakout_detected": True}
+
+        def _mock_get(key):
+            if key == "engine:orb:london":
+                return json.dumps(london_data).encode()
+            return None
+
+        self._mock_cache.cache_get.side_effect = _mock_get
+        result = _get_orb_from_cache()
+        assert result is not None
+        parsed = json.loads(result)
+        assert "london" in parsed
+        assert parsed["london"]["session_key"] == "london"
+        assert parsed["best"]["session_key"] == "london"
+
+    def test_get_orb_from_cache_both_sessions(self):
+        from lib.services.data.api.sse import _get_orb_from_cache
+
+        london_data = {"type": "ORB", "symbol": "MGC", "session_key": "london", "breakout_detected": False}
+        us_data = {"type": "ORB", "symbol": "MGC", "session_key": "us", "breakout_detected": True}
+
+        def _mock_get(key):
+            if key == "engine:orb:london":
+                return json.dumps(london_data).encode()
+            if key == "engine:orb:us":
+                return json.dumps(us_data).encode()
+            return None
+
+        self._mock_cache.cache_get.side_effect = _mock_get
+        result = _get_orb_from_cache()
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["london"] is not None
+        assert parsed["us"] is not None
+        # Best should be the one with breakout (US)
+        assert parsed["best"]["session_key"] == "us"
+        assert parsed["best"]["breakout_detected"] is True
+
+    def test_get_orb_from_cache_legacy_fallback(self):
+        """Legacy cache key (engine:orb) still works when session keys are absent."""
+        from lib.services.data.api.sse import _get_orb_from_cache
+
+        legacy_data = {"type": "ORB", "symbol": "MGC", "breakout_detected": True}
+
+        def _mock_get(key):
+            if key == "engine:orb":
+                return json.dumps(legacy_data).encode()
+            return None
+
+        self._mock_cache.cache_get.side_effect = _mock_get
+        result = _get_orb_from_cache()
+        assert result is not None
+        parsed = json.loads(result)
+        # Legacy data slots into "us" by default (session_key defaults to "us")
+        assert parsed["us"]["symbol"] == "MGC"
 
 
 # ===========================================================================
@@ -1279,7 +1408,7 @@ class TestRiskModels:
             max_risk_per_trade=375.0,
             daily_pnl=-50.0,
             open_trade_count=1,
-            checked_at="2026-02-27T10:00:00-05:00",
+            checked_at="2026-02-27T10:00:00-03:00",
         )
         assert resp.allowed is True
         assert resp.total_risk == 100.0
@@ -1391,10 +1520,120 @@ class TestORBConstants:
 
 
 class TestSchedulerORBConstants:
-    """Verify scheduler ORB-related constants."""
+    """Test scheduler ORB-related constants."""
 
     def test_orb_check_interval(self):
         from lib.services.engine.scheduler import ScheduleManager
 
-        assert ScheduleManager.ORB_CHECK_INTERVAL > 0
-        assert ScheduleManager.ORB_CHECK_INTERVAL <= 300  # max 5 min
+        assert ScheduleManager.ORB_CHECK_INTERVAL == 2 * 60
+
+    def test_orb_london_check_interval(self):
+        from lib.services.engine.scheduler import ScheduleManager
+
+        assert ScheduleManager.ORB_LONDON_CHECK_INTERVAL == 2 * 60
+
+
+class TestSchedulerORBLondon:
+    """Test London Open ORB scheduling (03:00–05:00 ET)."""
+
+    def test_london_orb_action_type_exists(self):
+        from lib.services.engine.scheduler import ActionType
+
+        assert hasattr(ActionType, "CHECK_ORB_LONDON")
+        assert ActionType.CHECK_ORB_LONDON == "check_orb_london"
+
+    def test_london_orb_scheduled_during_premarket_window(self):
+        """London ORB should be scheduled during 03:00–05:00 ET (pre-market)."""
+        from lib.services.engine.scheduler import ActionType, ScheduleManager
+
+        mgr = ScheduleManager()
+        now = datetime(2025, 1, 15, 3, 30, tzinfo=ZoneInfo("America/New_York"))
+        actions = mgr.get_pending_actions(now=now)
+        action_types = [a.action for a in actions]
+        assert ActionType.CHECK_ORB_LONDON in action_types
+
+    def test_london_orb_not_scheduled_before_3am(self):
+        """London ORB should NOT be scheduled before 03:00 ET."""
+        from lib.services.engine.scheduler import ActionType, ScheduleManager
+
+        mgr = ScheduleManager()
+        now = datetime(2025, 1, 15, 2, 30, tzinfo=ZoneInfo("America/New_York"))
+        actions = mgr.get_pending_actions(now=now)
+        action_types = [a.action for a in actions]
+        assert ActionType.CHECK_ORB_LONDON not in action_types
+
+    def test_london_orb_scheduled_at_active_start(self):
+        """London ORB tail-end check runs in early active session (05:00–05:30 ET)."""
+        from lib.services.engine.scheduler import ActionType, ScheduleManager
+
+        mgr = ScheduleManager()
+        now = datetime(2025, 1, 15, 5, 15, tzinfo=ZoneInfo("America/New_York"))
+        actions = mgr.get_pending_actions(now=now)
+        action_types = [a.action for a in actions]
+        assert ActionType.CHECK_ORB_LONDON in action_types
+
+    def test_london_orb_not_scheduled_during_us_window(self):
+        """London ORB should NOT be scheduled during 09:30–11:00 ET."""
+        from lib.services.engine.scheduler import ActionType, ScheduleManager
+
+        mgr = ScheduleManager()
+        now = datetime(2025, 1, 15, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+        actions = mgr.get_pending_actions(now=now)
+        action_types = [a.action for a in actions]
+        assert ActionType.CHECK_ORB_LONDON not in action_types
+
+
+class TestMultiSessionORB:
+    """Test multi-session ORB detection."""
+
+    def test_detect_all_sessions(self):
+        from lib.services.engine.orb import detect_all_sessions
+
+        # Use bars that span enough time to cover both session windows
+        bars = _make_1m_bars(n=60, start_price=2700.0, start_time="2026-02-27 09:20:00")
+        multi = detect_all_sessions(bars, symbol="MGC")
+        assert "london" in multi.sessions
+        assert "us" in multi.sessions
+        assert multi.symbol == "MGC"
+
+    def test_multi_session_result_properties(self):
+        from lib.services.engine.orb import MultiSessionORBResult, ORBResult
+
+        r1 = ORBResult(symbol="MGC", session_key="london", breakout_detected=True, or_range=10.0)
+        r2 = ORBResult(symbol="MGC", session_key="us", breakout_detected=False, or_range=5.0)
+        multi = MultiSessionORBResult(symbol="MGC", sessions={"london": r1, "us": r2})
+        assert multi.has_any_breakout is True
+        assert len(multi.active_breakouts) == 1
+        assert multi.best_breakout.session_key == "london"
+
+    def test_session_helpers(self):
+        from lib.services.engine.orb import get_active_sessions, get_session_status
+
+        # 03:15 ET — London should be active (forming)
+        now_london = datetime(2025, 1, 15, 3, 15, tzinfo=ZoneInfo("America/New_York"))
+        active = get_active_sessions(now_london)
+        assert any(s.key == "london" for s in active)
+
+        statuses = get_session_status(now_london)
+        assert statuses["london"] == "forming"
+        assert statuses["us"] == "waiting"
+
+        # 09:45 ET — US should be active (forming)
+        now_us = datetime(2025, 1, 15, 9, 45, tzinfo=ZoneInfo("America/New_York"))
+        active = get_active_sessions(now_us)
+        assert any(s.key == "us" for s in active)
+
+        statuses = get_session_status(now_us)
+        assert statuses["london"] == "complete"
+        assert statuses["us"] == "forming"
+
+    def test_orb_result_includes_session_info(self):
+        from lib.services.engine.orb import LONDON_SESSION, detect_opening_range_breakout
+
+        bars = _make_1m_bars()
+        result = detect_opening_range_breakout(bars, symbol="MGC", session=LONDON_SESSION)
+        assert result.session_name == "London Open"
+        assert result.session_key == "london"
+        d = result.to_dict()
+        assert d["session_name"] == "London Open"
+        assert d["session_key"] == "london"

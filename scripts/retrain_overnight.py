@@ -34,9 +34,9 @@ Scheduling:
 Session-aware time windows (all times Eastern):
   ┌──────────────────────────────────────────────────────────┐
   │ 12:00–17:00 ET  Dataset generation (CPU-bound I/O)      │
-  │ 17:00–03:00 ET  GPU training window (GPU-bound)         │
-  │ 03:00–05:00 ET  Validation + promotion + cleanup        │
-  │ 05:00–12:00 ET  ACTIVE SESSION — NO TRAINING            │
+  │ 17:00–00:00 ET  GPU training window (GPU-bound)         │
+  │ 00:00–03:00 ET  Validation + promotion + cleanup        │
+  │ 03:00–12:00 ET  ACTIVE SESSION — NO TRAINING            │
   └──────────────────────────────────────────────────────────┘
   With ``--immediate`` the pipeline runs all stages back-to-back
   regardless of clock time (useful for manual kicks).
@@ -121,7 +121,7 @@ AUDIT_LOG_PATH = os.path.join(MODEL_DIR, "retrain_audit.jsonl")
 LOCKFILE_PATH = os.path.join(MODEL_DIR, ".retrain_lock")
 
 # Session boundaries (Eastern Time hours)
-ACTIVE_SESSION_START = 5  # 05:00 ET
+ACTIVE_SESSION_START = 3  # 03:00 ET
 ACTIVE_SESSION_END = 12  # 12:00 ET
 
 
@@ -254,7 +254,7 @@ def _now_et() -> datetime:
 
 
 def _is_active_session(now: Optional[datetime] = None) -> bool:
-    """Return True if we're in the active trading session (05:00–12:00 ET)."""
+    """Return True if we're in the active trading session (03:00–12:00 ET)."""
     now = now or _now_et()
     return ACTIVE_SESSION_START <= now.hour < ACTIVE_SESSION_END
 
@@ -1008,7 +1008,7 @@ def run_pipeline(cfg: RetrainConfig) -> RetrainResult:
 
     if not cfg.immediate and _is_active_session():
         logger.warning(
-            "🚫 Cannot start retraining during active session (05:00–12:00 ET). Use --immediate to override."
+            "🚫 Cannot start retraining during active session (03:00–12:00 ET). Use --immediate to override."
         )
         result.status = "skipped"
         result.finished_at = _now_et().isoformat()
@@ -1167,9 +1167,9 @@ def main():
         epilog="""
 Session-aware time windows (all times Eastern):
   12:00–17:00 ET   Dataset generation (CPU-bound)
-  17:00–03:00 ET   GPU training window
-  03:00–05:00 ET   Validation + promotion + cleanup
-  05:00–12:00 ET   ACTIVE SESSION — NO TRAINING
+  17:00–00:00 ET   GPU training window
+  00:00–03:00 ET   Validation + promotion + cleanup
+  03:00–12:00 ET   ACTIVE SESSION — NO TRAINING
 
 Use --immediate to run all stages back-to-back regardless of time.
 

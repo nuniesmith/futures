@@ -92,7 +92,7 @@ class TestPreMarketActions:
         pending = mgr.get_pending_actions(now=now)
 
         action_types = {a.action for a in pending}
-        assert ActionType.FKS_RECOMPUTE not in action_types
+        assert ActionType.RUBY_RECOMPUTE not in action_types
         assert ActionType.GROK_LIVE_UPDATE not in action_types
 
     def test_no_off_hours_actions_during_premarket(self):
@@ -135,7 +135,7 @@ class TestActiveActions:
 
         action_types = {a.action for a in pending}
         # All interval-based actions should be pending on first call
-        assert ActionType.FKS_RECOMPUTE in action_types
+        assert ActionType.RUBY_RECOMPUTE in action_types
         assert ActionType.PUBLISH_FOCUS_UPDATE in action_types
         assert ActionType.CHECK_RISK_RULES in action_types
         assert ActionType.CHECK_NO_TRADE in action_types
@@ -156,15 +156,15 @@ class TestActiveActions:
 
         # First call — everything is pending
         pending1 = mgr.get_pending_actions(now=now)
-        assert any(a.action == ActionType.FKS_RECOMPUTE for a in pending1)
+        assert any(a.action == ActionType.RUBY_RECOMPUTE for a in pending1)
 
         # Mark done
-        mgr.mark_done(ActionType.FKS_RECOMPUTE)
+        mgr.mark_done(ActionType.RUBY_RECOMPUTE)
 
         # Immediately call again — should NOT be pending (5 min cooldown)
         now2 = datetime(2026, 2, 27, 8, 0, 5, tzinfo=_EST)
         pending2 = mgr.get_pending_actions(now=now2)
-        assert not any(a.action == ActionType.FKS_RECOMPUTE for a in pending2)
+        assert not any(a.action == ActionType.RUBY_RECOMPUTE for a in pending2)
 
     def test_no_off_hours_during_active(self):
         mgr = ScheduleManager()
@@ -199,7 +199,7 @@ class TestOffHoursActions:
         pending = mgr.get_pending_actions(now=now)
 
         action_types = {a.action for a in pending}
-        assert ActionType.FKS_RECOMPUTE not in action_types
+        assert ActionType.RUBY_RECOMPUTE not in action_types
         assert ActionType.GROK_LIVE_UPDATE not in action_types
 
     def test_off_hours_once_per_session(self):
@@ -236,7 +236,7 @@ class TestSessionTransitions:
 
         # Should now see active-session actions
         action_types = {a.action for a in pending}
-        assert ActionType.FKS_RECOMPUTE in action_types
+        assert ActionType.RUBY_RECOMPUTE in action_types
 
     def test_active_to_off_hours_transition(self):
         mgr = ScheduleManager()
