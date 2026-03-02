@@ -168,6 +168,7 @@ services:
             context: .
             dockerfile: docker/engine/Dockerfile
         restart: unless-stopped
+        shm_size: 2gb
         env_file:
             - .env
         environment:
@@ -182,6 +183,7 @@ services:
             - app_data:/app/data
             - ./models:/app/models
             - ./dataset:/app/dataset
+            - ./scripts:/app/scripts
         depends_on:
             redis:
                 condition: service_healthy

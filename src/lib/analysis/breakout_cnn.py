@@ -401,6 +401,52 @@ else:
 # ---------------------------------------------------------------------------
 
 
+def _detect_docker() -> bool:
+    """Return True if we appear to be running inside a Docker container."""
+    try:
+        if os.path.exists("/.dockerenv"):
+            return True
+        with open("/proc/1/cgroup", "r") as f:
+            return any("docker" in line or "containerd" in line for line in f)
+    except Exception:
+        return False
+
+
+def _safe_num_workers(requested: int) -> int:
+    """Clamp DataLoader num_workers to 0 inside Docker when /dev/shm is small.
+
+    PyTorch multiprocess DataLoader workers communicate via shared memory.
+    Docker's default /dev/shm is only 64 MB, which causes:
+        RuntimeError: unable to allocate shared memory(shm)
+    Setting num_workers=0 forces single-process loading (slower but safe).
+    """
+    if requested == 0:
+        return 0
+
+    if not _detect_docker():
+        return requested
+
+    # Check /dev/shm size — need at least 512 MB for multi-worker loading
+    try:
+        stat = os.statvfs("/dev/shm")
+        shm_bytes = stat.f_frsize * stat.f_blocks
+        shm_mb = shm_bytes / (1024 * 1024)
+        if shm_mb >= 512:
+            logger.info("Docker detected with %.0f MB /dev/shm — using %d DataLoader workers", shm_mb, requested)
+            return requested
+        else:
+            logger.warning(
+                "Docker detected with only %.0f MB /dev/shm (need ≥512 MB) — "
+                "forcing num_workers=0 to avoid shared memory crash. "
+                "Fix: add 'shm_size: 2gb' to docker-compose.yml",
+                shm_mb,
+            )
+            return 0
+    except Exception:
+        logger.warning("Docker detected but cannot check /dev/shm — forcing num_workers=0 for safety")
+        return 0
+
+
 def train_model(
     data_csv: str,
     val_csv: str | None = None,
@@ -445,6 +491,9 @@ def train_model(
 
     device = torch.device(get_device())
     logger.info("Training on device: %s", device)
+
+    # Clamp num_workers for Docker shared memory safety
+    num_workers = _safe_num_workers(num_workers)
 
     # --- Datasets ---
     train_transform = get_training_transform()

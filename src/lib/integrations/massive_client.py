@@ -1645,9 +1645,11 @@ class MassiveFeedManager:
 
         reconnect_delay = 1
         max_reconnect_delay = 60
+        _MIN_STABLE_SECS = 30  # only reset backoff after this many seconds of uptime
 
         while self._running:
             ws = None
+            _connected_at = None
             try:
                 logger.info("Connecting to %s …", _WS_FUTURES_URI)
                 ws = await websockets.connect(
@@ -1707,7 +1709,7 @@ class MassiveFeedManager:
 
                 self._connected = True
                 self._ws = ws  # store for stop() to close
-                reconnect_delay = 1  # reset back-off on success
+                _connected_at = asyncio.get_event_loop().time()
 
                 # --- 3. Message loop ---
                 async for raw in ws:
@@ -1734,6 +1736,13 @@ class MassiveFeedManager:
                 if len(self.errors) > 100:
                     self.errors = self.errors[-50:]
             finally:
+                # Only reset backoff if the connection was stable for 30+ seconds.
+                # This prevents tight reconnect loops when the server keeps kicking
+                # us shortly after auth (e.g. 1008 policy violation every ~8s).
+                if self._connected and _connected_at is not None:
+                    _uptime = asyncio.get_event_loop().time() - _connected_at
+                    if _uptime >= _MIN_STABLE_SECS:
+                        reconnect_delay = 1  # was genuinely stable — reset backoff
                 self._connected = False
                 self._ws = None
                 if ws is not None:

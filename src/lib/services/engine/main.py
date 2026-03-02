@@ -181,35 +181,34 @@ def _run_retrain_from_command(
         "running", "CNN retraining started via dashboard command", session=session, skip_dataset=skip_dataset
     )
     try:
-        import importlib.util
+        import sys as _sys
         from pathlib import Path
 
-        _here = Path(__file__).resolve().parent
-        _project_root = _here
-        for _p in _here.parents:
-            if (_p / "scripts").is_dir() and (_p / "src").is_dir():
-                _project_root = _p
+        # Locate scripts/ directory
+        _candidates = [
+            Path("/app/scripts"),
+            Path(__file__).resolve().parents[4] / "scripts",
+        ]
+        _scripts_dir = None
+        for _c in _candidates:
+            if (_c / "retrain_overnight.py").is_file():
+                _scripts_dir = _c
                 break
 
-        _pipeline_path = _project_root / "scripts" / "retrain_overnight.py"
-        if not _pipeline_path.is_file():
-            msg = f"Retrain script not found at {_pipeline_path}"
+        if _scripts_dir is None:
+            msg = "retrain_overnight.py not found in any scripts/ location"
             logger.error(msg)
             _publish_retrain_status("failed", msg)
             return
 
-        _spec = importlib.util.spec_from_file_location("retrain_overnight", str(_pipeline_path))
-        if _spec is None or _spec.loader is None:
-            msg = "Could not load retrain_overnight module spec"
-            logger.error(msg)
-            _publish_retrain_status("failed", msg)
-            return
+        _scripts_str = str(_scripts_dir)
+        if _scripts_str not in _sys.path:
+            _sys.path.insert(0, _scripts_str)
 
-        _mod = importlib.util.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
+        import retrain_overnight  # noqa: E402
 
         # Build config
-        cfg = _mod.RetrainConfig.from_env()
+        cfg = retrain_overnight.RetrainConfig.from_env()
         cfg.immediate = True
         cfg.force = True
         cfg.skip_dataset = skip_dataset
@@ -223,7 +222,7 @@ def _run_retrain_from_command(
             "🚀 Starting CNN retrain pipeline: session=%s skip_dataset=%s epochs=%s", session, skip_dataset, cfg.epochs
         )
 
-        result = _mod.run_pipeline(cfg)
+        result = retrain_overnight.run_pipeline(cfg)
 
         if result.status == "success":
             logger.info(
@@ -1198,42 +1197,55 @@ def _handle_train_breakout_cnn(engine) -> None:
 
     Falls back to the basic train_model() if the pipeline is unavailable.
     """
+    global _retrain_thread
+
+    # If a dashboard-triggered retrain is already running, skip the scheduled one
+    if _retrain_thread is not None and _retrain_thread.is_alive():
+        logger.info(
+            "⏭️  Skipping scheduled CNN training — dashboard-triggered retrain is already running (thread=%s)",
+            _retrain_thread.name,
+        )
+        return
+
     logger.info("▶ Training breakout CNN (overnight pipeline)...")
 
     # --- Try the full overnight retraining pipeline first ---
     try:
-        import importlib.util
+        import sys as _sys
         from pathlib import Path
 
-        # Walk upward from this file to the project root (contains scripts/)
-        _here = Path(__file__).resolve().parent
-        _project_root = _here
-        for _p in _here.parents:
-            if (_p / "scripts").is_dir() and (_p / "src").is_dir():
-                _project_root = _p
+        # Locate the scripts/ directory (mounted at /app/scripts in Docker,
+        # or at <project_root>/scripts on bare metal).
+        _candidates = [
+            Path("/app/scripts"),
+            Path(__file__).resolve().parents[4] / "scripts",  # futures/scripts
+        ]
+        _scripts_dir = None
+        for _c in _candidates:
+            if (_c / "retrain_overnight.py").is_file():
+                _scripts_dir = _c
                 break
-        _pipeline_path = _project_root / "scripts" / "retrain_overnight.py"
-        if _pipeline_path.is_file():
-            _spec = importlib.util.spec_from_file_location("retrain_overnight", str(_pipeline_path))
-            if _spec is None or _spec.loader is None:
-                logger.warning("Could not load retrain_overnight module spec — falling back to basic trainer")
-            else:
-                _mod = importlib.util.module_from_spec(_spec)
-                _spec.loader.exec_module(_mod)
 
-                success = _mod.run_from_engine()
-                if success:
-                    logger.info("✅ CNN retraining pipeline completed — model promoted")
-                else:
-                    logger.warning(
-                        "CNN retraining pipeline finished but model was NOT promoted (gate rejected or error)"
-                    )
-                return
+        if _scripts_dir is None:
+            logger.info("retrain_overnight.py not found in any scripts/ location — falling back to basic trainer")
         else:
-            logger.info("Overnight pipeline script not found at %s — falling back to basic trainer", _pipeline_path)
+            # Add scripts/ to sys.path so we can import it directly
+            _scripts_str = str(_scripts_dir)
+            if _scripts_str not in _sys.path:
+                _sys.path.insert(0, _scripts_str)
+
+            # Use a direct import — much more reliable than importlib.util
+            import retrain_overnight  # noqa: E402
+
+            success = retrain_overnight.run_from_engine()
+            if success:
+                logger.info("✅ CNN retraining pipeline completed — model promoted")
+            else:
+                logger.warning("CNN retraining pipeline finished but model was NOT promoted (gate rejected or error)")
+            return
 
     except Exception as exc:
-        logger.warning("Overnight pipeline failed (%s) — falling back to basic trainer", exc)
+        logger.warning("Overnight pipeline failed (%s) — falling back to basic trainer", exc, exc_info=True)
 
     # --- Fallback: use the in-module train_model() directly ---
     try:
@@ -1254,6 +1266,7 @@ def _handle_train_breakout_cnn(engine) -> None:
             batch_size=32,
             freeze_epochs=2,
             model_dir="models",
+            num_workers=0,  # safe for Docker (no /dev/shm issues)
         )
 
         if model_path:
@@ -1270,7 +1283,7 @@ def _handle_train_breakout_cnn(engine) -> None:
     except ImportError as exc:
         logger.warning("Breakout CNN module not available: %s", exc)
     except Exception as exc:
-        logger.error("CNN training error: %s", exc)
+        logger.error("CNN training error: %s", exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
