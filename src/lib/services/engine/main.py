@@ -846,24 +846,77 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                 )
 
                                 if snap_path:
-                                    # Build tabular features
+                                    # Build tabular features (8 features — must match TABULAR_FEATURES order)
                                     _vol_ratio = 1.0
                                     _atr_pct = 0.0
                                     _quality_norm = 0.0
+                                    _cvd_delta = 0.0
+                                    _nr7_flag = 0.0
                                     try:
                                         _quality_norm = getattr(result, "quality_pct", 0) / 100.0
                                         if hasattr(result, "atr_value") and result.atr_value > 0:
                                             _atr_pct = result.atr_value / result.trigger_price
+                                        # Volume ratio from ORB result if available
+                                        if hasattr(result, "volume_ratio") and result.volume_ratio > 0:
+                                            _vol_ratio = result.volume_ratio
+                                    except Exception:
+                                        pass
+
+                                    # Compute real CVD delta from 1m bars if possible
+                                    try:
+                                        if bars_1m is not None and len(bars_1m) > 30:
+                                            _closes = bars_1m["Close"].values.astype(float)
+                                            _opens = (
+                                                bars_1m["Open"].values.astype(float)
+                                                if "Open" in bars_1m.columns
+                                                else _closes
+                                            )
+                                            _vols = (
+                                                bars_1m["Volume"].values.astype(float)
+                                                if "Volume" in bars_1m.columns
+                                                else None
+                                            )
+                                            if _vols is not None:
+                                                _total_v = float(_vols.sum())
+                                                if _total_v > 0:
+                                                    _buy_v = float(_vols[_closes > _opens].sum())
+                                                    _sell_v = float(_vols[_closes <= _opens].sum())
+                                                    _cvd_delta = (_buy_v - _sell_v) / _total_v
+                                    except Exception:
+                                        pass
+
+                                    # NR7 flag: check if today's daily range is narrowest in 7 days
+                                    try:
+                                        if bars_daily is not None and len(bars_daily) >= 7:
+                                            _d_highs = bars_daily["High"].values[-7:].astype(float)
+                                            _d_lows = bars_daily["Low"].values[-7:].astype(float)
+                                            _d_ranges = _d_highs - _d_lows
+                                            _nr7_flag = 1.0 if _d_ranges[-1] <= _d_ranges.min() else 0.0
+                                    except Exception:
+                                        pass
+
+                                    _session_key = getattr(orb_session, "key", "us")
+
+                                    # London/NY overlap: 08:00–09:00 ET is historically strongest
+                                    _london_overlap = 0.0
+                                    try:
+                                        from datetime import datetime as _dt
+                                        from zoneinfo import ZoneInfo as _ZI
+
+                                        _now_hour = _dt.now(tz=_ZI("America/New_York")).hour
+                                        _london_overlap = 1.0 if 8 <= _now_hour <= 9 else 0.0
                                     except Exception:
                                         pass
 
                                     tab_features = [
                                         _quality_norm,  # quality_pct normalised
-                                        _vol_ratio,  # volume_ratio (default 1.0)
+                                        _vol_ratio,  # volume_ratio
                                         _atr_pct,  # atr_pct
-                                        0.0,  # cvd_delta (not available in live path)
-                                        0.0,  # nr7_flag (could be enriched later)
+                                        _cvd_delta,  # cvd_delta (real from bars)
+                                        _nr7_flag,  # nr7_flag (from daily bars)
                                         1.0 if result.direction == "LONG" else 0.0,
+                                        1.0 if _session_key == "us" else 0.0,  # session_flag
+                                        _london_overlap,  # london_overlap_flag
                                     ]
 
                                     cnn_result = predict_breakout(

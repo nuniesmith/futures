@@ -169,6 +169,13 @@ services:
             dockerfile: docker/engine/Dockerfile
         restart: unless-stopped
         shm_size: 2gb
+        deploy:
+            resources:
+                reservations:
+                    devices:
+                        - driver: nvidia
+                          count: 1
+                          capabilities: [gpu]
         env_file:
             - .env
         environment:

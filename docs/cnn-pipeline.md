@@ -13,15 +13,15 @@ on ORB signals during the active trading session (03:00–12:00 ET).
 │                                                                     │
 │  OFF-HOURS (12:00–00:00 ET)          PRE-MARKET (00:00–03:00 ET)   │
 │  ┌──────────────┐                    ┌─────────────────────┐       │
-│  │ 1. Generate   │  historical bars  │ 4. Morning briefing │       │
-│  │    dataset    │──────────────────▶│    includes model   │       │
-│  │    images     │  render charts    │    health check     │       │
+│  │ 1. Generate  │  historical bars  │ 4. Morning briefing │       │
+│  │    dataset   │──────────────────▶│    includes model   │       │
+│  │    images    │  render charts    │    health check     │       │
 │  └──────┬───────┘                    └─────────────────────┘       │
 │         │                                                           │
-│  ┌──────▼───────┐                    ACTIVE (03:00–12:00 ET)       │
+│  ┌──────▼──────┐                    ACTIVE (03:00–12:00 ET)       │
 │  │ 2. Train on  │  GPU (RTX 2070)   ┌─────────────────────┐       │
-│  │    GPU with   │──────────────────▶│ 5. Live inference   │       │
-│  │    val gate   │  promote if pass  │    predict_breakout │       │
+│  │    GPU with  │──────────────────▶│ 5. Live inference   │       │
+│  │    val gate  │  promote if pass  │    predict_breakout │       │
 │  └──────┬───────┘                    │    on each ORB      │       │
 │         │                            │    signal            │       │
 │  ┌──────▼───────┐                    └─────────────────────┘       │

@@ -627,18 +627,40 @@ def generate_dataset_for_symbol(
         # Render chart image
         rendered_path = None
         if _can_render:
-            # Extract the window of bars for this simulation
+            # Extract the window of bars for this simulation.
+            # Use _window_offset stored by simulate_batch() when available —
+            # this is the authoritative start index into bars_1m.  The old
+            # ``sim_idx * step_size`` calculation breaks when multiple
+            # sessions are concatenated (e.g. orb_session="both") because
+            # sim_idx keeps incrementing across session boundaries.
             try:
-                breakout_idx = result.breakout_bar_idx
-                if breakout_idx < 0:
-                    breakout_idx = cfg.window_size // 2
+                _stored_offset = getattr(result, "_window_offset", -1)
+                _stored_wsize = getattr(result, "_window_size", 0)
 
-                # Calculate the approximate position in the full bars DataFrame
-                window_start = sim_idx * cfg.step_size
-                window_end = min(window_start + cfg.window_size, len(bars_1m))
+                if _stored_offset >= 0:
+                    window_start = _stored_offset
+                    window_end = min(
+                        window_start + (_stored_wsize or cfg.window_size),
+                        len(bars_1m),
+                    )
+                else:
+                    # Fallback for older ORBSimResult objects without provenance
+                    window_start = sim_idx * cfg.step_size
+                    window_end = min(window_start + cfg.window_size, len(bars_1m))
+
                 window_bars = bars_1m.iloc[window_start:window_end].copy()
 
-                if len(window_bars) >= 10:
+                if len(window_bars) < 10:
+                    logger.warning(
+                        "Skipping render for %s window %d: only %d bars (offset=%d, end=%d, total_bars=%d)",
+                        symbol,
+                        sim_idx,
+                        len(window_bars),
+                        window_start,
+                        window_end,
+                        len(bars_1m),
+                    )
+                else:
                     rendered_path = render_ruby_snapshot(  # type: ignore[misc]
                         bars=window_bars,
                         symbol=symbol,
@@ -650,8 +672,23 @@ def generate_dataset_for_symbol(
                         save_path=image_path,
                         config=render_cfg,
                     )
+                    if rendered_path is None:
+                        logger.warning(
+                            "render_ruby_snapshot returned None for %s window %d (bars=%d, orb_h=%s, orb_l=%s, dir=%s)",
+                            symbol,
+                            sim_idx,
+                            len(window_bars),
+                            result.or_high,
+                            result.or_low,
+                            result.direction,
+                        )
             except Exception as exc:
-                logger.debug("Render failed for %s window %d: %s", symbol, sim_idx, exc)
+                logger.warning(
+                    "Render exception for %s window %d: %s",
+                    symbol,
+                    sim_idx,
+                    exc,
+                )
 
         if rendered_path is None and _can_render:
             stats.render_failures += 1
@@ -690,8 +727,9 @@ def _build_row(result, image_path: str) -> dict[str, Any]:
         "quality_pct": result.quality_pct,
         "volume_ratio": round(result.breakout_volume_ratio, 4),
         "atr_pct": round(atr_pct, 6),
-        "cvd_delta": 0.0,  # placeholder — fill from CVD module if available
+        "cvd_delta": round(getattr(result, "cvd_delta", 0.0), 4),
         "nr7_flag": 1 if result.nr7 else 0,
+        "london_overlap_flag": getattr(result, "london_overlap_flag", 0.0),
         "entry": round(result.entry, 6),
         "sl": round(result.sl, 6),
         "tp1": round(result.tp1, 6),
@@ -861,16 +899,61 @@ def split_dataset(
 
     rng = np.random.RandomState(random_seed)
 
+    # --- Infer session from breakout_time for stratification ---
+    # London session: breakout hour < 8 ET;  US session: hour >= 8 ET.
+    def _infer_session(bt: Any) -> str:
+        try:
+            bt_str = str(bt).strip()
+            if not bt_str or bt_str.lower() == "nan":
+                return "unknown"
+            # Parse hour from timestamp like "2026-01-29 03:30:00-05:00"
+            if " " in bt_str:
+                hour = int(bt_str.split(" ")[1].split(":")[0])
+            else:
+                hour = 10  # fallback to US if can't parse
+            return "london" if hour < 8 else "us"
+        except Exception:
+            return "unknown"
+
     if stratify and "label" in df.columns:
+        # Build a composite stratification key from label + session so that
+        # both London and US images are proportionally represented in the
+        # train and val sets for every label class.
+        if "breakout_time" in df.columns:
+            df["_session"] = df["breakout_time"].apply(_infer_session)
+            df["_strat_key"] = df["label"].astype(str) + "__" + df["_session"]
+        else:
+            df["_strat_key"] = df["label"].astype(str)
+
         train_parts = []
         val_parts = []
-        for _label, group in df.groupby("label"):
+        for _key, group in df.groupby("_strat_key"):
             n_val = max(1, int(len(group) * val_fraction))
             shuffled = group.sample(frac=1, random_state=rng)
             val_parts.append(shuffled.iloc[:n_val])
             train_parts.append(shuffled.iloc[n_val:])
+
         train_df = pd.concat(train_parts, ignore_index=True).sample(frac=1, random_state=rng)
         val_df = pd.concat(val_parts, ignore_index=True).sample(frac=1, random_state=rng)
+
+        # Log stratification breakdown for audit
+        if "_session" in df.columns:
+            for split_name, split_df in [("train", train_df), ("val", val_df)]:
+                session_counts = split_df["_session"].value_counts().to_dict()
+                label_counts = split_df["label"].value_counts().to_dict()
+                logger.info(
+                    "  %s split — sessions: %s | labels: %s",
+                    split_name,
+                    session_counts,
+                    label_counts,
+                )
+
+        # Drop helper columns before saving
+        for col in ("_session", "_strat_key"):
+            if col in train_df.columns:
+                train_df = train_df.drop(columns=[col])
+            if col in val_df.columns:
+                val_df = val_df.drop(columns=[col])
     else:
         shuffled = df.sample(frac=1, random_state=rng)
         n_val = max(1, int(len(shuffled) * val_fraction))

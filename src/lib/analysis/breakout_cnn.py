@@ -106,6 +106,8 @@ TABULAR_FEATURES: list[str] = [
     "cvd_delta",  # cumulative volume delta (normalised)
     "nr7_flag",  # 1.0 if NR7 day, else 0.0
     "direction_flag",  # 1.0 = LONG, 0.0 = SHORT
+    "session_flag",  # 1.0 = US session, 0.0 = London session
+    "london_overlap_flag",  # 1.0 if breakout in 08:00–09:00 ET (London/NY overlap)
 ]
 
 NUM_TABULAR = len(TABULAR_FEATURES)
@@ -213,10 +215,40 @@ if _TORCH_AVAILABLE:
             self.transform = transform or get_inference_transform()
             self.image_root = image_root
 
-            # Pre-validate: drop rows with missing image paths
-            self.df = self.df.dropna(subset=["image_path"])
             if "label" not in self.df.columns:
                 raise ValueError("CSV must have a 'label' column")
+
+            # --- Pre-validate: aggressively remove rows without usable images ---
+            initial_count = len(self.df)
+
+            # 1. Drop rows where image_path is NaN or empty string
+            self.df = self.df.dropna(subset=["image_path"])
+            self.df = self.df[self.df["image_path"].astype(str).str.strip().ne("")]
+            dropped_empty = initial_count - len(self.df)
+
+            # 2. Verify image files actually exist on disk
+            def _resolve(p: str) -> str:
+                p = str(p).strip()
+                if self.image_root and not os.path.isabs(p):
+                    return os.path.join(self.image_root, p)
+                return p
+
+            exists_mask = self.df["image_path"].apply(lambda p: os.path.isfile(_resolve(str(p))))
+            dropped_missing = int((~exists_mask).sum())
+            self.df = self.df[exists_mask]
+
+            # 3. Reset index so iloc is contiguous
+            self.df = self.df.reset_index(drop=True)
+
+            if dropped_empty > 0 or dropped_missing > 0:
+                logger.warning(
+                    "BreakoutDataset: dropped %d empty-path + %d missing-file rows from %s (kept %d / %d)",
+                    dropped_empty,
+                    dropped_missing,
+                    csv_path,
+                    len(self.df),
+                    initial_count,
+                )
 
             logger.info("BreakoutDataset loaded: %d samples from %s", len(self.df), csv_path)
 
@@ -227,15 +259,31 @@ if _TORCH_AVAILABLE:
             row = self.df.iloc[idx]
 
             # --- Image ---
-            img_path = row["image_path"]
+            img_path = str(row["image_path"]).strip()
             if self.image_root and not os.path.isabs(img_path):
                 img_path = os.path.join(self.image_root, img_path)
 
+            valid = True  # tracks whether this sample should be used
             try:
                 img = Image.open(img_path).convert("RGB")
+
+                # Detect degenerate / near-blank images: if the image has
+                # essentially zero variance it contains no chart information
+                # (e.g. a solid-colour fallback from a render failure).
+                img_arr = np.asarray(img)
+                if img_arr.std() < 2.0:
+                    logger.warning(
+                        "Near-blank image detected (std=%.2f): %s — marking invalid",
+                        img_arr.std(),
+                        img_path,
+                    )
+                    valid = False
             except Exception as exc:
-                logger.warning("Failed to load image %s: %s — using blank", img_path, exc)
-                img = Image.new("RGB", (IMAGE_SIZE, IMAGE_SIZE), color=(15, 15, 26))
+                logger.warning("Failed to load image %s: %s — marking invalid", img_path, exc)
+                # Create a dummy image so tensor pipeline doesn't crash;
+                # the valid=False flag tells the collate_fn to drop this sample.
+                img = Image.new("RGB", (IMAGE_SIZE, IMAGE_SIZE), color=(0, 0, 0))
+                valid = False
 
             if self.transform:
                 img = self.transform(img)
@@ -252,6 +300,23 @@ if _TORCH_AVAILABLE:
             _cvd_raw = float(row.get("cvd_delta", 0.0))
             _cvd_norm = max(min(_cvd_raw, 1.0), -1.0)
 
+            # Determine session from breakout_time: London if hour < 8, US otherwise
+            _session = 1.0  # default to US
+            _bt = ""
+            _hour = 10  # default to US-session hour
+            try:
+                _bt = str(row.get("breakout_time", ""))
+                if _bt and " " in _bt:
+                    # Parse hour from timestamp like "2026-01-29 03:30:00-05:00"
+                    _hour = int(_bt.split(" ")[1].split(":")[0])
+                    _session = 0.0 if _hour < 8 else 1.0
+            except Exception:
+                _session = 1.0
+
+            # London/NY overlap flag: 08:00–09:00 ET is historically the
+            # strongest breakout window when both sessions are active.
+            _london_overlap = 1.0 if 8 <= _hour <= 9 else 0.0
+
             tabular = torch.tensor(
                 [
                     float(row.get("quality_pct", 0)) / 100.0,  # already 0–1
@@ -260,6 +325,8 @@ if _TORCH_AVAILABLE:
                     _cvd_norm,
                     float(row.get("nr7_flag", 0)),  # 0 or 1
                     1.0 if str(row.get("direction", "")).upper().startswith("L") else 0.0,
+                    _session,  # 1.0 = US, 0.0 = London
+                    _london_overlap,  # 1.0 if 08:00–09:00 ET overlap
                 ],
                 dtype=torch.float32,
             )
@@ -273,7 +340,27 @@ if _TORCH_AVAILABLE:
             label_str = str(row.get("label", "bad"))
             target = 1 if label_str.startswith("good") else 0
 
-            return img, tabular, torch.tensor(target, dtype=torch.long)
+            return img, tabular, torch.tensor(target, dtype=torch.long), torch.tensor(valid, dtype=torch.bool)
+
+        @staticmethod
+        def skip_invalid_collate(batch):
+            """Custom collate_fn that drops samples flagged as invalid.
+
+            Each sample is a tuple ``(img, tabular, target, valid_flag)``.
+            Only samples where ``valid_flag`` is True are kept.  If the entire
+            batch is invalid we return ``None`` — the training loop must check
+            for this and skip the batch.
+            """
+            # batch is a list of (img, tabular, target, valid) tuples
+            filtered = [s for s in batch if s[3].item()]
+            if not filtered:
+                return None  # entire batch was invalid — caller must skip
+
+            imgs = torch.stack([s[0] for s in filtered])
+            tabs = torch.stack([s[1] for s in filtered])
+            targets = torch.stack([s[2] for s in filtered])
+            return imgs, tabs, targets
+
 
 else:
     # Stub when torch is not available
@@ -287,6 +374,11 @@ else:
             return 0
 
         def __getitem__(self, idx: int) -> Any:
+            raise RuntimeError("PyTorch is not installed")
+
+        @staticmethod
+        def skip_invalid_collate(batch: Any) -> Any:
+            """Stub — PyTorch is not installed."""
             raise RuntimeError("PyTorch is not installed")
 
 
@@ -319,7 +411,7 @@ if _TORCH_AVAILABLE:
             freeze_backbone_epochs: int = 0,
         ):
             super().__init__()
-            self.num_tabular = num_tabular
+            self.num_tabular = num_tabular  # now 8 (was 7)
             self._freeze_backbone_epochs = freeze_backbone_epochs
 
             # --- Image backbone: EfficientNetV2-S ---
@@ -518,6 +610,7 @@ def train_model(
         num_workers=num_workers,
         pin_memory=(device.type == "cuda"),
         drop_last=True,
+        collate_fn=BreakoutDataset.skip_invalid_collate,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -525,6 +618,7 @@ def train_model(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=(device.type == "cuda"),
+        collate_fn=BreakoutDataset.skip_invalid_collate,
     )
 
     # --- Model ---
@@ -563,7 +657,11 @@ def train_model(
         train_correct = 0
         train_total = 0
 
-        for batch_idx, (imgs, tabs, labels) in enumerate(train_loader):
+        for batch_idx, batch in enumerate(train_loader):
+            # skip_invalid_collate returns None when every sample was invalid
+            if batch is None:
+                continue
+            imgs, tabs, labels = batch
             imgs = imgs.to(device, non_blocking=True)
             tabs = tabs.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
@@ -601,7 +699,10 @@ def train_model(
         val_total = 0
 
         with torch.no_grad():
-            for imgs, tabs, labels in val_loader:
+            for batch in val_loader:
+                if batch is None:
+                    continue
+                imgs, tabs, labels = batch
                 imgs = imgs.to(device, non_blocking=True)
                 tabs = tabs.to(device, non_blocking=True)
                 labels = labels.to(device, non_blocking=True)
@@ -743,14 +844,15 @@ def _load_model(
 def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[float]:
     """Apply the same normalisation used in BreakoutDataset to raw inference features.
 
-    Input order: [quality_pct_norm, volume_ratio, atr_pct, cvd_delta, nr7_flag, direction_flag]
+    Input order: [quality_pct_norm, volume_ratio, atr_pct, cvd_delta, nr7_flag,
+                  direction_flag, session_flag, london_overlap_flag]
     The caller is expected to pass quality_pct already divided by 100.
 
-    Returns a list of 6 floats in normalised form.
+    Returns a list of 8 floats in normalised form.
     """
     f = list(raw_features)
     if len(f) != NUM_TABULAR:
-        return f  # pass through — caller will get an error downstream
+        raise ValueError(f"Expected {NUM_TABULAR} tabular features, got {len(f)}. Required order: {TABULAR_FEATURES}")
 
     quality_norm = max(min(f[0], 1.0), 0.0)
 
@@ -764,7 +866,10 @@ def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[floa
     # cvd_delta: clamp [-1, 1]
     cvd_norm = max(min(f[3], 1.0), -1.0)
 
-    return [quality_norm, vol_norm, atr_norm, cvd_norm, f[4], f[5]]
+    # f[4] = nr7_flag (0 or 1), f[5] = direction_flag (0 or 1),
+    # f[6] = session_flag (1.0 = US, 0.0 = London) — all pass through
+    # f[7] = london_overlap_flag (0 or 1) — pass through
+    return [quality_norm, vol_norm, atr_norm, cvd_norm, f[4], f[5], f[6], f[7]]
 
 
 def predict_breakout(
@@ -777,14 +882,17 @@ def predict_breakout(
 
     Args:
         image_path: Path to the PNG chart snapshot.
-        tabular_features: List/tuple of 6 floats in TABULAR_FEATURES order:
-            [quality_pct_norm, volume_ratio, atr_pct, cvd_delta, nr7_flag, direction_flag]
+        tabular_features: List/tuple of 8 floats in TABULAR_FEATURES order:
+            [quality_pct_norm, volume_ratio, atr_pct, cvd_delta, nr7_flag,
+             direction_flag, session_flag, london_overlap_flag]
             - quality_pct_norm: quality_pct / 100 (0.0–1.0)
             - volume_ratio: breakout bar volume / 20-bar average
             - atr_pct: ATR as fraction of price
-            - cvd_delta: normalised CVD delta
+            - cvd_delta: normalised CVD delta (-1 to 1)
             - nr7_flag: 1.0 if NR7 day, 0.0 otherwise
             - direction_flag: 1.0 for LONG, 0.0 for SHORT
+            - session_flag: 1.0 for US session, 0.0 for London
+            - london_overlap_flag: 1.0 if 08:00–09:00 ET, 0.0 otherwise
         model_path: Explicit model path (default: latest in models/).
         threshold: Probability threshold for "signal" verdict (default 0.82).
 

@@ -4,7 +4,7 @@ Futures Data Service — FastAPI + Background Engine
 Dedicated microservice that runs all heavy computation:
   - Massive WebSocket listener (real-time 1m bars)
   - DashboardEngine (5m refresh, optimization, backtesting)
-  - FKS modules (volatility, wave, signal quality, regime, CVD, ICT)
+  - Ruby modules (volatility, wave, signal quality, regime, CVD, ICT)
   - REST API + HTMX dashboard
 
 Usage (from project root):

@@ -155,6 +155,15 @@ class ORBSimResult:
     # Volume context
     breakout_volume_ratio: float = 0.0  # breakout bar vol / avg vol
 
+    # CVD & session context (for CNN tabular features)
+    cvd_delta: float = 0.0  # cumulative volume delta from OR to breakout (-1 to 1)
+    london_overlap_flag: float = 0.0  # 1.0 if breakout in 08:00–09:00 ET overlap
+
+    # Window provenance — set by simulate_batch() so the dataset generator
+    # can recover the exact slice of bars_1m used for this simulation.
+    _window_offset: int = -1  # start index into the original bars_1m
+    _window_size: int = 0  # number of bars in the window
+
     # Error
     error: str = ""
 
@@ -183,6 +192,8 @@ class ORBSimResult:
             "pm_low": round(self.pm_low, 6),
             "nr7": self.nr7,
             "breakout_volume_ratio": round(self.breakout_volume_ratio, 3),
+            "cvd_delta": round(self.cvd_delta, 4),
+            "london_overlap_flag": self.london_overlap_flag,
             "error": self.error,
         }
 
@@ -457,6 +468,25 @@ def simulate_orb_outcome(
     if avg_vol > 0:
         result.breakout_volume_ratio = float(volumes[breakout_idx] / avg_vol)
 
+    # --- Real CVD delta (cumulative volume delta from OR start to breakout) ---
+    or_start_idx = int(or_indices[0])
+    cvd = 0.0
+    total_vol = 0.0
+    for i in range(or_start_idx, breakout_idx + 1):
+        vol = float(volumes[i])
+        total_vol += vol
+        if closes[i] > opens[i]:
+            cvd += vol
+        else:
+            cvd -= vol
+    result.cvd_delta = (cvd / total_vol) if total_vol > 0 else 0.0
+
+    # --- London/NY overlap flag (08:00–09:00 ET is historically strongest) ---
+    with contextlib.suppress(Exception):
+        breakout_et = df.index[breakout_idx]
+        _hour = breakout_et.hour
+        result.london_overlap_flag = 1.0 if 8 <= _hour <= 9 else 0.0
+
     # --- Step 4: Compute brackets (Bridge-style) ---
     sl_dist = atr * cfg.sl_atr_mult
     tp1_dist = atr * cfg.tp1_atr_mult
@@ -625,16 +655,20 @@ def simulate_batch(
                 config=cfg,
                 bars_daily=bars_daily,
             )
+            # Store window provenance so dataset generator can recover bars
+            result._window_offset = start
+            result._window_size = len(window)
             results.append(result)
         except Exception as exc:
             logger.debug("Simulation failed at offset %d: %s", start, exc)
-            results.append(
-                ORBSimResult(
-                    symbol=symbol,
-                    error=str(exc),
-                    simulated_at=datetime.now(_EST).isoformat(),
-                )
+            err_result = ORBSimResult(
+                symbol=symbol,
+                error=str(exc),
+                simulated_at=datetime.now(_EST).isoformat(),
             )
+            err_result._window_offset = start
+            err_result._window_size = end - start
+            results.append(err_result)
 
     trades = sum(1 for r in results if r.is_trade)
     winners = sum(1 for r in results if r.is_winner)

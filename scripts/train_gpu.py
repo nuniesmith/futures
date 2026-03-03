@@ -37,22 +37,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# ---------------------------------------------------------------------------
-# Ensure project root is on path
-# ---------------------------------------------------------------------------
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
-# ---------------------------------------------------------------------------
-# Imports (torch + project)
-# ---------------------------------------------------------------------------
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
 from lib.analysis.breakout_cnn import (
@@ -64,6 +51,16 @@ from lib.analysis.breakout_cnn import (
     get_inference_transform,
     get_training_transform,
 )
+
+# ---------------------------------------------------------------------------
+# Ensure project root is on path
+# ---------------------------------------------------------------------------
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+SRC_DIR = PROJECT_ROOT / "src"
+
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -164,6 +161,7 @@ def train(
         pin_memory=(device.type == "cuda"),
         drop_last=True,
         persistent_workers=(num_workers > 0),
+        collate_fn=BreakoutDataset.skip_invalid_collate,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -172,6 +170,7 @@ def train(
         num_workers=num_workers,
         pin_memory=(device.type == "cuda"),
         persistent_workers=(num_workers > 0),
+        collate_fn=BreakoutDataset.skip_invalid_collate,
     )
 
     # --- Model ---
@@ -181,6 +180,7 @@ def train(
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info("Parameters:      %.1fM total", total_params / 1e6)
+    logger.info("                 %.1fM trainable", trainable_params / 1e6)
     logger.info("-" * 70)
 
     # --- Class-weighted loss ---
@@ -209,7 +209,7 @@ def train(
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     # --- Mixed precision scaler ---
-    scaler = GradScaler(enabled=use_amp)
+    scaler = GradScaler("cuda", enabled=use_amp)
 
     # --- Training state ---
     os.makedirs(model_dir, exist_ok=True)
@@ -255,14 +255,18 @@ def train(
                 ncols=100,
             )
 
-        for batch_idx, (imgs, tabs, labels) in enumerate(loader_iter):
+        for batch_idx, batch in enumerate(loader_iter):
+            # skip_invalid_collate returns None when every sample was invalid
+            if batch is None:
+                continue
+            imgs, tabs, labels = batch
             imgs = imgs.to(device, non_blocking=True)
             tabs = tabs.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
 
-            with autocast(enabled=use_amp):
+            with autocast("cuda", enabled=use_amp):
                 outputs = model(imgs, tabs)
                 loss = criterion(outputs, labels)
 
@@ -311,12 +315,15 @@ def train(
             )
 
         with torch.no_grad():
-            for imgs, tabs, labels in loader_iter_val:
+            for batch in loader_iter_val:
+                if batch is None:
+                    continue
+                imgs, tabs, labels = batch
                 imgs = imgs.to(device, non_blocking=True)
                 tabs = tabs.to(device, non_blocking=True)
                 labels = labels.to(device, non_blocking=True)
 
-                with autocast(enabled=use_amp):
+                with autocast("cuda", enabled=use_amp):
                     outputs = model(imgs, tabs)
                     loss = criterion(outputs, labels)
 

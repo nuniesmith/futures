@@ -788,6 +788,7 @@ def _evaluate_model_on_val(model_path: str, val_csv: str) -> dict[str, float]:
         shuffle=False,
         num_workers=2,
         pin_memory=(device.type == "cuda"),
+        collate_fn=BreakoutDataset.skip_invalid_collate,
     )
 
     criterion = nn.CrossEntropyLoss()
@@ -799,7 +800,11 @@ def _evaluate_model_on_val(model_path: str, val_csv: str) -> dict[str, float]:
     fn = 0  # false negatives (good predicted as bad)
 
     with torch.no_grad():
-        for imgs, tabs, labels in val_loader:
+        for batch in val_loader:
+            # skip_invalid_collate returns None when every sample was invalid
+            if batch is None:
+                continue
+            imgs, tabs, labels = batch
             imgs = imgs.to(device, non_blocking=True)
             tabs = tabs.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
