@@ -40,6 +40,19 @@
 //
 // =============================================================================
 
+// ── Assembly references required by NT8's NinjaScript compiler ───────────────
+// GDI+ (System.Drawing) is part of .NET Framework 4.8 but is not auto-referenced
+// by the NinjaScript build system — the #r pragma adds it explicitly.
+// The OnnxRuntime DLLs must be copied to Documents\NinjaTrader 8\bin\Custom\
+// before compiling:
+//   Microsoft.ML.OnnxRuntime.dll   (NuGet: Microsoft.ML.OnnxRuntime 1.18.1)
+//   Microsoft.ML.OnnxRuntime.Primitives.dll  (same package)
+//   onnxruntime.dll                (runtimes\win-x64\native\)
+//   onnxruntime_providers_shared.dll (same native folder)
+#r "System.Drawing.dll"
+#r "Microsoft.ML.OnnxRuntime.dll"
+#r "Microsoft.ML.OnnxRuntime.Primitives.dll"
+
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -421,7 +434,9 @@ namespace NinjaTrader.NinjaScript
                     g.DrawImage(src, 0, 0, ImageSize, ImageSize);
                 }
 
-                // Lock bits for fast pixel access
+                // Lock bits and copy to a managed byte array via Marshal.Copy so
+                // we never need the /unsafe compiler flag (NT8 disallows it).
+                // Format24bppRgb lays out pixels as B, G, R bytes per pixel.
                 var rect = new Rectangle(0, 0, ImageSize, ImageSize);
                 var data = resized.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
                 try
@@ -429,28 +444,29 @@ namespace NinjaTrader.NinjaScript
                     int stride    = data.Stride;
                     int planeSize = ImageSize * ImageSize;
 
-                    // Format24bppRgb is stored as B, G, R bytes (little-endian GDI+).
+                    // Copy the entire locked region into a managed array.
+                    // stride * ImageSize covers all rows including any row-padding bytes.
+                    byte[] raw = new byte[stride * ImageSize];
+                    Marshal.Copy(data.Scan0, raw, 0, raw.Length);
+
+                    // Repack from interleaved BGR rows into planar CHW (R plane, G plane, B plane).
                     // We want CHW order: all R, then all G, then all B.
-                    unsafe
+                    for (int y = 0; y < ImageSize; y++)
                     {
-                        byte* ptr = (byte*)data.Scan0.ToPointer();
-                        for (int y = 0; y < ImageSize; y++)
+                        int rowBase = y * stride;
+                        for (int x = 0; x < ImageSize; x++)
                         {
-                            byte* row = ptr + y * stride;
-                            for (int x = 0; x < ImageSize; x++)
-                            {
-                                // GDI+ stores B, G, R at each pixel
-                                float b = row[x * 3 + 0] / 255f;
-                                float g = row[x * 3 + 1] / 255f;
-                                float r = row[x * 3 + 2] / 255f;
+                            // GDI+ Format24bppRgb stores B, G, R at each pixel
+                            float b = raw[rowBase + x * 3 + 0] / 255f;
+                            float g = raw[rowBase + x * 3 + 1] / 255f;
+                            float r = raw[rowBase + x * 3 + 2] / 255f;
 
-                                int pixIdx = y * ImageSize + x;
+                            int pixIdx = y * ImageSize + x;
 
-                                // Normalise: (pixel - mean) / std
-                                buf[0 * planeSize + pixIdx] = (r - _mean[0]) / _std[0]; // R
-                                buf[1 * planeSize + pixIdx] = (g - _mean[1]) / _std[1]; // G
-                                buf[2 * planeSize + pixIdx] = (b - _mean[2]) / _std[2]; // B
-                            }
+                            // Normalise: (pixel - mean) / std  (ImageNet constants)
+                            buf[0 * planeSize + pixIdx] = (r - _mean[0]) / _std[0]; // R
+                            buf[1 * planeSize + pixIdx] = (g - _mean[1]) / _std[1]; // G
+                            buf[2 * planeSize + pixIdx] = (b - _mean[2]) / _std[2]; // B
                         }
                     }
                 }
