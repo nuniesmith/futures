@@ -203,12 +203,12 @@ run_docker() {
 
     echo ""
     ok "Services are running:"
-    echo "    Dashboard:   http://${ts_ip}:8080"
-    echo "    Data API:    http://${ts_ip}:8000"
-    echo "    Postgres:    http://${ts_ip}:5432"
-    echo "    Redis:       http://${ts_ip}:6379"
-    echo "    Prometheus:  http://${ts_ip}:9090"
-    echo "    Grafana:     http://${ts_ip}:3000"
+    echo "    Dashboard:   http://${ts_ip}:8180"
+    echo "    Data API:    http://${ts_ip}:8100"
+    echo "    Postgres:    ${ts_ip}:5433"
+    echo "    Redis:       ${ts_ip}:6380"
+    echo "    Prometheus:  http://${ts_ip}:9095"
+    echo "    Grafana:     http://${ts_ip}:3010"
     echo ""
     echo "  Logs:  docker compose logs -f"
     echo "  Stop:  ./run.sh --down"
@@ -227,11 +227,11 @@ run_local() {
     ts_ip=$(get_tailscale_ip)
     ts_ip="${ts_ip:-$TAILSCALE_IP}"
 
-    log "Starting web service locally (http://${ts_ip}:8080) ..."
-    log "  (data API on http://${ts_ip}:8000)"
-    DATA_SERVICE_URL="http://${ts_ip}:8000" \
+    log "Starting web service locally (http://${ts_ip}:8180) ..."
+    log "  (data API on http://${ts_ip}:8100)"
+    DATA_SERVICE_URL="http://${ts_ip}:8100" \
     PYTHONPATH=src exec uvicorn lib.services.web.main:app \
-        --host 0.0.0.0 --port 8080 --reload
+        --host 0.0.0.0 --port 8180 --reload
 }
 
 # ---------------------------------------------------------------------------

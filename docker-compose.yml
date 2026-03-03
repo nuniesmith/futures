@@ -28,7 +28,7 @@ services:
         image: postgres:16-alpine
         restart: unless-stopped
         ports:
-            - "5432:5432"
+            - "5433:5432"
         environment:
             POSTGRES_USER: ${POSTGRES_USER:-futures_user}
             POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
@@ -53,7 +53,7 @@ services:
         image: redis:7-alpine
         restart: unless-stopped
         ports:
-            - "6379:6379"
+            - "6380:6379"
         volumes:
             - redis_data:/data
         command:
@@ -84,7 +84,7 @@ services:
             dockerfile: docker/data/Dockerfile
         restart: unless-stopped
         ports:
-            - "8000:8000"
+            - "8100:8000"
         env_file:
             - .env
         environment:
@@ -133,7 +133,7 @@ services:
             dockerfile: docker/web/Dockerfile
         restart: unless-stopped
         ports:
-            - "8080:8080"
+            - "8180:8080"
         environment:
             - DATA_SERVICE_URL=http://data:8000
             - WEB_HOST=0.0.0.0
@@ -209,7 +209,7 @@ services:
             dockerfile: docker/monitoring/prometheus/Dockerfile
         restart: unless-stopped
         ports:
-            - "9090:9090"
+            - "9095:9090"
         volumes:
             - prometheus_data:/prometheus
         command:
@@ -235,7 +235,7 @@ services:
             dockerfile: docker/monitoring/grafana/Dockerfile
         restart: unless-stopped
         ports:
-            - "3000:3000"
+            - "3010:3000"
         environment:
             - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
             - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
