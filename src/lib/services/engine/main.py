@@ -572,12 +572,24 @@ def _handle_check_orb_london_ny(engine) -> None:
     _handle_check_orb(engine, orb_session=LONDON_NY_SESSION)
 
 
-def _handle_check_orb_sydney(engine) -> None:
-    """Check for Sydney Open ORB patterns (17:00–17:30 ET, overnight).
+def _handle_check_orb_frankfurt(engine) -> None:
+    """Check for Frankfurt/Xetra Open ORB patterns (03:00–03:30 ET / 08:00 CET).
 
-    Low-volatility overnight session. Relevant for thin metals and CME
-    Globex overnight markets. wraps_midnight=True — uses prior calendar
-    day bars.
+    Pre-London European institutional flow. Sets EUR/USD direction and
+    DAX-correlated index futures tone. Fires at the same ET time as the
+    London open but uses the frankfurt session asset list (6E, MES/MNQ,
+    MYM, MGC).  wraps_midnight=False.
+    """
+    from lib.services.engine.orb import FRANKFURT_SESSION
+
+    _handle_check_orb(engine, orb_session=FRANKFURT_SESSION)
+
+
+def _handle_check_orb_sydney(engine) -> None:
+    """Check for Sydney/ASX Open ORB patterns (18:30–19:00 ET, overnight).
+
+    Australian Securities Exchange open. Thin overnight session relevant
+    for metals, energy, AUD/JPY FX, and MBT. wraps_midnight=True.
     """
     from lib.services.engine.orb import SYDNEY_SESSION
 
@@ -587,8 +599,8 @@ def _handle_check_orb_sydney(engine) -> None:
 def _handle_check_orb_cme(engine) -> None:
     """Check for CME Globex Re-Open ORB patterns (18:00–18:30 ET, overnight).
 
-    First bars after the daily 17:00–18:00 ET settlement break. A clean
-    overnight-range anchor feeding into London and US sessions.
+    First bars of the new Globex trading day after the 17:00–18:00 ET
+    settlement break.  Clean overnight anchor for all CME micro products.
     wraps_midnight=True.
     """
     from lib.services.engine.orb import CME_OPEN_SESSION
@@ -597,14 +609,37 @@ def _handle_check_orb_cme(engine) -> None:
 
 
 def _handle_check_orb_tokyo(engine) -> None:
-    """Check for Tokyo Open ORB patterns (19:00–19:30 ET, overnight).
+    """Check for Tokyo/TSE Open ORB patterns (19:00–19:30 ET, overnight).
 
     Narrow-range session with mean-reversion bias. Strongest for metals
-    and thin Globex markets in overnight hours. wraps_midnight=True.
+    and JPY/AUD-correlated FX in overnight Globex hours. wraps_midnight=True.
     """
     from lib.services.engine.orb import TOKYO_SESSION
 
     _handle_check_orb(engine, orb_session=TOKYO_SESSION)
+
+
+def _handle_check_orb_shanghai(engine) -> None:
+    """Check for Shanghai/HK Open ORB patterns (21:00–21:30 ET, overnight).
+
+    CSI 300 / HKEX open (09:30 CST).  Copper (MHG) and gold (MGC)
+    sentiment driver via SHFE open-price auction. wraps_midnight=True.
+    """
+    from lib.services.engine.orb import SHANGHAI_SESSION
+
+    _handle_check_orb(engine, orb_session=SHANGHAI_SESSION)
+
+
+def _handle_check_orb_cme_settle(engine) -> None:
+    """Check for CME Settlement ORB patterns (14:00–14:30 ET).
+
+    Metals and energy settlement window.  Gold (MGC) and crude (MCL)
+    typically see directional resolution before the 17:00 ET close.
+    wraps_midnight=False.
+    """
+    from lib.services.engine.orb import CME_SETTLEMENT_SESSION
+
+    _handle_check_orb(engine, orb_session=CME_SETTLEMENT_SESSION)
 
 
 def _handle_check_orb(engine, orb_session=None) -> None:
@@ -732,21 +767,72 @@ def _handle_check_orb(engine, orb_session=None) -> None:
 
                             _session_key = getattr(orb_session, "key", "us")
 
-                            if _session_key == "london":
-                                _filter_allowed_windows = [
-                                    (_dt_time(3, 0), _dt_time(5, 0)),
-                                ]
-                                _pm_end = _dt_time(3, 0)  # premarket ends at OR start
-                                _enable_lunch = False  # irrelevant at 03:00–05:00 ET
-                                logger.debug("ORB filters: London mode — windows 03:00–05:00, PM end 03:00, lunch OFF")
+                            # ── Session-aware filter windows ───────────────────
+                            # Each session needs its own allowed trading window,
+                            # pre-market range end, and lunch-filter flag.
+                            # All times are ET wall-clock (DST-safe via ZoneInfo).
+                            if _session_key == "cme":
+                                # CME Globex open 18:00–20:00 ET (overnight)
+                                _filter_allowed_windows = [(_dt_time(18, 0), _dt_time(20, 0))]
+                                _pm_end = _dt_time(18, 0)
+                                _enable_lunch = False
+                                logger.debug("ORB filters: CME-open mode — 18:00–20:00 ET, lunch OFF")
+
+                            elif _session_key == "sydney":
+                                # Sydney/ASX open 18:30–20:30 ET (overnight)
+                                _filter_allowed_windows = [(_dt_time(18, 30), _dt_time(20, 30))]
+                                _pm_end = _dt_time(18, 30)
+                                _enable_lunch = False
+                                logger.debug("ORB filters: Sydney mode — 18:30–20:30 ET, lunch OFF")
+
+                            elif _session_key == "tokyo":
+                                # Tokyo/TSE open 19:00–21:00 ET (overnight)
+                                _filter_allowed_windows = [(_dt_time(19, 0), _dt_time(21, 0))]
+                                _pm_end = _dt_time(19, 0)
+                                _enable_lunch = False
+                                logger.debug("ORB filters: Tokyo mode — 19:00–21:00 ET, lunch OFF")
+
+                            elif _session_key == "shanghai":
+                                # Shanghai/HK open 21:00–23:00 ET (overnight)
+                                _filter_allowed_windows = [(_dt_time(21, 0), _dt_time(23, 0))]
+                                _pm_end = _dt_time(21, 0)
+                                _enable_lunch = False
+                                logger.debug("ORB filters: Shanghai mode — 21:00–23:00 ET, lunch OFF")
+
+                            elif _session_key == "frankfurt":
+                                # Frankfurt/Xetra open 03:00–04:30 ET
+                                _filter_allowed_windows = [(_dt_time(3, 0), _dt_time(4, 30))]
+                                _pm_end = _dt_time(3, 0)
+                                _enable_lunch = False
+                                logger.debug("ORB filters: Frankfurt mode — 03:00–04:30 ET, lunch OFF")
+
+                            elif _session_key == "london":
+                                # London open 03:00–05:00 ET
+                                _filter_allowed_windows = [(_dt_time(3, 0), _dt_time(5, 0))]
+                                _pm_end = _dt_time(3, 0)
+                                _enable_lunch = False
+                                logger.debug("ORB filters: London mode — 03:00–05:00 ET, lunch OFF")
+
+                            elif _session_key == "london_ny":
+                                # London-NY crossover 08:00–10:00 ET
+                                _filter_allowed_windows = [(_dt_time(8, 0), _dt_time(10, 0))]
+                                _pm_end = _dt_time(8, 0)
+                                _enable_lunch = False
+                                logger.debug("ORB filters: London-NY mode — 08:00–10:00 ET, lunch OFF")
+
+                            elif _session_key == "cme_settle":
+                                # CME settlement window 14:00–15:30 ET
+                                _filter_allowed_windows = [(_dt_time(14, 0), _dt_time(15, 30))]
+                                _pm_end = _dt_time(8, 20)
+                                _enable_lunch = False
+                                logger.debug("ORB filters: CME-settle mode — 14:00–15:30 ET, lunch OFF")
+
                             else:
-                                # US session (default)
-                                _filter_allowed_windows = [
-                                    (_dt_time(8, 20), _dt_time(10, 30)),
-                                ]
+                                # US session (default, 09:30–11:00 ET)
+                                _filter_allowed_windows = [(_dt_time(8, 20), _dt_time(10, 30))]
                                 _pm_end = _dt_time(8, 20)
                                 _enable_lunch = True
-                                logger.debug("ORB filters: US mode — windows 08:20–10:30, PM end 08:20, lunch ON")
+                                logger.debug("ORB filters: US mode — 08:20–10:30 ET, lunch ON")
 
                             # Extract pre-market range with session-aware end time
                             pm_high, pm_low = extract_premarket_range(bars_1m, pm_end=_pm_end)  # type: ignore[possibly-unbound]
@@ -923,9 +1009,10 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                         _quality_norm = getattr(result, "quality_pct", 0) / 100.0
                                         if hasattr(result, "atr_value") and result.atr_value > 0:
                                             _atr_pct = result.atr_value / result.trigger_price
-                                        # Volume ratio from ORB result if available
-                                        if hasattr(result, "volume_ratio") and result.volume_ratio > 0:
-                                            _vol_ratio = result.volume_ratio
+                                        # Volume ratio from ORB result if available (not always present)
+                                        _vol_ratio_raw = getattr(result, "volume_ratio", None)
+                                        if _vol_ratio_raw is not None and float(_vol_ratio_raw) > 0:
+                                            _vol_ratio = float(_vol_ratio_raw)
                                     except Exception:
                                         pass
 
@@ -975,6 +1062,24 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                     except Exception:
                                         pass
 
+                                    # Encode session as a normalised ordinal so the CNN
+                                    # can learn session-specific breakout characteristics.
+                                    # Order matches the Globex-day cycle:
+                                    #   0=cme, 1=sydney, 2=tokyo, 3=shanghai,
+                                    #   4=frankfurt, 5=london, 6=london_ny, 7=us, 8=cme_settle
+                                    _session_ordinals = {
+                                        "cme": 0.0,
+                                        "sydney": 0.125,
+                                        "tokyo": 0.25,
+                                        "shanghai": 0.375,
+                                        "frankfurt": 0.5,
+                                        "london": 0.625,
+                                        "london_ny": 0.75,
+                                        "us": 0.875,
+                                        "cme_settle": 1.0,
+                                    }
+                                    _session_enc = _session_ordinals.get(_session_key, 0.875)
+
                                     tab_features = [
                                         _quality_norm,  # quality_pct normalised
                                         _vol_ratio,  # volume_ratio
@@ -982,7 +1087,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                         _cvd_delta,  # cvd_delta (real from bars)
                                         _nr7_flag,  # nr7_flag (from daily bars)
                                         1.0 if result.direction == "LONG" else 0.0,
-                                        1.0 if _session_key == "us" else 0.0,  # session_flag
+                                        _session_enc,  # session encoding (ordinal, 0–1)
                                         _london_overlap,  # london_overlap_flag
                                     ]
 
@@ -1201,6 +1306,12 @@ def _persist_orb_enrichment(row_id: int | None, metadata: dict) -> None:
         logger.debug("Failed to enrich ORB event %s (non-fatal): %s", row_id, exc)
 
 
+# ---------------------------------------------------------------------------
+# Routing table: ActionType → handler function
+# Populated after all handlers are defined (see _ACTION_HANDLERS at bottom).
+# ---------------------------------------------------------------------------
+
+
 def _handle_historical_backfill(engine) -> None:
     """Backfill historical 1-min bars to Postgres/SQLite (off-hours).
 
@@ -1302,8 +1413,34 @@ def _handle_generate_chart_dataset(engine) -> None:
     """
     logger.info("▶ Generating chart dataset (incremental build)...")
 
-    # Determine symbols: prefer daily focus list, fall back to defaults.
-    symbols = ["MGC", "MES", "MNQ", "MCL", "6E", "MBT"]
+    # Full symbol universe across all sessions and exchanges.
+    # Covers all CME micro contracts + FX futures active in the 9-session
+    # Globex-day cycle (18:00 ET start).  The incremental builder will skip
+    # symbols that have no historical bars yet — safe to list all here.
+    _ALL_SYMBOLS = [
+        # Micro metals
+        "MGC",
+        "SIL",
+        "MHG",
+        # Micro energy
+        "MCL",
+        # Micro equity index
+        "MES",
+        "MNQ",
+        "M2K",
+        "MYM",
+        # Micro crypto
+        "MBT",
+        # FX futures (CME standard)
+        "6E",
+        "6B",
+        "6J",
+        "6A",
+        "6C",
+    ]
+
+    # Prefer daily focus list as a priority override; fall back to full universe.
+    symbols = _ALL_SYMBOLS
     try:
         from lib.core.cache import cache_get
 
@@ -1311,8 +1448,14 @@ def _handle_generate_chart_dataset(engine) -> None:
         if raw_focus:
             focus_data = json.loads(raw_focus)
             focus_symbols = [a.get("symbol", "") for a in focus_data.get("assets", [])]
+            # Merge: keep focus symbols first, then add any remaining universe symbols
+            # so the dataset always includes all tradeable instruments.
             if focus_symbols:
-                symbols = [s for s in focus_symbols if s]
+                merged = [s for s in focus_symbols if s]
+                for s in _ALL_SYMBOLS:
+                    if s not in merged:
+                        merged.append(s)
+                symbols = merged
     except Exception:
         pass
 
@@ -1340,7 +1483,10 @@ def _handle_generate_chart_dataset(engine) -> None:
             symbols=symbols,
             days_back=int(os.getenv("CNN_RETRAIN_DAYS_BACK", "90")),
             chart_dpi=150,
-            orb_session="both",
+            # "all" runs all 9 Globex-day sessions (CME open, Sydney, Tokyo,
+            # Shanghai, Frankfurt, London, London-NY, US, CME settlement).
+            # This maximises dataset diversity across exchange opens.
+            orb_session=os.getenv("CNN_ORB_SESSION", "all"),
             skip_existing=True,  # incremental — never regenerate what we have
         )
 
@@ -1383,7 +1529,9 @@ def _handle_generate_chart_dataset(engine) -> None:
             bars_source="db",  # use Postgres historical_bars table
             skip_existing=True,
             chart_dpi=150,
-            orb_session="both",
+            # Match the primary pipeline's session setting so the fallback
+            # produces the same multi-session dataset.
+            orb_session=os.getenv("CNN_ORB_SESSION", "all"),
         )
 
         stats = generate_dataset(
@@ -1794,11 +1942,14 @@ def main():
         ActionType.CHECK_RISK_RULES: lambda: _handle_check_risk_rules(engine, account_size),
         ActionType.CHECK_NO_TRADE: lambda: _handle_check_no_trade(engine, account_size),
         ActionType.CHECK_ORB: lambda: _handle_check_orb(engine),
+        ActionType.CHECK_ORB_CME: lambda: _handle_check_orb_cme(engine),
+        ActionType.CHECK_ORB_SYDNEY: lambda: _handle_check_orb_sydney(engine),
+        ActionType.CHECK_ORB_TOKYO: lambda: _handle_check_orb_tokyo(engine),
+        ActionType.CHECK_ORB_SHANGHAI: lambda: _handle_check_orb_shanghai(engine),
+        ActionType.CHECK_ORB_FRANKFURT: lambda: _handle_check_orb_frankfurt(engine),
         ActionType.CHECK_ORB_LONDON: lambda: _handle_check_orb_london(engine),
         ActionType.CHECK_ORB_LONDON_NY: lambda: _handle_check_orb_london_ny(engine),
-        ActionType.CHECK_ORB_SYDNEY: lambda: _handle_check_orb_sydney(engine),
-        ActionType.CHECK_ORB_CME: lambda: _handle_check_orb_cme(engine),
-        ActionType.CHECK_ORB_TOKYO: lambda: _handle_check_orb_tokyo(engine),
+        ActionType.CHECK_ORB_CME_SETTLE: lambda: _handle_check_orb_cme_settle(engine),
         ActionType.HISTORICAL_BACKFILL: lambda: _handle_historical_backfill(engine),
         ActionType.RUN_OPTIMIZATION: lambda: _handle_run_optimization(engine),
         ActionType.RUN_BACKTEST: lambda: _handle_run_backtest(engine),

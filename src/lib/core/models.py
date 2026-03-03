@@ -225,14 +225,23 @@ FULL_CONTRACT_SPECS = {
     "Crude Oil": {"ticker": "CL=F", "point": 1_000, "tick": 0.01, "margin": 7_000},
     "S&P": {"ticker": "ES=F", "point": 50, "tick": 0.25, "margin": 12_000},
     "Nasdaq": {"ticker": "NQ=F", "point": 20, "tick": 0.25, "margin": 17_000},
+    # FX futures (full-size CME)
+    "Euro FX": {"ticker": "6E=F", "point": 125_000, "tick": 0.00005, "margin": 2_800},
+    "British Pound": {"ticker": "6B=F", "point": 62_500, "tick": 0.0001, "margin": 2_600},
+    "Japanese Yen": {"ticker": "6J=F", "point": 12_500_000, "tick": 0.0000005, "margin": 2_400},
+    "Australian Dollar": {"ticker": "6A=F", "point": 100_000, "tick": 0.0001, "margin": 1_800},
+    "Canadian Dollar": {"ticker": "6C=F", "point": 100_000, "tick": 0.0001, "margin": 1_600},
+    # Bitcoin (full-size CME)
+    "Bitcoin": {"ticker": "BTC=F", "point": 5, "tick": 5.0, "margin": 80_000},
 }
 
 # ---------------------------------------------------------------------------
 # Contract specifications — Micro CME contracts
-# Micro contracts are 1/10 of full size (except Silver which is 1/5).
+# Micro contracts are 1/10 of full size (except Silver 1/5, FX 1/10).
 # These give more granularity for position sizing and scaling.
 # ---------------------------------------------------------------------------
 MICRO_CONTRACT_SPECS = {
+    # ── Metals ──────────────────────────────────────────────────────────────
     "Gold": {
         "ticker": "MGC=F",
         "data_ticker": "MGC=F",
@@ -254,6 +263,7 @@ MICRO_CONTRACT_SPECS = {
         "tick": 0.0005,
         "margin": 600,
     },
+    # ── Energy ──────────────────────────────────────────────────────────────
     "Crude Oil": {
         "ticker": "MCL=F",
         "data_ticker": "CL=F",
@@ -261,6 +271,7 @@ MICRO_CONTRACT_SPECS = {
         "tick": 0.01,
         "margin": 700,
     },
+    # ── Equity index ────────────────────────────────────────────────────────
     "S&P": {
         "ticker": "MES=F",
         "data_ticker": "ES=F",
@@ -274,6 +285,67 @@ MICRO_CONTRACT_SPECS = {
         "point": 2,
         "tick": 0.25,
         "margin": 2_100,
+    },
+    "Russell 2000": {
+        "ticker": "M2K=F",
+        "data_ticker": "RTY=F",
+        "point": 5,
+        "tick": 0.10,
+        "margin": 1_200,
+    },
+    "Dow Jones": {
+        "ticker": "MYM=F",
+        "data_ticker": "YM=F",
+        "point": 0.5,
+        "tick": 1.0,
+        "margin": 1_100,
+    },
+    # ── FX futures (micro / standard CME) ───────────────────────────────────
+    # NB: CME FX futures do not have a separate "micro" product line for all
+    # pairs; we trade the standard contract size but track them alongside
+    # micros for session-based ORB scanning.
+    "Euro FX": {
+        "ticker": "6E=F",
+        "data_ticker": "6E=F",
+        "point": 125_000,
+        "tick": 0.00005,
+        "margin": 2_800,
+    },
+    "British Pound": {
+        "ticker": "6B=F",
+        "data_ticker": "6B=F",
+        "point": 62_500,
+        "tick": 0.0001,
+        "margin": 2_600,
+    },
+    "Japanese Yen": {
+        "ticker": "6J=F",
+        "data_ticker": "6J=F",
+        "point": 12_500_000,
+        "tick": 0.0000005,
+        "margin": 2_400,
+    },
+    "Australian Dollar": {
+        "ticker": "6A=F",
+        "data_ticker": "6A=F",
+        "point": 100_000,
+        "tick": 0.0001,
+        "margin": 1_800,
+    },
+    "Canadian Dollar": {
+        "ticker": "6C=F",
+        "data_ticker": "6C=F",
+        "point": 100_000,
+        "tick": 0.0001,
+        "margin": 1_600,
+    },
+    # ── Crypto ──────────────────────────────────────────────────────────────
+    "Micro Bitcoin": {
+        "ticker": "MBT=F",
+        "data_ticker": "MBT=F",
+        "point": 0.1,
+        "tick": 5.0,
+        "margin": 8_000,
     },
 }
 
@@ -290,6 +362,33 @@ ASSETS: dict[str, str] = {name: str(spec.get("data_ticker", spec["ticker"])) for
 # Reverse lookup: data ticker → name
 TICKER_TO_NAME: dict[str, str] = {
     str(spec.get("data_ticker", spec["ticker"])): name for name, spec in CONTRACT_SPECS.items()
+}
+
+# ---------------------------------------------------------------------------
+# Flat ticker sets — useful for quick membership checks
+# ---------------------------------------------------------------------------
+# All micro-contract tickers (for filtering signals to tradeable instruments)
+MICRO_TICKERS: frozenset[str] = frozenset(
+    str(spec.get("data_ticker", spec["ticker"])) for spec in MICRO_CONTRACT_SPECS.values()
+)
+
+# FX futures tickers subset
+FX_TICKERS: frozenset[str] = frozenset({"6E=F", "6B=F", "6J=F", "6A=F", "6C=F"})
+
+# Overnight-session relevant tickers (traded when US equity markets are closed)
+OVERNIGHT_TICKERS: frozenset[str] = frozenset(
+    {"MGC=F", "MCL=F", "MHG=F", "SIL=F", "6E=F", "6B=F", "6J=F", "6A=F", "MBT=F"}
+)
+
+# Point values for quick P&L calculation (per contract, per full point move)
+# Keyed by data_ticker so callers can look up by the ticker they actually trade.
+POINT_VALUE: dict[str, float] = {
+    str(spec.get("data_ticker", spec["ticker"])): float(spec["point"]) for spec in MICRO_CONTRACT_SPECS.values()
+}
+
+# Tick sizes keyed by data_ticker
+TICK_SIZE: dict[str, float] = {
+    str(spec.get("data_ticker", spec["ticker"])): float(spec["tick"]) for spec in MICRO_CONTRACT_SPECS.values()
 }
 
 

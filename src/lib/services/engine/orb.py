@@ -1,80 +1,70 @@
 """
-Opening Range Breakout (ORB) Detector — Multi-Session
-==================================================
-Detects opening range breakouts across six trading sessions:
+Opening Range Breakout (ORB) Detector — Multi-Session, Full 24h Coverage
+=========================================================================
+Detects opening range breakouts across **nine** trading sessions spanning
+the full 24-hour futures cycle, starting at the CME Globex re-open at
+18:00 ET each day.
 
-  1. **Sydney / Asia Open** (17:00–17:30 ET prev-day / 22:00–22:30 UTC)
-     Low-volatility overnight session. Useful pre-filter for crypto
-     (MBT/MET) and precious metals in thin overnight hours.
+Session order (by ET clock, new-day starting 18:00 ET):
 
-  2. **Tokyo Open** (19:00–19:30 ET prev-day / 00:00–00:30 UTC)
-     Narrow-range session with mean-reversion bias. Strongest on
-     JPY/AUD-correlated pairs and CME metals in overnight Globex.
+  1. **CME Globex Open**  18:00–18:30 ET  (prev-day; after settlement break)
+     First bars of the new Globex trading day. Clean overnight anchor
+     for all CME micro contracts.  wraps_midnight=True.
 
-  3. **CME Globex Open** (18:00–18:30 ET prev-day)
-     The futures exchange re-open after the 15-min daily settlement
-     break (17:00–18:00 ET). A clean overnight-range anchor that
-     feeds into London and US sessions.
+  2. **Sydney / Asia Open**  18:30–19:00 ET  (prev-day; ASX/SFE open ~19:00 ET)
+     Thin metals, energy, and MBT.  wraps_midnight=True.
 
-  4. **London Open** (03:00–03:30 ET / 08:00–08:30 UTC)   ← PRIMARY
+  3. **Tokyo Open**  19:00–19:30 ET  (prev-day; TSE open 19:00 ET EST / 09:00 JST)
+     Narrow-range session. Strongest on metals and JPY-correlated FX.
+     wraps_midnight=True.
+
+  4. **Shanghai/Hong Kong Open**  21:00–21:30 ET  (prev-day; CSI/HKEX 09:30 CST)
+     Copper (MHG/HG) and gold sentiment driver from SHFE.
+     wraps_midnight=True.
+
+  5. **Frankfurt / Xetra Open**  03:00–03:30 ET  (08:00–08:30 CET)
+     Pre-London institutional flow; sets European equity and EUR/USD tone.
+     Strongest on 6E, MES/MNQ (DAX correlation), MGC.
+
+  6. **London Open**  03:00–03:30 ET  (08:00–08:30 UTC)  ← PRIMARY
      Highest-conviction session. Institutional order flow drives the
-     daily range for metals, energy, FX futures, and indices. The
-     London–NY crossover (08:00–12:00 ET) produces the cleanest moves.
+     daily range for metals, energy, FX futures, and indices.
 
-  5. **London–NY Crossover** (08:00–08:30 ET / 13:00–13:30 UTC)
-     The overlap window where both London and New York are fully
-     active. Highest intraday volume and tightest spreads. Best for
-     6E (EUR), MES/MNQ, and MGC. Separate OR from the London open.
+  7. **London–NY Crossover**  08:00–08:30 ET  (13:00–13:30 UTC)
+     Overlap window — highest intraday volume and tightest spreads.
+     Best assets: 6E, MES/MNQ, MGC.
 
-  6. **US Equity Open** (09:30–10:00 ET)
-     Traditional Toby Crabel ORB for equity-index futures (MES, MNQ).
-     Also covers MGC during the gold-index correlation window.
+  8. **US Equity Open**  09:30–10:00 ET
+     Classic Toby Crabel ORB for MES/MNQ.  Also covers MGC.
 
-Each session is defined by an ORBSession dataclass with its own
-start/end times, ATR parameters, breakout multiplier, and quality
-gate thresholds (depth, body-ratio, OR-size cap).
+  9. **CME Settlement / Late Session**  14:00–14:30 ET
+     Metals/energy settlement window.  Gold (MGC) and crude (MCL)
+     typically see directional resolution before the 17:00 close.
+
+DST Handling
+------------
+All ``or_start`` / ``or_end`` / ``scan_end`` times are stored in **ET wall-clock**
+time (America/New_York).  ``ZoneInfo("America/New_York")`` handles EST↔EDT
+transitions automatically, so the UTC equivalent shifts by 1 hour during
+summer (EDT = UTC-4) vs winter (EST = UTC-5).  No manual offset needed.
+
+The ``get_session_for_utc()`` helper converts a UTC datetime to ET and
+checks membership in the appropriate session window.
 
 Quality filters (applied inside detect_opening_range_breakout):
   - **Depth filter**: breakout bar close must penetrate the OR level
-    by at least ``min_depth_atr_pct`` × ATR (default 0.15×). Eliminates
-    wick-only fakes.
-  - **Body-ratio filter**: breakout bar body must be ≥ ``min_body_ratio``
-    of the bar's total range (default 0.55). Eliminates doji/indecision
-    candles at the breakout point.
-  - **OR-size cap**: if the opening range exceeds ``max_or_atr_ratio`` × ATR
-    (default 1.8×), the range is too wide to trade safely — skip.
-  - **OR-size floor**: if the opening range is less than ``min_or_atr_ratio``
-    × ATR (default 0.05×), the range is too narrow (compression) — skip.
+    by at least ``min_depth_atr_pct`` × ATR (default 0.15×).
+  - **Body-ratio filter**: breakout bar body ≥ ``min_body_ratio`` of range.
+  - **OR-size cap**: if OR range > ``max_or_atr_ratio`` × ATR, skip.
+  - **OR-size floor**: if OR range < ``min_or_atr_ratio`` × ATR, skip.
 
 Public API:
     result = detect_opening_range_breakout(bars_1m, symbol="MGC", session=LONDON_SESSION)
-    result = detect_opening_range_breakout(bars_1m, symbol="MNQ", session=US_SESSION)
     results = detect_all_sessions(bars_1m, symbol="MGC")
-
     publish_orb_alert(result)   → push to Redis for SSE/dashboard
 
-Usage from engine scheduler:
-    from lib.services.engine.orb import (
-        detect_opening_range_breakout,
-        detect_all_sessions,
-        publish_orb_alert,
-        LONDON_SESSION,
-        US_SESSION,
-        ORB_SESSIONS,
-        SESSION_ASSETS,
-    )
-
-    # Single session
-    result = detect_opening_range_breakout(bars_1m, symbol="MGC", session=LONDON_SESSION)
-
-    # All sessions for one symbol
-    for result in detect_all_sessions(bars_1m, symbol="MGC"):
-        if result.breakout_detected:
-            publish_orb_alert(result)
-
-    # All sessions, respecting per-session asset lists
-    from lib.services.engine.orb import get_session_assets
-    assets_for_london = get_session_assets(LONDON_SESSION)
+    # DST-safe session lookup
+    session = get_session_for_utc(datetime.now(UTC))
 """
 
 import contextlib
@@ -93,6 +83,7 @@ import pandas as pd
 logger = logging.getLogger("engine.orb")
 
 _EST = ZoneInfo("America/New_York")
+_UTC = ZoneInfo("UTC")
 
 # ---------------------------------------------------------------------------
 # Session Definitions
@@ -106,12 +97,16 @@ class ORBSession:
     Each session has its own time window, ATR parameters, Redis keys,
     and quality-gate thresholds for depth, body, and OR-size checks.
     Frozen so instances are hashable and can be used as dict keys.
+
+    All times (or_start, or_end, scan_end) are **ET wall-clock** times
+    (America/New_York).  DST transitions (EST↔EDT) are handled automatically
+    by Python's ZoneInfo — no manual UTC offset needed.
     """
 
     name: str  # Human-readable name
     key: str  # Short key for Redis/logs ("london", "us", "tokyo", …)
-    or_start: dt_time  # Opening range start (ET)
-    or_end: dt_time  # Opening range end (ET)
+    or_start: dt_time  # Opening range start (ET wall-clock)
+    or_end: dt_time  # Opening range end (ET wall-clock)
     scan_end: dt_time  # Stop scanning for breakouts after this time (ET)
     atr_period: int = 14  # ATR look-back period
     breakout_multiplier: float = 0.5  # ATR multiplier for breakout threshold
@@ -141,64 +136,36 @@ class ORBSession:
     # Set to 0.0 to disable.
     min_or_atr_ratio: float = 0.05
 
-    # Whether this session wraps past midnight (Sydney/Tokyo/CME open
-    # starts in the previous calendar day ET). When True, bar filtering
-    # must look back into the previous day's bars.
+    # Whether this session wraps past midnight (all overnight sessions
+    # 18:00–03:00 ET start in the previous calendar day ET).  When True,
+    # bar filtering must look back into the previous day's bars.
     wraps_midnight: bool = False
 
+    # --- Dataset generation ---
+    # Whether to include this session in CNN dataset generation.
+    # Set False for very thin sessions where signal quality is too low
+    # to produce useful training labels.
+    include_in_dataset: bool = True
+
+
+# ===========================================================================
+# Session Definitions — Full 24-Hour Cycle (ET wall-clock, DST-aware)
+# ===========================================================================
+# The Globex trading day starts at 18:00 ET (after the 17:00–18:00
+# settlement break).  Sessions below are listed in chronological order
+# within that 18:00 ET → next-day 17:00 ET cycle.
+#
+# DST note: all times are ET wall-clock.  In summer (EDT, UTC-4) all
+# UTC equivalents shift 1 hour earlier vs winter (EST, UTC-5).  Python's
+# ZoneInfo("America/New_York") handles this automatically — no adjustments
+# needed here.
+# ===========================================================================
 
 # ---------------------------------------------------------------------------
-# Sydney / Asia Open  17:00–17:30 ET (previous calendar day)
-# Low-volatility overnight session. Good for MBT/MET crypto and thin
-# metals. Mean-reversion bias — tighter depth/body requirements.
-# wraps_midnight=True: OR window is in the previous calendar day in ET.
-# ---------------------------------------------------------------------------
-SYDNEY_SESSION = ORBSession(
-    name="Sydney Open",
-    key="sydney",
-    or_start=dt_time(17, 0),
-    or_end=dt_time(17, 30),
-    scan_end=dt_time(19, 0),
-    atr_period=14,
-    breakout_multiplier=0.4,
-    min_bars=3,
-    max_bars=35,
-    description="Sydney / Asia open (17:00–17:30 ET / 22:00–22:30 UTC)",
-    min_depth_atr_pct=0.10,  # shallower threshold — lower overnight vol
-    min_body_ratio=0.50,
-    max_or_atr_ratio=1.5,  # tighter cap — overnight ranges should be narrow
-    min_or_atr_ratio=0.03,
-    wraps_midnight=True,
-)
-
-# ---------------------------------------------------------------------------
-# Tokyo Open  19:00–19:30 ET (previous calendar day)
-# Narrow-range session. Strongest on metals and crypto in thin Globex hours.
-# wraps_midnight=True.
-# ---------------------------------------------------------------------------
-TOKYO_SESSION = ORBSession(
-    name="Tokyo Open",
-    key="tokyo",
-    or_start=dt_time(19, 0),
-    or_end=dt_time(19, 30),
-    scan_end=dt_time(21, 0),
-    atr_period=14,
-    breakout_multiplier=0.4,
-    min_bars=3,
-    max_bars=35,
-    description="Tokyo open (19:00–19:30 ET / 00:00–00:30 UTC)",
-    min_depth_atr_pct=0.10,
-    min_body_ratio=0.50,
-    max_or_atr_ratio=1.4,
-    min_or_atr_ratio=0.03,
-    wraps_midnight=True,
-)
-
-# ---------------------------------------------------------------------------
-# CME Globex Re-Open  18:00–18:30 ET (previous calendar day)
+# 1. CME Globex Re-Open  18:00–18:30 ET  ← START OF GLOBEX DAY
 # Futures exchange re-opens after the 17:00–18:00 ET daily settlement
-# break. First bars of the new trading day — clean overnight anchor.
-# wraps_midnight=True.
+# break. First bars of the new trading day — clean overnight anchor for
+# all CME micro products.  wraps_midnight=True.
 # ---------------------------------------------------------------------------
 CME_OPEN_SESSION = ORBSession(
     name="CME Globex Open",
@@ -210,18 +177,118 @@ CME_OPEN_SESSION = ORBSession(
     breakout_multiplier=0.45,
     min_bars=3,
     max_bars=35,
-    description="CME Globex re-open after settlement break (18:00–18:30 ET)",
+    description=(
+        "CME Globex re-open after settlement break (18:00–18:30 ET / 23:00–23:30 UTC EST | 22:00–22:30 UTC EDT)"
+    ),
     min_depth_atr_pct=0.12,
     min_body_ratio=0.52,
     max_or_atr_ratio=1.6,
     min_or_atr_ratio=0.04,
     wraps_midnight=True,
+    include_in_dataset=True,
 )
 
 # ---------------------------------------------------------------------------
-# London Open  03:00–03:30 ET (08:00–08:30 UTC)   ← PRIMARY SESSION
-# Highest-conviction ORB session. Institutional flow sets the daily range
-# for metals, energy, FX futures, and indices.
+# 2. Sydney / ASX Open  18:30–19:00 ET  (ASX opens ~19:00 ET EST)
+# Australian Securities Exchange open; thin metals + MBT in overnight
+# Globex.  wraps_midnight=True.
+# ---------------------------------------------------------------------------
+SYDNEY_SESSION = ORBSession(
+    name="Sydney Open",
+    key="sydney",
+    or_start=dt_time(18, 30),
+    or_end=dt_time(19, 0),
+    scan_end=dt_time(20, 30),
+    atr_period=14,
+    breakout_multiplier=0.4,
+    min_bars=3,
+    max_bars=35,
+    description=("Sydney / ASX open (18:30–19:00 ET / 23:30–00:00 UTC EST | 22:30–23:00 UTC EDT)"),
+    min_depth_atr_pct=0.10,
+    min_body_ratio=0.50,
+    max_or_atr_ratio=1.5,
+    min_or_atr_ratio=0.03,
+    wraps_midnight=True,
+    include_in_dataset=True,
+)
+
+# ---------------------------------------------------------------------------
+# 3. Tokyo / TSE Open  19:00–19:30 ET  (09:00 JST = 19:00 ET EST / 18:00 ET EDT)
+# Tokyo Stock Exchange open.  Narrow-range session; strongest for metals
+# and JPY/AUD-correlated FX futures.  wraps_midnight=True.
+# ---------------------------------------------------------------------------
+TOKYO_SESSION = ORBSession(
+    name="Tokyo Open",
+    key="tokyo",
+    or_start=dt_time(19, 0),
+    or_end=dt_time(19, 30),
+    scan_end=dt_time(21, 0),
+    atr_period=14,
+    breakout_multiplier=0.4,
+    min_bars=3,
+    max_bars=35,
+    description=("Tokyo / TSE open (19:00–19:30 ET / 00:00–00:30 UTC EST | 23:00–23:30 UTC EDT)"),
+    min_depth_atr_pct=0.10,
+    min_body_ratio=0.50,
+    max_or_atr_ratio=1.4,
+    min_or_atr_ratio=0.03,
+    wraps_midnight=True,
+    include_in_dataset=True,
+)
+
+# ---------------------------------------------------------------------------
+# 4. Shanghai / Hong Kong Open  21:00–21:30 ET
+# CSI 300 / HKEX open (09:30 CST / HKT).  Copper (MHG) and gold (MGC)
+# sentiment driver via SHFE open-price auction.  wraps_midnight=True.
+# ---------------------------------------------------------------------------
+SHANGHAI_SESSION = ORBSession(
+    name="Shanghai/HK Open",
+    key="shanghai",
+    or_start=dt_time(21, 0),
+    or_end=dt_time(21, 30),
+    scan_end=dt_time(23, 0),
+    atr_period=14,
+    breakout_multiplier=0.4,
+    min_bars=3,
+    max_bars=35,
+    description=("Shanghai/HK open — CSI 300 / HKEX (21:00–21:30 ET / 02:00–02:30 UTC EST | 01:00–01:30 UTC EDT)"),
+    min_depth_atr_pct=0.10,
+    min_body_ratio=0.50,
+    max_or_atr_ratio=1.5,
+    min_or_atr_ratio=0.03,
+    wraps_midnight=True,
+    include_in_dataset=True,
+)
+
+# ---------------------------------------------------------------------------
+# 5. Frankfurt / Xetra Open  03:00–03:30 ET  (08:00–08:30 CET / 09:00 CEST)
+# Pre-London institutional flow; sets European equity and EUR/USD tone.
+# Fires at the same ET time as London open — treated as a separate
+# session key for asset filtering (DAX-correlated symbols).
+# ---------------------------------------------------------------------------
+FRANKFURT_SESSION = ORBSession(
+    name="Frankfurt/Xetra Open",
+    key="frankfurt",
+    or_start=dt_time(3, 0),
+    or_end=dt_time(3, 30),
+    scan_end=dt_time(4, 30),
+    atr_period=14,
+    breakout_multiplier=0.45,
+    min_bars=4,
+    max_bars=35,
+    description=("Frankfurt / Xetra open (03:00–03:30 ET / 08:00–08:30 UTC EST | 07:00–07:30 UTC EDT)"),
+    min_depth_atr_pct=0.12,
+    min_body_ratio=0.52,
+    max_or_atr_ratio=1.7,
+    min_or_atr_ratio=0.04,
+    wraps_midnight=False,
+    include_in_dataset=True,
+)
+
+# ---------------------------------------------------------------------------
+# 6. London Open  03:00–03:30 ET  (08:00–08:30 UTC)  ← PRIMARY SESSION
+# Highest-conviction session. Institutional order flow drives the daily
+# range for metals, energy, FX futures, and indices.
 # ---------------------------------------------------------------------------
 LONDON_SESSION = ORBSession(
     name="London Open",
@@ -233,17 +300,19 @@ LONDON_SESSION = ORBSession(
     breakout_multiplier=0.5,
     min_bars=5,
     max_bars=35,
-    description="London open session (03:00–03:30 ET / 08:00–08:30 UTC)",
+    description=("London open session (03:00–03:30 ET / 08:00–08:30 UTC EST | 07:00–07:30 UTC EDT)"),
     min_depth_atr_pct=0.15,
     min_body_ratio=0.55,
     max_or_atr_ratio=1.8,
     min_or_atr_ratio=0.05,
+    wraps_midnight=False,
+    include_in_dataset=True,
 )
 
 # ---------------------------------------------------------------------------
-# London–NY Crossover  08:00–08:30 ET (13:00–13:30 UTC)
+# 7. London–NY Crossover  08:00–08:30 ET  (13:00–13:30 UTC)
 # Both exchanges fully active. Highest intraday volume, tightest spreads.
-# Best assets: 6E (EUR), MES, MNQ, MGC. Separate OR from London open.
+# Best assets: 6E (EUR), MES, MNQ, MGC.
 # ---------------------------------------------------------------------------
 LONDON_NY_SESSION = ORBSession(
     name="London-NY Crossover",
@@ -255,17 +324,19 @@ LONDON_NY_SESSION = ORBSession(
     breakout_multiplier=0.5,
     min_bars=5,
     max_bars=35,
-    description="London-NY crossover (08:00–08:30 ET / 13:00–13:30 UTC)",
-    min_depth_atr_pct=0.18,  # stricter — high vol means more fakes too
+    description=("London-NY crossover (08:00–08:30 ET / 13:00–13:30 UTC EST | 12:00–12:30 UTC EDT)"),
+    min_depth_atr_pct=0.18,
     min_body_ratio=0.58,
-    max_or_atr_ratio=2.0,  # wider cap — legitimate high-vol range
+    max_or_atr_ratio=2.0,
     min_or_atr_ratio=0.06,
+    wraps_midnight=False,
+    include_in_dataset=True,
 )
 
 # ---------------------------------------------------------------------------
-# US Equity Open  09:30–10:00 ET
-# Classic Toby Crabel ORB for MES/MNQ. Also covers MGC during gold-index
-# correlation window.
+# 8. US Equity Open  09:30–10:00 ET
+# Classic Toby Crabel ORB for MES/MNQ.  Also covers MGC during the
+# gold-index correlation window.
 # ---------------------------------------------------------------------------
 US_SESSION = ORBSession(
     name="US Equity Open",
@@ -282,45 +353,168 @@ US_SESSION = ORBSession(
     min_body_ratio=0.55,
     max_or_atr_ratio=1.8,
     min_or_atr_ratio=0.05,
+    wraps_midnight=False,
+    include_in_dataset=True,
 )
 
 # ---------------------------------------------------------------------------
-# All sessions in priority order
+# 9. CME Settlement / Late Session  14:00–14:30 ET
+# Metals and energy settlement window.  Gold (MGC) and crude (MCL) often
+# see directional resolution and range extension before the 17:00 close.
 # ---------------------------------------------------------------------------
-# Overnight sessions (wraps_midnight) run in the prior calendar day but
-# are evaluated continuously once the engine starts. The scheduler activates
-# them based on current ET time.
+CME_SETTLEMENT_SESSION = ORBSession(
+    name="CME Settlement",
+    key="cme_settle",
+    or_start=dt_time(14, 0),
+    or_end=dt_time(14, 30),
+    scan_end=dt_time(15, 30),
+    atr_period=14,
+    breakout_multiplier=0.45,
+    min_bars=3,
+    max_bars=35,
+    description="CME metals/energy settlement (14:00–14:30 ET)",
+    min_depth_atr_pct=0.12,
+    min_body_ratio=0.52,
+    max_or_atr_ratio=1.7,
+    min_or_atr_ratio=0.04,
+    wraps_midnight=False,
+    include_in_dataset=True,
+)
+
+# ---------------------------------------------------------------------------
+# All sessions — chronological order within the Globex day (18:00 ET start)
+# ---------------------------------------------------------------------------
 ORB_SESSIONS: list[ORBSession] = [
-    SYDNEY_SESSION,
-    CME_OPEN_SESSION,
-    TOKYO_SESSION,
-    LONDON_SESSION,
-    LONDON_NY_SESSION,
-    US_SESSION,
+    CME_OPEN_SESSION,  # 18:00 ET  — start of Globex day
+    SYDNEY_SESSION,  # 18:30 ET
+    TOKYO_SESSION,  # 19:00 ET
+    SHANGHAI_SESSION,  # 21:00 ET
+    FRANKFURT_SESSION,  # 03:00 ET  — pre-London
+    LONDON_SESSION,  # 03:00 ET  — primary
+    LONDON_NY_SESSION,  # 08:00 ET
+    US_SESSION,  # 09:30 ET
+    CME_SETTLEMENT_SESSION,  # 14:00 ET
 ]
+
+# Convenience lookup: session key → ORBSession
+SESSION_BY_KEY: dict[str, ORBSession] = {s.key: s for s in ORB_SESSIONS}
 
 # ---------------------------------------------------------------------------
 # Per-session asset focus lists
 # ---------------------------------------------------------------------------
-# Maps session key → list of Yahoo tickers that are relevant for that session.
+# Maps session key → list of Yahoo tickers relevant for that session.
 # The ORB check loop filters assets to this list per session, avoiding e.g.
 # checking MES during Tokyo (near-zero volume) or 6E during US Equity Open
 # (FX already moved 5 hours earlier).
 #
 # Ticker values must match ASSETS dict in lib/core/models.py.
+#
+# Extended symbol set (all micro CME contracts + FX futures):
+#   MGC=F  Micro Gold          MES=F  Micro S&P 500
+#   MCL=F  Micro Crude Oil     MNQ=F  Micro Nasdaq-100
+#   MHG=F  Micro Copper        M2K=F  Micro Russell 2000
+#   SIL=F  Micro Silver        MYM=F  Micro Dow Jones
+#   MBT=F  Micro Bitcoin       6E=F   Euro FX
+#   6B=F   British Pound       6J=F   Japanese Yen
+#   6A=F   Australian Dollar   6C=F   Canadian Dollar
 SESSION_ASSETS: dict[str, list[str]] = {
-    # Sydney: crypto micros + thin metals
-    "sydney": ["MGC=F", "SI=F", "MCL=F"],
-    # CME Globex re-open: all futures (new trading day starts here)
-    "cme": ["MGC=F", "SI=F", "HG=F", "MCL=F", "ES=F", "NQ=F"],
-    # Tokyo: metals + crypto (JPY-correlated)
-    "tokyo": ["MGC=F", "SI=F", "MCL=F"],
-    # London: FX, metals, energy, index futures
-    "london": ["MGC=F", "SI=F", "HG=F", "MCL=F", "ES=F", "NQ=F"],
-    # London-NY crossover: highest-conviction; all 6 assets
-    "london_ny": ["MGC=F", "SI=F", "HG=F", "MCL=F", "ES=F", "NQ=F"],
-    # US Equity Open: primarily index futures and gold
-    "us": ["MGC=F", "ES=F", "NQ=F", "MCL=F"],
+    # CME Globex re-open (18:00 ET): all CME micros — new trading day starts here.
+    # FX included because overnight gaps in 6E/6J drive early direction.
+    "cme": [
+        "MGC=F",
+        "MCL=F",
+        "MHG=F",
+        "SIL=F",
+        "MES=F",
+        "MNQ=F",
+        "M2K=F",
+        "MYM=F",
+        "6E=F",
+        "6B=F",
+        "6J=F",
+        "MBT=F",
+    ],
+    # Sydney / ASX (18:30 ET): thin overnight; metals, energy, AUD-correlated FX, MBT.
+    "sydney": [
+        "MGC=F",
+        "MCL=F",
+        "SIL=F",
+        "6A=F",
+        "6J=F",
+        "MBT=F",
+    ],
+    # Tokyo / TSE (19:00 ET): metals, JPY/AUD FX, thin index futures.
+    "tokyo": [
+        "MGC=F",
+        "MCL=F",
+        "MHG=F",
+        "SIL=F",
+        "6J=F",
+        "6A=F",
+    ],
+    # Shanghai / HK (21:00 ET): copper and gold dominant; CNH-proxy via 6J.
+    "shanghai": [
+        "MGC=F",
+        "MHG=F",
+        "MCL=F",
+        "SIL=F",
+        "6J=F",
+    ],
+    # Frankfurt / Xetra (03:00 ET): EUR FX, DAX-correlated index futures, metals.
+    "frankfurt": [
+        "MGC=F",
+        "MCL=F",
+        "MES=F",
+        "MNQ=F",
+        "MYM=F",
+        "6E=F",
+        "6B=F",
+    ],
+    # London Open (03:00 ET): primary session — all major CME contracts + FX.
+    "london": [
+        "MGC=F",
+        "MCL=F",
+        "MHG=F",
+        "SIL=F",
+        "MES=F",
+        "MNQ=F",
+        "M2K=F",
+        "MYM=F",
+        "6E=F",
+        "6B=F",
+        "6J=F",
+    ],
+    # London-NY Crossover (08:00 ET): highest-conviction; full universe.
+    "london_ny": [
+        "MGC=F",
+        "MCL=F",
+        "MHG=F",
+        "SIL=F",
+        "MES=F",
+        "MNQ=F",
+        "M2K=F",
+        "MYM=F",
+        "6E=F",
+        "6B=F",
+        "6J=F",
+        "MBT=F",
+    ],
+    # US Equity Open (09:30 ET): index futures primary; gold correlation window.
+    "us": [
+        "MGC=F",
+        "MCL=F",
+        "MES=F",
+        "MNQ=F",
+        "M2K=F",
+        "MYM=F",
+    ],
+    # CME Settlement (14:00 ET): metals and energy resolution before close.
+    "cme_settle": [
+        "MGC=F",
+        "MCL=F",
+        "MHG=F",
+        "SIL=F",
+    ],
 }
 
 
@@ -346,7 +540,90 @@ def get_session_assets(session: "ORBSession") -> list[str]:
         return []
 
 
+def get_session_for_utc(utc_dt: datetime) -> ORBSession | None:
+    """Return the ORBSession that is currently active for the given UTC datetime.
+
+    Converts *utc_dt* to ET wall-clock time (ZoneInfo("America/New_York"))
+    and checks each session's OR start → scan_end window.  DST transitions
+    are handled automatically — no manual UTC offset needed.
+
+    For ``wraps_midnight`` sessions the wall-clock window may straddle
+    00:00 ET (e.g. CME open 18:00–20:00 ET).  These sessions are always
+    active when the ET time is within [or_start, scan_end] regardless of
+    calendar date.
+
+    Returns the *first* matching session in ORB_SESSIONS priority order,
+    or ``None`` if no session is currently active.
+
+    Args:
+        utc_dt: A tz-aware datetime in UTC (or any tz — will be converted).
+
+    Example::
+
+        from datetime import datetime, timezone
+        from lib.services.engine.orb import get_session_for_utc
+
+        now_utc = datetime.now(timezone.utc)
+        session = get_session_for_utc(now_utc)
+        if session:
+            print(f"Active session: {session.name}")
+    """
+    # Convert to ET wall-clock — ZoneInfo handles EST (UTC-5) / EDT (UTC-4)
+    et_dt = utc_dt.astimezone(_EST)
+    et_time = et_dt.time()
+
+    for session in ORB_SESSIONS:
+        start = session.or_start
+        end = session.scan_end
+
+        if start <= end:
+            # Normal (no midnight wrap): window is e.g. 03:00–05:00
+            if start <= et_time <= end:
+                return session
+        else:
+            # Wraps midnight: window straddles 00:00 e.g. 18:00–02:00
+            # (scan_end < or_start means the window crosses midnight)
+            if et_time >= start or et_time <= end:
+                return session
+
+    return None
+
+
+def get_active_session_keys(utc_dt: datetime | None = None) -> list[str]:
+    """Return keys of ALL sessions whose windows overlap the given UTC time.
+
+    Unlike ``get_session_for_utc()`` (which returns only the first match),
+    this returns every session that is simultaneously active — useful when
+    Frankfurt and London overlap at 03:00–03:30 ET.
+
+    Args:
+        utc_dt: UTC datetime to check.  Defaults to ``datetime.now(UTC)``.
+
+    Returns:
+        List of session key strings (may be empty).
+    """
+    if utc_dt is None:
+        utc_dt = datetime.now(tz=_UTC)
+
+    et_dt = utc_dt.astimezone(_EST)
+    et_time = et_dt.time()
+
+    active: list[str] = []
+    for session in ORB_SESSIONS:
+        start = session.or_start
+        end = session.scan_end
+        if start <= end:
+            if start <= et_time <= end:
+                active.append(session.key)
+        else:
+            if et_time >= start or et_time <= end:
+                active.append(session.key)
+    return active
+
+
+# ---------------------------------------------------------------------------
 # Legacy aliases for backward compatibility
+# ---------------------------------------------------------------------------
 OR_START = US_SESSION.or_start
 OR_END = US_SESSION.or_end
 ATR_PERIOD = 14
@@ -354,9 +631,12 @@ BREAKOUT_ATR_MULTIPLIER = 0.5
 MIN_OR_BARS = 5
 MAX_OR_BARS = 35
 
-# Convenience set of overnight (wraps_midnight) sessions for the scheduler
+# Convenience groupings used by the scheduler
 OVERNIGHT_SESSIONS: list[ORBSession] = [s for s in ORB_SESSIONS if s.wraps_midnight]
 DAYTIME_SESSIONS: list[ORBSession] = [s for s in ORB_SESSIONS if not s.wraps_midnight]
+
+# Sessions included in CNN dataset generation
+DATASET_SESSIONS: list[ORBSession] = [s for s in ORB_SESSIONS if s.include_in_dataset]
 
 
 # ---------------------------------------------------------------------------

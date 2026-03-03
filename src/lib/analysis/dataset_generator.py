@@ -91,10 +91,22 @@ class DatasetConfig:
     max_hold_bars: int = 120
     atr_period: int = 14
 
-    # ORB session: "us" (default, OR 09:30–10:00) or "london" (OR 03:00–03:30).
-    # When "london", the bracket config is automatically adjusted to use
-    # London OR times and a narrower pre-market window (00:00–03:00).
-    # When "both", dataset generation runs both sessions per day (combined).
+    # ORB session selection for dataset generation.
+    # Controls which opening-range windows are simulated per bar history.
+    #
+    # Supported values:
+    #   "us"        — US Equity Open 09:30–10:00 ET (default)
+    #   "london"    — London Open 03:00–03:30 ET
+    #   "both"      — London + US (backward-compatible two-session alias)
+    #   "all"       — All 9 sessions across the full Globex day (recommended
+    #                 for maximum dataset diversity and coverage)
+    #   "frankfurt" — Frankfurt/Xetra 03:00–03:30 ET
+    #   "tokyo"     — Tokyo/TSE 19:00–19:30 ET (overnight)
+    #   "shanghai"  — Shanghai/HK 21:00–21:30 ET (overnight)
+    #   "cme"       — CME Globex re-open 18:00–18:30 ET (overnight)
+    #   "sydney"    — Sydney/ASX 18:30–19:00 ET (overnight)
+    #   "london_ny" — London-NY Crossover 08:00–08:30 ET
+    #   "cme_settle"— CME Settlement 14:00–14:30 ET
     orb_session: str = "us"
 
     # Chart rendering
@@ -179,24 +191,26 @@ class DatasetStats:
 # "MGC=F", "ES=F", etc.  This mapping bridges the two.
 
 _SYMBOL_TO_TICKER: dict[str, str] = {
-    # Micro contracts
-    "MGC": "MGC=F",
-    "MES": "MES=F",
-    "MNQ": "MNQ=F",
-    "MCL": "MCL=F",
-    "MYM": "MYM=F",
-    "M2K": "M2K=F",
-    "SIL": "SIL=F",
-    "MHG": "MHG=F",
-    # Micro Bitcoin (CME)
-    "MBT": "MBT=F",
-    # FX futures (CME)
+    # ── Micro metals ──────────────────────────────────────────────────────
+    "MGC": "MGC=F",  # Micro Gold
+    "SIL": "SIL=F",  # Micro Silver
+    "MHG": "MHG=F",  # Micro Copper
+    # ── Micro energy ──────────────────────────────────────────────────────
+    "MCL": "MCL=F",  # Micro Crude Oil
+    # ── Micro equity index ────────────────────────────────────────────────
+    "MES": "MES=F",  # Micro S&P 500
+    "MNQ": "MNQ=F",  # Micro Nasdaq-100
+    "M2K": "M2K=F",  # Micro Russell 2000
+    "MYM": "MYM=F",  # Micro Dow Jones
+    # ── Micro crypto ──────────────────────────────────────────────────────
+    "MBT": "MBT=F",  # Micro Bitcoin (CME)
+    # ── FX futures (CME standard) ─────────────────────────────────────────
     "6E": "6E=F",  # Euro FX
     "6B": "6B=F",  # British Pound
     "6J": "6J=F",  # Japanese Yen
     "6A": "6A=F",  # Australian Dollar
     "6C": "6C=F",  # Canadian Dollar
-    # Full-size contracts
+    # ── Full-size contracts (data source aliases) ─────────────────────────
     "GC": "GC=F",
     "ES": "ES=F",
     "NQ": "NQ=F",
@@ -205,7 +219,7 @@ _SYMBOL_TO_TICKER: dict[str, str] = {
     "HG": "HG=F",
     "YM": "YM=F",
     "RTY": "RTY=F",
-    # Bitcoin futures (CME full-size)
+    # ── Crypto (CME full-size) ─────────────────────────────────────────────
     "BTC": "BTC=F",
 }
 
@@ -527,48 +541,114 @@ def load_daily_bars(
 # ---------------------------------------------------------------------------
 
 
-def _bracket_configs_for_session(
-    cfg: DatasetConfig,
-) -> list[tuple[str, Any]]:
-    """Return (session_key, BracketConfig) pairs based on ``cfg.orb_session``.
+# ---------------------------------------------------------------------------
+# Per-session BracketConfig parameters
+# ---------------------------------------------------------------------------
+# Maps session_key → (or_start, or_end, pm_end) as time objects (ET).
+# These mirror the ORBSession definitions in engine/orb.py but are
+# duplicated here to keep the dataset generator independent of the engine.
+_SESSION_BRACKET_PARAMS: dict[str, tuple["dt_time_type", "dt_time_type", "dt_time_type"]] = {}  # filled below
 
-    - ``"us"``     → single US config (OR 09:30–10:00, PM end 08:20)
-    - ``"london"`` → single London config (OR 03:00–03:30, PM end 03:00)
-    - ``"both"``   → both configs so the generator runs each session per day
+
+def _get_session_bracket_params() -> dict[str, Any]:
+    """Lazily build the session → (or_start, or_end, pm_end) mapping.
+
+    Returns a dict keyed by session_key with tuples of
+    ``(or_start, or_end, pm_end)`` as ``datetime.time`` objects in ET.
+    Importing ``datetime.time`` here avoids a module-level circular import.
     """
     from datetime import time as dt_time
 
+    return {
+        # CME Globex re-open  18:00–18:30 ET  (overnight, wraps_midnight)
+        "cme": (dt_time(18, 0), dt_time(18, 30), dt_time(18, 0)),
+        # Sydney / ASX  18:30–19:00 ET  (overnight, wraps_midnight)
+        "sydney": (dt_time(18, 30), dt_time(19, 0), dt_time(18, 30)),
+        # Tokyo / TSE  19:00–19:30 ET  (overnight, wraps_midnight)
+        "tokyo": (dt_time(19, 0), dt_time(19, 30), dt_time(19, 0)),
+        # Shanghai / HK  21:00–21:30 ET  (overnight, wraps_midnight)
+        "shanghai": (dt_time(21, 0), dt_time(21, 30), dt_time(21, 0)),
+        # Frankfurt / Xetra  03:00–03:30 ET
+        "frankfurt": (dt_time(3, 0), dt_time(3, 30), dt_time(3, 0)),
+        # London Open  03:00–03:30 ET  (primary session)
+        "london": (dt_time(3, 0), dt_time(3, 30), dt_time(3, 0)),
+        # London-NY Crossover  08:00–08:30 ET
+        "london_ny": (dt_time(8, 0), dt_time(8, 30), dt_time(8, 0)),
+        # US Equity Open  09:30–10:00 ET
+        "us": (dt_time(9, 30), dt_time(10, 0), dt_time(8, 20)),
+        # CME Settlement  14:00–14:30 ET
+        "cme_settle": (dt_time(14, 0), dt_time(14, 30), dt_time(8, 20)),
+    }
+
+
+# Ordered list of all session keys for "all" mode (chronological Globex-day order)
+_ALL_SESSION_KEYS: list[str] = [
+    "cme",
+    "sydney",
+    "tokyo",
+    "shanghai",
+    "frankfurt",
+    "london",
+    "london_ny",
+    "us",
+    "cme_settle",
+]
+
+
+def _bracket_configs_for_session(
+    cfg: DatasetConfig,
+) -> list[tuple[str, Any]]:
+    """Return ``(session_key, BracketConfig)`` pairs based on ``cfg.orb_session``.
+
+    Supported values for ``cfg.orb_session``:
+
+    - ``"us"``        → US Equity Open only (OR 09:30–10:00 ET)
+    - ``"london"``    → London Open only (OR 03:00–03:30 ET)
+    - ``"both"``      → London + US (backward-compatible alias for two sessions)
+    - ``"all"``       → All 9 sessions across the full Globex day
+    - ``"frankfurt"`` → Frankfurt/Xetra only (OR 03:00–03:30 ET)
+    - ``"tokyo"``     → Tokyo/TSE only (OR 19:00–19:30 ET)
+    - ``"shanghai"``  → Shanghai/HK only (OR 21:00–21:30 ET)
+    - ``"cme"``       → CME Globex re-open only (OR 18:00–18:30 ET)
+    - ``"sydney"``    → Sydney/ASX only (OR 18:30–19:00 ET)
+    - ``"london_ny"`` → London-NY Crossover only (OR 08:00–08:30 ET)
+    - ``"cme_settle"``→ CME Settlement only (OR 14:00–14:30 ET)
+
+    Any unknown value falls back to ``"us"``.
+    """
     from lib.analysis.orb_simulator import BracketConfig
 
-    us_cfg = BracketConfig(
-        sl_atr_mult=cfg.sl_atr_mult,
-        tp1_atr_mult=cfg.tp1_atr_mult,
-        tp2_atr_mult=cfg.tp2_atr_mult,
-        max_hold_bars=cfg.max_hold_bars,
-        atr_period=cfg.atr_period,
-        or_start=dt_time(9, 30),
-        or_end=dt_time(10, 0),
-        pm_end=dt_time(8, 20),
-    )
+    session_params = _get_session_bracket_params()
 
-    london_cfg = BracketConfig(
-        sl_atr_mult=cfg.sl_atr_mult,
-        tp1_atr_mult=cfg.tp1_atr_mult,
-        tp2_atr_mult=cfg.tp2_atr_mult,
-        max_hold_bars=cfg.max_hold_bars,
-        atr_period=cfg.atr_period,
-        or_start=dt_time(3, 0),
-        or_end=dt_time(3, 30),
-        pm_end=dt_time(3, 0),
-    )
+    def _make_cfg(key: str) -> Any:
+        or_start, or_end, pm_end = session_params[key]
+        return BracketConfig(
+            sl_atr_mult=cfg.sl_atr_mult,
+            tp1_atr_mult=cfg.tp1_atr_mult,
+            tp2_atr_mult=cfg.tp2_atr_mult,
+            max_hold_bars=cfg.max_hold_bars,
+            atr_period=cfg.atr_period,
+            or_start=or_start,
+            or_end=or_end,
+            pm_end=pm_end,
+        )
 
     session = cfg.orb_session.lower().strip()
-    if session == "london":
-        return [("london", london_cfg)]
-    elif session == "both":
-        return [("london", london_cfg), ("us", us_cfg)]
+
+    if session == "both":
+        # Backward-compatible: London + US
+        return [("london", _make_cfg("london")), ("us", _make_cfg("us"))]
+    elif session == "all":
+        # Full Globex-day coverage — all 9 sessions
+        return [(key, _make_cfg(key)) for key in _ALL_SESSION_KEYS]
+    elif session in session_params:
+        return [(session, _make_cfg(session))]
     else:
-        return [("us", us_cfg)]
+        logger.warning(
+            "Unknown orb_session '%s' in DatasetConfig — falling back to 'us'",
+            cfg.orb_session,
+        )
+        return [("us", _make_cfg("us"))]
 
 
 def generate_dataset_for_symbol(

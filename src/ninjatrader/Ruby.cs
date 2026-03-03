@@ -232,11 +232,11 @@ namespace NinjaTrader.NinjaScript.Indicators
                     PlotStyle.Line, "BB_Lower");                            // 6
 
                 // Volume plots (7–14)
-                AddPlot(new Stroke(Brushes.Gold, DashStyleHelper.Solid, 2),
+                AddPlot(new Stroke(Brushes.Magenta, DashStyleHelper.Solid, 2),
                     PlotStyle.Line, "VWAP");                                // 7
-                AddPlot(new Stroke(Brushes.Gold, DashStyleHelper.Dot, 1),
+                AddPlot(new Stroke(Brushes.Magenta, DashStyleHelper.Dot, 1),
                     PlotStyle.Line, "VWAP_Upper1");                         // 8
-                AddPlot(new Stroke(Brushes.Gold, DashStyleHelper.Dot, 1),
+                AddPlot(new Stroke(Brushes.Magenta, DashStyleHelper.Dot, 1),
                     PlotStyle.Line, "VWAP_Lower1");                         // 9
                 AddPlot(new Stroke(Brushes.DarkGoldenrod, DashStyleHelper.Dash, 1),
                     PlotStyle.Line, "VWAP_Upper2");                         // 10

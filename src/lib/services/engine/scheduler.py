@@ -1,19 +1,35 @@
 """
-Session-Aware Engine Scheduler
-==========================================
-Manages the engine's behavior based on Eastern Time trading sessions:
+Session-Aware Engine Scheduler — Full 24-Hour Globex Coverage
+=============================================================
+Manages the engine's behavior based on Eastern Time trading sessions.
+The Globex futures day begins at 18:00 ET (after the 17:00–18:00
+settlement break), so the scheduler is organised around that 24-hour
+cycle rather than the calendar midnight.
 
-  - **Pre-market (00:00–03:00 ET):** Compute daily focus once, run Grok
-    morning briefing, prepare alerts for the trading day.
-  - **Active (03:00–12:00 ET):** London Open (03:00–08:00) + US Open
-    (08:00–12:00). Live Ruby recomputation every 5 min, publish focus
-    updates to Redis, run Grok updates every 15 min, ORB detection.
-  - **Off-hours (12:00–00:00 ET):** Historical data backfill, full
-    optimization runs, backtesting, next-day prep.
+DST handling
+------------
+All session boundary times are **ET wall-clock** (America/New_York).
+Python's ZoneInfo handles EST↔EDT transitions automatically — no manual
+UTC offsets needed.  In summer (EDT = UTC-4) all UTC equivalents shift
+one hour earlier vs winter (EST = UTC-5).
 
-The ScheduleManager is consumed by the engine main loop. It tracks what
-has already run within each session to avoid redundant work (e.g. daily
-focus is computed once per pre-market window, not every loop iteration).
+Session windows (ET wall-clock, Globex-day order):
+  - **Evening / Overnight (18:00–03:00 ET):**
+      CME Globex open (18:00), Sydney/ASX (18:30), Tokyo/TSE (19:00),
+      Shanghai/HK (21:00).  ORB checks fire every 2 min within each
+      scan window.  All other actions sleep at the off-hours interval.
+  - **Pre-market (00:00–03:00 ET):**
+      Compute daily focus once, run Grok morning briefing, prepare alerts.
+  - **Active (03:00–12:00 ET):**
+      Frankfurt/Xetra (03:00), London Open (03:00–08:00),
+      London-NY Crossover (08:00–10:00), US Equity Open (09:30–11:00).
+      Live Ruby recomputation every 5 min, Grok updates every 15 min.
+  - **Off-hours / Afternoon (12:00–18:00 ET):**
+      CME Settlement ORB (14:00–15:30).  Historical backfill, optimisation,
+      backtesting, CNN dataset generation + retraining.
+
+The ScheduleManager is consumed by the engine main loop.  It tracks what
+has already run within each session to avoid redundant work.
 
 Usage:
     from lib.services.engine.scheduler import ScheduleManager
@@ -40,42 +56,51 @@ _EST = ZoneInfo("America/New_York")
 
 
 class SessionMode(StrEnum):
-    PRE_MARKET = "pre-market"
-    ACTIVE = "active"
-    OFF_HOURS = "off-hours"
+    EVENING = "evening"  # 18:00–00:00 ET — overnight ORB sessions
+    PRE_MARKET = "pre-market"  # 00:00–03:00 ET — daily focus + briefing
+    ACTIVE = "active"  # 03:00–12:00 ET — London + US live trading
+    OFF_HOURS = "off-hours"  # 12:00–18:00 ET — backfill, CNN, backtest
 
 
 class ActionType(StrEnum):
     """All schedulable engine actions."""
 
-    # Pre-market actions (run once per day)
+    # Pre-market actions (run once per day, 00:00–03:00 ET)
     COMPUTE_DAILY_FOCUS = "compute_daily_focus"
     GROK_MORNING_BRIEF = "grok_morning_brief"
     PREP_ALERTS = "prep_alerts"
 
-    # Active session actions (recurring)
+    # Active session actions (recurring, 03:00–12:00 ET)
     RUBY_RECOMPUTE = "fks_recompute"
     PUBLISH_FOCUS_UPDATE = "publish_focus_update"
     GROK_LIVE_UPDATE = "grok_live_update"
     CHECK_RISK_RULES = "check_risk_rules"
     CHECK_NO_TRADE = "check_no_trade"
+
+    # ── ORB session checks — fired every 2 min within scan windows ──────────
+    # US Equity Open  09:30–11:00 ET
     CHECK_ORB = "check_orb"
-
-    # London Open ORB — runs during pre-market (03:00–05:00 ET)
+    # Frankfurt / Xetra Open  03:00–04:30 ET  (08:00 CET / 09:00 CEST)
+    CHECK_ORB_FRANKFURT = "check_orb_frankfurt"
+    # London Open  03:00–05:00 ET  (primary session)
     CHECK_ORB_LONDON = "check_orb_london"
-
-    # London–NY Crossover ORB — runs during active session (08:00–10:00 ET)
+    # London–NY Crossover  08:00–10:00 ET
     CHECK_ORB_LONDON_NY = "check_orb_london_ny"
 
-    # Overnight sessions — run during off-hours / pre-market wrap windows
-    # Sydney Open  17:00–19:00 ET  (previous calendar day — wraps midnight)
-    CHECK_ORB_SYDNEY = "check_orb_sydney"
-    # CME Globex re-open  18:00–20:00 ET  (previous calendar day — wraps midnight)
+    # Evening / overnight sessions (18:00–03:00 ET, wraps_midnight)
+    # CME Globex re-open  18:00–20:00 ET
     CHECK_ORB_CME = "check_orb_cme"
-    # Tokyo Open  19:00–21:00 ET  (previous calendar day — wraps midnight)
+    # Sydney / ASX Open  18:30–20:30 ET
+    CHECK_ORB_SYDNEY = "check_orb_sydney"
+    # Tokyo / TSE Open  19:00–21:00 ET
     CHECK_ORB_TOKYO = "check_orb_tokyo"
+    # Shanghai / HK Open  21:00–23:00 ET
+    CHECK_ORB_SHANGHAI = "check_orb_shanghai"
 
-    # Off-hours actions (run once per session)
+    # CME Settlement  14:00–15:30 ET  (metals/energy settlement window)
+    CHECK_ORB_CME_SETTLE = "check_orb_cme_settle"
+
+    # Off-hours actions (12:00–18:00 ET, run once per session)
     HISTORICAL_BACKFILL = "historical_backfill"
     RUN_OPTIMIZATION = "run_optimization"
     RUN_BACKTEST = "run_backtest"
@@ -85,7 +110,7 @@ class ActionType(StrEnum):
     GENERATE_CHART_DATASET = "generate_chart_dataset"
     TRAIN_BREAKOUT_CNN = "train_breakout_cnn"
 
-    # Daily report — runs once per day at end of active session (around 12:00 ET)
+    # Daily report — runs once per day at end of active session (~12:00 ET)
     DAILY_REPORT = "daily_report"
 
 
@@ -115,27 +140,37 @@ class ScheduleManager:
     Determines which actions need to run based on the current ET time,
     what has already been completed, and configured intervals.
 
+    The scheduler covers the full 24-hour Globex day starting at 18:00 ET:
+      18:00–00:00 ET  EVENING   — overnight ORB checks (CME/Sydney/Tokyo/Shanghai)
+      00:00–03:00 ET  PRE_MARKET — daily focus, Grok briefing, alert prep
+      03:00–12:00 ET  ACTIVE    — Frankfurt/London/LN-NY/US ORB + live recompute
+      12:00–18:00 ET  OFF_HOURS — CME settlement ORB, backfill, CNN, backtest
+
     Thread-safe: all state is read/written from a single engine thread.
     """
 
-    # Recurring interval configuration (seconds)
-    RUBY_INTERVAL = 5 * 60  # 5 minutes during active
-    GROK_INTERVAL = 15 * 60  # 15 minutes during active
-    RISK_CHECK_INTERVAL = 60  # 1 minute during active
-    NO_TRADE_INTERVAL = 2 * 60  # 2 minutes during active
-    ORB_CHECK_INTERVAL = 2 * 60  # 2 min — US open (09:30–11:00 ET)
-    ORB_LONDON_CHECK_INTERVAL = 2 * 60  # 2 min — London open (03:00–05:00 ET)
-    ORB_LONDON_NY_CHECK_INTERVAL = 2 * 60  # 2 min — London-NY crossover (08:00–10:00 ET)
-    ORB_SYDNEY_CHECK_INTERVAL = 2 * 60  # 2 min — Sydney open (17:00–19:00 ET)
-    ORB_CME_CHECK_INTERVAL = 2 * 60  # 2 min — CME Globex re-open (18:00–20:00 ET)
-    ORB_TOKYO_CHECK_INTERVAL = 2 * 60  # 2 min — Tokyo open (19:00–21:00 ET)
-    FOCUS_PUBLISH_INTERVAL = 30  # 30 seconds during active (throttled downstream)
-    STATUS_PUBLISH_INTERVAL = 10  # 10 seconds always
+    # Recurring interval configuration (seconds) — all ORB checks = 2 min
+    RUBY_INTERVAL = 5 * 60  # 5 min during active
+    GROK_INTERVAL = 15 * 60  # 15 min during active
+    RISK_CHECK_INTERVAL = 60  # 1 min during active
+    NO_TRADE_INTERVAL = 2 * 60  # 2 min during active
+    ORB_CHECK_INTERVAL = 2 * 60  # US open          09:30–11:00 ET
+    ORB_FRANKFURT_CHECK_INTERVAL = 2 * 60  # Frankfurt/Xetra  03:00–04:30 ET
+    ORB_LONDON_CHECK_INTERVAL = 2 * 60  # London open      03:00–05:00 ET
+    ORB_LONDON_NY_CHECK_INTERVAL = 2 * 60  # London-NY cross  08:00–10:00 ET
+    ORB_CME_CHECK_INTERVAL = 2 * 60  # CME Globex open  18:00–20:00 ET
+    ORB_SYDNEY_CHECK_INTERVAL = 2 * 60  # Sydney / ASX     18:30–20:30 ET
+    ORB_TOKYO_CHECK_INTERVAL = 2 * 60  # Tokyo / TSE      19:00–21:00 ET
+    ORB_SHANGHAI_CHECK_INTERVAL = 2 * 60  # Shanghai / HK    21:00–23:00 ET
+    ORB_CME_SETTLE_CHECK_INTERVAL = 2 * 60  # CME settlement   14:00–15:30 ET
+    FOCUS_PUBLISH_INTERVAL = 30  # 30 s during active (throttled downstream)
+    STATUS_PUBLISH_INTERVAL = 10  # 10 s always
 
-    # Sleep intervals per session (how long the main loop sleeps between cycles)
-    SLEEP_PRE_MARKET = 30.0  # check every 30s during pre-market
-    SLEEP_ACTIVE = 10.0  # check every 10s during active hours
-    SLEEP_OFF_HOURS = 60.0  # check every 60s during off-hours
+    # Sleep intervals per session
+    SLEEP_EVENING = 30.0  # check every 30 s during evening overnight ORBs
+    SLEEP_PRE_MARKET = 30.0  # check every 30 s during pre-market
+    SLEEP_ACTIVE = 10.0  # check every 10 s during active hours
+    SLEEP_OFF_HOURS = 60.0  # check every 60 s during off-hours
 
     def __init__(self) -> None:
         self._trackers: dict[ActionType, _ActionTracker] = {action: _ActionTracker() for action in ActionType}
@@ -150,17 +185,20 @@ class ScheduleManager:
 
     @staticmethod
     def get_session_mode(now: datetime | None = None) -> SessionMode:
-        """Determine current trading session based on ET time.
+        """Determine current trading session based on ET wall-clock time.
 
-        Boundaries:
-          - Pre-market:  00:00–03:00 ET
-          - Active:      03:00–12:00 ET  (London 03–08, London-NY 08–10, US 09:30–11)
-          - Off-hours:   12:00–00:00 ET  (includes overnight ORB windows 17–21 ET)
+        Globex-day boundaries (all ET, DST-aware via ZoneInfo):
+          - Evening    18:00–00:00 ET  overnight ORB windows (CME/Sydney/Tokyo/Shanghai)
+          - Pre-market 00:00–03:00 ET  daily focus + Grok briefing
+          - Active     03:00–12:00 ET  Frankfurt/London/LN-NY/US live trading
+          - Off-hours  12:00–18:00 ET  CNN training, backfill, backtest, CME settle ORB
         """
         if now is None:
             now = datetime.now(tz=_EST)
         hour = now.hour
-        if 0 <= hour < 3:
+        if 18 <= hour <= 23:
+            return SessionMode.EVENING
+        elif 0 <= hour < 3:
             return SessionMode.PRE_MARKET
         elif 3 <= hour < 12:
             return SessionMode.ACTIVE
@@ -176,7 +214,9 @@ class ScheduleManager:
     def sleep_interval(self) -> float:
         """How long the main loop should sleep between scheduler cycles."""
         session = self.current_session
-        if session == SessionMode.PRE_MARKET:
+        if session == SessionMode.EVENING:
+            return self.SLEEP_EVENING
+        elif session == SessionMode.PRE_MARKET:
             return self.SLEEP_PRE_MARKET
         elif session == SessionMode.ACTIVE:
             return self.SLEEP_ACTIVE
@@ -189,7 +229,7 @@ class ScheduleManager:
     ) -> list[ScheduledAction]:
         """Return ordered list of actions that should run right now.
 
-        Call this each engine loop iteration. It handles:
+        Call this each engine loop iteration.  It handles:
           - Session transitions (resets per-session trackers)
           - Day transitions (resets per-day trackers)
           - Interval-based recurring actions
@@ -217,7 +257,9 @@ class ScheduleManager:
         # Gather pending actions based on session
         pending: list[ScheduledAction] = []
 
-        if session == SessionMode.PRE_MARKET:
+        if session == SessionMode.EVENING:
+            pending.extend(self._get_evening_actions(ts, now))
+        elif session == SessionMode.PRE_MARKET:
             pending.extend(self._get_pre_market_actions(ts, today, now=now))
         elif session == SessionMode.ACTIVE:
             pending.extend(self._get_active_actions(ts, now))
@@ -286,26 +328,35 @@ class ScheduleManager:
         }
 
     def time_until_next_session(self, now: datetime | None = None) -> tuple[SessionMode, float]:
-        """Return the next session and seconds until it starts."""
+        """Return the next session and seconds until it starts.
+
+        Globex-day order: EVENING (18:00) → PRE_MARKET (00:00) → ACTIVE (03:00)
+                          → OFF_HOURS (12:00) → EVENING (18:00)
+        """
         if now is None:
             now = datetime.now(tz=_EST)
         hour = now.hour
 
-        if 0 <= hour < 5:
+        if 18 <= hour <= 23:
+            # In evening, next is pre-market at 00:00 (midnight)
+            next_session = SessionMode.PRE_MARKET
+            target_hour = 24
+        elif 0 <= hour < 3:
             # In pre-market, next is active at 03:00
             next_session = SessionMode.ACTIVE
-            target_hour = 5
-        elif 5 <= hour < 12:
+            target_hour = 3
+        elif 3 <= hour < 12:
             # In active, next is off-hours at 12:00
             next_session = SessionMode.OFF_HOURS
             target_hour = 12
         else:
-            # In off-hours, next is pre-market at 00:00 (next day)
-            next_session = SessionMode.PRE_MARKET
-            target_hour = 24  # midnight
+            # In off-hours (12:00–18:00), next is evening at 18:00
+            next_session = SessionMode.EVENING
+            target_hour = 18
 
         # Calculate seconds until target hour
-        seconds_remaining = (target_hour - hour - 1) * 3600
+        effective_hour = hour if hour < 24 else 0
+        seconds_remaining = (target_hour - effective_hour - 1) * 3600
         seconds_remaining += (60 - now.minute - 1) * 60
         seconds_remaining += 60 - now.second
         # Clamp to non-negative
@@ -316,6 +367,77 @@ class ScheduleManager:
     # ------------------------------------------------------------------
     # Internal: per-session action generators
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Internal: per-session action generators
+    # ------------------------------------------------------------------
+
+    def _get_evening_actions(
+        self,
+        ts: float,
+        now: datetime,
+    ) -> list[ScheduledAction]:
+        """Evening / overnight (18:00–00:00 ET): overnight ORB checks only.
+
+        Fires CME Globex open, Sydney/ASX, Tokyo/TSE, and Shanghai/HK ORB
+        checks every 2 minutes within their respective scan windows.
+        All other costly actions (backfill, CNN, etc.) are deferred to
+        off-hours (12:00–18:00 ET) so they don't compete with live data.
+        """
+        actions: list[ScheduledAction] = []
+        now_time = now.time()
+
+        from datetime import time as _dt_time
+
+        # --- CME Globex Re-Open ORB — 18:00–20:00 ET ---
+        if _dt_time(18, 0) <= now_time <= _dt_time(20, 0) and self._interval_elapsed(
+            ActionType.CHECK_ORB_CME, ts, self.ORB_CME_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB_CME,
+                    priority=1,
+                    description="Check CME Globex Open ORB (18:00–18:30 ET opening range)",
+                )
+            )
+
+        # --- Sydney / ASX Open ORB — 18:30–20:30 ET ---
+        if _dt_time(18, 30) <= now_time <= _dt_time(20, 30) and self._interval_elapsed(
+            ActionType.CHECK_ORB_SYDNEY, ts, self.ORB_SYDNEY_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB_SYDNEY,
+                    priority=2,
+                    description="Check Sydney/ASX Open ORB (18:30–19:00 ET opening range)",
+                )
+            )
+
+        # --- Tokyo / TSE Open ORB — 19:00–21:00 ET ---
+        if _dt_time(19, 0) <= now_time <= _dt_time(21, 0) and self._interval_elapsed(
+            ActionType.CHECK_ORB_TOKYO, ts, self.ORB_TOKYO_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB_TOKYO,
+                    priority=2,
+                    description="Check Tokyo/TSE Open ORB (19:00–19:30 ET opening range)",
+                )
+            )
+
+        # --- Shanghai / HK Open ORB — 21:00–23:00 ET ---
+        if _dt_time(21, 0) <= now_time <= _dt_time(23, 0) and self._interval_elapsed(
+            ActionType.CHECK_ORB_SHANGHAI, ts, self.ORB_SHANGHAI_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB_SHANGHAI,
+                    priority=2,
+                    description="Check Shanghai/HK Open ORB (21:00–21:30 ET opening range)",
+                )
+            )
+
+        return actions
 
     def _get_pre_market_actions(
         self,
@@ -363,11 +485,13 @@ class ScheduleManager:
         ts: float,
         now: datetime,
     ) -> list[ScheduledAction]:
-        """Active (03:00–12:00 ET): live recomputation + updates.
+        """Active (03:00–12:00 ET): live recomputation + ORB checks.
 
-        Sub-sessions:
-          - London Open  03:00–08:00 ET  (primary ORB window)
-          - US Open      08:00–12:00 ET  (equity ORB window)
+        Sub-sessions within the active window (ET wall-clock):
+          - Frankfurt/Xetra  03:00–04:30 ET  (08:00 CET / 09:00 CEST)
+          - London Open      03:00–05:00 ET  (primary ORB session)
+          - London-NY Cross  08:00–10:00 ET
+          - US Equity Open   09:30–11:00 ET
         """
         actions: list[ScheduledAction] = []
         today = now.date()
@@ -435,8 +559,21 @@ class ScheduleManager:
                 )
             )
 
+        # --- Frankfurt / Xetra Open ORB — every 2 min during 03:00–04:30 ET ---
+        # Xetra opens 08:00 CET (= 03:00 EST / 02:00 EDT) — fires at same ET
+        # time as London open, but uses frankfurt session asset list.
+        if _dt_time(3, 0) <= now_time <= _dt_time(4, 30) and self._interval_elapsed(
+            ActionType.CHECK_ORB_FRANKFURT, ts, self.ORB_FRANKFURT_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB_FRANKFURT,
+                    priority=6,
+                    description="Check Frankfurt/Xetra Open ORB (03:00–03:30 ET opening range)",
+                )
+            )
+
         # --- London Open ORB — every 2 min during 03:00–05:00 ET ---
-        # London opens 08:00 UTC = 03:00 ET. OR forms 03:00–03:30 ET.
         if _dt_time(3, 0) <= now_time <= _dt_time(5, 0) and self._interval_elapsed(
             ActionType.CHECK_ORB_LONDON, ts, self.ORB_LONDON_CHECK_INTERVAL
         ):
@@ -449,7 +586,6 @@ class ScheduleManager:
             )
 
         # --- London-NY Crossover ORB — every 2 min during 08:00–10:00 ET ---
-        # Both exchanges fully active. OR forms 08:00–08:30 ET.
         if _dt_time(8, 0) <= now_time <= _dt_time(10, 0) and self._interval_elapsed(
             ActionType.CHECK_ORB_LONDON_NY, ts, self.ORB_LONDON_NY_CHECK_INTERVAL
         ):
@@ -469,21 +605,18 @@ class ScheduleManager:
                 ScheduledAction(
                     action=ActionType.CHECK_ORB,
                     priority=6,
-                    description="Check US Equity Open ORB (09:30–10:00 OR)",
+                    description="Check US Equity Open ORB (09:30–10:00 ET OR)",
                 )
             )
 
         return actions
 
     def _get_off_hours_actions(self, ts: float, today: date | None = None) -> list[ScheduledAction]:
-        """Off-hours (12:00–00:00 ET): overnight ORBs, daily report, backfill, optimize, backtest.
+        """Off-hours (12:00–18:00 ET): CME settlement ORB, daily report, backfill, CNN training.
 
-        Overnight ORB windows (all wraps_midnight sessions):
-          - Sydney Open:   17:00–19:00 ET
-          - CME Globex:    18:00–20:00 ET
-          - Tokyo Open:    19:00–21:00 ET
-        These fire every 2 minutes within their scan windows, identical
-        to the daytime ORB checks.
+        The overnight ORB windows (CME Globex open, Sydney, Tokyo, Shanghai)
+        are now handled by _get_evening_actions() (18:00–00:00 ET).
+        This window handles the daytime settlement ORB and all batch tasks.
         """
         actions: list[ScheduledAction] = []
         session = SessionMode.OFF_HOURS.value
@@ -495,42 +628,16 @@ class ScheduleManager:
 
         from datetime import time as _dt_time
 
-        # --- Sydney Open ORB — every 2 min during 17:00–19:00 ET ---
-        # OR forms 17:00–17:30 ET (previous calendar day).
-        if _dt_time(17, 0) <= now_time <= _dt_time(19, 0) and self._interval_elapsed(
-            ActionType.CHECK_ORB_SYDNEY, ts, self.ORB_SYDNEY_CHECK_INTERVAL
+        # --- CME Settlement ORB — every 2 min during 14:00–15:30 ET ---
+        # Metals and energy settlement window; directional resolution before close.
+        if _dt_time(14, 0) <= now_time <= _dt_time(15, 30) and self._interval_elapsed(
+            ActionType.CHECK_ORB_CME_SETTLE, ts, self.ORB_CME_SETTLE_CHECK_INTERVAL
         ):
             actions.append(
                 ScheduledAction(
-                    action=ActionType.CHECK_ORB_SYDNEY,
+                    action=ActionType.CHECK_ORB_CME_SETTLE,
                     priority=2,
-                    description="Check Sydney Open ORB (17:00–17:30 ET opening range)",
-                )
-            )
-
-        # --- CME Globex Re-Open ORB — every 2 min during 18:00–20:00 ET ---
-        # OR forms 18:00–18:30 ET (previous calendar day, after settlement break).
-        if _dt_time(18, 0) <= now_time <= _dt_time(20, 0) and self._interval_elapsed(
-            ActionType.CHECK_ORB_CME, ts, self.ORB_CME_CHECK_INTERVAL
-        ):
-            actions.append(
-                ScheduledAction(
-                    action=ActionType.CHECK_ORB_CME,
-                    priority=2,
-                    description="Check CME Globex Open ORB (18:00–18:30 ET opening range)",
-                )
-            )
-
-        # --- Tokyo Open ORB — every 2 min during 19:00–21:00 ET ---
-        # OR forms 19:00–19:30 ET (previous calendar day).
-        if _dt_time(19, 0) <= now_time <= _dt_time(21, 0) and self._interval_elapsed(
-            ActionType.CHECK_ORB_TOKYO, ts, self.ORB_TOKYO_CHECK_INTERVAL
-        ):
-            actions.append(
-                ScheduledAction(
-                    action=ActionType.CHECK_ORB_TOKYO,
-                    priority=2,
-                    description="Check Tokyo Open ORB (19:00–19:30 ET opening range)",
+                    description="Check CME Settlement ORB (14:00–14:30 ET metals/energy window)",
                 )
             )
 
@@ -617,6 +724,10 @@ class ScheduleManager:
     # Internal: helpers
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Internal: helpers
+    # ------------------------------------------------------------------
+
     def _ran_today(self, action: ActionType, today: date) -> bool:
         """Check if action has already run today."""
         return self._trackers[action].last_run_date == today
@@ -670,6 +781,7 @@ class ScheduleManager:
     @staticmethod
     def _session_emoji(session: SessionMode) -> str:
         return {
+            SessionMode.EVENING: "🌃",
             SessionMode.PRE_MARKET: "🌙",
             SessionMode.ACTIVE: "🟢",
             SessionMode.OFF_HOURS: "⚙️",
