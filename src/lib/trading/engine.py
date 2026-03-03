@@ -767,7 +767,7 @@ class DashboardEngine:
                 provider=get_massive_provider(),
                 subscribe_trades=True,
                 subscribe_quotes=False,
-                use_broad_subscriptions=True,
+                use_broad_subscriptions=False,
             )
 
             # Register a callback that logs, buffers, and computes 1m signal quality

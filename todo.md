@@ -55,23 +55,26 @@
 
 ### 🔲 Priority 1 – Paper Trading & Monitoring (Do This Week)
 
-- [ ] **Start paper trading** on Sim100 (1 micro contract, MGC/MES/MNQ/6E/MBT) for 5–7 sessions.  
-- [ ] **Build Grafana dashboards** (leverage existing Prometheus + Redis):  
-  - Live ORB signals with CNN probability + chart thumbnail.  
-  - Risk metrics (daily P&L, exposure, consecutive losses).  
-  - Filter rejection rates + CNN confidence distribution.  
-  - Model performance (last retrain accuracy).  
-- [ ] **Add daily health report** (email or Grafana alert) with yesterday’s stats.
+- [ ] **Start paper trading** on Sim100 (1 micro contract, MGC/MES/MNQ/6E/MBT) for 5–7 sessions.
+  - Stack is ready: `bash scripts/paper_trade_start.sh` runs pre-flight checks + `docker compose up -d --build`
+  - **This is the only manual step remaining — run the script.**
+- [x] **Build Grafana dashboards** (leverage existing Prometheus + Redis):
+  - `config/grafana/orb-trading-dashboard.json` — full dashboard provisioned automatically
+  - Live ORB signals with CNN probability ✓
+  - Risk metrics (daily P&L, exposure, consecutive losses) ✓
+  - Filter rejection rates + CNN confidence distribution ✓
+  - Model performance (last retrain accuracy, `model_stale`, `model_last_retrain_epoch` gauges) ✓
+- [x] **Daily health report** — `scripts/daily_report.py` + `_handle_daily_report` in engine publishes to `engine:daily_report` Redis key; email via `_send_daily_report_email`; REST at `GET /audit/daily-report`.
 
 ---
 
-### 🔲 Priority 2 – Production Hardening (Next 7–10 Days)
+### ✅ Priority 2 – Production Hardening (Completed)
 
-- [ ] **GPU support in Docker** — switch to CUDA PyTorch wheels for faster inference.  
-- [ ] **Model selection logic** — auto-pick best model from `models/` (based on val accuracy + date).  
-- [ ] **Incremental dataset build** — nightly script to add new bars without full regeneration.  
-- [ ] **Centralized Redis helpers** — reduce duplication in `main.py` handlers.  
-- [ ] **Add health checks** for model existence + last retrain timestamp.
+- [x] **GPU support in Docker** — CUDA 12.8 base image + `.[gpu]` PyTorch wheels in `docker/engine/Dockerfile`.  
+- [x] **Model selection logic** — `_find_best_model()` in `breakout_cnn.py`: prefers champion → highest val_accuracy from meta JSON → newest mtime fallback. `_find_latest_model()` kept as alias.  
+- [x] **Incremental dataset build** — `scripts/incremental_dataset_build.py` (nightly, adds new bars without full regeneration).  
+- [x] **Centralized Redis helpers** — `src/lib/core/redis_helpers.py`: typed wrappers for pub/sub, key-value, streams; channel + key + TTL constants; `publish_and_cache()` combined helper.  
+- [x] **Health checks** for model existence + last retrain timestamp — `_check_model_health()` in `api/health.py` surfaces champion path, val_accuracy, promoted_at, stale flag; `model_stale` + `model_last_retrain_epoch` Prometheus gauges in `api/metrics.py`; retrain pipeline writes `engine:model_health` Redis key on promotion.
 
 ---
 

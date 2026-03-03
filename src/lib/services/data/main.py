@@ -100,6 +100,12 @@ from lib.services.data.api.analysis import (  # noqa: E402
 )
 from lib.services.data.api.audit import router as audit_router  # noqa: E402
 from lib.services.data.api.auth import require_api_key  # noqa: E402
+from lib.services.data.api.bars import (  # noqa: E402
+    router as bars_router,
+)
+from lib.services.data.api.bars import (  # noqa: E402
+    startup_warm_caches,
+)
 from lib.services.data.api.cnn import router as cnn_router  # noqa: E402
 from lib.services.data.api.dashboard import (  # noqa: E402
     router as dashboard_router,
@@ -287,6 +293,13 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.info("Primary data source: yfinance (default)")
 
+    # 6. Warm Redis bar caches from Postgres so the dataset generator and
+    #    engine have data available immediately without waiting for a fill.
+    try:
+        startup_warm_caches(days_back=7)
+    except Exception as exc:
+        logger.warning("Startup cache warm failed (non-fatal): %s", exc)
+
     logger.info("=" * 60)
     logger.info("  Data Service ready — accepting requests")
     logger.info("=" * 60)
@@ -379,6 +392,12 @@ app.include_router(journal_router, prefix="/journal", tags=["Journal"])
 # Market Data: /data/ohlcv, /data/daily, /data/source  (OHLCV proxy for thin client)
 app.include_router(market_data_router, prefix="/data", tags=["Market Data"])
 
+# Bars: /bars/{symbol}, /bars/bulk, /bars/status, /bars/assets
+#       /bars/{symbol}/gaps, /bars/{symbol}/fill, /bars/fill/all, /bars/fill/status
+# Historical bar store — serves data from Postgres with auto gap-fill from Massive.
+# Primary data source for CNN dataset generation, engine backtesting, and web charts.
+app.include_router(bars_router, tags=["Bars"])
+
 # Health: /health, /metrics  (no prefix — top-level)
 app.include_router(health_router, tags=["Health"])
 
@@ -435,6 +454,14 @@ def api_info():
             "cnn_retrain_log": "/cnn/retrain/log",
             "cnn_retrain_cancel": "/cnn/retrain/cancel",
             "cnn_history": "/cnn/history",
+            "bars": "/bars/{symbol}",
+            "bars_bulk": "/bars/bulk",
+            "bars_status": "/bars/status",
+            "bars_assets": "/bars/assets",
+            "bars_gaps": "/bars/{symbol}/gaps",
+            "bars_fill": "/bars/{symbol}/fill",
+            "bars_fill_all": "/bars/fill/all",
+            "bars_fill_status": "/bars/fill/status",
         },
     }
 

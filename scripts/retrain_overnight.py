@@ -136,11 +136,16 @@ class RetrainConfig:
     """All tunables for the overnight retraining pipeline."""
 
     # Dataset generation
-    symbols: list[str] = field(default_factory=lambda: ["MGC", "MES", "MNQ"])
+    symbols: list[str] = field(default_factory=lambda: ["MGC", "MES", "MNQ", "MCL", "6E", "MBT"])
     days_back: int = 90
     skip_existing_images: bool = True
     chart_dpi: int = 150
-    bars_source: str = "cache"
+    # "db"     — read from Postgres/SQLite historical_bars table (preferred;
+    #             populated by the data service's nightly backfill + auto-fill).
+    # "cache"  — read from Redis (limited history, short TTL).
+    # "massive"— call Massive REST API directly (live, no DB caching).
+    # "csv"    — read from local CSV files (offline / synthetic data).
+    bars_source: str = "db"
     orb_session: str = "both"  # "us", "london", or "both"
 
     # Train/val split
@@ -1036,6 +1041,31 @@ def stage_promote(cfg: RetrainConfig, result: RetrainResult) -> bool:
             CHAMPION_PATH,
             result.best_val_accuracy,
         )
+
+        # Publish model health snapshot to Redis so /health + Grafana pick it up
+        # immediately without waiting for the next Prometheus scrape cycle.
+        try:
+            from lib.core.redis_helpers import KEY_MODEL_HEALTH, TTL_DAY, cache_set_json
+
+            health_payload = {
+                "status": "ok",
+                "available": True,
+                "champion_path": CHAMPION_PATH,
+                "val_accuracy": result.best_val_accuracy,
+                "precision": result.best_precision,
+                "recall": result.best_recall,
+                "train_samples": result.train_samples,
+                "val_samples": result.val_samples,
+                "epochs_trained": result.training_epochs_run,
+                "promoted_at": _now_et().isoformat(),
+                "run_id": result.run_id,
+                "stale": False,
+            }
+            cache_set_json(KEY_MODEL_HEALTH, health_payload, TTL_DAY)
+            logger.info("Model health published to Redis key %s", KEY_MODEL_HEALTH)
+        except Exception as _rhe:
+            logger.debug("Could not publish model health to Redis (non-fatal): %s", _rhe)
+
         return True
 
     except Exception as exc:

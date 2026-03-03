@@ -1,25 +1,31 @@
 """
-Dashboard API Router (TASK-301 / TASK-303 / TASK-501)
-=======================================================
-Serves the HTMX dashboard and HTML fragment endpoints.
+Dashboard API Router
+=====================
+ORB-centric trading dashboard for NinjaTrader + Ruby indicator workflow.
 
-Day 4 additions (TASK-501):
-  - Positions panel now shows risk status, total risk % of account,
-    and red warning banner when total risk > 5%.
-  - Risk status bar sourced from engine:risk_status Redis key.
-  - Grok compact update panel (TASK-601) shows latest ≤8-line summary.
+Layout:
+  - Header bar: service health dots + market session clock strip
+  - Session strip: live visual timeline of all major futures sessions
+    with overlap highlighting and current-time cursor
+  - Main (2/3): ORB detection cards per symbol, with CNN probability,
+    filter results, and NT8/Ruby metric validation side-by-side
+  - Sidebar (1/3): live positions + P&L, risk status, market events feed,
+    Grok brief, CNN model status
+  - Footer: session schedule reference
 
 Endpoints:
-    GET /                     — Full HTML dashboard page
-    GET /api/focus            — All asset focus data as JSON
-    GET /api/focus/html       — All asset cards as HTML fragments
-    GET /api/focus/{symbol}   — Single asset card HTML fragment
-    GET /api/positions/html   — Live positions panel HTML
-    GET /api/risk/html        — Risk status panel HTML
-    GET /api/grok/html        — Grok compact update panel HTML
-    GET /api/alerts/html      — Alerts panel HTML
-    GET /api/time             — Formatted time string with session indicator
-    GET /api/no-trade         — No-trade banner HTML (if applicable)
+    GET /                       — Full HTML dashboard page
+    GET /api/focus              — All asset focus data as JSON
+    GET /api/focus/html         — All asset cards as HTML fragments
+    GET /api/focus/{symbol}     — Single asset card HTML fragment
+    GET /api/positions/html     — Live positions panel HTML
+    GET /api/risk/html          — Risk status panel HTML
+    GET /api/grok/html          — Grok compact update panel HTML
+    GET /api/alerts/html        — Alerts panel HTML
+    GET /api/orb/html           — ORB panel HTML
+    GET /api/market-session/html — Session clock strip HTML
+    GET /api/time               — Formatted time string with session indicator
+    GET /api/no-trade           — No-trade banner HTML (if applicable)
 """
 
 import contextlib
@@ -106,10 +112,10 @@ def _get_session_info() -> dict[str, str]:
     """Get current session mode and display info.
 
     Boundaries (all Eastern Time):
-      - Pre-market:          00:00–03:00
+      - Pre-market:           00:00–03:00
       - Active / London Open: 03:00–08:00
       - Active / US Open:     08:00–12:00
-      - Off-hours:           12:00–00:00
+      - Off-hours:            12:00–00:00
     """
     now = datetime.now(tz=_EST)
     hour = now.hour
@@ -144,6 +150,152 @@ def _get_session_info() -> dict[str, str]:
         "date": now.strftime("%A, %B %d, %Y"),
         "time_et": now.strftime("%I:%M:%S %p ET"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Market session definitions (all times in ET, displayed on the strip)
+# Each session: (label, short, start_hour_ET, end_hour_ET, color_class, bg_class)
+# ---------------------------------------------------------------------------
+_SESSIONS = [
+    # (label,          short,   start, end,  bar_color,           text_color,       overlap_note)
+    ("Sydney", "SYD", 17, 2, "bg-slate-600", "text-slate-300", ""),
+    ("Tokyo", "TYO", 19, 4, "bg-indigo-700", "text-indigo-200", ""),
+    ("London", "LON", 3, 12, "bg-blue-700", "text-blue-200", ""),
+    ("US Equity", "US", 9, 16, "bg-emerald-700", "text-emerald-200", ""),
+    ("US Futures", "CME", 18, 17, "bg-teal-800", "text-teal-300", ""),  # ~23h
+]
+
+# ORB window markers shown on the session strip
+_ORB_WINDOWS = [
+    ("London ORB", 3, 3.5, "border-blue-400"),
+    ("US ORB", 9.5, 10.0, "border-emerald-400"),
+]
+
+
+def _render_session_strip() -> str:
+    """Render the horizontal market session timeline strip.
+
+    Shows a 24-hour bar (00:00–24:00 ET) with coloured session blocks,
+    overlap highlights, ORB window markers, and a live cursor for now.
+    Updated client-side via JS every minute.
+    """
+    # Build session blocks as percentage offsets (each hour = 100/24 %)
+    HOUR_PCT = 100.0 / 24.0
+
+    def _pct(h: float) -> str:
+        return f"{h * HOUR_PCT:.3f}%"
+
+    # Session blocks HTML
+    blocks = ""
+    # Sydney wraps midnight: render two segments
+    # We use inline style for pixel-perfect positioning
+    session_rows = [
+        # label,  short, start, end(ET), color_tw
+        ("Sydney", "SYD", 17, 26, "#334155"),  # slate-700, end=26 means wraps to 02:00
+        ("Tokyo", "TYO", 19, 28, "#3730a3"),  # indigo-800, wraps to 04:00
+        ("London", "LON", 3, 12, "#1d4ed8"),  # blue-700
+        ("US Equity", "US", 9, 16, "#047857"),  # emerald-800 — overlaps London 09–12
+        ("CME 23h", "CME", 18, 41, "#134e4a"),  # teal-900, wraps full day minus 1h
+    ]
+
+    overlap_highlights = ""
+    # London + US overlap: 09:30–12:00 ET  (9.5–12)
+    overlap_highlights += f"""
+        <div class="absolute top-0 bottom-0 border-l border-r border-yellow-400/30 bg-yellow-400/10"
+             style="left:{_pct(9.5)};width:{_pct(2.5)}"
+             title="London/US Overlap 09:30–12:00 ET"></div>
+    """
+
+    # ORB markers
+    orb_markers = ""
+    for orb_label, start_h, end_h, border_cls in _ORB_WINDOWS:
+        orb_markers += f"""
+        <div class="absolute top-0 bottom-0 {border_cls} border-l-2 border-r-2 bg-white/5"
+             style="left:{_pct(start_h)};width:{_pct(end_h - start_h)}"
+             title="{orb_label}">
+            <span class="absolute top-0.5 left-0.5 text-[8px] text-white/60 leading-none whitespace-nowrap">ORB</span>
+        </div>
+        """
+
+    # Hour tick marks (every 3h)
+    ticks = ""
+    for h in range(0, 25, 3):
+        label_h = h % 24
+        ticks += f"""
+        <div class="absolute top-0 bottom-0 border-l border-zinc-700/50"
+             style="left:{_pct(h)}">
+            <span class="absolute -bottom-4 text-[9px] text-zinc-600 -translate-x-1/2">{label_h:02d}</span>
+        </div>
+        """
+
+    # Session label bars — stacked in two rows to avoid overlap
+    # Row 0: Sydney, Tokyo, CME (background/futures)
+    # Row 1: London, US Equity (foreground/primary)
+    row0 = [
+        ("Sydney", 17, 26, "#1e293b", "#94a3b8"),
+        ("Tokyo", 19, 28, "#1e1b4b", "#a5b4fc"),
+        ("CME 23h", 18, 41, "#042f2e", "#5eead4"),
+    ]
+    row1 = [("London", 3, 12, "#1e3a5f", "#93c5fd"), ("US", 9, 16, "#052e16", "#6ee7b7")]
+
+    def _bar(label: str, s: int, e: int, bg: str, fg: str, row: int) -> str:
+        # clamp to 0–24
+        s24 = s % 24
+        e24 = e % 24 if e <= 24 else 24
+        width = (e - s) if e <= 24 else (24 - s)
+        width = min(width, 24 - s24)
+        top = "1px" if row == 0 else "13px"
+        height = "10px"
+        return (
+            f'<div class="absolute rounded-sm flex items-center px-1 overflow-hidden"'
+            f' style="left:{_pct(s24)};width:{_pct(width)};top:{top};height:{height};'
+            f'background:{bg};border:1px solid {fg}33" title="{label}">'
+            f'<span style="color:{fg};font-size:7px;white-space:nowrap;line-height:1">{label}</span>'
+            f"</div>"
+        )
+
+    bars_html = ""
+    for label, s, e, bg, fg in row0:
+        bars_html += _bar(label, s, e, bg, fg, 0)
+    for label, s, e, bg, fg in row1:
+        bars_html += _bar(label, s, e, bg, fg, 1)
+
+    return f"""
+    <div id="session-strip"
+         class="bg-zinc-900/80 border border-zinc-800 rounded-lg px-4 pt-3 pb-6 mb-4 relative overflow-hidden"
+         hx-get="/api/market-session/html"
+         hx-trigger="every 60s"
+         hx-swap="outerHTML">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Market Sessions (ET)</span>
+            <div class="flex items-center gap-3 text-[9px] text-zinc-600">
+                <span><span class="inline-block w-2 h-2 rounded-sm bg-blue-700 mr-1"></span>London</span>
+                <span><span class="inline-block w-2 h-2 rounded-sm bg-emerald-700 mr-1"></span>US Equity</span>
+                <span><span class="inline-block w-2 h-2 rounded-sm bg-yellow-400/30 border border-yellow-400/40 mr-1"></span>Overlap</span>
+                <span><span class="inline-block w-1 h-2 border-l-2 border-blue-400 mr-1"></span>ORB Window</span>
+            </div>
+        </div>
+        <!-- Timeline bar -->
+        <div class="relative h-6 w-full" id="session-bar-inner">
+            <!-- Background -->
+            <div class="absolute inset-0 bg-zinc-800/60 rounded"></div>
+            {overlap_highlights}
+            {bars_html}
+            {orb_markers}
+            {ticks}
+            <!-- Live cursor — positioned by JS -->
+            <div id="session-cursor"
+                 class="absolute top-0 bottom-0 w-0.5 bg-white/80 z-10 pointer-events-none"
+                 style="left:0%">
+                <div class="absolute -top-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-white rounded-full"></div>
+            </div>
+        </div>
+        <!-- Open/closed badges — updated by JS -->
+        <div id="session-badges" class="flex flex-wrap gap-1.5 mt-3">
+            <span class="text-[9px] text-zinc-600 self-center">Loading sessions...</span>
+        </div>
+    </div>
+    """
 
 
 def _get_positions() -> list[dict[str, Any]]:
@@ -421,147 +573,109 @@ def _render_positions_panel(
     positions: list[dict[str, Any]],
     risk_status: dict[str, Any] | None = None,
 ) -> str:
-    """Render live positions panel with risk status as HTML fragment (TASK-501).
+    """Render condensed live positions + daily P&L panel."""
+    daily_pnl = 0.0
+    can_trade = True
+    block_reason = ""
+    consecutive = 0
+    open_count = 0
+    max_trades = 2
+    risk_pct = 0.0
 
-    Shows:
-      - Each position: symbol, LONG/SHORT, qty, avg price, unrealized P&L
-      - Total risk % prominently (sum of position risks / account value)
-      - Red warning banner if total risk > 5% of account
-      - Risk rules status bar (daily P&L, open trades, block reason)
-    """
-    # ---- Risk status bar (always shown) ----
-    risk_bar = ""
+    block_html = ""
     if risk_status:
         daily_pnl = risk_status.get("daily_pnl", 0)
-        daily_color = "text-green-400" if daily_pnl >= 0 else "text-red-400"
-        open_count = risk_status.get("open_trade_count", 0)
-        max_trades = risk_status.get("max_open_trades", 2)
-        risk_pct = risk_status.get("risk_pct_of_account", 0)
         can_trade = risk_status.get("can_trade", True)
         block_reason = risk_status.get("block_reason", "")
         consecutive = risk_status.get("consecutive_losses", 0)
-        is_overnight = risk_status.get("is_overnight_warning", False)
-
-        # Risk percentage color + warning threshold
-        if risk_pct > 5:
-            risk_pct_color = "text-red-400 font-bold"
-            risk_pct_emoji = "🔴"
-        elif risk_pct > 3:
-            risk_pct_color = "text-yellow-400"
-            risk_pct_emoji = "🟡"
-        else:
-            risk_pct_color = "text-green-400"
-            risk_pct_emoji = "🟢"
-
-        # Risk warning banner (> 5% of account)
-        risk_warning_html = ""
-        if risk_pct > 5:
-            risk_warning_html = f"""
-            <div class="bg-red-900/60 border border-red-500 rounded px-3 py-2 mb-2 text-center">
-                <span class="text-red-300 text-xs font-bold">
-                    ⚠️ TOTAL RISK {risk_pct:.1f}% OF ACCOUNT — EXCEEDS 5% LIMIT
-                </span>
-            </div>
-            """
-
-        # Overnight warning
-        overnight_html = ""
-        if is_overnight:
-            overnight_html = """
-            <div class="bg-yellow-900/60 border border-yellow-600 rounded px-3 py-2 mb-2 text-center">
-                <span class="text-yellow-300 text-xs font-bold">
-                    ⏰ SESSION ENDING — Close or protect open positions
-                </span>
-            </div>
-            """
-
-        # Trade block banner
-        block_html = ""
+        open_count = risk_status.get("open_trade_count", 0)
+        max_trades = risk_status.get("max_open_trades", 2)
+        risk_pct = risk_status.get("risk_pct_of_account", 0)
         if not can_trade and block_reason:
             block_html = f"""
-            <div class="bg-red-900/40 border border-red-700 rounded px-3 py-1.5 mb-2">
+            <div class="bg-red-900/40 border border-red-700 rounded px-2 py-1 mb-2">
                 <span class="text-red-400 text-xs">🚫 {block_reason}</span>
             </div>
             """
 
-        risk_bar = f"""
-        {risk_warning_html}{overnight_html}{block_html}
-        <div class="grid grid-cols-4 gap-2 mb-3 text-xs">
-            <div class="bg-zinc-800/60 rounded p-1.5 text-center">
-                <div class="text-zinc-500">Daily P&L</div>
-                <div class="{daily_color} font-mono font-bold">${daily_pnl:,.2f}</div>
-            </div>
-            <div class="bg-zinc-800/60 rounded p-1.5 text-center">
-                <div class="text-zinc-500">Trades</div>
-                <div class="text-zinc-200 font-mono">{open_count}/{max_trades}</div>
-            </div>
-            <div class="bg-zinc-800/60 rounded p-1.5 text-center">
-                <div class="text-zinc-500">Risk %</div>
-                <div class="{risk_pct_color} font-mono">{risk_pct_emoji} {risk_pct:.1f}%</div>
-            </div>
-            <div class="bg-zinc-800/60 rounded p-1.5 text-center">
-                <div class="text-zinc-500">L-Streak</div>
-                <div class="{"text-red-400" if consecutive > 1 else "text-zinc-200"} font-mono">{consecutive}</div>
-            </div>
-        </div>
-        """
+    daily_color = "text-green-400" if daily_pnl >= 0 else "text-red-400"
+    pnl_sign = "+" if daily_pnl >= 0 else ""
+    risk_color = "text-red-400 font-bold" if risk_pct > 5 else ("text-yellow-400" if risk_pct > 3 else "text-green-400")
+    trade_color = "text-yellow-400" if open_count >= max_trades else "text-zinc-200"
+    streak_color = "text-red-400" if consecutive > 1 else "text-zinc-400"
 
-    # ---- Empty state ----
+    # Stats row
+    stats_html = f"""
+    <div class="grid grid-cols-4 gap-1 mb-2 text-center">
+        <div class="bg-zinc-800/60 rounded py-1">
+            <div class="text-[9px] text-zinc-500">Daily P&L</div>
+            <div class="{daily_color} font-mono text-xs font-bold">{pnl_sign}${daily_pnl:,.0f}</div>
+        </div>
+        <div class="bg-zinc-800/60 rounded py-1">
+            <div class="text-[9px] text-zinc-500">Positions</div>
+            <div class="{trade_color} font-mono text-xs">{open_count}/{max_trades}</div>
+        </div>
+        <div class="bg-zinc-800/60 rounded py-1">
+            <div class="text-[9px] text-zinc-500">Exposure</div>
+            <div class="{risk_color} font-mono text-xs">{risk_pct:.1f}%</div>
+        </div>
+        <div class="bg-zinc-800/60 rounded py-1">
+            <div class="text-[9px] text-zinc-500">L-Streak</div>
+            <div class="{streak_color} font-mono text-xs">{consecutive}</div>
+        </div>
+    </div>
+    """
+
     if not positions:
         return f"""
-        <div id="positions-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+        <div id="positions-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
              hx-swap-oob="true">
-            <h3 class="text-sm font-semibold text-zinc-400 mb-2">LIVE POSITIONS</h3>
-            {risk_bar}
-            <div class="flex items-center gap-2 text-zinc-500">
-                <span class="text-green-500">✓</span>
-                <span>No open positions</span>
+            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">Positions &amp; P&amp;L</h3>
+            {block_html}{stats_html}
+            <div class="text-xs text-zinc-600 flex items-center gap-1.5">
+                <span class="text-green-500">✓</span> No open positions
             </div>
         </div>
         """
 
-    # ---- Position rows ----
     rows = ""
     total_pnl = 0.0
     for pos in positions:
         sym = pos.get("symbol", pos.get("instrument", "?"))
-        side = pos.get("side", pos.get("direction", "?"))
+        side = pos.get("side", pos.get("direction", "?")).upper()
         qty = pos.get("quantity", pos.get("contracts", 0))
         avg_price = pos.get("avgPrice", pos.get("avg_price", pos.get("entry", 0)))
         unrealized = pos.get("unrealizedPnL", pos.get("unrealized_pnl", pos.get("pnl", 0)))
         total_pnl += unrealized
-
-        side_color = "text-green-400" if side.upper() in ("LONG", "BUY") else "text-red-400"
+        side_color = "text-green-400" if side in ("LONG", "BUY") else "text-red-400"
         pnl_color = "text-green-400" if unrealized >= 0 else "text-red-400"
-
         rows += f"""
-        <tr class="border-b border-zinc-800">
-            <td class="py-1 text-white font-mono text-sm">{sym}</td>
-            <td class="py-1 {side_color} text-sm font-semibold">{side.upper()}</td>
-            <td class="py-1 text-zinc-300 text-sm text-center">{qty}</td>
-            <td class="py-1 text-zinc-300 font-mono text-sm text-right">{avg_price:,.2f}</td>
-            <td class="py-1 {pnl_color} font-mono text-sm text-right">${unrealized:,.2f}</td>
+        <tr class="border-b border-zinc-800/60">
+            <td class="py-0.5 text-white font-mono text-xs">{sym}</td>
+            <td class="py-0.5 {side_color} text-xs font-semibold">{side}</td>
+            <td class="py-0.5 text-zinc-300 text-xs text-center">{qty}</td>
+            <td class="py-0.5 text-zinc-400 font-mono text-xs text-right">{avg_price:,.2f}</td>
+            <td class="py-0.5 {pnl_color} font-mono text-xs text-right font-bold">${unrealized:,.2f}</td>
         </tr>
         """
 
     total_color = "text-green-400" if total_pnl >= 0 else "text-red-400"
-
     return f"""
-    <div id="positions-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+    <div id="positions-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
          hx-swap-oob="true">
         <div class="flex items-center justify-between mb-2">
-            <h3 class="text-sm font-semibold text-zinc-400">LIVE POSITIONS</h3>
-            <span class="{total_color} font-mono font-bold">${total_pnl:,.2f}</span>
+            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Positions &amp; P&amp;L</h3>
+            <span class="{total_color} font-mono text-xs font-bold">Open: ${total_pnl:,.2f}</span>
         </div>
-        {risk_bar}
+        {block_html}{stats_html}
         <table class="w-full">
             <thead>
-                <tr class="text-xs text-zinc-500 border-b border-zinc-700">
-                    <th class="text-left py-1">Symbol</th>
-                    <th class="text-left py-1">Side</th>
-                    <th class="text-center py-1">Qty</th>
-                    <th class="text-right py-1">Avg Price</th>
-                    <th class="text-right py-1">P&L</th>
+                <tr class="text-[9px] text-zinc-600 border-b border-zinc-700">
+                    <th class="text-left pb-0.5">Sym</th>
+                    <th class="text-left pb-0.5">Side</th>
+                    <th class="text-center pb-0.5">Qty</th>
+                    <th class="text-right pb-0.5">Avg</th>
+                    <th class="text-right pb-0.5">P&amp;L</th>
                 </tr>
             </thead>
             <tbody>{rows}</tbody>
@@ -571,13 +685,13 @@ def _render_positions_panel(
 
 
 def _render_risk_panel(risk_status: dict[str, Any] | None) -> str:
-    """Render standalone risk status panel as HTML fragment."""
+    """Render condensed risk rules panel."""
     if not risk_status:
         return """
-        <div id="risk-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+        <div id="risk-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
              hx-swap-oob="true">
-            <h3 class="text-sm font-semibold text-zinc-400 mb-2">RISK STATUS</h3>
-            <div class="text-zinc-500 text-sm">Waiting for risk engine...</div>
+            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">Risk Rules</h3>
+            <div class="text-zinc-600 text-xs">Waiting for risk engine...</div>
         </div>
         """
 
@@ -585,101 +699,80 @@ def _render_risk_panel(risk_status: dict[str, Any] | None) -> str:
     max_daily = risk_status.get("max_daily_loss", -500)
     risk_per_trade = risk_status.get("max_risk_per_trade", 375)
     can_trade = risk_status.get("can_trade", True)
-    block_reason = risk_status.get("block_reason", "")
-    risk_pct = risk_status.get("risk_pct_of_account", 0)
     rules = risk_status.get("rules", {})
 
-    status_emoji = "🟢" if can_trade else "🔴"
-    status_text = "CLEAR" if can_trade else "BLOCKED"
     status_color = "text-green-400" if can_trade else "text-red-400"
+    status_dot = "bg-green-500" if can_trade else "bg-red-500"
+    status_text = "CLEAR" if can_trade else "BLOCKED"
     pnl_color = "text-green-400" if daily_pnl >= 0 else "text-red-400"
-
-    # Daily P&L progress bar (relative to max daily loss)
     pnl_pct = min(abs(daily_pnl / max_daily) * 100, 100) if max_daily != 0 else 0
-    pnl_bar_color = "bg-green-500" if daily_pnl >= 0 else ("bg-red-500" if pnl_pct > 60 else "bg-yellow-500")
-
-    block_html = ""
-    if not can_trade:
-        block_html = f"""
-        <div class="bg-red-900/40 border border-red-700 rounded px-3 py-1.5 mt-2">
-            <span class="text-red-400 text-xs">🚫 {block_reason}</span>
-        </div>
-        """
+    bar_color = "bg-green-500" if daily_pnl >= 0 else ("bg-red-500" if pnl_pct > 60 else "bg-yellow-500")
 
     return f"""
-    <div id="risk-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+    <div id="risk-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
          hx-swap-oob="true">
         <div class="flex items-center justify-between mb-2">
-            <h3 class="text-sm font-semibold text-zinc-400">RISK STATUS</h3>
-            <span class="{status_color} text-sm font-bold">{status_emoji} {status_text}</span>
+            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Risk Rules</h3>
+            <span class="flex items-center gap-1 {status_color} text-xs font-bold">
+                <span class="w-1.5 h-1.5 rounded-full {status_dot} inline-block"></span>
+                {status_text}
+            </span>
         </div>
-
-        <div class="space-y-2 text-xs">
-            <div>
-                <div class="flex justify-between text-zinc-400 mb-0.5">
-                    <span>Daily P&L</span>
-                    <span class="{pnl_color} font-mono">${daily_pnl:,.2f} / ${max_daily:,.2f}</span>
-                </div>
-                <div class="w-full bg-zinc-700 rounded-full h-1.5">
-                    <div class="{pnl_bar_color} h-1.5 rounded-full transition-all duration-500"
-                         style="width: {pnl_pct:.0f}%"></div>
-                </div>
+        <div class="mb-1.5">
+            <div class="flex justify-between text-[10px] text-zinc-500 mb-0.5">
+                <span>Daily P&amp;L</span>
+                <span class="{pnl_color} font-mono">${daily_pnl:,.0f} / ${max_daily:,.0f}</span>
             </div>
-            <div class="grid grid-cols-2 gap-2">
-                <div class="text-zinc-400">Max risk/trade: <span class="text-zinc-200 font-mono">${risk_per_trade:,.0f}</span></div>
-                <div class="text-zinc-400">Exposure: <span class="text-zinc-200 font-mono">{risk_pct:.1f}%</span></div>
-                <div class="text-zinc-400">Cutoff: <span class="text-zinc-200 font-mono">{rules.get("no_entry_after", "10:00")} ET</span></div>
-                <div class="text-zinc-400">Close by: <span class="text-zinc-200 font-mono">{rules.get("session_end", "12:00")} ET</span></div>
+            <div class="w-full bg-zinc-700 rounded-full h-1">
+                <div class="{bar_color} h-1 rounded-full" style="width:{pnl_pct:.0f}%"></div>
             </div>
         </div>
-        {block_html}
+        <div class="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-zinc-500">
+            <div>Max/trade: <span class="text-zinc-300 font-mono">${risk_per_trade:,.0f}</span></div>
+            <div>No entry: <span class="text-zinc-300 font-mono">{rules.get("no_entry_after", "10:00")} ET</span></div>
+            <div>Close by: <span class="text-zinc-300 font-mono">{rules.get("session_end", "12:00")} ET</span></div>
+        </div>
     </div>
     """
 
 
 def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
-    """Render the Grok compact update panel as HTML fragment (TASK-601)."""
+    """Render condensed Grok AI brief panel."""
     if not grok_data:
         return """
-        <div id="grok-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+        <div id="grok-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
              hx-swap-oob="true">
-            <h3 class="text-sm font-semibold text-zinc-400 mb-2">🤖 GROK UPDATE</h3>
-            <div class="text-zinc-500 text-sm">Waiting for next update...</div>
+            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">🤖 AI Brief</h3>
+            <div class="text-zinc-600 text-xs">Waiting for next update...</div>
         </div>
         """
 
     text = grok_data.get("text", "")
     time_et = grok_data.get("time_et", "")
 
-    # Convert the compact text to styled HTML lines
     lines_html = ""
     for line in text.split("\n"):
         stripped = line.strip()
         if not stripped:
-            lines_html += '<div class="h-1"></div>'
             continue
         if stripped.upper().startswith("DO NOW"):
-            # Highlight the DO NOW line
-            lines_html += f'<div class="text-yellow-300 font-bold text-sm mt-1">{stripped}</div>'
+            lines_html += f'<div class="text-yellow-300 font-bold text-[10px] mt-1 border-l-2 border-yellow-400 pl-1.5">{stripped}</div>'
         else:
-            # Asset status line — detect emoji for coloring
-            css = "text-zinc-200"
+            css = "text-zinc-400"
             if "🟢" in stripped:
                 css = "text-green-300"
             elif "🔴" in stripped:
                 css = "text-red-300"
-            elif "⚪" in stripped:
-                css = "text-zinc-400"
-            lines_html += f'<div class="{css} font-mono text-xs">{stripped}</div>'
+            lines_html += f'<div class="{css} font-mono text-[10px]">{stripped}</div>'
 
     return f"""
-    <div id="grok-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+    <div id="grok-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
          hx-swap-oob="true">
-        <div class="flex items-center justify-between mb-2">
-            <h3 class="text-sm font-semibold text-zinc-400">🤖 GROK UPDATE</h3>
-            <span class="text-xs text-zinc-500">{time_et}</span>
+        <div class="flex items-center justify-between mb-1.5">
+            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">🤖 AI Brief</h3>
+            <span class="text-[9px] text-zinc-600">{time_et}</span>
         </div>
-        <div class="space-y-0.5">
+        <div class="space-y-0.5 max-h-28 overflow-y-auto">
             {lines_html}
         </div>
     </div>
@@ -877,6 +970,21 @@ def _render_orb_panel(orb_data: dict[str, Any] | None) -> str:
     """
 
 
+def _render_market_events_panel() -> str:
+    """Render a live market events / activity feed panel for the sidebar."""
+    return """
+    <div id="market-events-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3">
+        <div class="flex items-center justify-between mb-1.5">
+            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Market Events</h3>
+            <span class="text-[9px] text-zinc-600" id="events-ts">—</span>
+        </div>
+        <div id="market-events-feed" class="space-y-1 max-h-36 overflow-y-auto text-[10px]">
+            <div class="text-zinc-600">Listening for ORB signals, fills, and alerts...</div>
+        </div>
+    </div>
+    """
+
+
 def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str, str]) -> str:
     """Render the complete dashboard HTML page."""
     # Asset cards grid
@@ -901,21 +1009,27 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     # Determine if we're in off-hours (hide trading panels)
     is_off_hours = session.get("mode") == "off-hours"
 
-    # Positions panel with risk status (TASK-501)
+    # Positions panel with risk status
     positions = _get_positions()
     risk_status = _get_risk_status()
     positions_html = _render_positions_panel(positions, risk_status=risk_status)
 
-    # Risk status panel
+    # Risk panel
     risk_html = _render_risk_panel(risk_status)
 
-    # Grok compact update panel (TASK-601)
+    # Grok brief panel
     grok_data = _get_grok_update()
     grok_html = _render_grok_panel(grok_data)
 
-    # Opening Range Breakout panel (TASK-801)
+    # ORB panel
     orb_data = _get_orb_data()
     orb_html = _render_orb_panel(orb_data)
+
+    # Session strip
+    session_strip_html = _render_session_strip()
+
+    # Market events panel
+    market_events_html = _render_market_events_panel()
 
     # Focus summary
     total = focus_data.get("total_assets", 0) if focus_data else 0
@@ -933,10 +1047,8 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Futures Trading Co-Pilot</title>
+    <title>ORB Co-Pilot</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
-
-    <!-- Suppress Tailwind CDN production warning before it loads -->
     <script>
         (function() {{
             var origWarn = console.warn;
@@ -946,536 +1058,511 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             }};
         }})();
     </script>
-    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-
-    <!-- HTMX (polling/ajax only — SSE is handled by native EventSource below) -->
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-
-    <!-- Hyperscript -->
     <script src="https://unpkg.com/hyperscript.org@0.9.14"></script>
-
     <style>
         body {{ font-family: 'Inter', system-ui, -apple-system, sans-serif; }}
-        .glow-green {{ box-shadow: 0 0 15px rgba(34, 197, 94, 0.2); }}
-        .glow-red {{ box-shadow: 0 0 15px rgba(239, 68, 68, 0.2); }}
-        .glow-purple {{ box-shadow: 0 0 15px rgba(168, 85, 247, 0.2); }}
-        /* Flash animation for live updates */
+        .glow-green {{ box-shadow: 0 0 12px rgba(34,197,94,0.25); }}
+        .glow-red   {{ box-shadow: 0 0 12px rgba(239,68,68,0.25); }}
+        .glow-blue  {{ box-shadow: 0 0 12px rgba(59,130,246,0.25); }}
         @keyframes sse-flash {{
-            0% {{ outline: 2px solid rgba(34, 197, 94, 0.8); outline-offset: -2px; }}
-            100% {{ outline: 2px solid transparent; outline-offset: -2px; }}
+            0%   {{ outline: 2px solid rgba(34,197,94,0.9); outline-offset:-2px; }}
+            100% {{ outline: 2px solid transparent; outline-offset:-2px; }}
         }}
-        .sse-updated {{
-            animation: sse-flash 1.2s ease-out;
+        .sse-updated {{ animation: sse-flash 1.2s ease-out; }}
+        @keyframes breakout-pulse {{
+            0%,100% {{ box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }}
+            50%      {{ box-shadow: 0 0 0 6px rgba(34,197,94,0); }}
         }}
-        /* SSE connection indicator */
-        #sse-status-dot.connected {{ color: #22c55e; }}
+        .breakout-active {{ animation: breakout-pulse 2s ease-in-out infinite; }}
+        #sse-status-dot.connected    {{ color: #22c55e; }}
         #sse-status-dot.disconnected {{ color: #ef4444; }}
-        #sse-status-dot.connecting {{ color: #eab308; }}
+        #sse-status-dot.connecting   {{ color: #eab308; }}
+        /* Validation match/mismatch row colours */
+        .val-match    {{ background: rgba(34,197,94,0.06); }}
+        .val-mismatch {{ background: rgba(239,68,68,0.06); }}
+        /* Slim scrollbar */
+        ::-webkit-scrollbar {{ width:4px; height:4px; }}
+        ::-webkit-scrollbar-track {{ background:#18181b; }}
+        ::-webkit-scrollbar-thumb {{ background:#3f3f46; border-radius:2px; }}
     </style>
 </head>
 <body class="bg-zinc-950 text-white min-h-screen">
+<div id="sse-container">
+<div class="max-w-screen-2xl mx-auto px-3 py-3">
 
-    <!-- Main content container (SSE managed by native JS EventSource below) -->
-    <div id="sse-container">
+    <!-- ═══════════════════════════════════════════════════════════════
+         HEADER: compact single row — logo | health bar | clock | tools
+    ═══════════════════════════════════════════════════════════════════ -->
+    <header class="flex items-center justify-between mb-3 border-b border-zinc-800 pb-2.5">
 
-    <div class="max-w-7xl mx-auto px-4 py-4">
-        <!-- Header — 3-column: title | NT8 health | clock + NT8 tools -->
-        <header class="mb-6 border-b border-zinc-800 pb-4">
-            <div class="flex items-center justify-between">
-                <!-- Left: Title + SSE -->
-                <div class="flex-shrink-0">
-                    <h1 class="text-2xl font-bold">
-                        <span class="text-zinc-400">Futures</span> Trading Co-Pilot
-                    </h1>
-                    <div class="text-sm text-zinc-500 mt-1">
-                        {session["date"]}
-                        <span id="sse-status-dot" class="connecting ml-2" title="SSE: connecting...">●</span>
-                        <span id="sse-status-text" class="text-xs text-zinc-600">connecting</span>
-                    </div>
+        <!-- Left: title + SSE dot -->
+        <div class="flex items-center gap-3 min-w-0">
+            <div>
+                <span class="text-lg font-bold text-white leading-none">ORB Co-Pilot</span>
+                <div class="text-[10px] text-zinc-600 mt-0.5 whitespace-nowrap">
+                    {session["date"]}
+                    <span id="sse-status-dot" class="connecting ml-1.5" title="SSE">●</span>
+                    <span id="sse-status-text" class="text-zinc-700">connecting</span>
                 </div>
-
-                <!-- Center: System Health Indicators (polled every 10s) -->
-                <div id="nt8-health-bar"
-                     class="hidden md:flex items-center"
-                     hx-get="/api/nt8/health/html"
-                     hx-trigger="load, every 10s"
-                     hx-swap="innerHTML">
-                    <div class="flex items-center gap-2">
-                        <div class="flex items-center gap-2 pr-2 border-r border-zinc-700">
-                            <div class="flex items-center gap-1.5 cursor-default" title="Data Service: checking...">
-                                <span class="relative flex h-2.5 w-2.5">
-                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
-                                </span>
-                                <span class="text-[11px] text-zinc-500">Data</span>
-                            </div>
-                            <div class="flex items-center gap-1.5 cursor-default" title="Engine: checking...">
-                                <span class="relative flex h-2.5 w-2.5">
-                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
-                                </span>
-                                <span class="text-[11px] text-zinc-500">Engine</span>
-                            </div>
-                            <div class="flex items-center gap-1.5 cursor-default" title="Redis: checking...">
-                                <span class="relative flex h-2.5 w-2.5">
-                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
-                                </span>
-                                <span class="text-[11px] text-zinc-500">Redis</span>
-                            </div>
-                            <div class="flex items-center gap-1.5 cursor-default" title="Postgres: checking...">
-                                <span class="relative flex h-2.5 w-2.5">
-                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
-                                </span>
-                                <span class="text-[11px] text-zinc-500">Postgres</span>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-2 pl-1">
-                            <div class="flex items-center gap-1.5 cursor-default" title="Bridge: checking...">
-                                <span class="relative flex h-2.5 w-2.5">
-                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
-                                </span>
-                                <span class="text-[11px] text-zinc-500">Bridge</span>
-                            </div>
-                            <div class="flex items-center gap-1.5 cursor-default" title="Ruby: checking...">
-                                <span class="relative flex h-2.5 w-2.5">
-                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
-                                </span>
-                                <span class="text-[11px] text-zinc-500">Ruby</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Right: Clock + NT8 Tools Dropdown -->
-                <div class="flex items-center gap-3">
-                    <div class="text-right">
-                        <div id="clock" class="text-2xl font-mono font-bold {session["css_class"]}">
-                            {session["time_et"]}
-                        </div>
-                        <div id="session-badge" class="text-sm font-semibold mt-1 {session["css_class"]}">
-                            {session["emoji"]} {session["label"]}
-                        </div>
-                    </div>
-
-                    <!-- NT8 Tools Dropdown -->
-                    <div id="nt8-toolbar-container"
-                         hx-get="/api/nt8/panel/html"
-                         hx-trigger="load"
-                         hx-swap="innerHTML">
-                    </div>
-                </div>
-            </div>
-        </header>
-
-        <!-- No Trade Banner — updated via JS htmx:sseMessage handler (fetches /api/no-trade) -->
-        <div id="no-trade-container"
-             _="on `no-trade-alert` add .glow-red to me then wait 2s then remove .glow-red from me">
-            {no_trade_html}
-        </div>
-
-        <!-- Focus Summary Bar -->
-        <div id="focus-summary"
-             class="flex items-center justify-between bg-zinc-900/60 border border-zinc-800 rounded-lg px-4 py-2 mb-4">
-            <div class="flex items-center gap-4 text-sm">
-                <span class="text-zinc-400">TODAY'S FOCUS</span>
-                <span id="focus-count" class="text-zinc-300">{tradeable}/{total} tradeable</span>
-                <span id="focus-updated" class="text-zinc-500">Updated: {computed}</span>
-            </div>
-            <div class="flex items-center gap-2">
-                <button hx-get="/api/focus/html"
-                        hx-target="#focus-grid"
-                        hx-swap="innerHTML"
-                        hx-indicator="#refresh-spinner"
-                        class="px-3 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-xs text-zinc-300
-                               transition-colors duration-200 border border-zinc-700">
-                    ↻ Refresh
-                </button>
-                <span id="refresh-spinner" class="htmx-indicator text-zinc-500 text-xs">Loading...</span>
             </div>
         </div>
 
-        <!-- Main Grid: Focus Cards + Sidebar -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <!-- Focus Cards (2/3 width) -->
-            <div class="lg:col-span-2">
-                <!-- SSE full focus swap target (fallback: HTMX polling every 30s) -->
-                <div id="focus-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4"
+        <!-- Centre: health indicators -->
+        <div id="nt8-health-bar"
+             class="hidden md:flex items-center gap-1 flex-1 justify-center"
+             hx-get="/api/nt8/health/html"
+             hx-trigger="load, every 10s"
+             hx-swap="innerHTML">
+            <!-- skeleton dots shown until HTMX loads real content -->
+            {{% for lbl in ["Data","Engine","Redis","DB","Bridge","Ruby","NT8"] %}}
+            <div class="flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800">
+                <span class="w-1.5 h-1.5 rounded-full bg-zinc-600"></span>
+                <span class="text-[10px] text-zinc-600">{{{{ lbl }}}}</span>
+            </div>
+            {{% endfor %}}
+        </div>
+
+        <!-- Right: clock + session + NT8 tools -->
+        <div class="flex items-center gap-2 shrink-0">
+            <div class="text-right">
+                <div id="clock" class="text-xl font-mono font-bold {session["css_class"]} leading-none">
+                    {session["time_et"]}
+                </div>
+                <div id="session-badge" class="text-[11px] font-semibold {session["css_class"]} mt-0.5 text-right">
+                    {session["emoji"]} {session["label"]}
+                </div>
+            </div>
+            <div id="nt8-toolbar-container"
+                 hx-get="/api/nt8/panel/html"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+            </div>
+        </div>
+    </header>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         SESSION TIMELINE STRIP
+    ═══════════════════════════════════════════════════════════════════ -->
+    {session_strip_html}
+
+    <!-- No-trade banner -->
+    <div id="no-trade-container"
+         _="on `no-trade-alert` add .glow-red to me then wait 2s then remove .glow-red from me">
+        {no_trade_html}
+    </div>
+
+    <!-- Focus summary bar -->
+    <div id="focus-summary"
+         class="flex items-center justify-between bg-zinc-900/60 border border-zinc-800 rounded-lg px-3 py-1.5 mb-3">
+        <div class="flex items-center gap-3 text-xs">
+            <span class="text-zinc-500 uppercase tracking-wide font-semibold">Today's Focus</span>
+            <span id="focus-count" class="text-zinc-300 font-mono">{tradeable}/{total} tradeable</span>
+            <span id="focus-updated" class="text-zinc-600">Updated: {computed}</span>
+        </div>
+        <div class="flex items-center gap-2">
+            <button hx-get="/api/focus/html"
+                    hx-target="#focus-grid"
+                    hx-swap="innerHTML"
+                    hx-indicator="#refresh-spinner"
+                    class="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 rounded text-[11px] text-zinc-400
+                           border border-zinc-700 transition-colors">↻ Refresh</button>
+            <span id="refresh-spinner" class="htmx-indicator text-zinc-600 text-xs">…</span>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         MAIN GRID  — 3 cols: ORB signals (2) | Sidebar (1)
+    ═══════════════════════════════════════════════════════════════════ -->
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-3">
+
+        <!-- ── LEFT/CENTRE: ORB detection + asset cards ─────────────── -->
+        <div class="xl:col-span-2 space-y-3">
+
+            <!-- ORB Panel — primary focus, full width, always visible -->
+            <div id="orb-container"
+                 hx-get="/api/orb/html"
+                 hx-trigger="every 20s"
+                 hx-swap="innerHTML">
+                {orb_html}
+            </div>
+
+            <!-- NT8 / Ruby Validation Panel -->
+            <div id="nt8-validation-panel"
+                 class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
+                 hx-get="/api/nt8/health/html?detail=1"
+                 hx-trigger="load, every 15s"
+                 hx-swap="outerHTML">
+                <div class="flex items-center justify-between mb-2">
+                    <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">
+                        NinjaTrader / Ruby Validation
+                    </h3>
+                    <span class="text-[9px] text-zinc-600">Compares engine metrics vs NT8 bridge</span>
+                </div>
+                <div class="text-xs text-zinc-600">Loading NT8 data...</div>
+            </div>
+
+            <!-- Asset Focus Cards -->
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <h3 class="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Asset Focus</h3>
+                </div>
+                <div id="focus-grid" class="grid grid-cols-1 md:grid-cols-2 gap-3"
                      hx-get="/api/focus/html"
                      hx-trigger="every 30s"
                      hx-swap="innerHTML">
                     {cards_html}
                 </div>
             </div>
+        </div>
 
-            <!-- Sidebar (1/3 width) -->
-            <div class="space-y-4">
-                <!-- Positions Panel — SSE live + HTMX polling fallback (TASK-501) -->
-                <div id="positions-container"
-                     hx-get="/api/positions/html"
-                     hx-trigger="every 10s"
-                     hx-swap="innerHTML">
-                    {positions_html}
+        <!-- ── SIDEBAR ───────────────────────────────────────────────── -->
+        <div class="space-y-2.5">
+
+            <!-- Positions & P&L -->
+            <div id="positions-container"
+                 hx-get="/api/positions/html"
+                 hx-trigger="every 10s"
+                 hx-swap="innerHTML">
+                {positions_html}
+            </div>
+
+            <!-- Risk Rules — always visible -->
+            <div id="risk-container"
+                 hx-get="/api/risk/html"
+                 hx-trigger="every 15s"
+                 hx-swap="innerHTML">
+                {risk_html}
+            </div>
+
+            <!-- Market Events feed -->
+            {market_events_html}
+
+            <!-- Grok AI Brief -->
+            <div id="grok-container"
+                 hx-get="/api/grok/html"
+                 hx-trigger="every 60s"
+                 hx-swap="innerHTML">
+                {grok_html}
+            </div>
+
+            <!-- CNN Model — always visible -->
+            <div id="cnn-panel"
+                 class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
+                 hx-get="/cnn/status/html"
+                 hx-trigger="load, every 15s"
+                 hx-swap="innerHTML">
+                <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">🧠 CNN Model</h3>
+                <div class="text-zinc-600 text-xs">Loading...</div>
+            </div>
+
+            <!-- Alerts -->
+            <div id="alerts-panel"
+                 hx-get="/api/alerts/html"
+                 hx-trigger="every 30s"
+                 hx-swap="innerHTML">
+                <div class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3">
+                    <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">Alerts</h3>
+                    <div class="text-zinc-600 text-xs">No alerts</div>
                 </div>
+            </div>
 
-                <!-- Risk Status Panel (TASK-502) — hidden during off-hours -->
-                <div id="risk-container"
-                     class="{"hidden" if is_off_hours else ""}"
-                     hx-get="/api/risk/html"
-                     hx-trigger="every 15s"
-                     hx-swap="innerHTML">
-                    {risk_html}
-                </div>
-
-                <!-- Grok Compact Update Panel (TASK-601) — hidden during off-hours -->
-                <div id="grok-container"
-                     class="{"hidden" if is_off_hours else ""}"
-                     hx-get="/api/grok/html"
-                     hx-trigger="every 60s"
-                     hx-swap="innerHTML">
-                    {grok_html}
-                </div>
-
-                <!-- Opening Range Breakout Panel (TASK-801) — hidden during off-hours -->
-                <div id="orb-container"
-                     class="{"hidden" if is_off_hours else ""}"
-                     hx-get="/api/orb/html"
-                     hx-trigger="every 30s"
-                     hx-swap="innerHTML">
-                    {orb_html}
-                </div>
-
-                <!-- CNN Model Panel — always visible (retrain can run anytime) -->
-                <div id="cnn-panel"
-                     class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
-                     hx-get="/cnn/status/html"
-                     hx-trigger="load, every 15s"
-                     hx-swap="innerHTML">
-                    <h3 class="text-sm font-semibold text-zinc-400 mb-2">🧠 CNN MODEL</h3>
-                    <div class="text-zinc-500 text-sm">Loading model status...</div>
-                </div>
-
-                <!-- Alerts Panel — hidden during off-hours -->
-                <div id="alerts-panel"
-                     class="{"hidden" if is_off_hours else ""}"
-                     hx-get="/api/alerts/html"
-                     hx-trigger="every 30s"
-                     hx-swap="innerHTML">
-                    <div class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4">
-                        <h3 class="text-sm font-semibold text-zinc-400 mb-2">ALERTS</h3>
-                        <div class="text-zinc-500 text-sm">No alerts</div>
-                    </div>
-                </div>
-
-                <!-- Engine Status -->
-                <div class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4">
-                    <h3 class="text-sm font-semibold text-zinc-400 mb-2">ENGINE STATUS</h3>
+            <!-- Engine + SSE status — compact -->
+            <div class="bg-zinc-900/40 border border-zinc-800 rounded-lg p-2.5 space-y-1">
+                <div class="flex items-center justify-between">
+                    <span class="text-[10px] text-zinc-600 uppercase tracking-wide">Engine</span>
                     <div id="engine-status"
                          hx-get="/api/time"
                          hx-trigger="every 5s"
                          hx-swap="innerHTML"
-                         class="text-xs text-zinc-500">
-                        Connecting...
-                    </div>
+                         class="text-[10px] text-zinc-500">—</div>
                 </div>
-
-                <!-- SSE Connection Health -->
-                <div class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4">
-                    <h3 class="text-sm font-semibold text-zinc-400 mb-2">LIVE FEED</h3>
-                    <div id="sse-heartbeat" class="text-xs text-zinc-500">
-                        Waiting for heartbeat...
-                    </div>
-                    <div id="sse-last-update" class="text-xs text-zinc-600 mt-1">
-                        —
-                    </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-[10px] text-zinc-600 uppercase tracking-wide">Live Feed</span>
+                    <div id="sse-heartbeat" class="text-[10px] text-zinc-500">—</div>
                 </div>
-
-                <!-- Off-Hours Info Panel — only shown during off-hours -->
-                {
-        ""
-        if not is_off_hours
-        else '''
-                <div class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4">
-                    <h3 class="text-sm font-semibold text-zinc-400 mb-2">📅 NEXT SESSION</h3>
-                    <div class="text-xs text-zinc-500 space-y-1">
-                        <div>🌙 Pre-market: <span class="text-purple-400">00:00–03:00 ET</span></div>
-                        <div>🟢 London Open: <span class="text-green-400">03:00–08:00 ET</span></div>
-                        <div>🟢 US Open: <span class="text-green-400">08:00–12:00 ET</span></div>
-                        <div>⚙️ Off-hours: <span class="text-zinc-400">12:00–00:00 ET</span></div>
-                        <div class="mt-2 pt-2 border-t border-zinc-700 text-zinc-400">
-                            Engine is running backfill, optimization, and next-day prep.
-                            Trading panels will appear when the next session begins.
-                        </div>
-                    </div>
-                </div>
-                '''
-    }
-
+                <div id="sse-last-update" class="text-[9px] text-zinc-700">—</div>
             </div>
-        </div>
 
-        <!-- Footer -->
-        <footer class="mt-8 pt-4 border-t border-zinc-800 text-center text-xs text-zinc-600">
-            Pilot v1.0 — Session rules: Pre-market 00–03 | Active 03–12 | Off-hours 12–00 ET
-            | <a href="/sse/health" class="underline hover:text-zinc-400">SSE Health</a>
-            | <a href="/api/info" class="underline hover:text-zinc-400">API Info</a>
-        </footer>
+        </div>
     </div>
 
-    </div><!-- end sse-container -->
+    <!-- Footer -->
+    <footer class="mt-4 pt-2 border-t border-zinc-800/60 text-center text-[10px] text-zinc-700">
+        ORB Co-Pilot — Pre-market 00–03 ET | London 03–08 ET | US 08–12 ET | Off-hours 12–00 ET
+        &nbsp;·&nbsp;<a href="/sse/health" class="underline hover:text-zinc-500">SSE</a>
+        &nbsp;·&nbsp;<a href="/api/info" class="underline hover:text-zinc-500">API</a>
+    </footer>
+</div>
+</div><!-- end sse-container -->
 
-    <!-- Live clock JS (updates every second, no page refresh needed) -->
-    <script>
-        function updateClock() {{
-            const now = new Date();
-            const et = now.toLocaleTimeString('en-US', {{
-                timeZone: 'America/New_York',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                hour12: true
-            }}) + ' ET';
-            const el = document.getElementById('clock');
-            if (el) el.textContent = et;
+<!-- ═══════════════════════════════════════════════════
+     SESSION CURSOR: moves the timeline cursor every minute
+     and renders open/closed session badges
+═══════════════════════════════════════════════════════ -->
+<script>
+(function() {{
+    var HOUR_PCT = 100.0 / 24.0;
 
-            // Update session badge
-            const etHour = parseInt(now.toLocaleString('en-US', {{
-                timeZone: 'America/New_York', hour: 'numeric', hour12: false
-            }}));
-            const badge = document.getElementById('session-badge');
-            if (badge) {{
-                if (etHour >= 0 && etHour < 3) {{
-                    badge.innerHTML = '🌙 PRE-MARKET';
-                    badge.className = 'text-sm font-semibold mt-1 text-purple-400';
-                    if (el) el.className = 'text-2xl font-mono font-bold text-purple-400';
-                }} else if (etHour >= 3 && etHour < 8) {{
-                    badge.innerHTML = '🟢 LONDON OPEN';
-                    badge.className = 'text-sm font-semibold mt-1 text-green-400';
-                    if (el) el.className = 'text-2xl font-mono font-bold text-green-400';
-                }} else if (etHour >= 8 && etHour < 12) {{
-                    badge.innerHTML = '🟢 US OPEN';
-                    badge.className = 'text-sm font-semibold mt-1 text-green-400';
-                    if (el) el.className = 'text-2xl font-mono font-bold text-green-400';
-                }} else {{
-                    badge.innerHTML = '⚙️ OFF-HOURS';
-                    badge.className = 'text-sm font-semibold mt-1 text-zinc-400';
-                    if (el) el.className = 'text-2xl font-mono font-bold text-zinc-400';
-                }}
-            }}
+    // Sessions: [label, startH(ET), endH(ET), openColor, closedColor]
+    var SESSIONS = [
+        ['Sydney',    17, 26, '#22d3ee', '#3f3f46'],
+        ['Tokyo',     19, 28, '#818cf8', '#3f3f46'],
+        ['London',     3, 12, '#60a5fa', '#3f3f46'],
+        ['US Equity',  9, 16, '#34d399', '#3f3f46'],
+        ['CME 23h',   18, 41, '#2dd4bf', '#3f3f46'],
+    ];
+
+    function _etHour() {{
+        var now = new Date();
+        var etStr = now.toLocaleString('en-US', {{timeZone:'America/New_York',hour:'numeric',minute:'numeric',hour12:false}});
+        var parts = etStr.split(':');
+        return parseInt(parts[0]) + parseInt(parts[1]||0)/60;
+    }}
+
+    function _isOpen(startH, endH, h) {{
+        if (endH > 24) {{
+            // wraps midnight
+            return h >= startH || h < (endH - 24);
         }}
-        setInterval(updateClock, 1000);
-        updateClock();
-    </script>
+        return h >= startH && h < endH;
+    }}
 
-    <!-- SSE via native EventSource — no htmx-ext-sse needed.
-         Opening the EventSource AFTER window.load guarantees Firefox
-         won't log "connection interrupted while the page was loading". -->
-    <script>
-        (function() {{
-            var _es = null;           // current EventSource instance
-            var _reconnectMs = 3000;  // base reconnect delay
-            var _maxReconnect = 30000;
-            var _curDelay = _reconnectMs;
+    function updateStrip() {{
+        var h = _etHour();
+        var cursor = document.getElementById('session-cursor');
+        if (cursor) {{
+            var pct = (h * HOUR_PCT);
+            cursor.style.left = pct.toFixed(2) + '%';
+        }}
 
-            function _setStatus(state) {{
-                var dot = document.getElementById('sse-status-dot');
-                var txt = document.getElementById('sse-status-text');
-                if (state === 'connected') {{
-                    if (dot) {{ dot.className = 'connected ml-2'; dot.title = 'SSE: connected'; }}
-                    if (txt) {{ txt.textContent = 'live'; txt.className = 'text-xs text-green-600'; }}
-                }} else if (state === 'connecting') {{
-                    if (dot) {{ dot.className = 'connecting ml-2'; dot.title = 'SSE: connecting...'; }}
-                    if (txt) {{ txt.textContent = 'connecting'; txt.className = 'text-xs text-yellow-600'; }}
+        // Render badges
+        var badgesEl = document.getElementById('session-badges');
+        if (!badgesEl) return;
+        var html = '';
+        for (var i=0; i<SESSIONS.length; i++) {{
+            var s = SESSIONS[i];
+            var open = _isOpen(s[1], s[2], h);
+            var color = open ? s[3] : '#52525b';
+            var bgColor = open ? 'rgba(255,255,255,0.05)' : 'transparent';
+            var border = open ? '1px solid ' + s[3] + '44' : '1px solid #3f3f46';
+            html += '<span style="color:' + color + ';background:' + bgColor + ';border:' + border + ';font-size:9px;padding:1px 6px;border-radius:9999px;white-space:nowrap">';
+            html += (open ? '● ' : '○ ') + s[0];
+            html += '</span>';
+        }}
+        // Overlap badge
+        if (_isOpen(9, 12, h)) {{
+            html += '<span style="color:#fbbf24;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);font-size:9px;padding:1px 6px;border-radius:9999px">⚡ London/US Overlap</span>';
+        }}
+        badgesEl.innerHTML = html;
+    }}
+
+    updateStrip();
+    setInterval(updateStrip, 60000);
+}})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════
+     LIVE CLOCK
+═══════════════════════════════════════════════════════ -->
+<script>
+function updateClock() {{
+    var now = new Date();
+    var et = now.toLocaleTimeString('en-US',{{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true}}) + ' ET';
+    var el = document.getElementById('clock');
+    if (el) el.textContent = et;
+    var etHour = parseInt(now.toLocaleString('en-US',{{timeZone:'America/New_York',hour:'numeric',hour12:false}}));
+    var badge = document.getElementById('session-badge');
+    if (badge) {{
+        if (etHour>=0&&etHour<3)  {{ badge.innerHTML='🌙 PRE-MARKET';  badge.className='text-[11px] font-semibold text-purple-400 mt-0.5 text-right'; if(el) el.className='text-xl font-mono font-bold text-purple-400 leading-none'; }}
+        else if (etHour>=3&&etHour<8)  {{ badge.innerHTML='🟢 LONDON';  badge.className='text-[11px] font-semibold text-green-400 mt-0.5 text-right'; if(el) el.className='text-xl font-mono font-bold text-green-400 leading-none'; }}
+        else if (etHour>=8&&etHour<12) {{ badge.innerHTML='🟢 US OPEN'; badge.className='text-[11px] font-semibold text-green-400 mt-0.5 text-right'; if(el) el.className='text-xl font-mono font-bold text-green-400 leading-none'; }}
+        else                           {{ badge.innerHTML='⚙️ OFF-HRS';  badge.className='text-[11px] font-semibold text-zinc-400 mt-0.5 text-right'; if(el) el.className='text-xl font-mono font-bold text-zinc-400 leading-none'; }}
+    }}
+}}
+setInterval(updateClock, 1000);
+updateClock();
+</script>
+
+<!-- ═══════════════════════════════════════════════════
+     MARKET EVENTS FEED — appended to by SSE handlers
+═══════════════════════════════════════════════════════ -->
+<script>
+var _events = [];
+function _pushEvent(emoji, msg, color) {{
+    var now = new Date().toLocaleTimeString('en-US',{{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}});
+    _events.unshift({{t:now,e:emoji,m:msg,c:color||'text-zinc-400'}});
+    if (_events.length>40) _events.pop();
+    var feed = document.getElementById('market-events-feed');
+    if (!feed) return;
+    var ts = document.getElementById('events-ts');
+    if (ts) ts.textContent = now;
+    feed.innerHTML = _events.slice(0,12).map(function(ev){{
+        return '<div class="flex items-start gap-1.5 py-0.5 border-b border-zinc-800/40 last:border-0">'
+             + '<span class="text-[9px] text-zinc-600 font-mono shrink-0 mt-px">' + ev.t + '</span>'
+             + '<span class="' + ev.c + ' text-[10px] leading-tight">' + ev.e + ' ' + ev.m + '</span>'
+             + '</div>';
+    }}).join('');
+}}
+</script>
+
+<!-- ═══════════════════════════════════════════════════
+     SSE — native EventSource
+═══════════════════════════════════════════════════════ -->
+<script>
+(function() {{
+    var _es = null;
+    var _reconnectMs = 3000;
+    var _maxReconnect = 30000;
+    var _curDelay = _reconnectMs;
+
+    function _setStatus(state) {{
+        var dot = document.getElementById('sse-status-dot');
+        var txt = document.getElementById('sse-status-text');
+        if (state==='connected')   {{ if(dot){{dot.className='connected ml-1.5';dot.title='live';}} if(txt){{txt.textContent='live';txt.className='text-zinc-600';}} }}
+        else if(state==='connecting') {{ if(dot){{dot.className='connecting ml-1.5';}} if(txt){{txt.textContent='connecting';txt.className='text-zinc-700';}} }}
+        else {{ if(dot){{dot.className='disconnected ml-1.5';}} if(txt){{txt.textContent='reconnecting';txt.className='text-zinc-700';}} }}
+    }}
+
+    function _connect() {{
+        if (_es) {{ try{{_es.close();}}catch(e){{}} }}
+        _setStatus('connecting');
+        _es = new EventSource('/sse/dashboard');
+
+        _es.onopen = function() {{ _setStatus('connected'); _curDelay=_reconnectMs; }};
+        _es.onerror = function() {{
+            _setStatus('disconnected');
+            if (_es && _es.readyState===EventSource.CLOSED) {{
+                setTimeout(function(){{ _curDelay=Math.min(_curDelay*1.5,_maxReconnect); _connect(); }}, _curDelay);
+            }}
+        }};
+
+        _es.addEventListener('connected', function() {{ _setStatus('connected'); }});
+
+        // --- Focus update ---
+        _es.addEventListener('focus-update', function(e) {{
+            try {{
+                var focus = JSON.parse(e.data);
+                var countEl = document.getElementById('focus-count');
+                if (countEl) {{
+                    countEl.textContent = (focus.tradeable_assets||0) + '/' + (focus.total_assets||0) + ' tradeable';
+                }}
+                var updEl = document.getElementById('focus-updated');
+                if (updEl && focus.computed_at) {{
+                    var d = new Date(focus.computed_at);
+                    updEl.textContent = 'Updated: ' + d.toLocaleTimeString('en-US',{{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:true}}) + ' ET';
+                }}
+                if (typeof htmx!=='undefined') {{
+                    htmx.ajax('GET','/api/focus/html',{{target:'#focus-grid',swap:'innerHTML'}});
+                }}
+            }} catch(err) {{}}
+        }});
+
+        // --- Heartbeat ---
+        _es.addEventListener('heartbeat', function(e) {{
+            try {{
+                var hb = JSON.parse(e.data);
+                var hbEl = document.getElementById('sse-heartbeat');
+                if (hbEl) hbEl.innerHTML = '<span style="color:#22c55e">●</span> ' + (hb.time_et||'');
+            }} catch(err) {{}}
+            if (typeof htmx!=='undefined') {{
+                htmx.ajax('GET','/api/nt8/health/html',{{target:'#nt8-health-bar',swap:'innerHTML'}});
+            }}
+        }});
+
+        // --- Session change ---
+        _es.addEventListener('session-change', function(e) {{
+            try {{
+                var sc = JSON.parse(e.data);
+                var badge = document.getElementById('session-badge');
+                if (badge && sc.emoji && sc.session) badge.innerHTML = sc.emoji + ' ' + sc.session.replace('_','-').toUpperCase();
+            }} catch(err) {{}}
+        }});
+
+        // --- No-trade ---
+        _es.addEventListener('no-trade-alert', function(e) {{
+            try {{
+                var nt = JSON.parse(e.data);
+                if (nt.no_trade && typeof htmx!=='undefined') {{
+                    htmx.ajax('GET','/api/no-trade',{{target:'#no-trade-container',swap:'innerHTML'}});
+                }}
+            }} catch(err) {{}}
+        }});
+
+        // --- Positions update ---
+        _es.addEventListener('positions-update', function() {{
+            if (typeof htmx!=='undefined') {{
+                htmx.ajax('GET','/api/positions/html',{{target:'#positions-container',swap:'innerHTML'}});
+                htmx.ajax('GET','/api/nt8/health/html',{{target:'#nt8-health-bar',swap:'innerHTML'}});
+            }}
+            _pushEvent('📋','Position update','text-blue-400');
+        }});
+
+        // --- Grok update ---
+        _es.addEventListener('grok-update', function() {{
+            if (typeof htmx!=='undefined') {{
+                htmx.ajax('GET','/api/grok/html',{{target:'#grok-container',swap:'innerHTML'}});
+            }}
+            var lastUpd = document.getElementById('sse-last-update');
+            if (lastUpd) lastUpd.textContent = 'Grok: ' + new Date().toLocaleTimeString();
+        }});
+
+        // --- Risk update ---
+        _es.addEventListener('risk-update', function() {{
+            if (typeof htmx!=='undefined') {{
+                htmx.ajax('GET','/api/risk/html',{{target:'#risk-container',swap:'innerHTML'}});
+            }}
+        }});
+
+        // --- ORB update ---
+        _es.addEventListener('orb-update', function(e) {{
+            if (typeof htmx!=='undefined') {{
+                htmx.ajax('GET','/api/orb/html',{{target:'#orb-container',swap:'innerHTML'}});
+            }}
+            try {{
+                var orbData = JSON.parse(e.data);
+                var dir = orbData.direction||'';
+                var sym = orbData.symbol||'';
+                if (orbData.breakout_detected) {{
+                    var color = dir==='LONG' ? 'text-green-400' : 'text-red-400';
+                    var emoji = dir==='LONG' ? '🟢' : '🔴';
+                    _pushEvent(emoji, 'ORB breakout ' + dir + ' — ' + sym, color);
+                    // pulse the ORB container
+                    var orbEl = document.getElementById('orb-container');
+                    if (orbEl) {{ orbEl.classList.add('breakout-active'); setTimeout(function(){{orbEl.classList.remove('breakout-active');}},6000); }}
                 }} else {{
-                    if (dot) {{ dot.className = 'disconnected ml-2'; dot.title = 'SSE: disconnected'; }}
-                    if (txt) {{ txt.textContent = 'reconnecting...'; txt.className = 'text-xs text-red-600'; }}
+                    _pushEvent('📐','ORB update — ' + sym,'text-zinc-400');
                 }}
-            }}
+            }} catch(err) {{}}
+        }});
 
-            function _connect() {{
-                if (_es) {{
-                    try {{ _es.close(); }} catch(e) {{}}
-                }}
-                _setStatus('connecting');
-                _es = new EventSource('/sse/dashboard');
+        // --- Per-asset listeners ---
+        _es.onmessage = function(e) {{}};
+    }}
 
-                _es.onopen = function() {{
-                    _setStatus('connected');
-                    _curDelay = _reconnectMs;  // reset backoff on success
-                }};
-
-                _es.onerror = function() {{
-                    _setStatus('disconnected');
-                    // EventSource auto-reconnects, but if it moves to CLOSED
-                    // state we need to manually reconnect with backoff.
-                    if (_es && _es.readyState === EventSource.CLOSED) {{
-                        setTimeout(function() {{
-                            _curDelay = Math.min(_curDelay * 1.5, _maxReconnect);
-                            _connect();
-                        }}, _curDelay);
+    function _registerAssetListeners() {{
+        document.querySelectorAll('[id^="asset-card-"]').forEach(function(card) {{
+            var sym = card.id.replace('asset-card-','');
+            if (sym && _es) {{
+                _es.addEventListener(sym+'-update', function() {{
+                    if (typeof htmx!=='undefined') {{
+                        htmx.ajax('GET','/api/focus/'+encodeURIComponent(sym),{{target:card,swap:'outerHTML'}});
                     }}
-                }};
-
-                // --- Connected confirmation ---
-                _es.addEventListener('connected', function() {{
-                    _setStatus('connected');
-                }});
-
-                // --- Focus update: refresh summary bar + cards ---
-                _es.addEventListener('focus-update', function(e) {{
-                    try {{
-                        var focus = JSON.parse(e.data);
-                        var countEl = document.getElementById('focus-count');
-                        if (countEl) {{
-                            var tradeable = focus.tradeable_assets || 0;
-                            var total = focus.total_assets || 0;
-                            countEl.textContent = tradeable + '/' + total + ' tradeable';
-                        }}
-                        var updEl = document.getElementById('focus-updated');
-                        if (updEl) {{
-                            var ts = focus.computed_at || '';
-                            if (ts) {{
-                                var d = new Date(ts);
-                                updEl.textContent = 'Updated: ' + d.toLocaleTimeString('en-US', {{
-                                    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true
-                                }}) + ' ET';
-                            }}
-                        }}
-                        var lastUpd = document.getElementById('sse-last-update');
-                        if (lastUpd) {{
-                            lastUpd.textContent = 'Last focus: ' + new Date().toLocaleTimeString();
-                        }}
-                        // Refresh focus grid HTML via HTMX
-                        if (typeof htmx !== 'undefined') {{
-                            htmx.ajax('GET', '/api/focus/html', {{target: '#focus-grid', swap: 'innerHTML'}});
-                        }}
-                    }} catch(err) {{ /* ignore parse errors */ }}
-                }});
-
-                // --- Heartbeat ---
-                _es.addEventListener('heartbeat', function(e) {{
-                    try {{
-                        var hb = JSON.parse(e.data);
-                        var hbEl = document.getElementById('sse-heartbeat');
-                        if (hbEl) {{
-                            hbEl.innerHTML = '<span class="text-green-500">●</span> Connected — ' + (hb.time_et || '');
-                        }}
-                    }} catch(err) {{}}
-                    if (typeof htmx !== 'undefined') {{
-                        htmx.ajax('GET', '/api/nt8/health/html', {{target: '#nt8-health-bar', swap: 'innerHTML'}});
-                    }}
-                }});
-
-                // --- Session change ---
-                _es.addEventListener('session-change', function(e) {{
-                    try {{
-                        var sc = JSON.parse(e.data);
-                        var badge = document.getElementById('session-badge');
-                        if (badge && sc.emoji && sc.session) {{
-                            var label = sc.session.replace('_', '-').toUpperCase();
-                            badge.innerHTML = sc.emoji + ' ' + label;
-                        }}
-                    }} catch(err) {{}}
-                }});
-
-                // --- No-trade alert ---
-                _es.addEventListener('no-trade-alert', function(e) {{
-                    try {{
-                        var nt = JSON.parse(e.data);
-                        if (nt.no_trade && typeof htmx !== 'undefined') {{
-                            htmx.ajax('GET', '/api/no-trade', {{target: '#no-trade-container', swap: 'innerHTML'}});
-                            var ntc = document.getElementById('no-trade-container');
-                            if (ntc) {{ ntc.dispatchEvent(new CustomEvent('no-trade-alert', {{bubbles: false}})); }}
-                        }}
-                    }} catch(err) {{}}
-                }});
-
-                // --- Positions update ---
-                _es.addEventListener('positions-update', function() {{
-                    if (typeof htmx !== 'undefined') {{
-                        htmx.ajax('GET', '/api/positions/html', {{target: '#positions-container', swap: 'innerHTML'}});
-                        htmx.ajax('GET', '/api/nt8/health/html', {{target: '#nt8-health-bar', swap: 'innerHTML'}});
-                    }}
-                }});
-
-                // --- Grok update (TASK-602) ---
-                _es.addEventListener('grok-update', function() {{
-                    if (typeof htmx !== 'undefined') {{
-                        htmx.ajax('GET', '/api/grok/html', {{target: '#grok-container', swap: 'innerHTML'}});
-                    }}
-                    var lastUpd = document.getElementById('sse-last-update');
-                    if (lastUpd) {{
-                        lastUpd.textContent = 'Last Grok: ' + new Date().toLocaleTimeString();
-                    }}
-                }});
-
-                // --- Risk update ---
-                _es.addEventListener('risk-update', function() {{
-                    if (typeof htmx !== 'undefined') {{
-                        htmx.ajax('GET', '/api/risk/html', {{target: '#risk-container', swap: 'innerHTML'}});
-                    }}
-                }});
-
-                // --- ORB update (TASK-801) ---
-                _es.addEventListener('orb-update', function(e) {{
-                    if (typeof htmx !== 'undefined') {{
-                        htmx.ajax('GET', '/api/orb/html', {{target: '#orb-container', swap: 'innerHTML'}});
-                    }}
-                    try {{
-                        var orbData = JSON.parse(e.data);
-                        if (orbData.breakout_detected) {{
-                            var orbPanel = document.getElementById('orb-container');
-                            if (orbPanel) {{
-                                orbPanel.classList.add('sse-updated');
-                                setTimeout(function() {{ orbPanel.classList.remove('sse-updated'); }}, 2000);
-                            }}
-                        }}
-                    }} catch(err) {{}}
-                }});
-
-                // --- Per-asset updates (e.g. gold-update, nasdaq-update) ---
-                // We listen for any message event and check the type
-                _es.onmessage = function(e) {{
-                    // onmessage only fires for events without a named type,
-                    // which shouldn't happen here. Ignore.
-                }};
-            }}
-
-            // Helper: register per-asset listeners after we know which
-            // assets exist (read from DOM).  Called once after connect.
-            function _registerAssetListeners() {{
-                var cards = document.querySelectorAll('[id^="asset-card-"]');
-                cards.forEach(function(card) {{
-                    var sym = card.id.replace('asset-card-', '');
-                    if (sym && _es) {{
-                        _es.addEventListener(sym + '-update', function() {{
-                            if (typeof htmx !== 'undefined') {{
-                                htmx.ajax('GET', '/api/focus/' + encodeURIComponent(sym), {{target: card, swap: 'outerHTML'}});
-                            }}
-                            setTimeout(function() {{
-                                var updated = document.getElementById('asset-card-' + sym);
-                                if (updated) {{
-                                    updated.classList.add('sse-updated');
-                                    setTimeout(function() {{ updated.classList.remove('sse-updated'); }}, 1500);
-                                }}
-                            }}, 100);
-                        }});
-                    }}
+                    setTimeout(function(){{
+                        var u = document.getElementById('asset-card-'+sym);
+                        if (u) {{ u.classList.add('sse-updated'); setTimeout(function(){{u.classList.remove('sse-updated');}},1500); }}
+                    }},100);
                 }});
             }}
+        }});
+    }}
 
-            // ---------------------------------------------------------------
-            // Wait for window.load to guarantee all external scripts are done
-            // and Firefox considers the page fully loaded.  Only THEN open
-            // the EventSource — this eliminates the "connection interrupted
-            // while the page was loading" console error.
-            // ---------------------------------------------------------------
-            window.addEventListener('load', function() {{
-                setTimeout(function() {{
-                    _connect();
-                    _registerAssetListeners();
-                }}, 100);
-            }});
-        }})();
-    </script>
+    window.addEventListener('load', function() {{
+        setTimeout(function() {{ _connect(); _registerAssetListeners(); }}, 100);
+    }});
+}})();
+</script>
 </body>
 </html>"""
 
@@ -1486,6 +1573,12 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 
 
 @router.get("/", response_class=HTMLResponse)
+@router.get("/api/market-session/html", response_class=HTMLResponse)
+def get_market_session_html():
+    """Return the session strip HTML fragment for HTMX polling."""
+    return HTMLResponse(_render_session_strip())
+
+
 def dashboard_page(request: Request):
     """Serve the full HTML dashboard page."""
     focus_data = _get_focus_data()

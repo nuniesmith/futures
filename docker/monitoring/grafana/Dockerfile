@@ -15,3 +15,6 @@ COPY config/grafana/provisioning/dashboards/dashboards.yml \
 # --- Dashboard JSON ---
 COPY config/grafana/grafana-dashboard.json \
      /var/lib/grafana/dashboards/futures-copilot.json
+
+COPY config/grafana/orb-trading-dashboard.json \
+     /var/lib/grafana/dashboards/orb-cnn-paper-trading.json

@@ -6,7 +6,14 @@ so every test module can exercise indicators, strategies, and detectors
 without hitting the network.
 """
 
+import atexit
+import logging
 import os
+import threading
+
+import numpy as np
+import pandas as pd
+import pytest
 
 # ---------------------------------------------------------------------------
 # Disable Redis connections during tests so alert/cache tests don't hang
@@ -14,9 +21,71 @@ import os
 # ---------------------------------------------------------------------------
 os.environ.setdefault("DISABLE_REDIS", "1")
 
-import numpy as np
-import pandas as pd
-import pytest
+# ---------------------------------------------------------------------------
+# Prevent prometheus_client's C-extension (_mmap_dict) from crashing the
+# interpreter during atexit/GC teardown.
+#
+# Root cause: prometheus_client >= 0.20 registers an atexit handler that
+# tries to flush metrics to PROMETHEUS_MULTIPROC_DIR.  When that directory
+# doesn't exist (test environment) the C extension aborts the process with
+# "terminate called without an active exception" + core dump — even though
+# all tests passed.  Setting this env var disables the _created timestamp
+# series and the multiprocess flush path that triggers the crash.
+# ---------------------------------------------------------------------------
+os.environ.setdefault("PROMETHEUS_DISABLE_CREATED_SERIES", "true")
+
+
+# ---------------------------------------------------------------------------
+# Silence logging errors from daemon threads during interpreter shutdown.
+#
+# Root cause: DashboardEngine._loop() runs in a daemon thread.  When pytest
+# finishes, Python tears down logging stream handlers *before* daemon threads
+# are killed.  Any log call in those threads hits a closed file and raises
+# "ValueError: I/O operation on closed file", which propagates through
+# logging.Handler.handleError() → the C runtime abort handler →
+# "terminate called without an active exception" + core dump.
+#
+# Setting logging.raiseExceptions = False tells the logging machinery to
+# silently discard errors that occur inside handlers, preventing the crash.
+# We register it as an atexit handler so it fires as early as possible in
+# the teardown sequence — before stream handlers are closed.
+# ---------------------------------------------------------------------------
+def _silence_logging_on_shutdown() -> None:
+    logging.raiseExceptions = False
+
+
+atexit.register(_silence_logging_on_shutdown)
+
+
+# ---------------------------------------------------------------------------
+# Stop the DashboardEngine singleton before the interpreter exits.
+#
+# Root cause: DashboardEngine._loop() runs hmmlearn's HMM fitting inside a
+# daemon thread.  hmmlearn uses Cython/C extensions that call std::terminate()
+# if the thread is interrupted mid-computation during GC teardown — even with
+# daemon=True.  The fix is to signal the engine to stop and join its thread
+# with a short timeout *before* Python starts tearing down C extensions.
+#
+# We register this in two places:
+#   1. atexit — fires early in the Python shutdown sequence.
+#   2. A session-scoped autouse fixture — fires at pytest teardown time,
+#      which is even earlier than atexit for the test process.
+# ---------------------------------------------------------------------------
+def _stop_engine_singleton() -> None:
+    """Synchronously stop the DashboardEngine singleton if it was started."""
+    try:
+        from lib.trading.engine import _engine_instance  # noqa: PLC0415
+
+        if _engine_instance is not None and _engine_instance._running:
+            _engine_instance._running = False
+            t = _engine_instance._thread
+            if t is not None and t.is_alive():
+                t.join(timeout=3)
+    except Exception:
+        pass
+
+
+atexit.register(_stop_engine_singleton)
 
 # ---------------------------------------------------------------------------
 # Make sure the `src/` package is importable from tests regardless of how
@@ -29,9 +98,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _make_timestamps(
-    n: int, freq: str = "5min", start: str = "2025-01-06 03:00"
-) -> pd.DatetimeIndex:
+def _make_timestamps(n: int, freq: str = "5min", start: str = "2025-01-06 03:00") -> pd.DatetimeIndex:
     """Generate a tz-aware (US/Eastern) DatetimeIndex for *n* bars."""
     return pd.date_range(start=start, periods=n, freq=freq, tz="America/New_York")
 
@@ -170,6 +237,32 @@ def _gappy_ohlcv(
 # ---------------------------------------------------------------------------
 # Pytest fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _suppress_daemon_thread_logging_errors():
+    """Session-scoped fixture that ensures logging errors from daemon threads
+    (e.g. DashboardEngine._loop, regime HMM fitting) don't abort the process
+    during interpreter teardown.
+
+    The ``atexit`` registration above handles the common case, but this
+    fixture also covers pytest's own teardown hooks which run before atexit.
+    """
+    yield
+    # 1. Stop the engine background thread cleanly so hmmlearn's C extensions
+    #    are not mid-computation when the interpreter tears down.
+    _stop_engine_singleton()
+
+    # 2. Also join any other lingering daemon threads with a short grace period
+    #    so they can finish their current C-level work before GC runs.
+    main_thread = threading.main_thread()
+    for t in threading.enumerate():
+        if t is not main_thread and t.daemon and t.is_alive():
+            t.join(timeout=2)
+
+    # 3. Disable logging exception propagation so any remaining threads that
+    #    try to log against a closed stream fail silently instead of crashing.
+    logging.raiseExceptions = False
 
 
 @pytest.fixture()

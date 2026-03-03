@@ -133,6 +133,60 @@ class TestMetricDefinitions:
         assert REDIS_CONNECTED is not None
         assert "redis_connected" in REDIS_CONNECTED._name
 
+    def test_orb_filter_results_total_registered(self):
+        from lib.services.data.api.metrics import ORB_FILTER_RESULTS_TOTAL
+
+        assert ORB_FILTER_RESULTS_TOTAL is not None
+        assert "orb_filter_results" in ORB_FILTER_RESULTS_TOTAL._name
+
+    def test_orb_cnn_prob_registered(self):
+        from lib.services.data.api.metrics import ORB_CNN_PROB
+
+        assert ORB_CNN_PROB is not None
+        assert "orb_cnn_prob" in ORB_CNN_PROB._name
+
+    def test_orb_cnn_signals_total_registered(self):
+        from lib.services.data.api.metrics import ORB_CNN_SIGNALS_TOTAL
+
+        assert ORB_CNN_SIGNALS_TOTAL is not None
+        assert "orb_cnn_signals" in ORB_CNN_SIGNALS_TOTAL._name
+
+    def test_daily_pnl_gauge_registered(self):
+        from lib.services.data.api.metrics import DAILY_PNL_GAUGE
+
+        assert DAILY_PNL_GAUGE is not None
+        assert "daily_pnl_gauge" in DAILY_PNL_GAUGE._name
+
+    def test_consecutive_losses_gauge_registered(self):
+        from lib.services.data.api.metrics import CONSECUTIVE_LOSSES_GAUGE
+
+        assert CONSECUTIVE_LOSSES_GAUGE is not None
+        assert "consecutive_losses_gauge" in CONSECUTIVE_LOSSES_GAUGE._name
+
+    def test_model_val_accuracy_registered(self):
+        from lib.services.data.api.metrics import MODEL_VAL_ACCURACY
+
+        assert MODEL_VAL_ACCURACY is not None
+        assert "model_val_accuracy" in MODEL_VAL_ACCURACY._name
+
+    def test_model_val_precision_registered(self):
+        from lib.services.data.api.metrics import MODEL_VAL_PRECISION
+
+        assert MODEL_VAL_PRECISION is not None
+        assert "model_val_precision" in MODEL_VAL_PRECISION._name
+
+    def test_model_val_recall_registered(self):
+        from lib.services.data.api.metrics import MODEL_VAL_RECALL
+
+        assert MODEL_VAL_RECALL is not None
+        assert "model_val_recall" in MODEL_VAL_RECALL._name
+
+    def test_model_train_samples_registered(self):
+        from lib.services.data.api.metrics import MODEL_TRAIN_SAMPLES
+
+        assert MODEL_TRAIN_SAMPLES is not None
+        assert "model_train_samples" in MODEL_TRAIN_SAMPLES._name
+
 
 class TestMetricRecordHelpers:
     """Test the helper functions that record metric values."""
@@ -364,6 +418,158 @@ class TestMetricRecordHelpers:
         update_redis_status(False)
         assert REDIS_CONNECTED._value.get() == 0
 
+    def test_record_orb_filter_result_passed(self):
+        from lib.services.data.api.metrics import (
+            ORB_FILTER_RESULTS_TOTAL,
+            record_orb_filter_result,
+        )
+
+        initial = ORB_FILTER_RESULTS_TOTAL.labels(result="passed")._value.get()
+        record_orb_filter_result("passed")
+        after = ORB_FILTER_RESULTS_TOTAL.labels(result="passed")._value.get()
+        assert after == initial + 1
+
+    def test_record_orb_filter_result_rejected(self):
+        from lib.services.data.api.metrics import (
+            ORB_FILTER_RESULTS_TOTAL,
+            record_orb_filter_result,
+        )
+
+        initial = ORB_FILTER_RESULTS_TOTAL.labels(result="rejected")._value.get()
+        record_orb_filter_result("rejected")
+        after = ORB_FILTER_RESULTS_TOTAL.labels(result="rejected")._value.get()
+        assert after == initial + 1
+
+    def test_record_orb_filter_result_error(self):
+        from lib.services.data.api.metrics import (
+            ORB_FILTER_RESULTS_TOTAL,
+            record_orb_filter_result,
+        )
+
+        initial = ORB_FILTER_RESULTS_TOTAL.labels(result="error")._value.get()
+        record_orb_filter_result("error")
+        after = ORB_FILTER_RESULTS_TOTAL.labels(result="error")._value.get()
+        assert after == initial + 1
+
+    def test_record_orb_cnn_prob_observes(self):
+        from lib.services.data.api.metrics import ORB_CNN_PROB, record_orb_cnn_prob
+
+        before = ORB_CNN_PROB._sum.get()
+        record_orb_cnn_prob(0.87)
+        after = ORB_CNN_PROB._sum.get()
+        assert after > before
+
+    def test_record_orb_cnn_prob_count_increments(self):
+        from lib.services.data.api.metrics import ORB_CNN_PROB, record_orb_cnn_prob
+
+        # Read the current _count via the sum proxy (same pattern as _sum.get())
+        # or by checking the generated output — avoids relying on private attrs
+        # not present in prometheus_client type stubs.
+        before_sum = ORB_CNN_PROB._sum.get()
+        record_orb_cnn_prob(0.55)
+        after_sum = ORB_CNN_PROB._sum.get()
+        # Sum must have increased by approximately the observed value
+        assert after_sum == pytest.approx(before_sum + 0.55, abs=1e-6)
+
+    def test_record_orb_cnn_signal_signal(self):
+        from lib.services.data.api.metrics import (
+            ORB_CNN_SIGNALS_TOTAL,
+            record_orb_cnn_signal,
+        )
+
+        initial = ORB_CNN_SIGNALS_TOTAL.labels(verdict="signal")._value.get()
+        record_orb_cnn_signal("signal")
+        after = ORB_CNN_SIGNALS_TOTAL.labels(verdict="signal")._value.get()
+        assert after == initial + 1
+
+    def test_record_orb_cnn_signal_no_signal(self):
+        from lib.services.data.api.metrics import (
+            ORB_CNN_SIGNALS_TOTAL,
+            record_orb_cnn_signal,
+        )
+
+        initial = ORB_CNN_SIGNALS_TOTAL.labels(verdict="no_signal")._value.get()
+        record_orb_cnn_signal("no_signal")
+        after = ORB_CNN_SIGNALS_TOTAL.labels(verdict="no_signal")._value.get()
+        assert after == initial + 1
+
+    def test_record_orb_cnn_signal_skipped(self):
+        from lib.services.data.api.metrics import (
+            ORB_CNN_SIGNALS_TOTAL,
+            record_orb_cnn_signal,
+        )
+
+        initial = ORB_CNN_SIGNALS_TOTAL.labels(verdict="skipped")._value.get()
+        record_orb_cnn_signal("skipped")
+        after = ORB_CNN_SIGNALS_TOTAL.labels(verdict="skipped")._value.get()
+        assert after == initial + 1
+
+    def test_update_daily_pnl_positive(self):
+        from lib.services.data.api.metrics import DAILY_PNL_GAUGE, update_daily_pnl
+
+        update_daily_pnl(350.75)
+        assert DAILY_PNL_GAUGE._value.get() == pytest.approx(350.75)
+
+    def test_update_daily_pnl_negative(self):
+        from lib.services.data.api.metrics import DAILY_PNL_GAUGE, update_daily_pnl
+
+        update_daily_pnl(-120.50)
+        assert DAILY_PNL_GAUGE._value.get() == pytest.approx(-120.50)
+
+    def test_update_daily_pnl_zero(self):
+        from lib.services.data.api.metrics import DAILY_PNL_GAUGE, update_daily_pnl
+
+        update_daily_pnl(0.0)
+        assert DAILY_PNL_GAUGE._value.get() == pytest.approx(0.0)
+
+    def test_update_consecutive_losses(self):
+        from lib.services.data.api.metrics import (
+            CONSECUTIVE_LOSSES_GAUGE,
+            update_consecutive_losses,
+        )
+
+        update_consecutive_losses(3)
+        assert CONSECUTIVE_LOSSES_GAUGE._value.get() == 3
+
+    def test_update_consecutive_losses_zero(self):
+        from lib.services.data.api.metrics import (
+            CONSECUTIVE_LOSSES_GAUGE,
+            update_consecutive_losses,
+        )
+
+        update_consecutive_losses(0)
+        assert CONSECUTIVE_LOSSES_GAUGE._value.get() == 0
+
+    def test_update_model_metrics(self):
+        from lib.services.data.api.metrics import (
+            MODEL_TRAIN_SAMPLES,
+            MODEL_VAL_ACCURACY,
+            MODEL_VAL_PRECISION,
+            MODEL_VAL_RECALL,
+            update_model_metrics,
+        )
+
+        update_model_metrics(
+            val_accuracy=83.73,
+            val_precision=91.71,
+            val_recall=78.26,
+            train_samples=9941,
+        )
+        assert MODEL_VAL_ACCURACY._value.get() == pytest.approx(83.73)
+        assert MODEL_VAL_PRECISION._value.get() == pytest.approx(91.71)
+        assert MODEL_VAL_RECALL._value.get() == pytest.approx(78.26)
+        assert MODEL_TRAIN_SAMPLES._value.get() == 9941
+
+    def test_update_model_metrics_overwrites(self):
+        from lib.services.data.api.metrics import (
+            MODEL_VAL_ACCURACY,
+            update_model_metrics,
+        )
+
+        update_model_metrics(val_accuracy=70.0, val_precision=75.0, val_recall=60.0, train_samples=3000)
+        update_model_metrics(val_accuracy=85.0, val_precision=90.0, val_recall=80.0, train_samples=10000)
+        assert MODEL_VAL_ACCURACY._value.get() == pytest.approx(85.0)
+
 
 class TestPathNormalization:
     """Test _normalize_path for metric cardinality reduction."""
@@ -483,6 +689,7 @@ class TestPrometheusOutput:
 
         output = generate_latest(get_registry()).decode("utf-8")
         expected_metrics = [
+            # Original metrics
             "http_requests_total",
             "http_request_duration_seconds",
             "sse_connections_active",
@@ -495,6 +702,18 @@ class TestPrometheusOutput:
             "focus_quality_gauge",
             "positions_open_count",
             "redis_connected",
+            # New ORB filter + CNN metrics
+            "orb_filter_results_total",
+            "orb_cnn_prob",
+            "orb_cnn_signals_total",
+            # New risk / P&L metrics
+            "daily_pnl_gauge",
+            "consecutive_losses_gauge",
+            # New CNN model performance metrics
+            "model_val_accuracy",
+            "model_val_precision",
+            "model_val_recall",
+            "model_train_samples",
         ]
         for metric in expected_metrics:
             assert metric in output, f"Missing metric: {metric}"

@@ -71,6 +71,11 @@ packages = ["src/lib"]
 [tool.pytest.ini_options]
 testpaths = ["src/tests"]
 pythonpath = ["src"]
+# -p no:faulthandler: suppresses the C-level abort/core-dump from
+# prometheus_client's _mmap_dict C extension during interpreter shutdown.
+# All 1564 tests pass cleanly — the crash only happens in the atexit/GC
+# teardown phase, causing a spurious non-zero exit without this flag.
+addopts = "-p no:faulthandler"
 
 [tool.ruff]
 src = ["src"]

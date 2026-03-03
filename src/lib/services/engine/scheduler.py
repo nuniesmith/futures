@@ -64,6 +64,17 @@ class ActionType(StrEnum):
     # London Open ORB — runs during pre-market (03:00–05:00 ET)
     CHECK_ORB_LONDON = "check_orb_london"
 
+    # London–NY Crossover ORB — runs during active session (08:00–10:00 ET)
+    CHECK_ORB_LONDON_NY = "check_orb_london_ny"
+
+    # Overnight sessions — run during off-hours / pre-market wrap windows
+    # Sydney Open  17:00–19:00 ET  (previous calendar day — wraps midnight)
+    CHECK_ORB_SYDNEY = "check_orb_sydney"
+    # CME Globex re-open  18:00–20:00 ET  (previous calendar day — wraps midnight)
+    CHECK_ORB_CME = "check_orb_cme"
+    # Tokyo Open  19:00–21:00 ET  (previous calendar day — wraps midnight)
+    CHECK_ORB_TOKYO = "check_orb_tokyo"
+
     # Off-hours actions (run once per session)
     HISTORICAL_BACKFILL = "historical_backfill"
     RUN_OPTIMIZATION = "run_optimization"
@@ -73,6 +84,9 @@ class ActionType(StrEnum):
     # CNN dataset & training actions (off-hours, run once per session)
     GENERATE_CHART_DATASET = "generate_chart_dataset"
     TRAIN_BREAKOUT_CNN = "train_breakout_cnn"
+
+    # Daily report — runs once per day at end of active session (around 12:00 ET)
+    DAILY_REPORT = "daily_report"
 
 
 @dataclass
@@ -109,8 +123,12 @@ class ScheduleManager:
     GROK_INTERVAL = 15 * 60  # 15 minutes during active
     RISK_CHECK_INTERVAL = 60  # 1 minute during active
     NO_TRADE_INTERVAL = 2 * 60  # 2 minutes during active
-    ORB_CHECK_INTERVAL = 2 * 60  # 2 minutes during active (09:30–11:00 window)
-    ORB_LONDON_CHECK_INTERVAL = 2 * 60  # 2 minutes during pre-market (03:00–05:00 window)
+    ORB_CHECK_INTERVAL = 2 * 60  # 2 min — US open (09:30–11:00 ET)
+    ORB_LONDON_CHECK_INTERVAL = 2 * 60  # 2 min — London open (03:00–05:00 ET)
+    ORB_LONDON_NY_CHECK_INTERVAL = 2 * 60  # 2 min — London-NY crossover (08:00–10:00 ET)
+    ORB_SYDNEY_CHECK_INTERVAL = 2 * 60  # 2 min — Sydney open (17:00–19:00 ET)
+    ORB_CME_CHECK_INTERVAL = 2 * 60  # 2 min — CME Globex re-open (18:00–20:00 ET)
+    ORB_TOKYO_CHECK_INTERVAL = 2 * 60  # 2 min — Tokyo open (19:00–21:00 ET)
     FOCUS_PUBLISH_INTERVAL = 30  # 30 seconds during active (throttled downstream)
     STATUS_PUBLISH_INTERVAL = 10  # 10 seconds always
 
@@ -136,8 +154,8 @@ class ScheduleManager:
 
         Boundaries:
           - Pre-market:  00:00–03:00 ET
-          - Active:      03:00–12:00 ET  (London 03–08, US 08–12)
-          - Off-hours:   12:00–00:00 ET
+          - Active:      03:00–12:00 ET  (London 03–08, London-NY 08–10, US 09:30–11)
+          - Off-hours:   12:00–00:00 ET  (includes overnight ORB windows 17–21 ET)
         """
         if now is None:
             now = datetime.now(tz=_EST)
@@ -204,7 +222,7 @@ class ScheduleManager:
         elif session == SessionMode.ACTIVE:
             pending.extend(self._get_active_actions(ts, now))
         else:
-            pending.extend(self._get_off_hours_actions(ts))
+            pending.extend(self._get_off_hours_actions(ts, today=today))
 
         # Sort by priority
         pending.sort(key=lambda a: a.priority)
@@ -417,12 +435,9 @@ class ScheduleManager:
                 )
             )
 
-        # --- London Open ORB check — every 2 minutes during 03:00–05:00 ET ---
-        # London opens at 08:00 UTC = 03:00 ET. The opening range forms
-        # 03:00–03:30 ET, then we scan for breakouts until 05:00 ET.
-        _london_orb_start = _dt_time(3, 0)
-        _london_orb_end = _dt_time(5, 0)
-        if _london_orb_start <= now_time <= _london_orb_end and self._interval_elapsed(
+        # --- London Open ORB — every 2 min during 03:00–05:00 ET ---
+        # London opens 08:00 UTC = 03:00 ET. OR forms 03:00–03:30 ET.
+        if _dt_time(3, 0) <= now_time <= _dt_time(5, 0) and self._interval_elapsed(
             ActionType.CHECK_ORB_LONDON, ts, self.ORB_LONDON_CHECK_INTERVAL
         ):
             actions.append(
@@ -433,10 +448,21 @@ class ScheduleManager:
                 )
             )
 
-        # --- US Equity Open ORB check — every 2 minutes during 09:30–11:00 ET ---
-        _orb_start = _dt_time(9, 30)
-        _orb_end = _dt_time(11, 0)
-        if _orb_start <= now_time <= _orb_end and self._interval_elapsed(
+        # --- London-NY Crossover ORB — every 2 min during 08:00–10:00 ET ---
+        # Both exchanges fully active. OR forms 08:00–08:30 ET.
+        if _dt_time(8, 0) <= now_time <= _dt_time(10, 0) and self._interval_elapsed(
+            ActionType.CHECK_ORB_LONDON_NY, ts, self.ORB_LONDON_NY_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB_LONDON_NY,
+                    priority=6,
+                    description="Check London-NY Crossover ORB (08:00–08:30 ET opening range)",
+                )
+            )
+
+        # --- US Equity Open ORB — every 2 min during 09:30–11:00 ET ---
+        if _dt_time(9, 30) <= now_time <= _dt_time(11, 0) and self._interval_elapsed(
             ActionType.CHECK_ORB, ts, self.ORB_CHECK_INTERVAL
         ):
             actions.append(
@@ -449,17 +475,83 @@ class ScheduleManager:
 
         return actions
 
-    def _get_off_hours_actions(self, ts: float) -> list[ScheduledAction]:
-        """Off-hours (12:00–00:00 ET): backfill, optimize, backtest."""
+    def _get_off_hours_actions(self, ts: float, today: date | None = None) -> list[ScheduledAction]:
+        """Off-hours (12:00–00:00 ET): overnight ORBs, daily report, backfill, optimize, backtest.
+
+        Overnight ORB windows (all wraps_midnight sessions):
+          - Sydney Open:   17:00–19:00 ET
+          - CME Globex:    18:00–20:00 ET
+          - Tokyo Open:    19:00–21:00 ET
+        These fire every 2 minutes within their scan windows, identical
+        to the daytime ORB checks.
+        """
         actions: list[ScheduledAction] = []
         session = SessionMode.OFF_HOURS.value
+        if today is None:
+            today = datetime.now(tz=_EST).date()
+
+        now = datetime.now(tz=_EST)
+        now_time = now.time()
+
+        from datetime import time as _dt_time
+
+        # --- Sydney Open ORB — every 2 min during 17:00–19:00 ET ---
+        # OR forms 17:00–17:30 ET (previous calendar day).
+        if _dt_time(17, 0) <= now_time <= _dt_time(19, 0) and self._interval_elapsed(
+            ActionType.CHECK_ORB_SYDNEY, ts, self.ORB_SYDNEY_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB_SYDNEY,
+                    priority=2,
+                    description="Check Sydney Open ORB (17:00–17:30 ET opening range)",
+                )
+            )
+
+        # --- CME Globex Re-Open ORB — every 2 min during 18:00–20:00 ET ---
+        # OR forms 18:00–18:30 ET (previous calendar day, after settlement break).
+        if _dt_time(18, 0) <= now_time <= _dt_time(20, 0) and self._interval_elapsed(
+            ActionType.CHECK_ORB_CME, ts, self.ORB_CME_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB_CME,
+                    priority=2,
+                    description="Check CME Globex Open ORB (18:00–18:30 ET opening range)",
+                )
+            )
+
+        # --- Tokyo Open ORB — every 2 min during 19:00–21:00 ET ---
+        # OR forms 19:00–19:30 ET (previous calendar day).
+        if _dt_time(19, 0) <= now_time <= _dt_time(21, 0) and self._interval_elapsed(
+            ActionType.CHECK_ORB_TOKYO, ts, self.ORB_TOKYO_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB_TOKYO,
+                    priority=2,
+                    description="Check Tokyo Open ORB (19:00–19:30 ET opening range)",
+                )
+            )
+
+        # Daily report — once per day, first thing when off-hours begins.
+        # Summarises the just-completed trading session: ORB signals, CNN stats,
+        # filter rates, risk events. Publishes to Redis + optional email alert.
+        if not self._ran_today(ActionType.DAILY_REPORT, today):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.DAILY_REPORT,
+                    priority=0,
+                    description="Generate and publish daily trading session report",
+                )
+            )
 
         # Historical backfill — once per off-hours session
         if not self._ran_this_session(ActionType.HISTORICAL_BACKFILL, session):
             actions.append(
                 ScheduledAction(
                     action=ActionType.HISTORICAL_BACKFILL,
-                    priority=0,
+                    priority=1,
                     description="Backfill historical 1-min bars to Postgres",
                 )
             )
@@ -469,7 +561,7 @@ class ScheduleManager:
             actions.append(
                 ScheduledAction(
                     action=ActionType.RUN_OPTIMIZATION,
-                    priority=1,
+                    priority=2,
                     description="Run Optuna strategy optimization",
                 )
             )
@@ -479,7 +571,7 @@ class ScheduleManager:
             actions.append(
                 ScheduledAction(
                     action=ActionType.RUN_BACKTEST,
-                    priority=2,
+                    priority=3,
                     description="Run walk-forward backtesting",
                 )
             )
@@ -489,7 +581,7 @@ class ScheduleManager:
             actions.append(
                 ScheduledAction(
                     action=ActionType.NEXT_DAY_PREP,
-                    priority=3,
+                    priority=4,
                     description="Prepare next trading day parameters",
                 )
             )
@@ -501,7 +593,7 @@ class ScheduleManager:
             actions.append(
                 ScheduledAction(
                     action=ActionType.GENERATE_CHART_DATASET,
-                    priority=4,
+                    priority=5,
                     description="Generate labeled chart dataset for CNN training",
                 )
             )
@@ -514,7 +606,7 @@ class ScheduleManager:
             actions.append(
                 ScheduledAction(
                     action=ActionType.TRAIN_BREAKOUT_CNN,
-                    priority=5,
+                    priority=6,
                     description="Train/retrain EfficientNetV2 breakout CNN on latest dataset",
                 )
             )

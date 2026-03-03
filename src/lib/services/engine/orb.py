@@ -1,22 +1,50 @@
 """
 Opening Range Breakout (ORB) Detector — Multi-Session
 ==================================================
-Detects opening range breakouts across multiple trading sessions:
+Detects opening range breakouts across six trading sessions:
 
-  1. **London Open** (03:00–03:30 ET / 08:00–08:30 UTC)
-     The primary ORB session for futures. London open drives the
-     majority of daily range establishment for metals, indices, and
-     energy futures. This is where institutional order flow begins.
+  1. **Sydney / Asia Open** (17:00–17:30 ET prev-day / 22:00–22:30 UTC)
+     Low-volatility overnight session. Useful pre-filter for crypto
+     (MBT/MET) and precious metals in thin overnight hours.
 
-  2. **US Equity Open** (09:30–10:00 ET)
-     The traditional ORB window for equity-index futures (MES, MNQ).
-     Still useful as a secondary confirmation or for equity-correlated
-     instruments.
+  2. **Tokyo Open** (19:00–19:30 ET prev-day / 00:00–00:30 UTC)
+     Narrow-range session with mean-reversion bias. Strongest on
+     JPY/AUD-correlated pairs and CME metals in overnight Globex.
+
+  3. **CME Globex Open** (18:00–18:30 ET prev-day)
+     The futures exchange re-open after the 15-min daily settlement
+     break (17:00–18:00 ET). A clean overnight-range anchor that
+     feeds into London and US sessions.
+
+  4. **London Open** (03:00–03:30 ET / 08:00–08:30 UTC)   ← PRIMARY
+     Highest-conviction session. Institutional order flow drives the
+     daily range for metals, energy, FX futures, and indices. The
+     London–NY crossover (08:00–12:00 ET) produces the cleanest moves.
+
+  5. **London–NY Crossover** (08:00–08:30 ET / 13:00–13:30 UTC)
+     The overlap window where both London and New York are fully
+     active. Highest intraday volume and tightest spreads. Best for
+     6E (EUR), MES/MNQ, and MGC. Separate OR from the London open.
+
+  6. **US Equity Open** (09:30–10:00 ET)
+     Traditional Toby Crabel ORB for equity-index futures (MES, MNQ).
+     Also covers MGC during the gold-index correlation window.
 
 Each session is defined by an ORBSession dataclass with its own
-start/end times, ATR period, and breakout multiplier. The detector
-runs independently for each session and publishes results to
-session-specific Redis keys.
+start/end times, ATR parameters, breakout multiplier, and quality
+gate thresholds (depth, body-ratio, OR-size cap).
+
+Quality filters (applied inside detect_opening_range_breakout):
+  - **Depth filter**: breakout bar close must penetrate the OR level
+    by at least ``min_depth_atr_pct`` × ATR (default 0.15×). Eliminates
+    wick-only fakes.
+  - **Body-ratio filter**: breakout bar body must be ≥ ``min_body_ratio``
+    of the bar's total range (default 0.55). Eliminates doji/indecision
+    candles at the breakout point.
+  - **OR-size cap**: if the opening range exceeds ``max_or_atr_ratio`` × ATR
+    (default 1.8×), the range is too wide to trade safely — skip.
+  - **OR-size floor**: if the opening range is less than ``min_or_atr_ratio``
+    × ATR (default 0.05×), the range is too narrow (compression) — skip.
 
 Public API:
     result = detect_opening_range_breakout(bars_1m, symbol="MGC", session=LONDON_SESSION)
@@ -33,15 +61,20 @@ Usage from engine scheduler:
         LONDON_SESSION,
         US_SESSION,
         ORB_SESSIONS,
+        SESSION_ASSETS,
     )
 
     # Single session
     result = detect_opening_range_breakout(bars_1m, symbol="MGC", session=LONDON_SESSION)
 
-    # All sessions
+    # All sessions for one symbol
     for result in detect_all_sessions(bars_1m, symbol="MGC"):
         if result.breakout_detected:
             publish_orb_alert(result)
+
+    # All sessions, respecting per-session asset lists
+    from lib.services.engine.orb import get_session_assets
+    assets_for_london = get_session_assets(LONDON_SESSION)
 """
 
 import contextlib
@@ -70,12 +103,13 @@ _EST = ZoneInfo("America/New_York")
 class ORBSession:
     """Definition of an Opening Range session window.
 
-    Each session has its own time window, ATR parameters, and Redis keys.
+    Each session has its own time window, ATR parameters, Redis keys,
+    and quality-gate thresholds for depth, body, and OR-size checks.
     Frozen so instances are hashable and can be used as dict keys.
     """
 
     name: str  # Human-readable name
-    key: str  # Short key for Redis/logs ("london", "us")
+    key: str  # Short key for Redis/logs ("london", "us", "tokyo", …)
     or_start: dt_time  # Opening range start (ET)
     or_end: dt_time  # Opening range end (ET)
     scan_end: dt_time  # Stop scanning for breakouts after this time (ET)
@@ -85,10 +119,110 @@ class ORBSession:
     max_bars: int = 35  # Maximum expected bars in OR window
     description: str = ""
 
+    # --- Quality gate thresholds ---
+    # Depth: breakout bar close must clear the OR level by at least
+    # this fraction of ATR (e.g. 0.15 = 15% of ATR beyond the level).
+    # Set to 0.0 to disable.
+    min_depth_atr_pct: float = 0.15
 
-# London Open: 03:00–03:30 ET (08:00–08:30 UTC)
-# Primary session — institutional flow, daily range establishment.
-# Scan for breakouts until 03:00 ET (gives 1.5 hours post-OR).
+    # Body ratio: breakout candle body / total bar range.
+    # A value of 0.55 means the close-open body must be ≥ 55% of the
+    # high-low range — eliminates doji/shooting-star breakouts.
+    # Set to 0.0 to disable.
+    min_body_ratio: float = 0.55
+
+    # OR-size cap: if OR range > max_or_atr_ratio × ATR, skip — range
+    # is too wide (news spike, thin market) for reliable ORB.
+    # Set to 0.0 to disable.
+    max_or_atr_ratio: float = 1.8
+
+    # OR-size floor: if OR range < min_or_atr_ratio × ATR, skip — too
+    # narrow / compressed (usually pre-event squeeze).
+    # Set to 0.0 to disable.
+    min_or_atr_ratio: float = 0.05
+
+    # Whether this session wraps past midnight (Sydney/Tokyo/CME open
+    # starts in the previous calendar day ET). When True, bar filtering
+    # must look back into the previous day's bars.
+    wraps_midnight: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Sydney / Asia Open  17:00–17:30 ET (previous calendar day)
+# Low-volatility overnight session. Good for MBT/MET crypto and thin
+# metals. Mean-reversion bias — tighter depth/body requirements.
+# wraps_midnight=True: OR window is in the previous calendar day in ET.
+# ---------------------------------------------------------------------------
+SYDNEY_SESSION = ORBSession(
+    name="Sydney Open",
+    key="sydney",
+    or_start=dt_time(17, 0),
+    or_end=dt_time(17, 30),
+    scan_end=dt_time(19, 0),
+    atr_period=14,
+    breakout_multiplier=0.4,
+    min_bars=3,
+    max_bars=35,
+    description="Sydney / Asia open (17:00–17:30 ET / 22:00–22:30 UTC)",
+    min_depth_atr_pct=0.10,  # shallower threshold — lower overnight vol
+    min_body_ratio=0.50,
+    max_or_atr_ratio=1.5,  # tighter cap — overnight ranges should be narrow
+    min_or_atr_ratio=0.03,
+    wraps_midnight=True,
+)
+
+# ---------------------------------------------------------------------------
+# Tokyo Open  19:00–19:30 ET (previous calendar day)
+# Narrow-range session. Strongest on metals and crypto in thin Globex hours.
+# wraps_midnight=True.
+# ---------------------------------------------------------------------------
+TOKYO_SESSION = ORBSession(
+    name="Tokyo Open",
+    key="tokyo",
+    or_start=dt_time(19, 0),
+    or_end=dt_time(19, 30),
+    scan_end=dt_time(21, 0),
+    atr_period=14,
+    breakout_multiplier=0.4,
+    min_bars=3,
+    max_bars=35,
+    description="Tokyo open (19:00–19:30 ET / 00:00–00:30 UTC)",
+    min_depth_atr_pct=0.10,
+    min_body_ratio=0.50,
+    max_or_atr_ratio=1.4,
+    min_or_atr_ratio=0.03,
+    wraps_midnight=True,
+)
+
+# ---------------------------------------------------------------------------
+# CME Globex Re-Open  18:00–18:30 ET (previous calendar day)
+# Futures exchange re-opens after the 17:00–18:00 ET daily settlement
+# break. First bars of the new trading day — clean overnight anchor.
+# wraps_midnight=True.
+# ---------------------------------------------------------------------------
+CME_OPEN_SESSION = ORBSession(
+    name="CME Globex Open",
+    key="cme",
+    or_start=dt_time(18, 0),
+    or_end=dt_time(18, 30),
+    scan_end=dt_time(20, 0),
+    atr_period=14,
+    breakout_multiplier=0.45,
+    min_bars=3,
+    max_bars=35,
+    description="CME Globex re-open after settlement break (18:00–18:30 ET)",
+    min_depth_atr_pct=0.12,
+    min_body_ratio=0.52,
+    max_or_atr_ratio=1.6,
+    min_or_atr_ratio=0.04,
+    wraps_midnight=True,
+)
+
+# ---------------------------------------------------------------------------
+# London Open  03:00–03:30 ET (08:00–08:30 UTC)   ← PRIMARY SESSION
+# Highest-conviction ORB session. Institutional flow sets the daily range
+# for metals, energy, FX futures, and indices.
+# ---------------------------------------------------------------------------
 LONDON_SESSION = ORBSession(
     name="London Open",
     key="london",
@@ -100,11 +234,39 @@ LONDON_SESSION = ORBSession(
     min_bars=5,
     max_bars=35,
     description="London open session (03:00–03:30 ET / 08:00–08:30 UTC)",
+    min_depth_atr_pct=0.15,
+    min_body_ratio=0.55,
+    max_or_atr_ratio=1.8,
+    min_or_atr_ratio=0.05,
 )
 
-# US Equity Open: 09:30–10:00 ET
-# Secondary session — equity cash open.
-# Scan for breakouts until 11:00 ET (gives 1 hour post-OR).
+# ---------------------------------------------------------------------------
+# London–NY Crossover  08:00–08:30 ET (13:00–13:30 UTC)
+# Both exchanges fully active. Highest intraday volume, tightest spreads.
+# Best assets: 6E (EUR), MES, MNQ, MGC. Separate OR from London open.
+# ---------------------------------------------------------------------------
+LONDON_NY_SESSION = ORBSession(
+    name="London-NY Crossover",
+    key="london_ny",
+    or_start=dt_time(8, 0),
+    or_end=dt_time(8, 30),
+    scan_end=dt_time(10, 0),
+    atr_period=14,
+    breakout_multiplier=0.5,
+    min_bars=5,
+    max_bars=35,
+    description="London-NY crossover (08:00–08:30 ET / 13:00–13:30 UTC)",
+    min_depth_atr_pct=0.18,  # stricter — high vol means more fakes too
+    min_body_ratio=0.58,
+    max_or_atr_ratio=2.0,  # wider cap — legitimate high-vol range
+    min_or_atr_ratio=0.06,
+)
+
+# ---------------------------------------------------------------------------
+# US Equity Open  09:30–10:00 ET
+# Classic Toby Crabel ORB for MES/MNQ. Also covers MGC during gold-index
+# correlation window.
+# ---------------------------------------------------------------------------
 US_SESSION = ORBSession(
     name="US Equity Open",
     key="us",
@@ -116,10 +278,73 @@ US_SESSION = ORBSession(
     min_bars=5,
     max_bars=35,
     description="US equity cash open (09:30–10:00 ET)",
+    min_depth_atr_pct=0.15,
+    min_body_ratio=0.55,
+    max_or_atr_ratio=1.8,
+    min_or_atr_ratio=0.05,
 )
 
-# All sessions in priority order (London first — it's the primary session)
-ORB_SESSIONS: list[ORBSession] = [LONDON_SESSION, US_SESSION]
+# ---------------------------------------------------------------------------
+# All sessions in priority order
+# ---------------------------------------------------------------------------
+# Overnight sessions (wraps_midnight) run in the prior calendar day but
+# are evaluated continuously once the engine starts. The scheduler activates
+# them based on current ET time.
+ORB_SESSIONS: list[ORBSession] = [
+    SYDNEY_SESSION,
+    CME_OPEN_SESSION,
+    TOKYO_SESSION,
+    LONDON_SESSION,
+    LONDON_NY_SESSION,
+    US_SESSION,
+]
+
+# ---------------------------------------------------------------------------
+# Per-session asset focus lists
+# ---------------------------------------------------------------------------
+# Maps session key → list of Yahoo tickers that are relevant for that session.
+# The ORB check loop filters assets to this list per session, avoiding e.g.
+# checking MES during Tokyo (near-zero volume) or 6E during US Equity Open
+# (FX already moved 5 hours earlier).
+#
+# Ticker values must match ASSETS dict in lib/core/models.py.
+SESSION_ASSETS: dict[str, list[str]] = {
+    # Sydney: crypto micros + thin metals
+    "sydney": ["MGC=F", "SI=F", "MCL=F"],
+    # CME Globex re-open: all futures (new trading day starts here)
+    "cme": ["MGC=F", "SI=F", "HG=F", "MCL=F", "ES=F", "NQ=F"],
+    # Tokyo: metals + crypto (JPY-correlated)
+    "tokyo": ["MGC=F", "SI=F", "MCL=F"],
+    # London: FX, metals, energy, index futures
+    "london": ["MGC=F", "SI=F", "HG=F", "MCL=F", "ES=F", "NQ=F"],
+    # London-NY crossover: highest-conviction; all 6 assets
+    "london_ny": ["MGC=F", "SI=F", "HG=F", "MCL=F", "ES=F", "NQ=F"],
+    # US Equity Open: primarily index futures and gold
+    "us": ["MGC=F", "ES=F", "NQ=F", "MCL=F"],
+}
+
+
+def get_session_assets(session: "ORBSession") -> list[str]:
+    """Return the list of Yahoo tickers relevant for *session*.
+
+    Falls back to all configured assets if the session has no specific list.
+
+    Args:
+        session: The ORBSession to look up.
+
+    Returns:
+        List of Yahoo ticker strings (e.g. ``["MGC=F", "ES=F"]``).
+    """
+    if session.key in SESSION_ASSETS:
+        return SESSION_ASSETS[session.key]
+    # Fallback: return all asset tickers from the models config
+    try:
+        from lib.core.models import ASSETS
+
+        return list(ASSETS.values())
+    except Exception:
+        return []
+
 
 # Legacy aliases for backward compatibility
 OR_START = US_SESSION.or_start
@@ -128,6 +353,10 @@ ATR_PERIOD = 14
 BREAKOUT_ATR_MULTIPLIER = 0.5
 MIN_OR_BARS = 5
 MAX_OR_BARS = 35
+
+# Convenience set of overnight (wraps_midnight) sessions for the scheduler
+OVERNIGHT_SESSIONS: list[ORBSession] = [s for s in ORB_SESSIONS if s.wraps_midnight]
+DAYTIME_SESSIONS: list[ORBSession] = [s for s in ORB_SESSIONS if not s.wraps_midnight]
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +429,13 @@ class ORBResult:
     filter_passed: bool | None = None
     filter_summary: str = ""
 
+    # Quality gate results (populated by detect_opening_range_breakout)
+    depth_ok: bool | None = None  # True if depth filter passed
+    body_ratio_ok: bool | None = None  # True if body-ratio filter passed
+    or_size_ok: bool | None = None  # True if OR-size cap/floor passed
+    breakout_bar_depth: float = 0.0  # Actual penetration beyond OR level
+    breakout_bar_body_ratio: float = 0.0  # Actual body/range ratio of breakout bar
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to a JSON-serializable dict."""
         d = {
@@ -222,6 +458,12 @@ class ORBResult:
             "or_bar_count": self.or_bar_count,
             "evaluated_at": self.evaluated_at,
             "error": self.error,
+            # Quality gate results
+            "depth_ok": self.depth_ok,
+            "body_ratio_ok": self.body_ratio_ok,
+            "or_size_ok": self.or_size_ok,
+            "breakout_bar_depth": round(self.breakout_bar_depth, 6),
+            "breakout_bar_body_ratio": round(self.breakout_bar_body_ratio, 4),
         }
         # Include CNN data if present
         if self.cnn_prob is not None:
@@ -334,9 +576,14 @@ def compute_opening_range(
 ) -> tuple[float, float, int, bool]:
     """Extract the opening range (high, low) from 1-minute bars.
 
+    Handles sessions that ``wraps_midnight`` (Sydney, Tokyo, CME open):
+    those sessions start in the *previous* calendar day in ET, so we
+    look for bars on either today or yesterday within the OR time window.
+
     Args:
         bars_1m: DataFrame with DatetimeIndex and columns: High, Low, Close.
-                 Must contain bars from today's session.
+                 Should contain at least 24 hours of 1-minute bars so that
+                 overnight sessions have data.
         session: ORB session definition. Defaults to US_SESSION for
                  backward compatibility.
 
@@ -351,12 +598,40 @@ def compute_opening_range(
         return 0.0, 0.0, 0, False
 
     df = _localize_index(bars_1m.copy())
-
-    # Filter to bars within the opening range window
     idx: Any = df.index
     times = idx.time
-    or_mask = (times >= session.or_start) & (times < session.or_end)
-    or_bars: pd.DataFrame = df.loc[or_mask]
+
+    if session.wraps_midnight:
+        # For overnight sessions the OR window is e.g. 17:00–17:30 ET which
+        # lives in the *previous* calendar day relative to "today" in ET.
+        # We filter purely by wall-clock time regardless of date so that the
+        # most recent occurrence of that window is used.
+        or_mask = (times >= session.or_start) & (times < session.or_end)
+        # is_complete: any bar at or after or_end on the same calendar day
+        # as the last OR bar, or any bar today past midnight.
+        or_bars_all: pd.DataFrame = df.loc[or_mask]
+        if or_bars_all.empty:
+            return 0.0, 0.0, 0, False
+        # Use the most recent contiguous block (last date that has OR bars)
+        last_or_date = or_bars_all.index[-1].date()
+        or_bars: pd.DataFrame = or_bars_all[or_bars_all.index.date == last_or_date]
+
+        # is_complete: bars after or_end on that date, or any bar on the
+        # *next* calendar day (i.e., today if OR was yesterday)
+        import datetime as _dt
+
+        next_date = last_or_date + _dt.timedelta(days=1)
+        post_or = df[
+            ((df.index.date == last_or_date) & (times >= session.or_end)) | (df.index.date == next_date)  # type: ignore[operator]
+        ]
+        is_complete = not post_or.empty
+    else:
+        # Normal intraday session — filter by today's wall-clock time only
+        or_mask = (times >= session.or_start) & (times < session.or_end)
+        or_bars = df.loc[or_mask]
+        if or_bars.empty:
+            return 0.0, 0.0, 0, False
+        is_complete = bool(np.any(times >= session.or_end))
 
     if or_bars.empty:
         return 0.0, 0.0, 0, False
@@ -365,10 +640,84 @@ def compute_opening_range(
     or_low = float(or_bars["Low"].min())  # type: ignore[arg-type]
     bar_count: int = len(or_bars)
 
-    # Check if we have bars past the OR window (session progressed beyond OR end)
-    is_complete = bool(np.any(times >= session.or_end))
-
     return or_high, or_low, bar_count, is_complete
+
+
+def _check_or_size(
+    or_range: float,
+    atr: float,
+    session: ORBSession,
+) -> tuple[bool, str]:
+    """Check whether the opening range size is within acceptable bounds.
+
+    Args:
+        or_range: Height of the opening range (or_high - or_low).
+        atr: Current ATR value.
+        session: Session whose thresholds to apply.
+
+    Returns:
+        (passed, reason_string)  — reason is empty when passed=True.
+    """
+    if atr <= 0:
+        return True, ""  # can't evaluate without ATR; defer to caller
+
+    ratio = or_range / atr
+
+    if session.max_or_atr_ratio > 0 and ratio > session.max_or_atr_ratio:
+        return False, (f"OR too wide: {or_range:.4f} = {ratio:.2f}× ATR (cap {session.max_or_atr_ratio:.2f}×)")
+    if session.min_or_atr_ratio > 0 and ratio < session.min_or_atr_ratio:
+        return False, (f"OR too narrow: {or_range:.4f} = {ratio:.2f}× ATR (floor {session.min_or_atr_ratio:.2f}×)")
+    return True, ""
+
+
+def _check_breakout_bar_quality(
+    row: "pd.Series",
+    direction: str,
+    or_high: float,
+    or_low: float,
+    atr: float,
+    session: ORBSession,
+) -> tuple[bool, bool, float, float]:
+    """Evaluate depth and body-ratio quality of a candidate breakout bar.
+
+    Args:
+        row: The breakout bar (must have Open, High, Low, Close).
+        direction: ``"LONG"`` or ``"SHORT"``.
+        or_high: Opening range high.
+        or_low: Opening range low.
+        atr: Current ATR value.
+        session: Session whose quality thresholds to apply.
+
+    Returns:
+        (depth_ok, body_ratio_ok, depth_value, body_ratio_value)
+        depth_value  — absolute penetration beyond OR level (always ≥ 0).
+        body_ratio_value — |close - open| / (high - low), clamped [0, 1].
+    """
+    bar_open: float = float(row.get("Open", row.get("open", 0.0)))
+    bar_high: float = float(row.get("High", row.get("high", 0.0)))
+    bar_low: float = float(row.get("Low", row.get("low", 0.0)))
+    bar_close: float = float(row.get("Close", row.get("close", 0.0)))
+
+    # Depth: how far the close penetrated beyond the OR level
+    if direction == "LONG":
+        depth = max(bar_close - or_high, 0.0)
+    else:
+        depth = max(or_low - bar_close, 0.0)
+
+    # Body ratio: fraction of bar range covered by the candle body
+    bar_range = bar_high - bar_low
+    if bar_range > 0:
+        body_ratio = abs(bar_close - bar_open) / bar_range
+    else:
+        body_ratio = 0.0
+    body_ratio = min(body_ratio, 1.0)
+
+    # Evaluate thresholds
+    min_depth = atr * session.min_depth_atr_pct if atr > 0 else 0.0
+    depth_ok = (session.min_depth_atr_pct <= 0) or (depth >= min_depth)
+    body_ok = (session.min_body_ratio <= 0) or (body_ratio >= session.min_body_ratio)
+
+    return depth_ok, body_ok, depth, body_ratio
 
 
 def detect_opening_range_breakout(
@@ -384,14 +733,23 @@ def detect_opening_range_breakout(
     Algorithm:
       1. Compute the opening range (OR) from bars within the session window.
       2. Compute ATR from all available bars for volatility context.
-      3. Define breakout levels:
-           - Long trigger  = OR_high + (ATR * multiplier)
-           - Short trigger = OR_low  - (ATR * multiplier)
-      4. Scan bars after OR end (up to scan_end) for a close beyond either trigger.
-      5. Return the first breakout found (or no breakout).
+      3. Apply OR-size quality gate (too wide or too narrow → skip).
+      4. Define breakout levels:
+           - Long trigger  = OR_high + (ATR × multiplier)
+           - Short trigger = OR_low  − (ATR × multiplier)
+      5. Scan bars after OR end (up to scan_end) for a close beyond either trigger.
+      6. For the first candidate bar, apply depth and body-ratio quality gates.
+         If they fail, continue scanning for the next candidate bar.
+      7. Return the first bar that passes all quality gates (or no breakout).
+
+    The quality gate results (depth_ok, body_ratio_ok, or_size_ok) are always
+    populated on the returned ORBResult so the caller can log/audit them even
+    when breakout_detected=False.
 
     Args:
         bars_1m: 1-minute OHLCV DataFrame with DatetimeIndex.
+                 Should cover at least the current session day.  For overnight
+                 sessions (wraps_midnight=True), pass 2 days of bars.
         symbol: Instrument symbol for labelling (e.g. "MGC", "MNQ").
         session: ORB session definition. Defaults to US_SESSION.
         atr_period: ATR look-back period (overrides session default).
@@ -399,7 +757,7 @@ def detect_opening_range_breakout(
         now_fn: Optional clock function for testability.
 
     Returns:
-        ORBResult with breakout_detected=True/False and all details.
+        ORBResult with breakout_detected=True/False and all quality details.
     """
     if session is None:
         session = US_SESSION
@@ -461,6 +819,19 @@ def detect_opening_range_breakout(
         result.error = "ATR is zero — cannot compute breakout thresholds"
         return result
 
+    # --- OR-size quality gate ---
+    or_size_ok, or_size_reason = _check_or_size(result.or_range, atr, session)
+    result.or_size_ok = or_size_ok
+    if not or_size_ok:
+        result.error = f"OR-size gate: {or_size_reason}"
+        logger.debug(
+            "ORB [%s] %s skipped — %s",
+            session.name,
+            symbol,
+            or_size_reason,
+        )
+        return result
+
     # --- Compute breakout levels ---
     threshold = atr * _breakout_mult
     result.breakout_threshold = threshold
@@ -469,43 +840,102 @@ def detect_opening_range_breakout(
 
     # --- If OR isn't complete yet, just return the levels (no scan) ---
     if not or_complete:
-        # OR is still forming — return the current range and triggers
         return result
 
     # --- Scan post-OR bars for breakout ---
     df = _localize_index(bars_1m.copy())
     _idx: Any = df.index
     times = _idx.time
-    # Only scan bars between OR end and scan end
-    post_or_mask = (times >= session.or_end) & (times <= session.scan_end)
-    post_or_bars: pd.DataFrame = df.loc[post_or_mask]
+
+    if session.wraps_midnight:
+        # For overnight sessions, post-OR bars can be on the next calendar day
+        import datetime as _dt
+
+        # Find the date of the most recent OR bar
+        _or_mask = (times >= session.or_start) & (times < session.or_end)
+        _or_dates = df.loc[_or_mask].index
+        if _or_dates.empty:
+            return result
+        _last_or_date = _or_dates[-1].date()
+        _next_date = _last_or_date + _dt.timedelta(days=1)
+
+        post_or_bars: pd.DataFrame = df[
+            ((df.index.date == _last_or_date) & (times >= session.or_end) & (times <= session.scan_end))  # type: ignore[operator]
+            | ((df.index.date == _next_date) & (times <= session.scan_end))  # type: ignore[operator]
+        ]
+    else:
+        post_or_mask = (times >= session.or_end) & (times <= session.scan_end)
+        post_or_bars = df.loc[post_or_mask]
 
     if post_or_bars.empty:
-        # No post-OR bars yet — check not possible
         return result
 
+    # --- Scan for first qualifying breakout ---
     for idx_label, row in post_or_bars.iterrows():
         close: float = float(row["Close"])  # type: ignore[arg-type]
 
-        # Long breakout: close above OR_high + threshold
+        candidate_direction: str = ""
         if close > result.long_trigger:
-            result.breakout_detected = True
-            result.direction = "LONG"
-            result.trigger_price = close
-            result.breakout_bar_time = str(idx_label)
-            break
+            candidate_direction = "LONG"
+        elif close < result.short_trigger:
+            candidate_direction = "SHORT"
+        else:
+            continue
 
-        # Short breakout: close below OR_low - threshold
-        if close < result.short_trigger:
-            result.breakout_detected = True
-            result.direction = "SHORT"
-            result.trigger_price = close
-            result.breakout_bar_time = str(idx_label)
-            break
+        # Apply depth and body-ratio quality gates
+        depth_ok, body_ok, depth_val, body_val = _check_breakout_bar_quality(
+            row,
+            candidate_direction,
+            or_high,
+            or_low,
+            atr,
+            session,
+        )
+
+        # Always record the quality metrics on first candidate for auditing
+        if result.depth_ok is None:
+            result.depth_ok = depth_ok
+            result.body_ratio_ok = body_ok
+            result.breakout_bar_depth = depth_val
+            result.breakout_bar_body_ratio = body_val
+
+        if not depth_ok:
+            logger.debug(
+                "ORB [%s] %s %s candidate rejected: depth %.4f < min %.4f (%.2f× ATR)",
+                session.name,
+                candidate_direction,
+                symbol,
+                depth_val,
+                atr * session.min_depth_atr_pct,
+                session.min_depth_atr_pct,
+            )
+            continue  # look for a deeper bar
+
+        if not body_ok:
+            logger.debug(
+                "ORB [%s] %s %s candidate rejected: body ratio %.2f < min %.2f",
+                session.name,
+                candidate_direction,
+                symbol,
+                body_val,
+                session.min_body_ratio,
+            )
+            continue  # look for a cleaner bar
+
+        # All quality gates passed — confirmed breakout
+        result.breakout_detected = True
+        result.direction = candidate_direction
+        result.trigger_price = close
+        result.breakout_bar_time = str(idx_label)
+        result.depth_ok = depth_ok
+        result.body_ratio_ok = body_ok
+        result.breakout_bar_depth = depth_val
+        result.breakout_bar_body_ratio = body_val
+        break
 
     if result.breakout_detected:
         logger.info(
-            "ORB [%s] detected: %s %s @ %.4f (OR %.4f–%.4f, ATR %.4f, threshold %.4f)",
+            "ORB [%s] detected: %s %s @ %.4f (OR %.4f–%.4f, ATR %.4f, threshold %.4f, depth %.4f, body_ratio %.2f)",
             session.name,
             result.direction,
             symbol,
@@ -514,6 +944,8 @@ def detect_opening_range_breakout(
             result.or_high,
             atr,
             threshold,
+            result.breakout_bar_depth,
+            result.breakout_bar_body_ratio,
         )
 
     return result
@@ -641,7 +1073,9 @@ def scan_orb_all_sessions_all_assets(
 def get_active_sessions(now: datetime | None = None) -> list[ORBSession]:
     """Return sessions that are currently in their OR formation or scan window.
 
-    Useful for the scheduler to know which sessions need checking right now.
+    For overnight sessions (wraps_midnight=True) whose OR window is before
+    midnight ET, we check whether the current time is within the scan window
+    which may extend past midnight into the next calendar day.
 
     Args:
         now: Current time (tz-aware). Defaults to now in ET.
@@ -657,9 +1091,16 @@ def get_active_sessions(now: datetime | None = None) -> list[ORBSession]:
 
     active = []
     for session in ORB_SESSIONS:
-        # A session is "active" from its OR start through scan_end
-        if session.or_start <= t <= session.scan_end:
-            active.append(session)
+        if session.wraps_midnight:
+            # Overnight session: active from or_start (e.g. 17:00) to
+            # scan_end (e.g. 19:00).  scan_end is always on the same
+            # calendar day as or_start (no midnight crossing in scan window).
+            if session.or_start <= t <= session.scan_end:
+                active.append(session)
+        else:
+            # Normal session: active from or_start through scan_end same day
+            if session.or_start <= t <= session.scan_end:
+                active.append(session)
 
     return active
 
@@ -673,6 +1114,9 @@ def get_session_status(now: datetime | None = None) -> dict[str, str]:
     """Return a status dict for each session.
 
     Possible statuses: "waiting", "forming", "scanning", "complete"
+
+    For overnight (wraps_midnight) sessions, status is relative to the
+    most recent occurrence of that session window.
     """
     if now is None:
         now = datetime.now(tz=_EST)
@@ -692,6 +1136,21 @@ def get_session_status(now: datetime | None = None) -> dict[str, str]:
             statuses[session.key] = "complete"
 
     return statuses
+
+
+def get_session_by_key(key: str) -> ORBSession | None:
+    """Return the ORBSession with the given key, or None if not found.
+
+    Args:
+        key: Session key string, e.g. ``"london"``, ``"tokyo"``, ``"us"``.
+
+    Returns:
+        Matching ORBSession, or None.
+    """
+    for session in ORB_SESSIONS:
+        if session.key == key:
+            return session
+    return None
 
 
 # ---------------------------------------------------------------------------

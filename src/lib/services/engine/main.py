@@ -554,11 +554,26 @@ def _handle_check_orb_london(engine) -> None:
 
     Delegates to the shared ORB handler with the London session config.
     London open is the primary ORB session — institutional order flow
-    drives range establishment for metals, indices, and energy futures.
+    drives range establishment for metals, energy, and index futures.
     """
     from lib.services.engine.orb import LONDON_SESSION
 
     _handle_check_orb(engine, orb_session=LONDON_SESSION)
+
+
+def _handle_check_orb_london_ny(engine) -> None:
+    """Check for London-NY Crossover ORB patterns (08:00–08:30 ET).
+
+    Both London and New York are fully active — highest intraday volume,
+    tightest spreads. Best assets: 6E, MES, MNQ, MGC.
+    """
+    from lib.services.engine.orb import LONDON_NY_SESSION
+
+    _handle_check_orb(engine, orb_session=LONDON_NY_SESSION)
+
+
+def _handle_check_orb_sydney(engine) -> None:
+    """Check for Sydney Open ORB patterns (17:00–17
 
 
 def _handle_check_orb(engine, orb_session=None) -> None:
@@ -797,6 +812,13 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                         "published": False,
                                     },
                                 )
+                                # Prometheus: filter rejected
+                                try:
+                                    from lib.services.data.api.metrics import record_orb_filter_result
+
+                                    record_orb_filter_result("rejected")
+                                except Exception:
+                                    pass
                             else:
                                 logger.info(
                                     "✅ ORB PASSED filters: %s %s — %s",
@@ -804,6 +826,13 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                     symbol,
                                     filter_summary,
                                 )
+                                # Prometheus: filter passed
+                                try:
+                                    from lib.services.data.api.metrics import record_orb_filter_result
+
+                                    record_orb_filter_result("passed")
+                                except Exception:
+                                    pass
 
                         except Exception as exc:
                             # Filter failure is non-fatal — allow the breakout through
@@ -813,6 +842,13 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                 exc,
                             )
                             filter_passed = True
+                            # Prometheus: filter error
+                            try:
+                                from lib.services.data.api.metrics import record_orb_filter_result
+
+                                record_orb_filter_result("error")
+                            except Exception:
+                                pass
 
                     # Only publish and alert if filters pass (or filters unavailable)
                     if filter_passed:
@@ -937,14 +973,38 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                             cnn_confidence,
                                             "SIGNAL" if cnn_signal else "NO SIGNAL",
                                         )
+                                        # Prometheus: CNN probability + verdict
+                                        try:
+                                            from lib.services.data.api.metrics import (
+                                                record_orb_cnn_prob,
+                                                record_orb_cnn_signal,
+                                            )
+
+                                            if cnn_prob is not None:
+                                                record_orb_cnn_prob(cnn_prob)
+                                            record_orb_cnn_signal("signal" if cnn_signal else "no_signal")
+                                        except Exception:
+                                            pass
 
                                 # Periodic cleanup of old inference images
                                 cleanup_inference_images(max_age_seconds=1800)
 
                         except ImportError:
                             logger.debug("CNN module not available — skipping inference")
+                            try:
+                                from lib.services.data.api.metrics import record_orb_cnn_signal
+
+                                record_orb_cnn_signal("skipped")
+                            except Exception:
+                                pass
                         except Exception as cnn_exc:
                             logger.debug("CNN inference error (non-fatal): %s", cnn_exc)
+                            try:
+                                from lib.services.data.api.metrics import record_orb_cnn_signal
+
+                                record_orb_cnn_signal("skipped")
+                            except Exception:
+                                pass
 
                         # Optional CNN gate: if ORB_CNN_GATE=1, block low-prob signals
                         _cnn_gate = os.environ.get("ORB_CNN_GATE", "0") == "1"
@@ -1196,30 +1256,100 @@ def _handle_next_day_prep(engine) -> None:
 def _handle_generate_chart_dataset(engine) -> None:
     """Generate labeled chart images for CNN training (off-hours).
 
-    Pulls historical 1-minute bars for focus assets, simulates ORB trades
-    across sliding windows, renders Ruby-style chart snapshots, and writes
-    a CSV manifest (dataset/labels.csv) ready for BreakoutDataset.
+    Uses the incremental dataset build pipeline which:
+      1. Ensures all enabled assets have fresh, gap-free 1-minute bars in
+         Postgres by calling the data service's /bars/fill/all endpoint
+         (or falling back to a direct in-process backfill if the service
+         is not reachable from inside the engine container).
+      2. Generates chart images only for trading sessions that don't
+         already have images on disk (incremental / resumable).
+      3. Re-splits labels.csv into train.csv / val.csv with stratified
+         sampling so the CNN always trains on the freshest data.
+
+    This replaces the old "full regeneration from cache" approach and
+    implements Priority 2: Incremental dataset build.
     """
-    logger.info("▶ Generating chart dataset for CNN training...")
+    logger.info("▶ Generating chart dataset (incremental build)...")
+
+    # Determine symbols: prefer daily focus list, fall back to defaults.
+    symbols = ["MGC", "MES", "MNQ", "MCL", "6E", "MBT"]
+    try:
+        from lib.core.cache import cache_get
+
+        raw_focus = cache_get("engine:daily_focus")
+        if raw_focus:
+            focus_data = json.loads(raw_focus)
+            focus_symbols = [a.get("symbol", "") for a in focus_data.get("assets", [])]
+            if focus_symbols:
+                symbols = [s for s in focus_symbols if s]
+    except Exception:
+        pass
+
+    # ── Preferred path: use the incremental_dataset_build pipeline ────────
+    try:
+        import sys
+        from pathlib import Path
+
+        # Add scripts/ to path so the standalone script is importable.
+        scripts_dir = str(Path(__file__).resolve().parents[4] / "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+
+        from incremental_dataset_build import BuildConfig
+        from incremental_dataset_build import run as run_incremental_build
+
+        # Resolve data service URL from environment (engine and data service
+        # are co-located in Docker under the service name "data").
+        data_service_url = f"http://{os.getenv('DATA_SERVICE_HOST', 'data')}:{os.getenv('DATA_SERVICE_PORT', '8000')}"
+
+        cfg = BuildConfig(
+            data_service_url=data_service_url,
+            api_key=os.getenv("DATA_SERVICE_API_KEY", os.getenv("API_KEY", "")),
+            fill_days_back=int(os.getenv("CNN_RETRAIN_DAYS_BACK", "90")),
+            symbols=symbols,
+            days_back=int(os.getenv("CNN_RETRAIN_DAYS_BACK", "90")),
+            chart_dpi=150,
+            orb_session="both",
+            skip_existing=True,  # incremental — never regenerate what we have
+        )
+
+        result = run_incremental_build(cfg)
+
+        logger.info(
+            "✅ Incremental dataset build %s: +%d new images, %d total, "
+            "%d rows in labels.csv, +%d bars fetched (%.1f min total)",
+            result.status.upper(),
+            result.dataset_new_images,
+            result.dataset_total_images,
+            result.dataset_total_rows,
+            result.fill_bars_added,
+            (result.fill_duration_seconds + result.dataset_duration_seconds) / 60,
+        )
+
+        if result.errors:
+            for err in result.errors[:5]:
+                logger.warning("  ⚠ %s", err)
+
+        return
+
+    except ImportError as exc:
+        logger.warning(
+            "incremental_dataset_build not available (%s) — falling back to direct generation",
+            exc,
+        )
+    except Exception as exc:
+        logger.error(
+            "Incremental build pipeline failed (%s) — falling back to direct generation",
+            exc,
+        )
+
+    # ── Fallback: direct dataset generation from DB ───────────────────────
+    # Reached only if the incremental pipeline import or execution fails.
     try:
         from lib.analysis.dataset_generator import DatasetConfig, generate_dataset
 
-        # Determine symbols from daily focus (or use defaults)
-        symbols = ["MGC", "MES", "MNQ"]
-        try:
-            from lib.core.cache import cache_get
-
-            raw_focus = cache_get("engine:daily_focus")
-            if raw_focus:
-                focus_data = json.loads(raw_focus)
-                focus_symbols = [a.get("symbol", "") for a in focus_data.get("assets", [])]
-                if focus_symbols:
-                    symbols = [s for s in focus_symbols if s]
-        except Exception:
-            pass
-
         config = DatasetConfig(
-            bars_source="cache",
+            bars_source="db",  # use Postgres historical_bars table
             skip_existing=True,
             chart_dpi=150,
             orb_session="both",
@@ -1232,7 +1362,7 @@ def _handle_generate_chart_dataset(engine) -> None:
         )
 
         logger.info(
-            "✅ Chart dataset generation complete: %s",
+            "✅ Chart dataset generation (fallback) complete: %s",
             stats.summary(),
         )
 
@@ -1348,6 +1478,187 @@ def _handle_train_breakout_cnn(engine) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Daily report handler (runs once per day at start of off-hours ~12:00 ET)
+# ---------------------------------------------------------------------------
+
+
+def _handle_daily_report(engine) -> None:
+    """Generate the daily trading session report and publish it to Redis.
+
+    Builds a structured summary of the just-completed trading session:
+      - ORB signal count + filter pass/reject rates
+      - CNN probability stats (mean, min, max, above-threshold count)
+      - Risk events (blocks, warnings, consecutive losses)
+      - Model performance snapshot (val accuracy, precision, recall)
+
+    The report is:
+      1. Published to Redis key ``engine:daily_report`` (TTL 26h) so the
+         data-service can serve it at GET /audit/daily-report.
+      2. Logged at INFO level in a human-readable format.
+      3. Optionally emailed if ``DAILY_REPORT_EMAIL`` is set in the environment.
+
+    Any failure here is non-fatal — it is logged and the engine continues.
+    """
+    logger.info("▶ Generating daily session report...")
+    try:
+        # Build the report via the audit helper — _build_daily_report takes a
+        # date object and queries the DB internally for that day's events.
+        report: dict = {}
+        try:
+            from lib.services.data.api.audit import _build_daily_report
+
+            today = datetime.now(tz=_EST).date()
+            report = _build_daily_report(today)
+        except Exception as exc:
+            logger.debug("Could not build report from audit DB (%s) — using empty report", exc)
+            report = {"generated_at": datetime.now(tz=_EST).isoformat()}
+
+        # Add generation timestamp and session label
+        report["generated_at"] = datetime.now(tz=_EST).isoformat()
+        report["session"] = "daily"
+
+        # 1. Publish to Redis
+        try:
+            from lib.core.cache import cache_set
+
+            cache_set(
+                "engine:daily_report",
+                json.dumps(report, default=str).encode(),
+                ttl=26 * 3600,  # 26 hours — survives until tomorrow's report
+            )
+            logger.debug("Daily report published to Redis key engine:daily_report")
+        except Exception as exc:
+            logger.warning("Could not publish daily report to Redis: %s", exc)
+
+        # 2. Log summary — the report dict uses nested "orb" and "cnn" keys
+        orb_section = report.get("orb", {})
+        orb_count = orb_section.get("breakouts_detected", 0)
+        published = orb_section.get("published", 0)
+        filtered = orb_section.get("filter_failed", 0)
+        cnn_stats = report.get("cnn", {})
+        model_info_d = report.get("model", {})
+
+        logger.info("=" * 55)
+        logger.info("  📊 Daily Session Report — %s", datetime.now(tz=_EST).strftime("%Y-%m-%d"))
+        logger.info("=" * 55)
+        logger.info("  ORB detections : %d breakouts | %d published | %d filtered", orb_count, published, filtered)
+        if orb_count > 0:
+            pass_rate = published / orb_count * 100
+            logger.info("  Filter pass rate: %.0f%%", pass_rate)
+        if cnn_stats:
+            logger.info(
+                "  CNN P(good)    : mean=%.3f  min=%.3f  max=%.3f  n=%d",
+                cnn_stats.get("mean", 0),
+                cnn_stats.get("min", 0),
+                cnn_stats.get("max", 0),
+                cnn_stats.get("count", 0),
+            )
+        if model_info_d and model_info_d.get("available"):
+            val_acc = model_info_d.get("val_accuracy") or 0
+            precision = model_info_d.get("precision") or 0
+            recall = model_info_d.get("recall") or 0
+            samples = model_info_d.get("train_samples") or 0
+            logger.info(
+                "  Model          : acc=%.1f%%  prec=%.1f%%  recall=%.1f%%  samples=%d",
+                val_acc,
+                precision,
+                recall,
+                samples,
+            )
+        logger.info("=" * 55)
+
+        # 3. Optional email alert
+        email_to = os.environ.get("DAILY_REPORT_EMAIL", "").strip()
+        if email_to:
+            _send_daily_report_email(email_to, report)
+
+        logger.info("✅ Daily report complete")
+
+    except Exception as exc:
+        logger.warning("Daily report generation failed (non-fatal): %s", exc, exc_info=True)
+
+
+def _send_daily_report_email(to_addr: str, report: dict) -> None:
+    """Send the daily report via SMTP if environment variables are configured.
+
+    Required env vars:
+        SMTP_HOST        — e.g. smtp.gmail.com
+        SMTP_PORT        — e.g. 587
+        SMTP_USER        — sender email address
+        SMTP_PASSWORD    — sender password or app password
+        DAILY_REPORT_EMAIL — recipient address (already passed in)
+
+    If any required variable is missing the email is silently skipped.
+    """
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    smtp_host = os.environ.get("SMTP_HOST", "").strip()
+    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+    smtp_user = os.environ.get("SMTP_USER", "").strip()
+    smtp_pass = os.environ.get("SMTP_PASSWORD", "").strip()
+
+    if not all([smtp_host, smtp_user, smtp_pass]):
+        logger.debug("SMTP not configured — skipping daily report email (set SMTP_HOST/SMTP_USER/SMTP_PASSWORD)")
+        return
+
+    try:
+        today_str = datetime.now(tz=_EST).strftime("%Y-%m-%d")
+        orb_section = report.get("orb", {})
+        orb_count = orb_section.get("breakouts_detected", 0)
+        published = orb_section.get("published", 0)
+        filtered = orb_section.get("filter_failed", 0)
+        cnn_stats = report.get("cnn", {})
+        model_d = report.get("model", {})
+        pass_rate = (published / orb_count * 100) if orb_count else 0
+
+        # Plain-text body
+        lines = [
+            f"Futures Co-Pilot — Daily Report {today_str}",
+            "=" * 48,
+            f"ORB Detections : {orb_count} total | {published} published | {filtered} filtered",
+            f"Filter Pass Rate: {pass_rate:.0f}%",
+        ]
+        if cnn_stats:
+            lines += [
+                f"CNN P(good)    : mean={cnn_stats.get('mean', 0):.3f}  "
+                f"min={cnn_stats.get('min', 0):.3f}  max={cnn_stats.get('max', 0):.3f}  "
+                f"n={cnn_stats.get('count', 0)}",
+            ]
+        if model_d:
+            lines += [
+                f"Model          : acc={model_d.get('val_accuracy', 0):.1f}%  "
+                f"prec={model_d.get('precision', 0):.1f}%  "
+                f"recall={model_d.get('recall', 0):.1f}%  "
+                f"samples={model_d.get('train_samples', 0)}",
+                f"Last Promoted  : {model_d.get('promoted_at', 'unknown')}",
+            ]
+        lines += [
+            "",
+            "Generated by Futures Co-Pilot Engine",
+        ]
+        body = "\n".join(lines)
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"[Futures Co-Pilot] Daily Report {today_str} — {published} signal(s)"
+        msg["From"] = smtp_user
+        msg["To"] = to_addr
+        msg.attach(MIMEText(body, "plain"))
+
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(smtp_user, to_addr, msg.as_string())
+
+        logger.info("📧 Daily report emailed to %s", to_addr)
+
+    except Exception as exc:
+        logger.warning("Failed to send daily report email: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Publish engine status to Redis (runs every loop iteration)
 # ---------------------------------------------------------------------------
 
@@ -1459,6 +1770,7 @@ def main():
         ActionType.NEXT_DAY_PREP: lambda: _handle_next_day_prep(engine),
         ActionType.GENERATE_CHART_DATASET: lambda: _handle_generate_chart_dataset(engine),
         ActionType.TRAIN_BREAKOUT_CNN: lambda: _handle_train_breakout_cnn(engine),
+        ActionType.DAILY_REPORT: lambda: _handle_daily_report(engine),
     }
 
     logger.info("=" * 60)

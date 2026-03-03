@@ -109,7 +109,12 @@ class DatasetConfig:
     skip_existing: bool = True  # skip images that already exist on disk
 
     # Data source
-    bars_source: str = "cache"  # "cache" (Redis) or "massive" (API) or "csv"
+    # "db"     — read from Postgres/SQLite historical_bars table (preferred;
+    #             populated by the data service's nightly backfill + auto-fill)
+    # "cache"  — read from Redis (short-lived, limited history)
+    # "massive"— call Massive REST API directly (bypasses the DB)
+    # "csv"    — read from local CSV files (offline/test use)
+    bars_source: str = "db"  # "db" | "cache" | "massive" | "csv"
     csv_bars_dir: str = "data/bars"  # only used if bars_source == "csv"
 
     # Parallelism
@@ -183,6 +188,14 @@ _SYMBOL_TO_TICKER: dict[str, str] = {
     "M2K": "M2K=F",
     "SIL": "SIL=F",
     "MHG": "MHG=F",
+    # Micro Bitcoin (CME)
+    "MBT": "MBT=F",
+    # FX futures (CME)
+    "6E": "6E=F",  # Euro FX
+    "6B": "6B=F",  # British Pound
+    "6J": "6J=F",  # Japanese Yen
+    "6A": "6A=F",  # Australian Dollar
+    "6C": "6C=F",  # Canadian Dollar
     # Full-size contracts
     "GC": "GC=F",
     "ES": "ES=F",
@@ -192,7 +205,40 @@ _SYMBOL_TO_TICKER: dict[str, str] = {
     "HG": "HG=F",
     "YM": "YM=F",
     "RTY": "RTY=F",
+    # Bitcoin futures (CME full-size)
+    "BTC": "BTC=F",
 }
+
+
+def _load_bars_from_db(symbol: str, days: int = 90) -> pd.DataFrame | None:
+    """Load 1-minute bars directly from the Postgres/SQLite historical_bars table.
+
+    This is the **preferred** source for CNN dataset generation because it:
+      - Contains a deep, continuous history populated by the nightly backfill.
+      - Is always available (no network dependency at generation time).
+      - Supports up to 365 days of 1-minute bars with Massive.
+
+    Falls back gracefully to None if the table doesn't exist yet.
+    """
+    try:
+        from lib.services.engine.backfill import get_stored_bars
+
+        ticker = _resolve_ticker(symbol)
+        df = get_stored_bars(ticker, days_back=days, interval="1m")
+        if df is not None and not df.empty and len(df) > 50:
+            logger.debug(
+                "Loaded %d bars for %s (ticker=%s) from historical_bars DB",
+                len(df),
+                symbol,
+                ticker,
+            )
+            return df
+    except ImportError:
+        logger.debug("backfill module not available — skipping DB source")
+    except Exception as exc:
+        logger.debug("DB load failed for %s: %s", symbol, exc)
+
+    return None
 
 
 def _resolve_ticker(symbol: str) -> str:
@@ -364,25 +410,39 @@ def _load_bars_from_massive(symbol: str, days: int = 90) -> pd.DataFrame | None:
 
 def load_bars(
     symbol: str,
-    source: str = "cache",
+    source: str = "db",
     days: int = 90,
     csv_dir: str = "data/bars",
 ) -> pd.DataFrame | None:
     """Load 1-minute bars from the configured source, with fallback chain.
 
-    Tries the specified source first, then falls back through:
-      cache → csv → massive
+    Tries the specified source first, then falls back through the remaining
+    sources in priority order:
+
+        db → cache → massive → csv
+
+    The ``"db"`` source reads from the Postgres/SQLite ``historical_bars``
+    table that is populated by the data service's nightly backfill and
+    on-demand gap-fill endpoints.  It is the preferred source for CNN
+    dataset generation because it supports deep history (up to 365 days
+    with Massive) and has no live network dependency at generation time.
 
     Args:
-        symbol: Instrument symbol (e.g. "MGC").
-        source: Primary source — "cache", "csv", or "massive".
+        symbol: Instrument symbol (e.g. "MGC") or Yahoo-style ticker ("MGC=F").
+        source: Primary source — "db", "cache", "massive", or "csv".
         days: Number of days of history to request.
-        csv_dir: Directory for CSV bar files.
+        csv_dir: Directory for CSV bar files (used when source=="csv").
 
     Returns:
-        DataFrame with OHLCV columns and DatetimeIndex, or None.
+        DataFrame with OHLCV columns and DatetimeIndex, or None if all
+        sources fail.
     """
-    loaders = {
+    # Ordered fallback chain: db is always tried first since it holds the
+    # richest history; csv is last resort (offline / synthetic data).
+    _FALLBACK_ORDER = ["db", "cache", "massive", "csv"]
+
+    loaders: dict[str, Any] = {
+        "db": lambda: _load_bars_from_db(symbol, days),
         "cache": lambda: _load_bars_from_cache(symbol, days),
         "csv": lambda: _load_bars_from_csv(symbol, csv_dir),
         "massive": lambda: _load_bars_from_massive(symbol, days),
@@ -390,13 +450,19 @@ def load_bars(
 
     # Try primary source first
     if source in loaders:
-        df = loaders[source]()
-        if df is not None and not df.empty:
-            return df
+        try:
+            df = loaders[source]()
+            if df is not None and not df.empty:
+                return df
+        except Exception as exc:
+            logger.debug("Primary source %r failed for %s: %s", source, symbol, exc)
 
-    # Fallback chain
-    for name, loader in loaders.items():
+    # Fallback chain — skip the source we already tried
+    for name in _FALLBACK_ORDER:
         if name == source:
+            continue
+        loader = loaders.get(name)
+        if loader is None:
             continue
         try:
             df = loader()
@@ -907,10 +973,7 @@ def split_dataset(
             if not bt_str or bt_str.lower() == "nan":
                 return "unknown"
             # Parse hour from timestamp like "2026-01-29 03:30:00-05:00"
-            if " " in bt_str:
-                hour = int(bt_str.split(" ")[1].split(":")[0])
-            else:
-                hour = 10  # fallback to US if can't parse
+            hour = int(bt_str.split(" ")[1].split(":")[0]) if " " in bt_str else 10
             return "london" if hour < 8 else "us"
         except Exception:
             return "unknown"

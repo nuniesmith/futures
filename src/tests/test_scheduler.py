@@ -419,6 +419,89 @@ class TestMarkFailed:
 
 
 # ---------------------------------------------------------------------------
+# DAILY_REPORT action
+# ---------------------------------------------------------------------------
+
+
+class TestDailyReportAction:
+    def test_daily_report_present_in_off_hours(self):
+        """DAILY_REPORT should appear when off-hours begins."""
+        mgr = ScheduleManager()
+        now = datetime(2026, 2, 27, 12, 0, 0, tzinfo=_EST)
+        pending = mgr.get_pending_actions(now=now)
+
+        action_types = {a.action for a in pending}
+        assert ActionType.DAILY_REPORT in action_types
+
+    def test_daily_report_not_present_in_active_session(self):
+        """DAILY_REPORT must never fire during active trading hours."""
+        mgr = ScheduleManager()
+        now = datetime(2026, 2, 27, 9, 30, 0, tzinfo=_EST)
+        pending = mgr.get_pending_actions(now=now)
+
+        action_types = {a.action for a in pending}
+        assert ActionType.DAILY_REPORT not in action_types
+
+    def test_daily_report_not_present_in_pre_market(self):
+        """DAILY_REPORT must not fire during pre-market."""
+        mgr = ScheduleManager()
+        now = datetime(2026, 2, 27, 1, 0, 0, tzinfo=_EST)
+        pending = mgr.get_pending_actions(now=now)
+
+        action_types = {a.action for a in pending}
+        assert ActionType.DAILY_REPORT not in action_types
+
+    def test_daily_report_is_highest_priority_off_hours(self):
+        """DAILY_REPORT should be priority 0 in off-hours (fires before backfill/retrain)."""
+        mgr = ScheduleManager()
+        now = datetime(2026, 2, 27, 12, 0, 0, tzinfo=_EST)
+        pending = mgr.get_pending_actions(now=now)
+
+        report_actions = [a for a in pending if a.action == ActionType.DAILY_REPORT]
+        assert len(report_actions) == 1
+        assert report_actions[0].priority == 0
+
+    def test_daily_report_runs_once_per_day(self):
+        """DAILY_REPORT must not re-queue after mark_done()."""
+        mgr = ScheduleManager()
+        now = datetime(2026, 2, 27, 12, 0, 0, tzinfo=_EST)
+
+        pending1 = mgr.get_pending_actions(now=now)
+        assert any(a.action == ActionType.DAILY_REPORT for a in pending1)
+
+        mgr.mark_done(ActionType.DAILY_REPORT, now=now)
+
+        now2 = datetime(2026, 2, 27, 18, 0, 0, tzinfo=_EST)
+        pending2 = mgr.get_pending_actions(now=now2)
+        assert not any(a.action == ActionType.DAILY_REPORT for a in pending2)
+
+    def test_daily_report_requeues_next_day(self):
+        """DAILY_REPORT should reappear at the start of the next day's off-hours."""
+        mgr = ScheduleManager()
+        now = datetime(2026, 2, 27, 12, 0, 0, tzinfo=_EST)
+        mgr.get_pending_actions(now=now)
+        mgr.mark_done(ActionType.DAILY_REPORT, now=now)
+
+        # Next day's off-hours
+        tomorrow = datetime(2026, 2, 28, 12, 0, 0, tzinfo=_EST)
+        pending = mgr.get_pending_actions(now=tomorrow)
+        assert any(a.action == ActionType.DAILY_REPORT for a in pending)
+
+    def test_off_hours_priority_ordering_with_daily_report(self):
+        """All off-hours actions must be sorted monotonically by priority."""
+        mgr = ScheduleManager()
+        now = datetime(2026, 2, 27, 12, 0, 0, tzinfo=_EST)
+        pending = mgr.get_pending_actions(now=now)
+
+        priorities = [a.priority for a in pending]
+        for i in range(1, len(priorities)):
+            assert priorities[i] >= priorities[i - 1], (
+                f"Off-hours action at index {i} (priority {priorities[i]}) "
+                f"is out of order after index {i - 1} (priority {priorities[i - 1]})"
+            )
+
+
+# ---------------------------------------------------------------------------
 # SessionMode enum values
 # ---------------------------------------------------------------------------
 

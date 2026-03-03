@@ -12,9 +12,20 @@ Tracked metrics:
   - ``engine_cycle_duration_seconds`` — Histogram: engine cycle duration
   - ``risk_checks_total``             — Counter: risk checks by result (allowed/blocked/advisory)
   - ``orb_detections_total``          — Counter: ORB breakout detections by direction (LONG/SHORT/none)
+  - ``orb_filter_results_total``      — Counter: ORB filter gate outcomes by result (passed/rejected/error)
+  - ``orb_cnn_prob``                  — Histogram: CNN P(good) probability per scored breakout
+  - ``orb_cnn_signals_total``         — Counter: CNN signal outcomes by verdict (signal/no_signal/skipped)
   - ``no_trade_alerts_total``         — Counter: no-trade alerts by condition
   - ``focus_quality_gauge``           — Gauge: latest focus quality per asset symbol
   - ``positions_open_count``          — Gauge: number of currently open positions
+  - ``daily_pnl_gauge``               — Gauge: current day's realised P&L in dollars
+  - ``consecutive_losses_gauge``      — Gauge: number of consecutive losing trades
+  - ``model_val_accuracy``            — Gauge: validation accuracy of the current champion CNN model (0–100)
+  - ``model_val_precision``           — Gauge: validation precision of the current champion CNN model (0–100)
+  - ``model_val_recall``              — Gauge: validation recall of the current champion CNN model (0–100)
+  - ``model_train_samples``           — Gauge: number of training samples used by the current champion model
+  - ``model_stale``                   — Gauge: 1 if the champion model has not been retrained in > 26 hours, 0 otherwise
+  - ``model_last_retrain_epoch``      — Gauge: Unix epoch timestamp of the last successful model promotion
   - ``redis_connected``               — Gauge: 1 if Redis is connected, 0 otherwise
   - ``postgres_connected``            — Gauge: 1 if Postgres is connected, 0 otherwise
   - ``engine_up``                     — Gauge: 1 if engine is running and recently refreshed, 0 otherwise
@@ -121,6 +132,27 @@ ORB_DETECTIONS_TOTAL = Counter(
     registry=_registry,
 )
 
+ORB_FILTER_RESULTS_TOTAL = Counter(
+    "orb_filter_results_total",
+    "ORB filter gate outcomes",
+    labelnames=["result"],  # passed, rejected, error
+    registry=_registry,
+)
+
+ORB_CNN_PROB = Histogram(
+    "orb_cnn_prob",
+    "CNN P(good) probability score for each scored ORB breakout",
+    buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.80, 0.82, 0.85, 0.90, 0.95, 1.0),
+    registry=_registry,
+)
+
+ORB_CNN_SIGNALS_TOTAL = Counter(
+    "orb_cnn_signals_total",
+    "CNN signal verdict for scored ORB breakouts",
+    labelnames=["verdict"],  # signal, no_signal, skipped
+    registry=_registry,
+)
+
 # -- No-trade metrics --
 NO_TRADE_ALERTS_TOTAL = Counter(
     "no_trade_alerts_total",
@@ -141,6 +173,56 @@ FOCUS_QUALITY_GAUGE = Gauge(
 POSITIONS_OPEN_COUNT = Gauge(
     "positions_open_count",
     "Number of currently open positions",
+    registry=_registry,
+)
+
+# -- Risk / P&L --
+DAILY_PNL_GAUGE = Gauge(
+    "daily_pnl_gauge",
+    "Current trading day realised P&L in dollars",
+    registry=_registry,
+)
+
+CONSECUTIVE_LOSSES_GAUGE = Gauge(
+    "consecutive_losses_gauge",
+    "Number of consecutive losing trades",
+    registry=_registry,
+)
+
+# -- CNN model performance --
+MODEL_VAL_ACCURACY = Gauge(
+    "model_val_accuracy",
+    "Validation accuracy of the current champion CNN model (0–100)",
+    registry=_registry,
+)
+
+MODEL_VAL_PRECISION = Gauge(
+    "model_val_precision",
+    "Validation precision of the current champion CNN model (0–100)",
+    registry=_registry,
+)
+
+MODEL_VAL_RECALL = Gauge(
+    "model_val_recall",
+    "Validation recall of the current champion CNN model (0–100)",
+    registry=_registry,
+)
+
+MODEL_TRAIN_SAMPLES = Gauge(
+    "model_train_samples",
+    "Number of training samples used by the current champion CNN model",
+    registry=_registry,
+)
+
+MODEL_STALE = Gauge(
+    "model_stale",
+    "1 if the champion model has not been retrained in > 26 hours, 0 otherwise",
+    registry=_registry,
+)
+
+MODEL_LAST_RETRAIN_EPOCH = Gauge(
+    "model_last_retrain_epoch",
+    "Unix epoch timestamp of the last successful CNN model promotion",
     registry=_registry,
 )
 
@@ -194,6 +276,49 @@ def record_risk_check(result: str) -> None:
 def record_orb_detection(direction: str) -> None:
     """Record an ORB detection ('LONG', 'SHORT', or 'none')."""
     ORB_DETECTIONS_TOTAL.labels(direction=direction).inc()
+
+
+def record_orb_filter_result(result: str) -> None:
+    """Record an ORB filter gate outcome ('passed', 'rejected', or 'error')."""
+    ORB_FILTER_RESULTS_TOTAL.labels(result=result).inc()
+
+
+def record_orb_cnn_prob(prob: float) -> None:
+    """Record a CNN P(good) probability score (0.0–1.0) for a breakout."""
+    ORB_CNN_PROB.observe(float(prob))
+
+
+def record_orb_cnn_signal(verdict: str) -> None:
+    """Record a CNN signal verdict ('signal', 'no_signal', or 'skipped')."""
+    ORB_CNN_SIGNALS_TOTAL.labels(verdict=verdict).inc()
+
+
+def update_daily_pnl(pnl: float) -> None:
+    """Update the daily P&L gauge."""
+    DAILY_PNL_GAUGE.set(float(pnl))
+
+
+def update_consecutive_losses(count: int) -> None:
+    """Update the consecutive losses gauge."""
+    CONSECUTIVE_LOSSES_GAUGE.set(int(count))
+
+
+def update_model_metrics(val_accuracy: float, val_precision: float, val_recall: float, train_samples: int) -> None:
+    """Update CNN model performance gauges from the champion model metadata."""
+    MODEL_VAL_ACCURACY.set(float(val_accuracy))
+    MODEL_VAL_PRECISION.set(float(val_precision))
+    MODEL_VAL_RECALL.set(float(val_recall))
+    MODEL_TRAIN_SAMPLES.set(int(train_samples))
+
+
+def update_model_stale(is_stale: bool) -> None:
+    """Update the model staleness gauge (1 = stale, 0 = fresh)."""
+    MODEL_STALE.set(1 if is_stale else 0)
+
+
+def update_model_last_retrain(epoch: float) -> None:
+    """Update the last retrain epoch timestamp gauge."""
+    MODEL_LAST_RETRAIN_EPOCH.set(epoch)
 
 
 def record_no_trade_alert(condition: str) -> None:
@@ -381,6 +506,60 @@ def _collect_live_gauges() -> None:
             last_refresh = status.get("last_refresh_epoch")
             if last_refresh:
                 ENGINE_LAST_REFRESH_EPOCH.set(float(last_refresh))
+    except Exception:
+        pass
+
+    # Risk / P&L gauges from RiskManager Redis key
+    try:
+        import json as _json
+
+        from lib.core.cache import cache_get
+
+        raw = cache_get("engine:risk_status")
+        if raw:
+            risk = _json.loads(raw)
+            DAILY_PNL_GAUGE.set(float(risk.get("daily_pnl", 0.0)))
+            CONSECUTIVE_LOSSES_GAUGE.set(int(risk.get("consecutive_losses", 0)))
+    except Exception:
+        pass
+
+    # CNN model performance from meta JSON
+    try:
+        import json as _json
+        from pathlib import Path
+
+        _meta_candidates = [
+            Path("/app/models/breakout_cnn_best_meta.json"),
+            Path(__file__).resolve().parents[5] / "models" / "breakout_cnn_best_meta.json",
+        ]
+        for _meta_path in _meta_candidates:
+            if _meta_path.exists():
+                _meta = _json.loads(_meta_path.read_text())
+                MODEL_VAL_ACCURACY.set(float(_meta.get("val_accuracy", 0.0)))
+                MODEL_VAL_PRECISION.set(float(_meta.get("precision", 0.0)))
+                MODEL_VAL_RECALL.set(float(_meta.get("recall", 0.0)))
+                MODEL_TRAIN_SAMPLES.set(int(_meta.get("train_samples", 0)))
+
+                # Model staleness: compare promoted_at to now
+                try:
+                    from datetime import datetime, timedelta
+                    from zoneinfo import ZoneInfo
+
+                    _EST = ZoneInfo("America/New_York")
+                    promoted_str = _meta.get("promoted_at")
+                    if promoted_str:
+                        promoted_at = datetime.fromisoformat(promoted_str)
+                        if promoted_at.tzinfo is None:
+                            promoted_at = promoted_at.replace(tzinfo=_EST)
+                        MODEL_LAST_RETRAIN_EPOCH.set(promoted_at.timestamp())
+                        age_hours = (datetime.now(tz=_EST) - promoted_at).total_seconds() / 3600
+                        MODEL_STALE.set(1 if age_hours > 26 else 0)
+                    else:
+                        MODEL_STALE.set(0)
+                except Exception:
+                    MODEL_STALE.set(0)
+
+                break
     except Exception:
         pass
 

@@ -498,6 +498,15 @@ class RiskManager:
 
         status = self.get_status()
 
+        # Update Prometheus P&L and consecutive-loss gauges
+        try:
+            from lib.services.data.api.metrics import update_consecutive_losses, update_daily_pnl
+
+            update_daily_pnl(status.get("daily_pnl", 0.0))
+            update_consecutive_losses(status.get("consecutive_losses", 0))
+        except Exception:
+            pass
+
         try:
             payload_json = json.dumps(status, default=str, allow_nan=False)
         except (TypeError, ValueError) as exc:

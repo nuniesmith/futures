@@ -69,6 +69,21 @@ YAHOO_TO_MASSIVE_PRODUCT: dict[str, str] = {
     "MCL=F": "MCL",
     "MYM=F": "MYM",
     "M2K=F": "M2K",
+    # FX futures (CME)
+    "6E=F": "6E",  # Euro FX
+    "6B=F": "6B",  # British Pound
+    "6J=F": "6J",  # Japanese Yen
+    "6A=F": "6A",  # Australian Dollar
+    "6C=F": "6C",  # Canadian Dollar
+    "6S=F": "6S",  # Swiss Franc
+    # Micro FX futures (CME)
+    "M6E=F": "M6E",  # Micro Euro FX
+    "M6B=F": "M6B",  # Micro British Pound
+    # Crypto futures (CME)
+    "MBT=F": "MBT",  # Micro Bitcoin
+    "BTC=F": "BTC",  # Bitcoin (full-size)
+    "MET=F": "MET",  # Micro Ether
+    "ETH=F": "ETH",  # Ether (full-size)
 }
 
 # Reverse: product code → Yahoo ticker (for WebSocket → cache mapping)
@@ -1646,6 +1661,8 @@ class MassiveFeedManager:
         reconnect_delay = 1
         max_reconnect_delay = 60
         _MIN_STABLE_SECS = 30  # only reset backoff after this many seconds of uptime
+        _policy_violation_count = 0
+        _MAX_POLICY_VIOLATIONS = 3  # give up after 3 consecutive 1008s
 
         while self._running:
             ws = None
@@ -1731,10 +1748,28 @@ class MassiveFeedManager:
                 break
             except Exception as exc:
                 error_msg = f"WebSocket error: {exc}"
-                logger.error(error_msg)
+                is_policy_violation = "1008" in str(exc) or "policy violation" in str(exc).lower()
+                if is_policy_violation:
+                    _policy_violation_count += 1
+                    logger.error(error_msg)
+                    if _policy_violation_count >= _MAX_POLICY_VIOLATIONS:
+                        logger.warning(
+                            "Massive WebSocket: received %d consecutive 1008 policy-violation "
+                            "errors — your API plan may not include real-time futures WebSocket "
+                            "access. Stopping WS reconnect loop. REST polling will continue. "
+                            "To re-enable, restart the engine or upgrade your Massive plan.",
+                            _policy_violation_count,
+                        )
+                        self._running = False
+                else:
+                    _policy_violation_count = 0  # reset counter on non-1008 error
+                    logger.error(error_msg)
                 self.errors.append(error_msg)
                 if len(self.errors) > 100:
                     self.errors = self.errors[-50:]
+            else:
+                # Clean exit from message loop — reset violation counter
+                _policy_violation_count = 0
             finally:
                 # Only reset backoff if the connection was stable for 30+ seconds.
                 # This prevents tight reconnect loops when the server keeps kicking
@@ -1743,6 +1778,7 @@ class MassiveFeedManager:
                     _uptime = asyncio.get_event_loop().time() - _connected_at
                     if _uptime >= _MIN_STABLE_SECS:
                         reconnect_delay = 1  # was genuinely stable — reset backoff
+                        _policy_violation_count = 0  # stable connection — reset
                 self._connected = False
                 self._ws = None
                 if ws is not None:

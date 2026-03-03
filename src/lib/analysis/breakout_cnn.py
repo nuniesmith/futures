@@ -768,19 +768,88 @@ def train_model(
 # ---------------------------------------------------------------------------
 
 
-def _find_latest_model(model_dir: str = DEFAULT_MODEL_DIR) -> str | None:
-    """Find the most recently modified .pt file in the model directory."""
+def _find_best_model(model_dir: str = DEFAULT_MODEL_DIR) -> str | None:
+    """Find the best available model in *model_dir*.
+
+    Selection priority:
+      1. ``breakout_cnn_best.pt`` (the promoted champion) — always preferred
+         when it exists.
+      2. The checkpoint with the highest ``val_accuracy`` recorded in its
+         companion ``<stem>_meta.json`` sidecar file.
+      3. The most recently modified ``.pt`` file (mtime fallback when no
+         meta JSON is available for any checkpoint).
+
+    Args:
+        model_dir: Directory to search (default ``"models"``).
+
+    Returns:
+        Absolute path to the chosen model file, or ``None`` if no models
+        are found.
+    """
     model_path = Path(model_dir)
     if not model_path.is_dir():
         return None
 
+    # 1. Prefer the promoted champion if it exists
+    champion = model_path / "breakout_cnn_best.pt"
+    if champion.is_file():
+        logger.debug("Model selection: using champion %s", champion)
+        return str(champion)
+
+    # 2. Scan all breakout_cnn_*.pt checkpoints
     pt_files = list(model_path.glob(f"{MODEL_PREFIX}*.pt"))
     if not pt_files:
         return None
 
-    # Sort by modification time, newest first
+    # Try to rank by val_accuracy from companion meta JSON sidecars.
+    # A meta JSON for checkpoint "breakout_cnn_20260101_020000_acc87.pt"
+    # would be named "breakout_cnn_20260101_020000_acc87_meta.json".
+    # Also check the global "breakout_cnn_best_meta.json" as a fallback.
+    global_meta_path = model_path / "breakout_cnn_best_meta.json"
+
+    def _val_accuracy(pt: Path) -> float:
+        # Sidecar meta: same stem + _meta.json
+        sidecar = pt.with_name(pt.stem + "_meta.json")
+        for candidate in (sidecar, global_meta_path):
+            if candidate.is_file():
+                try:
+                    import json as _json
+
+                    meta = _json.loads(candidate.read_text())
+                    return float(meta.get("val_accuracy", 0.0))
+                except Exception:
+                    pass
+        # Try to parse accuracy from filename: "..._accNN.pt"
+        import re as _re
+
+        m = _re.search(r"_acc(\d+(?:\.\d+)?)", pt.stem)
+        if m:
+            return float(m.group(1))
+        return 0.0
+
+    scored = [(pt, _val_accuracy(pt)) for pt in pt_files]
+
+    # Check if any checkpoint has a meaningful accuracy score
+    if any(score > 0.0 for _, score in scored):
+        scored.sort(key=lambda x: x[1], reverse=True)
+        best = scored[0][0]
+        logger.debug(
+            "Model selection: chose %s (val_acc=%.1f%%) from %d checkpoints",
+            best.name,
+            scored[0][1],
+            len(pt_files),
+        )
+        return str(best)
+
+    # 3. Fallback: most recently modified file
     pt_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    logger.debug("Model selection: fallback to newest mtime %s", pt_files[0].name)
     return str(pt_files[0])
+
+
+def _find_latest_model(model_dir: str = DEFAULT_MODEL_DIR) -> str | None:
+    """Alias for :func:`_find_best_model` kept for backwards compatibility."""
+    return _find_best_model(model_dir)
 
 
 def _load_model(

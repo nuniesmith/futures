@@ -9,9 +9,11 @@ Provides:
 """
 
 import contextlib
+import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -21,6 +23,128 @@ _EST = ZoneInfo("America/New_York")
 logger = logging.getLogger("api.health")
 
 router = APIRouter(tags=["health"])
+
+# Maximum age before a model is considered stale (hours)
+_MODEL_STALE_HOURS = 26
+
+
+def _check_model_health() -> dict[str, Any]:
+    """Check CNN model existence and freshness.
+
+    Returns a dict with:
+      - ``status``: ``"ok"`` | ``"stale"`` | ``"missing"``
+      - ``available``: bool
+      - ``champion_path``: str | None
+      - ``size_mb``: float
+      - ``last_retrain``: ISO timestamp from promotion meta, or None
+      - ``last_retrain_ago``: human-readable age string, or None
+      - ``val_accuracy``: float from last promotion meta, or None
+      - ``stale``: bool — True when model hasn't been retrained in > 26 h
+    """
+    result: dict[str, Any] = {
+        "status": "missing",
+        "available": False,
+        "champion_path": None,
+        "size_mb": 0.0,
+        "last_retrain": None,
+        "last_retrain_ago": None,
+        "val_accuracy": None,
+        "precision": None,
+        "recall": None,
+        "stale": False,
+        "total_checkpoints": 0,
+    }
+
+    # Locate models/ directory — works both in Docker (/app/models) and bare-metal
+    _model_dir_candidates = [
+        Path("/app/models"),
+        Path(__file__).resolve().parents[5] / "models",
+    ]
+    model_dir: Path | None = None
+    for _c in _model_dir_candidates:
+        if _c.is_dir():
+            model_dir = _c
+            break
+
+    if model_dir is None:
+        return result
+
+    # Count all checkpoints
+    all_pt = list(model_dir.glob("breakout_cnn_*.pt"))
+    result["total_checkpoints"] = len(all_pt)
+
+    # Check for the champion model
+    champion = model_dir / "breakout_cnn_best.pt"
+    if not champion.is_file():
+        # Fall back to newest checkpoint by mtime
+        if all_pt:
+            champion = max(all_pt, key=lambda p: p.stat().st_mtime)
+        else:
+            return result  # no models at all
+
+    result["available"] = True
+    result["champion_path"] = str(champion)
+    stat = champion.stat()
+    result["size_mb"] = round(stat.st_size / (1024 * 1024), 1)
+
+    now_et = datetime.now(tz=_EST)
+
+    # Load promotion metadata for accurate retrain timestamp + accuracy
+    meta_path = model_dir / "breakout_cnn_best_meta.json"
+    promoted_at: datetime | None = None
+
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text())
+            promoted_str = meta.get("promoted_at")
+            if promoted_str:
+                promoted_at = datetime.fromisoformat(promoted_str)
+                if promoted_at.tzinfo is None:
+                    promoted_at = promoted_at.replace(tzinfo=_EST)
+                result["last_retrain"] = promoted_at.isoformat()
+
+                delta = now_et - promoted_at
+                hours = delta.total_seconds() / 3600
+                if hours < 1:
+                    result["last_retrain_ago"] = f"{int(delta.total_seconds() / 60)}m ago"
+                elif hours < 24:
+                    result["last_retrain_ago"] = f"{hours:.1f}h ago"
+                else:
+                    result["last_retrain_ago"] = f"{delta.days}d ago"
+
+            val_acc = meta.get("val_accuracy")
+            if val_acc is not None:
+                result["val_accuracy"] = round(float(val_acc), 1)
+            precision = meta.get("precision")
+            if precision is not None:
+                result["precision"] = round(float(precision), 3)
+            recall = meta.get("recall")
+            if recall is not None:
+                result["recall"] = round(float(recall), 3)
+
+        except Exception as exc:
+            logger.debug("_check_model_health: could not read meta JSON: %s", exc)
+
+    # Fall back to file mtime if no promotion metadata
+    if promoted_at is None:
+        promoted_at = datetime.fromtimestamp(stat.st_mtime, tz=_EST)
+        result["last_retrain"] = promoted_at.isoformat()
+        delta = now_et - promoted_at
+        hours = delta.total_seconds() / 3600
+        if hours < 1:
+            result["last_retrain_ago"] = f"{int(delta.total_seconds() / 60)}m ago"
+        elif hours < 24:
+            result["last_retrain_ago"] = f"{hours:.1f}h ago"
+        else:
+            result["last_retrain_ago"] = f"{delta.days}d ago"
+
+    # Staleness check
+    stale_threshold = timedelta(hours=_MODEL_STALE_HOURS)
+    is_stale = (now_et - promoted_at) > stale_threshold
+    result["stale"] = is_stale
+    result["status"] = "stale" if is_stale else "ok"
+
+    return result
 
 
 def _check_redis() -> dict[str, Any]:
@@ -74,10 +198,12 @@ def health():
     - Engine running state
     - Massive WebSocket live feed
     - Data source (Massive vs yfinance)
+    - CNN model existence, accuracy, and staleness
     - Database path
     """
     redis_status = _check_redis()
     postgres_status = _check_postgres()
+    model_status = _check_model_health()
     engine = _get_engine_or_none()
 
     engine_status = "not_initialized"
@@ -95,10 +221,14 @@ def health():
 
     db_path = os.getenv("DB_PATH", "futures_journal.db")
 
+    # Overall status: degraded if engine not running, model missing, or model stale
+    overall_ok = engine_status == "running" and model_status["available"] and not model_status["stale"]
+
     # --- Update Prometheus gauges ---
     with contextlib.suppress(Exception):
         from lib.services.data.api.metrics import (
             update_engine_up,
+            update_model_stale,
             update_postgres_status,
             update_redis_status,
         )
@@ -106,9 +236,10 @@ def health():
         update_redis_status(redis_status.get("connected", False))
         update_postgres_status(postgres_status.get("connected", False))
         update_engine_up(engine_status == "running")
+        update_model_stale(model_status.get("stale", False))
 
     return {
-        "status": "ok" if engine_status == "running" else "degraded",
+        "status": "ok" if overall_ok else "degraded",
         "timestamp": datetime.now(tz=_EST).isoformat(),
         "components": {
             "redis": redis_status,
@@ -116,6 +247,7 @@ def health():
             "engine": {"status": engine_status},
             "live_feed": live_feed_status,
             "data_source": data_source,
+            "model": model_status,
             "database": {"path": db_path},
         },
     }
