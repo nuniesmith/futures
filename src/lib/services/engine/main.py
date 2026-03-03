@@ -573,7 +573,38 @@ def _handle_check_orb_london_ny(engine) -> None:
 
 
 def _handle_check_orb_sydney(engine) -> None:
-    """Check for Sydney Open ORB patterns (17:00–17
+    """Check for Sydney Open ORB patterns (17:00–17:30 ET, overnight).
+
+    Low-volatility overnight session. Relevant for thin metals and CME
+    Globex overnight markets. wraps_midnight=True — uses prior calendar
+    day bars.
+    """
+    from lib.services.engine.orb import SYDNEY_SESSION
+
+    _handle_check_orb(engine, orb_session=SYDNEY_SESSION)
+
+
+def _handle_check_orb_cme(engine) -> None:
+    """Check for CME Globex Re-Open ORB patterns (18:00–18:30 ET, overnight).
+
+    First bars after the daily 17:00–18:00 ET settlement break. A clean
+    overnight-range anchor feeding into London and US sessions.
+    wraps_midnight=True.
+    """
+    from lib.services.engine.orb import CME_OPEN_SESSION
+
+    _handle_check_orb(engine, orb_session=CME_OPEN_SESSION)
+
+
+def _handle_check_orb_tokyo(engine) -> None:
+    """Check for Tokyo Open ORB patterns (19:00–19:30 ET, overnight).
+
+    Narrow-range session with mean-reversion bias. Strongest for metals
+    and thin Globex markets in overnight hours. wraps_midnight=True.
+    """
+    from lib.services.engine.orb import TOKYO_SESSION
+
+    _handle_check_orb(engine, orb_session=TOKYO_SESSION)
 
 
 def _handle_check_orb(engine, orb_session=None) -> None:
@@ -1764,6 +1795,10 @@ def main():
         ActionType.CHECK_NO_TRADE: lambda: _handle_check_no_trade(engine, account_size),
         ActionType.CHECK_ORB: lambda: _handle_check_orb(engine),
         ActionType.CHECK_ORB_LONDON: lambda: _handle_check_orb_london(engine),
+        ActionType.CHECK_ORB_LONDON_NY: lambda: _handle_check_orb_london_ny(engine),
+        ActionType.CHECK_ORB_SYDNEY: lambda: _handle_check_orb_sydney(engine),
+        ActionType.CHECK_ORB_CME: lambda: _handle_check_orb_cme(engine),
+        ActionType.CHECK_ORB_TOKYO: lambda: _handle_check_orb_tokyo(engine),
         ActionType.HISTORICAL_BACKFILL: lambda: _handle_historical_backfill(engine),
         ActionType.RUN_OPTIMIZATION: lambda: _handle_run_optimization(engine),
         ActionType.RUN_BACKTEST: lambda: _handle_run_backtest(engine),
