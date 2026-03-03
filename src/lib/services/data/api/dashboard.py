@@ -186,17 +186,8 @@ def _render_session_strip() -> str:
         return f"{h * HOUR_PCT:.3f}%"
 
     # Session blocks HTML
-    blocks = ""
     # Sydney wraps midnight: render two segments
     # We use inline style for pixel-perfect positioning
-    session_rows = [
-        # label,  short, start, end(ET), color_tw
-        ("Sydney", "SYD", 17, 26, "#334155"),  # slate-700, end=26 means wraps to 02:00
-        ("Tokyo", "TYO", 19, 28, "#3730a3"),  # indigo-800, wraps to 04:00
-        ("London", "LON", 3, 12, "#1d4ed8"),  # blue-700
-        ("US Equity", "US", 9, 16, "#047857"),  # emerald-800 — overlaps London 09–12
-        ("CME 23h", "CME", 18, 41, "#134e4a"),  # teal-900, wraps full day minus 1h
-    ]
 
     overlap_highlights = ""
     # London + US overlap: 09:30–12:00 ET  (9.5–12)
@@ -241,7 +232,6 @@ def _render_session_strip() -> str:
     def _bar(label: str, s: int, e: int, bg: str, fg: str, row: int) -> str:
         # clamp to 0–24
         s24 = s % 24
-        e24 = e % 24 if e <= 24 else 24
         width = (e - s) if e <= 24 else (24 - s)
         width = min(width, 24 - s24)
         top = "1px" if row == 0 else "13px"
@@ -1007,7 +997,6 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         no_trade_html = _render_no_trade_banner(str(focus_data.get("no_trade_reason", "Low-conviction day")))
 
     # Determine if we're in off-hours (hide trading panels)
-    is_off_hours = session.get("mode") == "off-hours"
 
     # Positions panel with risk status
     positions = _get_positions()

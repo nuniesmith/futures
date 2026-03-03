@@ -38,10 +38,13 @@ DATA_SERVICE_API_KEY    API key for the data service (if AUTH_REQUIRED=1)
 FILL_DAYS_BACK          Days of history to ensure are filled (default: 90)
 FILL_POLL_INTERVAL_SEC  Seconds between fill-status polls (default: 10)
 FILL_TIMEOUT_SEC        Max seconds to wait for fill to complete (default: 600)
-DATASET_SYMBOLS         Comma-separated symbol list (default: MGC,MES,MNQ,MCL,6E,MBT)
+DATASET_SYMBOLS         Comma-separated symbol list (default: 23-symbol universe covering
+                        metals, energy, equity index, FX, rates, agri, and crypto — see
+                        BuildConfig.symbols for the full list)
 DATASET_DAYS_BACK       Days of bar history to use for image generation (default: 90)
 DATASET_CHART_DPI       Chart image DPI (default: 150)
-DATASET_ORB_SESSION     ORB session: us, london, or both (default: both)
+DATASET_ORB_SESSION     ORB session: us, london, both, or all (default: all — full 24h
+                        Globex coverage recommended for 10k+ dataset)
 SKIP_FILL               Set to "1" to skip the data fill step
 SKIP_SPLIT              Set to "1" to skip the train/val split step
 FORCE_REGEN             Set to "1" to regenerate all images (ignore existing)
@@ -115,10 +118,42 @@ class BuildConfig:
     fill_timeout: int = 600  # seconds
 
     # Dataset generation settings
-    symbols: list[str] = field(default_factory=lambda: ["MGC", "MES", "MNQ", "MCL", "6E", "MBT"])
+    symbols: list[str] = field(
+        default_factory=lambda: [
+            # ── Micro metals ──────────────────────────────────────────────
+            "MGC",  # Micro Gold
+            "SIL",  # Micro Silver
+            "MHG",  # Micro Copper
+            # ── Micro energy ──────────────────────────────────────────────
+            "MCL",  # Micro Crude Oil
+            "MNG",  # Micro Natural Gas (data via NG=F)
+            # ── Micro equity index ────────────────────────────────────────
+            "MES",  # Micro S&P 500
+            "MNQ",  # Micro Nasdaq-100
+            "M2K",  # Micro Russell 2000
+            "MYM",  # Micro Dow Jones
+            # ── FX (CME standard + micro) ─────────────────────────────────
+            "6E",  # Euro FX
+            "6B",  # British Pound
+            "6J",  # Japanese Yen
+            "6A",  # Australian Dollar
+            "6C",  # Canadian Dollar
+            "6S",  # Swiss Franc
+            # ── Interest rates (CBOT) ─────────────────────────────────────
+            "ZN",  # 10-Year T-Note
+            "ZB",  # 30-Year T-Bond
+            # ── Agricultural (CBOT) ───────────────────────────────────────
+            "ZC",  # Corn
+            "ZS",  # Soybeans
+            "ZW",  # Wheat
+            # ── Crypto ────────────────────────────────────────────────────
+            "MBT",  # Micro Bitcoin
+            "MET",  # Micro Ether
+        ]
+    )
     days_back: int = 90
     chart_dpi: int = 150
-    orb_session: str = "both"  # "us" | "london" | "both"
+    orb_session: str = "all"  # "us" | "london" | "both" | "all" | any named session key
     skip_existing: bool = True  # True = incremental, False = full regen
 
     # Train/val split settings
@@ -145,7 +180,10 @@ class BuildConfig:
 
         cfg.days_back = int(os.getenv("DATASET_DAYS_BACK", str(cfg.days_back)))
         cfg.chart_dpi = int(os.getenv("DATASET_CHART_DPI", str(cfg.chart_dpi)))
+        # Support both DATASET_ORB_SESSION and CNN_ORB_SESSION (todo Quick Command alias).
+        # CNN_ORB_SESSION takes precedence if both are set.
         cfg.orb_session = os.getenv("DATASET_ORB_SESSION", cfg.orb_session)
+        cfg.orb_session = os.getenv("CNN_ORB_SESSION", cfg.orb_session)
 
         cfg.skip_fill = os.getenv("SKIP_FILL", "0").strip() in ("1", "true", "yes")
         cfg.skip_split = os.getenv("SKIP_SPLIT", "0").strip() in ("1", "true", "yes")
@@ -700,11 +738,33 @@ def _parse_args() -> argparse.Namespace:
         metavar="URL",
         help="Base URL of the data service (default: http://localhost:8000).",
     )
+    # All valid session keys (mirrors _ALL_SESSION_KEYS in dataset_generator.py)
+    _SESSION_CHOICES = [
+        "all",  # All 9 sessions across the full Globex day (recommended)
+        "both",  # London + US (backward-compatible two-session alias)
+        "us",  # US Equity Open  09:30–10:00 ET
+        "london",  # London Open  03:00–03:30 ET
+        "london_ny",  # London-NY Crossover  08:00–08:30 ET
+        "frankfurt",  # Frankfurt/Xetra  03:00–03:30 ET
+        "cme",  # CME Globex re-open  18:00–18:30 ET
+        "sydney",  # Sydney/ASX  18:30–19:00 ET
+        "tokyo",  # Tokyo/TSE  19:00–19:30 ET
+        "shanghai",  # Shanghai/HK  21:00–21:30 ET
+        "cme_settle",  # CME Settlement  14:00–14:30 ET
+    ]
     p.add_argument(
         "--orb-session",
-        choices=["us", "london", "both"],
+        "--session",  # alias used in todo Quick Commands
+        choices=_SESSION_CHOICES,
+        dest="orb_session",
         default=None,
-        help="ORB session(s) to generate images for (default: both).",
+        metavar="SESSION",
+        help=(
+            "ORB session(s) to generate images for. "
+            "Choices: %(choices)s. "
+            "Use 'all' for full 24-hour Globex coverage (recommended for 10k+ dataset). "
+            "Default: both (London + US)."
+        ),
     )
     p.add_argument(
         "--skip-fill",
@@ -750,6 +810,10 @@ def main() -> int:
         cfg.data_service_url = args.data_service_url.rstrip("/")
     if args.orb_session:
         cfg.orb_session = args.orb_session
+        # Keep fill scope in sync: when generating all sessions we need the
+        # full 90-day bar history regardless of which session is requested.
+        # fill_days_back was already sync'd with days_back above; no extra
+        # action needed here — just a note for clarity.
     if args.skip_fill:
         cfg.skip_fill = True
     if args.skip_split:

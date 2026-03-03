@@ -223,16 +223,28 @@ FULL_CONTRACT_SPECS = {
     "Silver": {"ticker": "SI=F", "point": 5_000, "tick": 0.005, "margin": 9_000},
     "Copper": {"ticker": "HG=F", "point": 25_000, "tick": 0.0005, "margin": 6_000},
     "Crude Oil": {"ticker": "CL=F", "point": 1_000, "tick": 0.01, "margin": 7_000},
+    "Natural Gas": {"ticker": "NG=F", "point": 10_000, "tick": 0.001, "margin": 3_500},
     "S&P": {"ticker": "ES=F", "point": 50, "tick": 0.25, "margin": 12_000},
     "Nasdaq": {"ticker": "NQ=F", "point": 20, "tick": 0.25, "margin": 17_000},
+    "Russell 2000": {"ticker": "RTY=F", "point": 50, "tick": 0.10, "margin": 8_000},
+    "Dow Jones": {"ticker": "YM=F", "point": 5, "tick": 1.0, "margin": 9_000},
     # FX futures (full-size CME)
     "Euro FX": {"ticker": "6E=F", "point": 125_000, "tick": 0.00005, "margin": 2_800},
     "British Pound": {"ticker": "6B=F", "point": 62_500, "tick": 0.0001, "margin": 2_600},
     "Japanese Yen": {"ticker": "6J=F", "point": 12_500_000, "tick": 0.0000005, "margin": 2_400},
     "Australian Dollar": {"ticker": "6A=F", "point": 100_000, "tick": 0.0001, "margin": 1_800},
     "Canadian Dollar": {"ticker": "6C=F", "point": 100_000, "tick": 0.0001, "margin": 1_600},
-    # Bitcoin (full-size CME)
+    "Swiss Franc": {"ticker": "6S=F", "point": 125_000, "tick": 0.0001, "margin": 3_000},
+    # Interest rate futures (CBOT)
+    "10Y T-Note": {"ticker": "ZN=F", "point": 1_000, "tick": 0.015625, "margin": 1_800},
+    "30Y T-Bond": {"ticker": "ZB=F", "point": 1_000, "tick": 0.03125, "margin": 3_200},
+    # Agricultural futures (CBOT)
+    "Corn": {"ticker": "ZC=F", "point": 50, "tick": 0.25, "margin": 1_200},
+    "Soybeans": {"ticker": "ZS=F", "point": 50, "tick": 0.25, "margin": 2_200},
+    "Wheat": {"ticker": "ZW=F", "point": 50, "tick": 0.25, "margin": 1_700},
+    # Crypto (full-size CME)
     "Bitcoin": {"ticker": "BTC=F", "point": 5, "tick": 5.0, "margin": 80_000},
+    "Ether": {"ticker": "ETH=F", "point": 50, "tick": 0.25, "margin": 6_500},
 }
 
 # ---------------------------------------------------------------------------
@@ -271,6 +283,14 @@ MICRO_CONTRACT_SPECS = {
         "tick": 0.01,
         "margin": 700,
     },
+    "Natural Gas": {
+        # CME Micro Natural Gas (MNG) — 1/10 of the standard NG contract
+        "ticker": "MNG=F",
+        "data_ticker": "NG=F",
+        "point": 1_000,
+        "tick": 0.001,
+        "margin": 350,
+    },
     # ── Equity index ────────────────────────────────────────────────────────
     "S&P": {
         "ticker": "MES=F",
@@ -300,23 +320,23 @@ MICRO_CONTRACT_SPECS = {
         "tick": 1.0,
         "margin": 1_100,
     },
-    # ── FX futures (micro / standard CME) ───────────────────────────────────
-    # NB: CME FX futures do not have a separate "micro" product line for all
-    # pairs; we trade the standard contract size but track them alongside
-    # micros for session-based ORB scanning.
+    # ── FX futures ──────────────────────────────────────────────────────────
+    # M6E / M6B are genuine CME Micro FX contracts (1/10 of standard size).
+    # The remaining pairs use the standard contract size alongside micros for
+    # session-based ORB scanning.
     "Euro FX": {
-        "ticker": "6E=F",
+        "ticker": "M6E=F",
         "data_ticker": "6E=F",
-        "point": 125_000,
-        "tick": 0.00005,
-        "margin": 2_800,
+        "point": 12_500,
+        "tick": 0.0001,
+        "margin": 280,
     },
     "British Pound": {
-        "ticker": "6B=F",
+        "ticker": "M6B=F",
         "data_ticker": "6B=F",
-        "point": 62_500,
+        "point": 6_250,
         "tick": 0.0001,
-        "margin": 2_600,
+        "margin": 260,
     },
     "Japanese Yen": {
         "ticker": "6J=F",
@@ -339,6 +359,53 @@ MICRO_CONTRACT_SPECS = {
         "tick": 0.0001,
         "margin": 1_600,
     },
+    "Swiss Franc": {
+        "ticker": "6S=F",
+        "data_ticker": "6S=F",
+        "point": 125_000,
+        "tick": 0.0001,
+        "margin": 3_000,
+    },
+    # ── Interest rate futures (CBOT) ─────────────────────────────────────────
+    # No standard CME micro exists for ZN/ZB; we use full-size contracts
+    # here since margins are already relatively small and they're important
+    # for macro regime context.
+    "10Y T-Note": {
+        "ticker": "ZN=F",
+        "data_ticker": "ZN=F",
+        "point": 1_000,
+        "tick": 0.015625,
+        "margin": 1_800,
+    },
+    "30Y T-Bond": {
+        "ticker": "ZB=F",
+        "data_ticker": "ZB=F",
+        "point": 1_000,
+        "tick": 0.03125,
+        "margin": 3_200,
+    },
+    # ── Agricultural futures (CBOT) ──────────────────────────────────────────
+    "Corn": {
+        "ticker": "ZC=F",
+        "data_ticker": "ZC=F",
+        "point": 50,
+        "tick": 0.25,
+        "margin": 1_200,
+    },
+    "Soybeans": {
+        "ticker": "ZS=F",
+        "data_ticker": "ZS=F",
+        "point": 50,
+        "tick": 0.25,
+        "margin": 2_200,
+    },
+    "Wheat": {
+        "ticker": "ZW=F",
+        "data_ticker": "ZW=F",
+        "point": 50,
+        "tick": 0.25,
+        "margin": 1_700,
+    },
     # ── Crypto ──────────────────────────────────────────────────────────────
     "Micro Bitcoin": {
         "ticker": "MBT=F",
@@ -346,6 +413,13 @@ MICRO_CONTRACT_SPECS = {
         "point": 0.1,
         "tick": 5.0,
         "margin": 8_000,
+    },
+    "Micro Ether": {
+        "ticker": "MET=F",
+        "data_ticker": "MET=F",
+        "point": 0.1,
+        "tick": 0.25,
+        "margin": 700,
     },
 }
 
@@ -372,12 +446,36 @@ MICRO_TICKERS: frozenset[str] = frozenset(
     str(spec.get("data_ticker", spec["ticker"])) for spec in MICRO_CONTRACT_SPECS.values()
 )
 
-# FX futures tickers subset
-FX_TICKERS: frozenset[str] = frozenset({"6E=F", "6B=F", "6J=F", "6A=F", "6C=F"})
+# FX futures tickers subset (data tickers)
+FX_TICKERS: frozenset[str] = frozenset({"6E=F", "6B=F", "6J=F", "6A=F", "6C=F", "6S=F"})
+
+# Interest rate futures tickers subset
+RATES_TICKERS: frozenset[str] = frozenset({"ZN=F", "ZB=F"})
+
+# Agricultural futures tickers subset
+AG_TICKERS: frozenset[str] = frozenset({"ZC=F", "ZS=F", "ZW=F"})
 
 # Overnight-session relevant tickers (traded when US equity markets are closed)
 OVERNIGHT_TICKERS: frozenset[str] = frozenset(
-    {"MGC=F", "MCL=F", "MHG=F", "SIL=F", "6E=F", "6B=F", "6J=F", "6A=F", "MBT=F"}
+    {
+        # Metals
+        "MGC=F",
+        "SIL=F",
+        "MHG=F",
+        # Energy
+        "CL=F",
+        "NG=F",
+        # FX
+        "6E=F",
+        "6B=F",
+        "6J=F",
+        "6A=F",
+        "6C=F",
+        "6S=F",
+        # Crypto
+        "MBT=F",
+        "MET=F",
+    }
 )
 
 # Point values for quick P&L calculation (per contract, per full point move)

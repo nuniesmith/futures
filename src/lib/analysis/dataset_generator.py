@@ -51,6 +51,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from datetime import time as dt_time_type
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
@@ -197,6 +198,10 @@ _SYMBOL_TO_TICKER: dict[str, str] = {
     "MHG": "MHG=F",  # Micro Copper
     # ── Micro energy ──────────────────────────────────────────────────────
     "MCL": "MCL=F",  # Micro Crude Oil
+    "MNG": "NG=F",  # Micro Natural Gas (data_ticker = NG=F, same bar data)
+    # ── Energy (full-size) ────────────────────────────────────────────────
+    "NG": "NG=F",  # Natural Gas (NYMEX)
+    "CL": "CL=F",  # Crude Oil (full-size alias)
     # ── Micro equity index ────────────────────────────────────────────────
     "MES": "MES=F",  # Micro S&P 500
     "MNQ": "MNQ=F",  # Micro Nasdaq-100
@@ -204,23 +209,40 @@ _SYMBOL_TO_TICKER: dict[str, str] = {
     "MYM": "MYM=F",  # Micro Dow Jones
     # ── Micro crypto ──────────────────────────────────────────────────────
     "MBT": "MBT=F",  # Micro Bitcoin (CME)
+    "MET": "MET=F",  # Micro Ether (CME)
+    # ── Micro FX futures (CME) ────────────────────────────────────────────
+    "M6E": "6E=F",  # Micro Euro FX (data_ticker = 6E=F)
+    "M6B": "6B=F",  # Micro British Pound (data_ticker = 6B=F)
+    "M6J": "6J=F",  # Micro Japanese Yen (data_ticker = 6J=F)
     # ── FX futures (CME standard) ─────────────────────────────────────────
     "6E": "6E=F",  # Euro FX
     "6B": "6B=F",  # British Pound
     "6J": "6J=F",  # Japanese Yen
     "6A": "6A=F",  # Australian Dollar
     "6C": "6C=F",  # Canadian Dollar
+    "6S": "6S=F",  # Swiss Franc
+    # ── Interest rate futures (CBOT) ─────────────────────────────────────
+    "ZN": "ZN=F",  # 10-Year T-Note
+    "ZB": "ZB=F",  # 30-Year T-Bond
+    "ZF": "ZF=F",  # 5-Year T-Note
+    "ZT": "ZT=F",  # 2-Year T-Note
+    # ── Agricultural futures (CBOT) ──────────────────────────────────────
+    "ZC": "ZC=F",  # Corn
+    "ZS": "ZS=F",  # Soybeans
+    "ZW": "ZW=F",  # Wheat
+    "ZL": "ZL=F",  # Soybean Oil
+    "ZM": "ZM=F",  # Soybean Meal
     # ── Full-size contracts (data source aliases) ─────────────────────────
     "GC": "GC=F",
     "ES": "ES=F",
     "NQ": "NQ=F",
-    "CL": "CL=F",
     "SI": "SI=F",
     "HG": "HG=F",
     "YM": "YM=F",
     "RTY": "RTY=F",
     # ── Crypto (CME full-size) ─────────────────────────────────────────────
     "BTC": "BTC=F",
+    "ETH": "ETH=F",  # Ether (CME full-size)
 }
 
 
@@ -547,7 +569,7 @@ def load_daily_bars(
 # Maps session_key → (or_start, or_end, pm_end) as time objects (ET).
 # These mirror the ORBSession definitions in engine/orb.py but are
 # duplicated here to keep the dataset generator independent of the engine.
-_SESSION_BRACKET_PARAMS: dict[str, tuple["dt_time_type", "dt_time_type", "dt_time_type"]] = {}  # filled below
+_SESSION_BRACKET_PARAMS: dict[str, tuple[dt_time_type, dt_time_type, dt_time_type]] = {}  # filled below
 
 
 def _get_session_bracket_params() -> dict[str, Any]:

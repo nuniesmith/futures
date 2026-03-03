@@ -1,0 +1,191 @@
+# =============================================================================
+# Futures Trading Co-Pilot — GPU Training Stack
+# =============================================================================
+#
+# Standalone compose file intended to run on a DEDICATED GPU MACHINE.
+# It is completely independent of docker-compose.yml — no shared networks,
+# no shared volumes, no dependency on the main stack being up.
+#
+# Services:
+#   trainer  — GPU-accelerated CNN training server (persistent HTTP service)
+#
+# The trainer runs as a LONG-LIVED HTTP SERVER on port 8200.
+# It does NOT exit after one training run — it stays alive and waits for
+# training requests via HTTP POST.
+#
+# This allows the main stack (CPU-only, runs anywhere including Raspberry Pi)
+# to trigger training remotely via Tailscale IP and rsync models back.
+#
+# Prerequisites on the GPU machine:
+#   - Docker with the NVIDIA Container Toolkit installed
+#     https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#   - nvidia-smi visible:
+#       docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi
+#   - A .env file with at minimum:
+#       POSTGRES_PASSWORD=...   (avoids compose warnings)
+#       REDIS_PASSWORD=...      (avoids compose warnings)
+#
+# Trainer HTTP API (port 8200):
+# ---------------------------------------------------------------------------
+#
+#   GET  /health          Liveness check — always 200 while server is up
+#   GET  /status          Full job + model + dataset status (poll this)
+#   POST /train           Trigger a training run (returns 202 immediately)
+#   POST /train/cancel    Cancel a running job
+#   GET  /model           Champion model metadata
+#   GET  /dataset         Dataset statistics
+#   GET  /logs            Recent retrain audit log entries
+#
+# Trigger training from any machine on the Tailscale network:
+# ---------------------------------------------------------------------------
+#
+#   curl -s http://100.113.72.63:8200/health
+#   curl -s -X POST http://100.113.72.63:8200/train \
+#        -H 'Content-Type: application/json' \
+#        -d '{"session":"all","skip_dataset":false,"immediate":true}'
+#   curl -s http://100.113.72.63:8200/status | python3 -m json.tool
+#
+# Sync trained model back to the main machine after training completes:
+# ---------------------------------------------------------------------------
+#
+#   bash scripts/sync_models.sh 100.113.72.63
+#   docker compose restart engine
+#
+# Or use run.train.sh for a guided workflow:
+#
+#   bash run.train.sh                # start the trainer server
+#   bash run.train.sh --trigger      # kick off a training run
+#   bash run.train.sh --status       # poll training status
+#   bash run.train.sh --sync         # rsync models back here
+#   bash run.train.sh --down         # stop the trainer
+#
+# One-shot pipeline (exits when done — original behaviour):
+# ---------------------------------------------------------------------------
+#
+#   docker compose -f docker-compose.train.yml run --rm trainer \
+#       python scripts/retrain_overnight.py --immediate
+#
+# Environment variables that control the pipeline (all optional):
+#   CNN_RETRAIN_MIN_ACC         Minimum val accuracy to promote  (default: 80.0)
+#   CNN_RETRAIN_MIN_PRECISION   Minimum precision to promote     (default: 75.0)
+#   CNN_RETRAIN_MIN_RECALL      Minimum recall to promote        (default: 70.0)
+#   CNN_RETRAIN_IMPROVEMENT     Required accuracy delta          (default: 0.0)
+#   CNN_RETRAIN_EPOCHS          Training epochs                  (default: 25)
+#   CNN_RETRAIN_BATCH_SIZE      Batch size                       (default: 64)
+#   CNN_RETRAIN_LR              Learning rate                    (default: 2e-4)
+#   CNN_RETRAIN_PATIENCE        Early stopping patience          (default: 8)
+#   CNN_RETRAIN_SYMBOLS         Comma-separated symbols
+#   CNN_RETRAIN_DAYS_BACK       Days of history for dataset gen  (default: 90)
+#   TRAINER_API_KEY             Optional bearer-token auth       (default: none)
+#
+# =============================================================================
+
+services:
+    # -------------------------------------------------------------------------
+    # Trainer — Persistent GPU training HTTP server
+    #
+    # Volumes (bind-mounts — host paths):
+    #   ./models    — champion .pt + meta JSON + audit log (rsync source)
+    #   ./dataset   — chart images + labels CSV (persisted between runs)
+    #   ./data      — scratch space (audit locks, health files)
+    #   ./scripts   — training scripts (no rebuild needed for script changes)
+    #
+    # Bind-mounts are used instead of named volumes so that rsync can pull
+    # models/ directly from the host filesystem without needing docker cp.
+    # -------------------------------------------------------------------------
+    trainer:
+        build:
+            context: .
+            dockerfile: docker/trainer/Dockerfile
+        # Restart unless explicitly stopped — this is a persistent service,
+        # not a one-shot pipeline.  It stays alive between training runs.
+        restart: unless-stopped
+        shm_size: 4gb
+        ports:
+            - "8200:8200"
+        deploy:
+            resources:
+                reservations:
+                    devices:
+                        - driver: nvidia
+                          count: 1
+                          capabilities: [gpu]
+        environment:
+            # ----------------------------------------------------------------
+            # Trainer server config
+            # ----------------------------------------------------------------
+            - TRAINER_HOST=0.0.0.0
+            - TRAINER_PORT=8200
+            # Optional: set a bearer token to protect the /train endpoint.
+            # Leave unset (or empty) for no authentication.
+            - TRAINER_API_KEY=${TRAINER_API_KEY:-}
+
+            # ----------------------------------------------------------------
+            # Validation gate thresholds (pipeline defaults — can be
+            # overridden per-request in the POST /train body)
+            # ----------------------------------------------------------------
+            - CNN_RETRAIN_MIN_ACC=${CNN_RETRAIN_MIN_ACC:-80.0}
+            - CNN_RETRAIN_MIN_PRECISION=${CNN_RETRAIN_MIN_PRECISION:-75.0}
+            - CNN_RETRAIN_MIN_RECALL=${CNN_RETRAIN_MIN_RECALL:-70.0}
+            - CNN_RETRAIN_IMPROVEMENT=${CNN_RETRAIN_IMPROVEMENT:-0.0}
+
+            # ----------------------------------------------------------------
+            # Training hyperparameters (pipeline defaults)
+            # ----------------------------------------------------------------
+            - CNN_RETRAIN_EPOCHS=${CNN_RETRAIN_EPOCHS:-25}
+            - CNN_RETRAIN_BATCH_SIZE=${CNN_RETRAIN_BATCH_SIZE:-64}
+            - CNN_RETRAIN_LR=${CNN_RETRAIN_LR:-0.0002}
+            - CNN_RETRAIN_PATIENCE=${CNN_RETRAIN_PATIENCE:-8}
+
+            # ----------------------------------------------------------------
+            # Dataset generation defaults
+            # ----------------------------------------------------------------
+            - CNN_RETRAIN_SYMBOLS=${CNN_RETRAIN_SYMBOLS:-MGC,SIL,MHG,MCL,MNG,MES,MNQ,M2K,MYM,6E,6B,6J,6A,6C,6S,ZN,ZB,ZC,ZS,ZW,MBT,MET}
+            - CNN_RETRAIN_DAYS_BACK=${CNN_RETRAIN_DAYS_BACK:-90}
+            - CNN_RETRAIN_ORB_SESSION=${CNN_RETRAIN_ORB_SESSION:-all}
+            - CNN_ORB_SESSION=${CNN_ORB_SESSION:-all}
+
+            # ----------------------------------------------------------------
+            # Python / runtime
+            # ----------------------------------------------------------------
+            - PYTHONPATH=/app/src
+            - PYTHONUNBUFFERED=1
+
+            # NVIDIA container toolkit
+            - NVIDIA_VISIBLE_DEVICES=all
+            - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+        volumes:
+            # Bind-mounts — files land directly on the host so rsync can
+            # pull models/ without any docker cp / volume-export dance.
+            # The host directories are created automatically by Docker Compose
+            # if they don't already exist.
+            - ./models:/app/models
+            - ./dataset:/app/dataset
+            - ./data:/app/data
+            - ./scripts:/app/scripts
+
+        # Default command: run the persistent HTTP training server.
+        # The server starts up immediately and waits for POST /train.
+        #
+        # Override to run the one-shot pipeline instead:
+        #   docker compose -f docker-compose.train.yml run --rm trainer \
+        #       python scripts/retrain_overnight.py --immediate
+        command: ["python", "scripts/trainer_server.py"]
+
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "python",
+                    "-c",
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8200/health')",
+                ]
+            interval: 30s
+            timeout: 10s
+            start_period: 60s
+            retries: 3
+
+# =============================================================================
+# No named volumes — bind-mounts used so rsync works directly on host dirs.
+# =============================================================================

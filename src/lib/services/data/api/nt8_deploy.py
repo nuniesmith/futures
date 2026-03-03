@@ -42,11 +42,41 @@ _GITHUB_BRANCH = "main"
 _GITHUB_RAW_BASE = f"https://raw.githubusercontent.com/{_GITHUB_REPO}/{_GITHUB_BRANCH}"
 
 # Mapping: source path in repo → destination relative to NT8 Custom dir
+#
+# Keys are paths relative to the repo root.
+# Values are paths relative to the NT8 Custom directory.
+#
+# Files with _BINARY_FILES keys are fetched as raw bytes (curl --output)
+# rather than text so they are not corrupted by line-ending conversion.
 _FILE_MAP = {
+    # ── Strategies ────────────────────────────────────────────────────────────
+    "src/ninjatrader/BreakoutStrategy.cs": "Strategies\\BreakoutStrategy.cs",
     "src/ninjatrader/Bridge.cs": "Strategies\\Bridge.cs",
+    # ── Indicators ────────────────────────────────────────────────────────────
     "src/ninjatrader/Ruby.cs": "Indicators\\Ruby.cs",
+    # ── Shared C# files (sit directly in Custom root) ────────────────────────
+    "src/ninjatrader/BridgeOrderEngine.cs": "BridgeOrderEngine.cs",
+    "src/ninjatrader/OrbCnnPredictor.cs": "OrbCnnPredictor.cs",
     "src/ninjatrader/SignalBus.cs": "SignalBus.cs",
+    # ── CNN model (binary — fetched to Models\ subfolder) ────────────────────
+    # Export from Python first:  python scripts/export_onnx.py
+    "models/orb_breakout_cnn.onnx": "Models\\orb_breakout_cnn.onnx",
 }
+
+# Files that must be copied as raw bytes (curl --output, no text conversion).
+# Any entry whose repo key ends in a non-text extension goes here.
+_BINARY_FILES = {
+    "models/orb_breakout_cnn.onnx",
+}
+
+# OnnxRuntime native DLLs that must also live in bin\Custom\ for
+# OrbCnnPredictor to load.  These are not in the GitHub repo — the bat
+# prints a reminder telling the user where to obtain them.
+_ONNX_RUNTIME_DLLS = [
+    "Microsoft.ML.OnnxRuntime.dll",
+    "onnxruntime.dll",
+    "onnxruntime_providers_shared.dll",
+]
 
 # Default NT8 Custom directory on Windows
 _DEFAULT_NT8_CUSTOM = r"C:\Users\jordan\Documents\NinjaTrader 8\bin\Custom"
@@ -138,28 +168,50 @@ def _get_positions_data() -> dict[str, Any] | None:
     return None
 
 
+def _cnn_model_on_disk() -> bool:
+    """Return True if the ONNX model file exists at the repo-relative path.
+
+    Checks ``models/orb_breakout_cnn.onnx`` relative to the project root
+    (two levels up from this file).  Also accepts an override via the
+    ``CNN_MODEL_PATH`` environment variable so staging/prod can point
+    elsewhere.
+    """
+    import os
+
+    override = os.getenv("CNN_MODEL_PATH", "")
+    if override:
+        return os.path.isfile(override)
+    here = os.path.dirname(__file__)
+    model_path = os.path.normpath(os.path.join(here, "..", "..", "..", "..", "models", "orb_breakout_cnn.onnx"))
+    return os.path.isfile(model_path)
+
+
 def _compute_health() -> dict[str, Any]:
     """Compute full system health status from all available cache sources.
 
     Returns a dict with:
         --- Service-level indicators ---
-        data_service_up: bool    — always True if this code is running
-        engine_up: bool          — engine status == "running"
-        redis_up: bool           — Redis ping succeeds
-        postgres_up: bool        — Postgres SELECT 1 succeeds
+        data_service_up: bool     — always True if this code is running
+        engine_up: bool           — engine status == "running"
+        redis_up: bool            — Redis ping succeeds
+        postgres_up: bool         — Postgres SELECT 1 succeeds
 
         --- NT8 Bridge indicators ---
-        bridge_connected: bool   — heartbeat received within TTL
-        bridge_state: str        — "Realtime", "Historical", "disconnected", etc.
-        bridge_version: str      — e.g. "2.0"
-        bridge_account: str      — e.g. "Sim101"
+        bridge_connected: bool    — heartbeat received within TTL
+        bridge_state: str         — "Realtime", "Historical", "disconnected", etc.
+        bridge_version: str       — e.g. "2.0"
+        bridge_account: str       — e.g. "Sim101"
         bridge_age_seconds: float — seconds since last heartbeat
-        ruby_attached: bool      — whether Ruby indicator is loaded on Bridge
-        signalbus_active: bool   — whether SignalBus consumer is registered
-        signalbus_pending: int   — signals waiting in queue
-        positions_count: int     — open positions
-        risk_blocked: bool       — risk enforcement blocking
-        last_heartbeat: str      — ISO timestamp of last heartbeat
+        ruby_attached: bool       — whether Ruby indicator is loaded on Bridge
+        signalbus_active: bool    — whether SignalBus consumer is registered
+        signalbus_pending: int    — signals waiting in queue
+        positions_count: int      — open positions
+        risk_blocked: bool        — risk enforcement blocking
+        last_heartbeat: str       — ISO timestamp of last heartbeat
+
+        --- CNN / BreakoutStrategy indicators ---
+        cnn_model_on_disk: bool   — orb_breakout_cnn.onnx present in repo models/
+        breakout_instruments: int — number of instruments tracked (from /status)
     """
     heartbeat = _get_heartbeat()
     bridge_status = _get_bridge_status_from_cache()
@@ -186,6 +238,9 @@ def _compute_health() -> dict[str, Any]:
         "positions_count": 0,
         "risk_blocked": False,
         "last_heartbeat": None,
+        # CNN / BreakoutStrategy
+        "cnn_model_on_disk": False,
+        "breakout_instruments": 0,
     }
 
     # --- Service-level checks ---
@@ -271,6 +326,17 @@ def _compute_health() -> dict[str, Any]:
         if not result["bridge_account"]:
             result["bridge_account"] = positions.get("account", "")
 
+    # --- CNN model file presence (checked server-side) ---
+    try:
+        result["cnn_model_on_disk"] = _cnn_model_on_disk()
+    except Exception:
+        result["cnn_model_on_disk"] = False
+
+    # --- Breakout instrument count from Bridge /status trackedInstruments ---
+    if bridge_status:
+        tracked = bridge_status.get("trackedInstruments", [])
+        result["breakout_instruments"] = len(tracked) if isinstance(tracked, list) else 0
+
     return result
 
 
@@ -280,72 +346,111 @@ def _compute_health() -> dict[str, Any]:
 
 
 def _generate_bat_installer() -> str:
-    """Generate a Windows .bat file that downloads CS files and deploys them."""
+    """Generate a Windows .bat file that downloads all NT8 files and deploys them.
+
+    Handles two file categories:
+      - Text files (.cs)  — downloaded with curl and copied normally.
+      - Binary files (.onnx) — downloaded with ``curl --output`` directly to
+        the destination so Windows never corrupts bytes via line-ending
+        conversion.  The Models\\ subfolder is created automatically.
+
+    OnnxRuntime native DLLs are NOT downloaded automatically (they live in
+    a NuGet package, not the GitHub repo).  A reminder section at the end
+    of the bat tells the user exactly where to get them.
+    """
 
     download_cmds = ""
     file_list_display = ""
     success_checks = ""
+    # Exclude binary files from the "text" count for the summary line;
+    # we count all files for the DEPLOYED check.
     file_count = len(_FILE_MAP)
 
     for i, (repo_path, nt8_rel_path) in enumerate(_FILE_MAP.items(), 1):
         raw_url = f"{_GITHUB_RAW_BASE}/{repo_path}"
         filename = repo_path.split("/")[-1]
         dest_subdir = nt8_rel_path.rsplit("\\", 1)[0] if "\\" in nt8_rel_path else ""
+        is_binary = repo_path in _BINARY_FILES
 
-        file_list_display += f"echo     {filename:20s} -^> {nt8_rel_path}\n"
+        # Display line for the header list
+        tag = "[bin]" if is_binary else "     "
+        file_list_display += f"echo  {tag} {filename:30s} -^> {nt8_rel_path}\n"
 
-        download_cmds += textwrap.dedent(f"""\
-            echo.
-            echo   [{i}/{file_count}] Downloading {filename}...
-            curl -sS -L -f -o "%TEMP_DIR%\\{filename}" "{raw_url}"
-            if errorlevel 1 (
-                echo   [FAIL] Could not download {filename}
-                set /a ERRORS+=1
-            ) else (
-                echo   [OK]   Downloaded {filename}
-            )
-        """)
-
+        # Always ensure the destination sub-directory exists first
         if dest_subdir:
             download_cmds += textwrap.dedent(f"""\
-                if not exist "%NT8_CUSTOM%\\{dest_subdir}" mkdir "%NT8_CUSTOM%\\{dest_subdir}"
+                if not exist "%NT8_CUSTOM%\\{dest_subdir}" (
+                    mkdir "%NT8_CUSTOM%\\{dest_subdir}" >nul 2>&1
+                )
             """)
 
-        download_cmds += textwrap.dedent(f"""\
-            if exist "%TEMP_DIR%\\{filename}" (
-                copy /Y "%TEMP_DIR%\\{filename}" "%NT8_CUSTOM%\\{nt8_rel_path}" >nul 2>&1
+        if is_binary:
+            # Binary files: curl writes directly to final destination so
+            # Windows never touches the bytes.  No intermediate temp copy.
+            download_cmds += textwrap.dedent(f"""\
+                echo.
+                echo   [{i}/{file_count}] Downloading {filename} (binary)...
+                curl -sS -L -f --output "%NT8_CUSTOM%\\{nt8_rel_path}" "{raw_url}"
                 if errorlevel 1 (
-                    echo   [FAIL] Could not copy {filename} to {nt8_rel_path}
-                    set /a ERRORS+=1
+                    echo   [WARN] Could not download {filename} - model may not exist yet.
+                    echo          Run: python scripts/export_onnx.py  then commit models/orb_breakout_cnn.onnx
                 ) else (
                     echo   [OK]   {filename} -^> {nt8_rel_path}
                 )
-            )
-        """)
+            """)
+        else:
+            # Text files: download to temp, then copy to destination.
+            download_cmds += textwrap.dedent(f"""\
+                echo.
+                echo   [{i}/{file_count}] Downloading {filename}...
+                curl -sS -L -f -o "%TEMP_DIR%\\{filename}" "{raw_url}"
+                if errorlevel 1 (
+                    echo   [FAIL] Could not download {filename}
+                    set /a ERRORS+=1
+                ) else (
+                    echo   [OK]   Downloaded {filename}
+                )
+                if exist "%TEMP_DIR%\\{filename}" (
+                    copy /Y "%TEMP_DIR%\\{filename}" "%NT8_CUSTOM%\\{nt8_rel_path}" >nul 2>&1
+                    if errorlevel 1 (
+                        echo   [FAIL] Could not copy {filename} to {nt8_rel_path}
+                        set /a ERRORS+=1
+                    ) else (
+                        echo   [OK]   {filename} -^> {nt8_rel_path}
+                    )
+                )
+            """)
 
         success_checks += f'if exist "%NT8_CUSTOM%\\{nt8_rel_path}" set /a DEPLOYED+=1\n'
+
+    # Build the OnnxRuntime DLL reminder block
+    dll_list = "\n".join(f"    echo      {dll}" for dll in _ONNX_RUNTIME_DLLS)
 
     bat_content = textwrap.dedent(f"""\
         @echo off
         setlocal EnableDelayedExpansion
 
         :: =====================================================================
-        :: NinjaTrader 8 — Deploy CS Files from GitHub
+        :: NinjaTrader 8 — Deploy Strategy Files from GitHub
         :: =====================================================================
         :: Generated by Futures Trading Co-Pilot
         ::
-        :: This script downloads the latest NinjaTrader C# source files from
+        :: Downloads the latest NinjaTrader C# source files + CNN model from
         :: the GitHub repository and copies them to the correct NT8 Custom
-        :: directories. After running, open NinjaTrader 8 and compile.
+        :: directories.  After running, open NinjaTrader 8 and compile.
         ::
-        :: Requirements: curl (included in Windows 10+)
+        :: Requirements: curl (included in Windows 10 build 1803+)
+        ::
+        :: Usage:
+        ::   deploy-nt8.bat                       (uses default NT8 path)
+        ::   deploy-nt8.bat "C:\\custom\\path"      (override NT8 Custom dir)
         :: =====================================================================
 
-        title NinjaTrader 8 — Deploy CS Files
+        title NinjaTrader 8 — Deploy Strategy Files
 
         echo.
         echo  ================================================================
-        echo   NinjaTrader 8 — Deploy CS Files from GitHub
+        echo   NinjaTrader 8 — Deploy Strategy Files from GitHub
         echo  ================================================================
         echo.
         echo  Repository: {_GITHUB_REPO} (branch: {_GITHUB_BRANCH})
@@ -383,11 +488,11 @@ def _generate_bat_installer() -> str:
 
         where curl >nul 2>&1
         if errorlevel 1 (
-            echo  [ERROR] curl not found. Please install curl or use Windows 10+.
+            echo  [ERROR] curl not found. Please install curl or upgrade to Windows 10 1803+.
             goto :error_exit
         )
 
-        :: ── Create temp directory ────────────────────────────────────────────
+        :: ── Create temp directory (for text files) ───────────────────────────
 
         mkdir "%TEMP_DIR%" >nul 2>&1
 
@@ -415,10 +520,31 @@ def _generate_bat_installer() -> str:
         )
         echo  ================================================================
         echo.
-        echo  Next steps:
-        echo    1. Open NinjaTrader 8
-        echo    2. Tools -^> NinjaScript Editor
-        echo    3. Right-click -^> Compile
+        echo  ── OnnxRuntime DLLs (required for CNN filter) ───────────────────
+        echo.
+        echo  The CNN model requires these DLLs in the same bin\\Custom\\ folder.
+        echo  They come from NuGet: Microsoft.ML.OnnxRuntime 1.18.1
+        echo.
+        echo  Required DLLs (copy from NuGet cache or VS build output):
+{dll_list}
+        echo.
+        echo  NuGet native path (after installing in a VS project):
+        echo    %USERPROFILE%\\.nuget\\packages\\microsoft.ml.onnxruntime\\1.18.1\\
+        echo             runtimes\\win-x64\\native\\
+        echo.
+        echo  ── Next steps ───────────────────────────────────────────────────
+        echo.
+        echo    1. Copy the OnnxRuntime DLLs above to:
+        echo       %NT8_CUSTOM%\\
+        echo.
+        echo    2. Open NinjaTrader 8
+        echo    3. Tools -^> NinjaScript Editor -^> right-click -^> Compile
+        echo.
+        echo    4. Add BreakoutStrategy to a chart.
+        echo       In Group 6 (AI Filter):
+        echo         Enable CNN Filter    = true
+        echo         CNN Model Path       = %NT8_CUSTOM%\\Models\\orb_breakout_cnn.onnx
+        echo         CNN Session Key      = us  (or london / tokyo / etc.)
         echo.
 
         if !ERRORS! GTR 0 goto :error_exit
@@ -474,9 +600,9 @@ def _render_health_dot(label: str, is_up: bool, title_up: str, title_down: str, 
 def _render_health_bar(health: dict[str, Any]) -> str:
     """Render health indicators as a compact HTML fragment.
 
-    Shows colored dots for Data, Engine, Redis, Postgres (service-level)
-    and Bridge, Ruby, SignalBus (NT8-level) with tooltips. Designed to
-    sit in the header toolbar area.
+    Shows colored dots for Data, Engine, Redis, Postgres (service-level),
+    Bridge, Ruby (NT8-level), and a CNN badge (AI filter status).
+    Designed to sit in the header toolbar area.
     """
     # --- Service-level indicators ---
     data_ok = health.get("data_service_up", True)
@@ -493,6 +619,10 @@ def _render_health_bar(health: dict[str, Any]) -> str:
     account = health.get("bridge_account", "")
     version = health.get("bridge_version", "")
     positions = health.get("positions_count", 0)
+
+    # --- CNN / BreakoutStrategy indicators ---
+    cnn_on_disk = health.get("cnn_model_on_disk", False)
+    breakout_instruments = health.get("breakout_instruments", 0)
 
     # Service dots
     data_dot = _render_health_dot("Data", data_ok, "Data Service: Running", "Data Service: Down")
@@ -511,14 +641,14 @@ def _render_health_bar(health: dict[str, Any]) -> str:
         bridge_title_down += f" — last seen {age:.0f}s ago"
     bridge_dot = _render_health_dot("Bridge", bridge_ok, bridge_title_up, bridge_title_down, pulse=bridge_ok)
 
-    # Ruby dot
+    # Ruby dot — yellow when Bridge is up but Ruby isn't attached
     if ruby_ok:
         ruby_title = "Ruby: Attached to Bridge"
     elif bridge_ok:
         ruby_title = "Ruby: Not attached (Bridge running without Ruby)"
     else:
         ruby_title = "Ruby: Unknown (Bridge not connected)"
-    # Ruby uses yellow when bridge is up but ruby isn't attached
+
     if ruby_ok:
         ruby_dot = _render_health_dot("Ruby", True, ruby_title, ruby_title, pulse=True)
     elif bridge_ok:
@@ -537,6 +667,34 @@ def _render_health_bar(health: dict[str, Any]) -> str:
             </span>
             <span class="text-[11px] text-zinc-500">Ruby</span>
         </div>"""
+
+    # CNN badge — purple when model is on disk, grey when missing
+    if cnn_on_disk:
+        cnn_title = "CNN model ready (orb_breakout_cnn.onnx on disk)"
+        cnn_badge = f"""
+            <span class="px-1.5 py-0.5 bg-purple-900/50 border border-purple-700/60 rounded
+                         text-[10px] text-purple-300 font-semibold tracking-wide cursor-default"
+                  title="{cnn_title}">
+                CNN ✓
+            </span>"""
+    else:
+        cnn_title = "CNN model not found — run: python scripts/export_onnx.py"
+        cnn_badge = f"""
+            <span class="px-1.5 py-0.5 bg-zinc-800/80 border border-zinc-700 rounded
+                         text-[10px] text-zinc-500 font-semibold tracking-wide cursor-default"
+                  title="{cnn_title}">
+                CNN –
+            </span>"""
+
+    # Breakout instruments badge (only when Bridge is up and tracking > 0)
+    instr_html = ""
+    if bridge_ok and breakout_instruments > 0:
+        instr_html = f"""
+            <span class="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded
+                         text-[10px] text-zinc-400 font-mono cursor-default"
+                  title="{breakout_instruments} instruments tracked by Bridge">
+                {breakout_instruments}i
+            </span>"""
 
     # Risk badge
     risk_html = ""
@@ -576,10 +734,16 @@ def _render_health_bar(health: dict[str, Any]) -> str:
         </div>
 
         <!-- NT8 Bridge Health -->
-        <div class="flex items-center gap-2 pl-1">
+        <div class="flex items-center gap-2 pl-1 pr-2 border-r border-zinc-700">
             {bridge_dot}
             {ver_html}
             {ruby_dot}
+            {instr_html}
+        </div>
+
+        <!-- CNN / AI Filter status -->
+        <div class="flex items-center gap-1.5 pl-1">
+            {cnn_badge}
         </div>
 
         {pos_html}
@@ -592,8 +756,26 @@ def _render_toolbar_dropdown() -> str:
     """Render the NT8 tools dropdown for the header area.
 
     A small icon button that reveals deploy options on click.
+    Includes the full file manifest, a CNN export shortcut, and both
+    download-bat and WSL-deploy actions.
     """
-    return """
+    # Build file manifest rows dynamically from _FILE_MAP so the HTML
+    # always stays in sync with what the bat actually deploys.
+    manifest_rows = ""
+    for repo_path, nt8_rel_path in _FILE_MAP.items():
+        filename = repo_path.split("/")[-1]
+        is_binary = repo_path in _BINARY_FILES
+        icon = "🧠" if filename.endswith(".onnx") else "📄"
+        dest_display = nt8_rel_path.replace("\\", "/")
+        # Dim the ONNX row slightly when model hasn't been exported yet
+        row_cls = "text-purple-400/80" if is_binary else "text-zinc-400"
+        manifest_rows += f"""
+                <div class="flex justify-between items-center">
+                    <span class="{row_cls}">{icon} {filename}</span>
+                    <span class="text-zinc-600">→ {dest_display}</span>
+                </div>"""
+
+    return f"""
     <div class="relative" id="nt8-toolbar">
         <!-- Trigger Button -->
         <button onclick="document.getElementById('nt8-dropdown').classList.toggle('hidden')"
@@ -616,7 +798,7 @@ def _render_toolbar_dropdown() -> str:
 
         <!-- Dropdown Panel -->
         <div id="nt8-dropdown"
-             class="hidden absolute right-0 top-full mt-2 w-72 bg-zinc-900 border border-zinc-700
+             class="hidden absolute right-0 top-full mt-2 w-80 bg-zinc-900 border border-zinc-700
                     rounded-lg shadow-2xl shadow-black/50 z-50 p-4">
 
             <!-- Header -->
@@ -633,17 +815,15 @@ def _render_toolbar_dropdown() -> str:
                 </button>
             </div>
 
-            <!-- File mapping -->
-            <div class="mb-3 text-[10px] text-zinc-600 space-y-0.5 bg-zinc-950/50 rounded p-2 border border-zinc-800">
-                <div class="flex justify-between">
-                    <span>📄 Bridge.cs</span><span class="text-zinc-500">→ Strategies/</span>
-                </div>
-                <div class="flex justify-between">
-                    <span>📄 Ruby.cs</span><span class="text-zinc-500">→ Indicators/</span>
-                </div>
-                <div class="flex justify-between">
-                    <span>📄 SignalBus.cs</span><span class="text-zinc-500">→ Custom/</span>
-                </div>
+            <!-- File manifest (generated from _FILE_MAP) -->
+            <div class="mb-3 text-[10px] space-y-0.5 bg-zinc-950/50 rounded p-2 border border-zinc-800">
+                {manifest_rows}
+            </div>
+
+            <!-- CNN export hint -->
+            <div class="mb-3 px-2 py-1.5 bg-purple-950/40 border border-purple-800/40 rounded text-[10px] text-purple-300/70">
+                🧠 Export CNN model before deploying:<br>
+                <span class="font-mono text-purple-400/90">python scripts/export_onnx.py</span>
             </div>
 
             <!-- Actions -->
@@ -682,20 +862,20 @@ def _render_toolbar_dropdown() -> str:
 
             <!-- Source info -->
             <div class="mt-3 pt-2 border-t border-zinc-800 text-[10px] text-zinc-600 text-center">
-                Source: github.com/nuniesmith/futures (main)
+                Source: github.com/{_GITHUB_REPO} ({_GITHUB_BRANCH})
             </div>
         </div>
     </div>
 
     <!-- Close dropdown on outside click -->
     <script>
-        document.addEventListener('click', function(e) {
+        document.addEventListener('click', function(e) {{
             var toolbar = document.getElementById('nt8-toolbar');
             var dropdown = document.getElementById('nt8-dropdown');
-            if (toolbar && dropdown && !toolbar.contains(e.target)) {
+            if (toolbar && dropdown && !toolbar.contains(e.target)) {{
                 dropdown.classList.add('hidden');
-            }
-        });
+            }}
+        }});
     </script>
     """
 

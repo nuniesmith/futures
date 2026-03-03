@@ -1,15 +1,20 @@
-# Dockerfile.engine — Background Engine Service (GPU-enabled)
+# Dockerfile.engine — Background Engine Service (CPU-only)
 # Runs DashboardEngine: Ruby modules, optimization, backtesting,
 # daily focus computation, session-aware scheduling.
 # Reads market data from Redis (written by data-service), writes results back.
 #
-# Uses NVIDIA CUDA runtime base image so PyTorch can access the GPU
-# for CNN training and inference. Python 3.13 via deadsnakes PPA.
+# CPU-only image — no CUDA runtime. PyTorch is NOT installed here.
+# CNN inference in the engine uses the cpu-fallback path in breakout_cnn.py.
+# GPU training is handled by the separate `trainer` service defined in
+# docker-compose.train.yml, intended to run on a dedicated GPU machine.
+# Trained models are copied back via scripts/sync_models.sh.
+#
+# Python 3.13 via deadsnakes PPA on Ubuntu 24.04.
 
 # ---------------------------------------------------------------------------
 # Stage 1: Install dependencies
 # ---------------------------------------------------------------------------
-FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04 AS deps
+FROM ubuntu:24.04 AS deps
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -41,16 +46,15 @@ WORKDIR /app
 COPY pyproject.toml .
 RUN mkdir -p src/lib && touch src/lib/__init__.py
 
-# Install base deps + gpu extras (includes torch, torchvision, mplfinance, Pillow)
-# Use the CUDA 12.8 PyTorch index to get GPU-enabled wheels that match the base image
-RUN pip install --no-cache-dir \
-    ".[gpu]" \
-    --extra-index-url https://download.pytorch.org/whl/cu128
+# Install base deps only — no [gpu] extras, no CUDA torch wheels.
+# torch/torchvision are intentionally excluded; the engine uses the
+# cpu-safe fallback in breakout_cnn.py for any inference it needs to do.
+RUN pip install --no-cache-dir "."
 
 # ---------------------------------------------------------------------------
 # Stage 2: Copy app code and run
 # ---------------------------------------------------------------------------
-FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04 AS runtime
+FROM ubuntu:24.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -86,10 +90,6 @@ COPY scripts/ ./scripts/
 
 # Create data directory
 RUN mkdir -p /app/data
-
-# NVIDIA runtime env vars — makes CUDA libraries visible inside the container
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 # PYTHONPATH: bare imports resolve from /app/src
 ENV PYTHONPATH="/app/src"

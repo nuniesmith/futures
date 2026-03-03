@@ -5,12 +5,19 @@ Provides endpoints for CNN model status, retraining triggers, and
 training log access from the web dashboard.
 
 Endpoints:
-    GET  /cnn/status          — Current model info + last training results
-    POST /cnn/retrain         — Trigger CNN retraining pipeline (async)
-    GET  /cnn/retrain/status  — Poll status of a running retrain job
-    POST /cnn/retrain/cancel  — Cancel a running retrain job
-    GET  /cnn/history         — Recent retrain audit log entries
-    GET  /cnn/status/html     — HTML fragment for dashboard panel
+    GET  /cnn/status              — Current model info + last training results
+    POST /cnn/retrain             — Trigger CNN retraining pipeline (async)
+    GET  /cnn/retrain/status      — Poll status of a running retrain job
+    POST /cnn/retrain/cancel      — Cancel a running retrain job
+    GET  /cnn/history             — Recent retrain audit log entries
+    GET  /cnn/status/html         — HTML fragment for dashboard panel
+
+Per-session CNN gate endpoints:
+    GET  /cnn/gate                — Return gate state for all 9 sessions
+    PUT  /cnn/gate/{session_key}  — Enable or disable the gate for one session
+    DELETE /cnn/gate/{session_key}— Remove per-session override (revert to env-var)
+    DELETE /cnn/gate              — Remove all overrides
+    GET  /cnn/gate/html           — Dashboard HTML fragment for gate panel
 """
 
 from __future__ import annotations
@@ -418,6 +425,285 @@ def cancel_retrain(request: Request):
         return cnn_status_html()
 
     return {"status": "cancelled", "message": "Retrain job cancelled."}
+
+
+# ---------------------------------------------------------------------------
+# Per-session CNN gate endpoints
+# ---------------------------------------------------------------------------
+
+_OVERNIGHT_SESSIONS = {"cme", "sydney", "tokyo", "shanghai"}
+_SESSION_LABELS: dict[str, str] = {
+    "cme": "CME Open 18:00 ET",
+    "sydney": "Sydney/ASX 18:30 ET",
+    "tokyo": "Tokyo/TSE 19:00 ET",
+    "shanghai": "Shanghai/HK 21:00 ET",
+    "frankfurt": "Frankfurt 03:00 ET",
+    "london": "London 03:00 ET",
+    "london_ny": "London-NY 08:00 ET",
+    "us": "US Equity 09:30 ET",
+    "cme_settle": "CME Settle 14:00 ET",
+}
+_SESSION_ORDER = list(_SESSION_LABELS.keys())
+
+
+def _get_gates_payload() -> dict[str, Any]:
+    """Return the full CNN gate state dict, annotated with effective values."""
+    try:
+        from lib.core.redis_helpers import get_all_cnn_gates
+
+        raw = get_all_cnn_gates()
+        global_env = raw.pop("_global_env", False)
+
+        sessions = []
+        for sk in _SESSION_ORDER:
+            override = raw.get(sk)  # True / False / None
+            effective = override if override is not None else global_env
+            sessions.append(
+                {
+                    "key": sk,
+                    "label": _SESSION_LABELS.get(sk, sk),
+                    "is_overnight": sk in _OVERNIGHT_SESSIONS,
+                    "override": override,  # None = no Redis key set
+                    "effective": effective,  # what the engine actually uses
+                    "source": "redis" if override is not None else "env",
+                }
+            )
+
+        return {
+            "sessions": sessions,
+            "global_env": global_env,
+            "redis_available": True,
+        }
+    except Exception as exc:
+        logger.warning("get_gates_payload failed: %s", exc)
+        return {
+            "sessions": [],
+            "global_env": False,
+            "redis_available": False,
+            "error": str(exc),
+        }
+
+
+@router.get("/cnn/gate")
+def get_cnn_gates():
+    """Return the CNN hard-gate state for all 9 ORB sessions.
+
+    Each session entry reports:
+    - ``override``: ``true``/``false`` if a Redis key is set, ``null`` otherwise.
+    - ``effective``: the value the engine will actually use (override if set,
+      else ``ORB_CNN_GATE`` env var).
+    - ``source``: ``"redis"`` or ``"env"``.
+    """
+    return _get_gates_payload()
+
+
+@router.put("/cnn/gate/{session_key}")
+def set_cnn_gate_endpoint(session_key: str, enabled: bool = True):
+    """Enable or disable the CNN hard gate for a single session.
+
+    Args:
+        session_key: One of: cme, sydney, tokyo, shanghai, frankfurt, london,
+                     london_ny, us, cme_settle.
+        enabled: ``true`` (default) to enable; ``false`` to disable.
+
+    The value is stored in Redis at ``engine:config:cnn_gate:{session_key}``
+    and persists for 30 days.  The engine picks it up on the next ORB check
+    with no restart required.
+    """
+    sk = session_key.lower().strip()
+    if sk not in _SESSION_LABELS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown session key '{sk}'. Valid keys: {', '.join(_SESSION_ORDER)}",
+        )
+
+    try:
+        from lib.core.redis_helpers import set_cnn_gate
+
+        ok = set_cnn_gate(sk, enabled)
+        if not ok:
+            raise HTTPException(status_code=503, detail="Redis unavailable — could not persist gate setting")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "session_key": sk,
+        "label": _SESSION_LABELS[sk],
+        "enabled": enabled,
+        "stored": True,
+        "message": (
+            f"CNN gate {'ENABLED' if enabled else 'DISABLED'} for session '{sk}' "
+            f"— takes effect on next ORB check (no restart needed)"
+        ),
+    }
+
+
+@router.delete("/cnn/gate/{session_key}")
+def reset_cnn_gate_endpoint(session_key: str):
+    """Remove the Redis override for *session_key*.
+
+    After this call the session reverts to the ``ORB_CNN_GATE`` env-var default.
+    """
+    sk = session_key.lower().strip()
+    if sk not in _SESSION_LABELS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown session key '{sk}'. Valid keys: {', '.join(_SESSION_ORDER)}",
+        )
+
+    try:
+        from lib.core.redis_helpers import reset_cnn_gate
+
+        reset_cnn_gate(sk)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "session_key": sk,
+        "removed": True,
+        "message": f"Override removed for session '{sk}' — now using ORB_CNN_GATE env var",
+    }
+
+
+@router.delete("/cnn/gate")
+def reset_all_cnn_gates_endpoint():
+    """Remove all per-session Redis overrides.
+
+    All sessions revert to the ``ORB_CNN_GATE`` env-var default.
+    """
+    try:
+        from lib.core.redis_helpers import reset_all_cnn_gates
+
+        count = reset_all_cnn_gates()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "removed_count": count,
+        "message": f"Removed {count} override(s) — all sessions now use ORB_CNN_GATE env var",
+    }
+
+
+@router.get("/cnn/gate/html", response_class=HTMLResponse)
+def cnn_gate_html():
+    """Return a dashboard HTML fragment for the per-session CNN gate panel.
+
+    Designed to be loaded into ``#cnn-gate-panel`` via HTMX polling every
+    30 seconds so the dashboard stays in sync with Redis state changes.
+    """
+    data = _get_gates_payload()
+    sessions: list[dict[str, Any]] = data.get("sessions", [])
+    global_env: bool = data.get("global_env", False)
+    redis_ok: bool = data.get("redis_available", False)
+
+    if not redis_ok:
+        return HTMLResponse(
+            content="""
+            <div class="text-[10px] text-red-400 flex items-center gap-1">
+                <span>⚠</span>
+                <span>Redis unavailable — gate state unknown</span>
+            </div>
+            """
+        )
+
+    rows_html = ""
+    for s in sessions:
+        sk: str = s["key"]
+        label: str = s["label"]
+        effective: bool = s["effective"]
+        source: str = s["source"]
+        is_overnight: bool = s["is_overnight"]
+
+        # Gate toggle button
+        if effective:
+            dot = '<span class="w-2 h-2 rounded-full bg-green-500 inline-block"></span>'
+            gate_text = "ON"
+            gate_color = "text-green-400"
+            toggle_title = f"Disable CNN gate for {sk}"
+            toggle_action = (
+                f"hx-delete='/cnn/gate/{sk}'" if source == "redis" else (f"hx-put='/cnn/gate/{sk}?enabled=false'")
+            )
+        else:
+            dot = '<span class="w-2 h-2 rounded-full bg-zinc-600 inline-block"></span>'
+            gate_text = "off"
+            gate_color = "text-zinc-500"
+            toggle_title = f"Enable CNN gate for {sk}"
+            toggle_action = f"hx-put='/cnn/gate/{sk}?enabled=true'"
+
+        source_badge = (
+            '<span class="text-[9px] text-blue-400 bg-blue-900/30 border border-blue-700/40 rounded px-1">redis</span>'
+            if source == "redis"
+            else '<span class="text-[9px] text-zinc-600">env</span>'
+        )
+        overnight_badge = '<span class="text-[9px] text-yellow-600">🌙</span>' if is_overnight else ""
+
+        rows_html += f"""
+        <div class="flex items-center justify-between gap-2 py-0.5">
+            <div class="flex items-center gap-1.5 min-w-0">
+                {dot}
+                {overnight_badge}
+                <span class="text-[10px] text-zinc-300 truncate" title="{label}">{label}</span>
+                {source_badge}
+            </div>
+            <button
+                {toggle_action}
+                hx-target="#cnn-gate-panel"
+                hx-swap="innerHTML"
+                title="{toggle_title}"
+                class="text-[10px] {gate_color} hover:text-white px-1.5 py-0.5 rounded
+                       bg-zinc-800 hover:bg-zinc-700 border border-zinc-700/60
+                       transition-colors duration-150 shrink-0 font-mono w-8 text-center">
+                {gate_text}
+            </button>
+        </div>
+        """
+
+    env_badge = '<span class="text-green-400">ON</span>' if global_env else '<span class="text-zinc-500">off</span>'
+
+    # Bulk action buttons
+    bulk_html = """
+        <div class="flex gap-1 mt-2 pt-1.5 border-t border-zinc-800">
+            <button hx-put="/cnn/gate/cme?enabled=true"
+                    hx-include="[name=_dummy]"
+                    hx-target="#cnn-gate-panel"
+                    hx-swap="innerHTML"
+                    hx-trigger="click"
+                    onclick="['cme','sydney','tokyo','shanghai'].forEach(s=>{
+                        htmx.ajax('PUT','/cnn/gate/'+s+'?enabled=true',{target:'#cnn-gate-panel',swap:'innerHTML'})
+                    });return false;"
+                    class="flex-1 text-[10px] px-1.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700
+                           text-zinc-400 hover:text-zinc-200 border border-zinc-700/60
+                           transition-colors duration-150"
+                    title="Enable CNN gate for all 4 overnight sessions (CME/Sydney/Tokyo/Shanghai)">
+                🌙 Enable overnight
+            </button>
+            <button hx-delete="/cnn/gate"
+                    hx-target="#cnn-gate-panel"
+                    hx-swap="innerHTML"
+                    hx-confirm="Remove all Redis overrides? All sessions will revert to the ORB_CNN_GATE env var."
+                    class="text-[10px] px-1.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700
+                           text-zinc-400 hover:text-red-300 border border-zinc-700/60
+                           transition-colors duration-150"
+                    title="Remove all Redis overrides">
+                ↺ Reset all
+            </button>
+        </div>
+    """
+
+    return HTMLResponse(
+        content=f"""
+        <div class="flex items-center justify-between mb-1.5">
+            <h3 class="text-sm font-semibold text-zinc-400">🔒 CNN GATE</h3>
+            <span class="text-zinc-600 text-[10px]">env default: {env_badge}</span>
+        </div>
+        <div class="space-y-0 text-xs">
+            {rows_html}
+        </div>
+        {bulk_html}
+        """
+    )
 
 
 @router.get("/cnn/history")

@@ -1,5 +1,5 @@
 # =============================================================================
-# Futures Trading Co-Pilot — Docker Compose (5-Service Architecture)
+# Futures Trading Co-Pilot — Docker Compose (CPU-only stack)
 # =============================================================================
 #
 # Services:
@@ -8,8 +8,17 @@
 #   data           — FastAPI API layer (reads from Redis, serves REST + SSE)
 #   web            — HTMX dashboard frontend (reverse-proxies to data service)
 #   engine         — background computation (Ruby, optimization, backtesting)
-#   prometheus     — metrics collection & alerting  (monitoring profile)
-#   grafana        — dashboards & visualization      (monitoring profile)
+#   prometheus     — metrics collection & alerting  [monitoring profile]
+#   grafana        — dashboards & visualization      [monitoring profile]
+#
+# GPU training is intentionally NOT part of this stack.
+# Use docker-compose.train.yml on a dedicated GPU machine instead:
+#
+#   docker compose -f docker-compose.train.yml up -d --build
+#
+# After training completes, copy the best models back with:
+#
+#   bash scripts/sync_models.sh <gpu-machine-host>
 #
 # Usage:
 #   docker compose up -d --build
@@ -94,7 +103,7 @@ services:
             - DATA_SERVICE_HOST=0.0.0.0
             - DATA_SERVICE_PORT=8000
             - ENGINE_MODE=remote
-            - NT_BRIDGE_HOST=${NT_BRIDGE_HOST:-100.108.223.51}
+            - NT_BRIDGE_HOST=${NT_BRIDGE_HOST:-100.113.72.63}
             - NT_BRIDGE_PORT=${NT_BRIDGE_PORT:-5680}
             - PYTHONPATH=/app/src
             - PYTHONUNBUFFERED=1
@@ -158,10 +167,16 @@ services:
             retries: 3
 
     # -------------------------------------------------------------------------
-    # Engine — Background computation worker
+    # Engine — Background computation worker (CPU-only)
     # Heavy: DashboardEngine, Ruby modules, optimization, backtesting,
     # Massive WebSocket, wave analysis, volatility, signal quality, regime,
     # CVD, ICT. Reads data from Massive/Redis, writes results to Redis.
+    #
+    # GPU training has been removed from this service. The engine will use
+    # the CPU-only inference path in breakout_cnn.py for any live predictions.
+    # Scheduled CNN training actions (TRAIN_BREAKOUT_CNN) are effectively
+    # no-ops here — run docker-compose.train.yml on the GPU machine instead,
+    # then sync the resulting models/ files back with scripts/sync_models.sh.
     # -------------------------------------------------------------------------
     engine:
         build:
@@ -169,13 +184,6 @@ services:
             dockerfile: docker/engine/Dockerfile
         restart: unless-stopped
         shm_size: 2gb
-        deploy:
-            resources:
-                reservations:
-                    devices:
-                        - driver: nvidia
-                          count: 1
-                          capabilities: [gpu]
         env_file:
             - .env
         environment:
@@ -198,12 +206,13 @@ services:
                 condition: service_healthy
 
     # -------------------------------------------------------------------------
-    # Prometheus — Metrics collection & alerting
+    # Prometheus — Metrics collection & alerting     [monitoring profile]
     # Config is baked into the image via docker/monitoring/prometheus/Dockerfile.
     # No host volume mounts for config files.
-    # UI at http://localhost:9090
+    # UI at http://localhost:9095
     # -------------------------------------------------------------------------
     prometheus:
+        profiles: [monitoring]
         build:
             context: .
             dockerfile: docker/monitoring/prometheus/Dockerfile
@@ -224,12 +233,13 @@ services:
                 condition: service_healthy
 
     # -------------------------------------------------------------------------
-    # Grafana — Dashboards & visualization
+    # Grafana — Dashboards & visualization           [monitoring profile]
     # Provisioning configs and dashboards are baked into the image via
     # docker/monitoring/grafana/Dockerfile. No host volume mounts for config.
-    # UI at http://localhost:3000  (admin / admin on first login)
+    # UI at http://localhost:3010  (admin / admin on first login)
     # -------------------------------------------------------------------------
     grafana:
+        profiles: [monitoring]
         build:
             context: .
             dockerfile: docker/monitoring/grafana/Dockerfile

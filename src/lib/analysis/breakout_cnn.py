@@ -49,6 +49,7 @@ Design:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import threading
@@ -119,6 +120,113 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 
 # Inference threshold — probability above this → "send signal"
 DEFAULT_THRESHOLD = 0.82
+
+# Per-session inference thresholds.
+#
+# Rationale: overnight sessions (CME open, Sydney, Tokyo, Shanghai) have
+# thinner markets and noisier price action than the primary London / US
+# sessions, so we require lower confidence to avoid over-filtering the
+# smaller signal pool while still maintaining signal quality.  Daytime
+# sessions (Frankfurt, London, London-NY, US, CME Settlement) keep the
+# full 0.82 bar.
+#
+# These are *starting* values — tune after 2 weeks of paper-trade data
+# by comparing CNN probability distributions per session in Grafana and
+# adjusting to match the 58-65% win-rate target.
+#
+# Keys match ORBSession.key values in orb.py / SESSION_BY_KEY.
+SESSION_THRESHOLDS: dict[str, float] = {
+    # ── Overnight sessions (18:00–03:00 ET, thin markets) ──────────────
+    "cme": 0.75,  # CME Globex re-open 18:00 ET — first bars, wide spread
+    "sydney": 0.72,  # Sydney/ASX 18:30 ET — thinnest session
+    "tokyo": 0.74,  # Tokyo/TSE 19:00 ET — narrow range, metals/JPY
+    "shanghai": 0.74,  # Shanghai/HK 21:00 ET — copper/gold driver
+    # ── Primary daytime sessions ────────────────────────────────────────
+    "frankfurt": 0.80,  # Frankfurt/Xetra 03:00 ET — pre-London, good vol
+    "london": 0.82,  # London Open 03:00 ET — PRIMARY, highest conviction
+    "london_ny": 0.82,  # London-NY Crossover 08:00 ET — highest volume
+    "us": 0.82,  # US Equity Open 09:30 ET — classic ORB session
+    "cme_settle": 0.78,  # CME Settlement 14:00 ET — metals/energy only
+}
+
+
+def get_session_threshold(session_key: str | None) -> float:
+    """Return the CNN inference threshold for *session_key*.
+
+    Falls back to ``DEFAULT_THRESHOLD`` (0.82) for unknown or None keys.
+    This is the single authoritative lookup used by both
+    ``predict_breakout()`` and ``predict_breakout_batch()``.
+
+    Args:
+        session_key: ORBSession.key string (e.g. "london", "tokyo", "us").
+                     None or empty string returns DEFAULT_THRESHOLD.
+
+    Returns:
+        Float probability threshold in [0, 1].
+
+    Example::
+
+        >>> get_session_threshold("tokyo")
+        0.74
+        >>> get_session_threshold("london")
+        0.82
+        >>> get_session_threshold(None)
+        0.82
+    """
+    if not session_key:
+        return DEFAULT_THRESHOLD
+    return SESSION_THRESHOLDS.get(session_key.lower().strip(), DEFAULT_THRESHOLD)
+
+
+# Ordinal session encoding — maps ORBSession.key → float in [0, 1].
+# Encodes the session's position in the 24-hour Globex day cycle so the
+# tabular head can learn time-of-day patterns.  Used by BreakoutDataset
+# and _normalise_tabular_for_inference in place of the old binary
+# session_flag (1.0 = US, 0.0 = London).
+#
+# Ordered chronologically within the Globex day (18:00 ET start):
+#   cme(18:00) → sydney(18:30) → tokyo(19:00) → shanghai(21:00) →
+#   frankfurt(03:00) → london(03:00) → london_ny(08:00) →
+#   us(09:30) → cme_settle(14:00)
+SESSION_ORDINAL: dict[str, float] = {
+    "cme": 0.0 / 8,  # 18:00 ET — position 0
+    "sydney": 1.0 / 8,  # 18:30 ET — position 1
+    "tokyo": 2.0 / 8,  # 19:00 ET — position 2
+    "shanghai": 3.0 / 8,  # 21:00 ET — position 3
+    "frankfurt": 4.0 / 8,  # 03:00 ET — position 4
+    "london": 5.0 / 8,  # 03:00 ET — position 5
+    "london_ny": 6.0 / 8,  # 08:00 ET — position 6
+    "us": 7.0 / 8,  # 09:30 ET — position 7
+    "cme_settle": 8.0 / 8,  # 14:00 ET — position 8
+}
+
+# Backward-compat aliases so old callers that pass session_flag=1.0 (US)
+# or session_flag=0.0 (London) still get sensible ordinal values.
+_SESSION_FLAG_COMPAT = {1.0: SESSION_ORDINAL["us"], 0.0: SESSION_ORDINAL["london"]}
+
+
+def get_session_ordinal(session_key: str | None) -> float:
+    """Return the ordinal encoding [0, 1] for *session_key*.
+
+    Falls back to the US session ordinal (0.875) for unknown keys.
+    Accepts the legacy float values ``1.0`` (US) and ``0.0`` (London)
+    for backward compatibility with old callers.
+
+    Args:
+        session_key: ORBSession.key string, or None.
+
+    Returns:
+        Float in [0.0, 1.0] representing session position in the Globex day.
+    """
+    if session_key is None:
+        return SESSION_ORDINAL["us"]
+    # Legacy float-as-string passthrough (e.g. "1.0", "0.0")
+    with contextlib.suppress(ValueError):
+        fval = float(session_key)
+        if fval in _SESSION_FLAG_COMPAT:
+            return _SESSION_FLAG_COMPAT[fval]
+    return SESSION_ORDINAL.get(str(session_key).lower().strip(), SESSION_ORDINAL["us"])
+
 
 # Model output directory
 DEFAULT_MODEL_DIR = "models"
@@ -364,7 +472,7 @@ if _TORCH_AVAILABLE:
 
 else:
     # Stub when torch is not available
-    class BreakoutDataset(Dataset):  # type: ignore[no-redef,misc]
+    class BreakoutDataset:  # type: ignore[no-redef,misc]
         """Stub for environments without PyTorch."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -475,7 +583,7 @@ if _TORCH_AVAILABLE:
 
 else:
 
-    class HybridBreakoutCNN(nn.Module):  # type: ignore[no-redef,misc]
+    class HybridBreakoutCNN:  # type: ignore[no-redef,misc]
         """Stub for environments without PyTorch."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -945,7 +1053,8 @@ def predict_breakout(
     image_path: str,
     tabular_features: Sequence[float],
     model_path: str | None = None,
-    threshold: float = DEFAULT_THRESHOLD,
+    threshold: float | None = None,
+    session_key: str | None = None,
 ) -> dict[str, Any] | None:
     """Predict whether a chart snapshot shows a high-quality breakout.
 
@@ -953,23 +1062,34 @@ def predict_breakout(
         image_path: Path to the PNG chart snapshot.
         tabular_features: List/tuple of 8 floats in TABULAR_FEATURES order:
             [quality_pct_norm, volume_ratio, atr_pct, cvd_delta, nr7_flag,
-             direction_flag, session_flag, london_overlap_flag]
+             direction_flag, session_ordinal, london_overlap_flag]
             - quality_pct_norm: quality_pct / 100 (0.0–1.0)
             - volume_ratio: breakout bar volume / 20-bar average
             - atr_pct: ATR as fraction of price
             - cvd_delta: normalised CVD delta (-1 to 1)
             - nr7_flag: 1.0 if NR7 day, 0.0 otherwise
             - direction_flag: 1.0 for LONG, 0.0 for SHORT
-            - session_flag: 1.0 for US session, 0.0 for London
+            - session_ordinal: ordinal position in Globex day via
+              ``get_session_ordinal(session_key)`` — replaces old binary
+              session_flag (1.0=US / 0.0=London).  Old binary values are
+              accepted for backward compatibility.
             - london_overlap_flag: 1.0 if 08:00–09:00 ET, 0.0 otherwise
         model_path: Explicit model path (default: latest in models/).
-        threshold: Probability threshold for "signal" verdict (default 0.82).
+        threshold: Probability threshold for "signal" verdict.
+                   When None (default), the per-session threshold from
+                   ``SESSION_THRESHOLDS`` is used via ``session_key``.
+                   Passing an explicit float overrides the session default.
+        session_key: ORBSession.key (e.g. "london", "tokyo", "us").
+                     Used to look up the per-session threshold and for
+                     logging.  Ignored if *threshold* is explicitly set.
 
     Returns:
         Dict with:
           - prob: float (0.0–1.0) — probability of clean breakout
           - signal: bool — True if prob >= threshold
           - confidence: str — "high", "medium", or "low"
+          - threshold: float — the threshold that was applied
+          - session_key: str — which session threshold was used
           - model_path: str — which model was used
         Or None if inference failed.
     """
@@ -980,6 +1100,10 @@ def predict_breakout(
     model = _load_model(model_path)
     if model is None:
         return None
+
+    # Resolve the effective threshold — explicit arg wins, then per-session,
+    # then global default.
+    effective_threshold = threshold if threshold is not None else get_session_threshold(session_key)
 
     device = next(model.parameters()).device
     transform = get_inference_transform()
@@ -996,7 +1120,7 @@ def predict_breakout(
             logger.error("Expected %d tabular features, got %d", NUM_TABULAR, len(tab_list))
             return None
 
-        tab_tensor = torch.tensor([tab_list], dtype=torch.float32).to(device)  # (1, 6)
+        tab_tensor = torch.tensor([tab_list], dtype=torch.float32).to(device)  # (1, 8)
 
         # Inference
         with torch.no_grad():
@@ -1004,19 +1128,22 @@ def predict_breakout(
             probs = torch.softmax(logits, dim=1)
             prob_good = float(probs[0, 1].item())
 
-        # Confidence bucketing
-        if prob_good >= 0.90:
+        # Confidence bucketing — relative to the effective threshold so that
+        # a "high" confidence call means the same quality bar regardless of
+        # which session we're in.
+        if prob_good >= effective_threshold + 0.08:
             confidence = "high"
-        elif prob_good >= 0.75:
+        elif prob_good >= effective_threshold - 0.04:
             confidence = "medium"
         else:
             confidence = "low"
 
         return {
             "prob": round(prob_good, 4),
-            "signal": prob_good >= threshold,
+            "signal": prob_good >= effective_threshold,
             "confidence": confidence,
-            "threshold": threshold,
+            "threshold": effective_threshold,
+            "session_key": session_key or "",
             "model_path": _cached_model_path or "",
         }
 
@@ -1029,7 +1156,8 @@ def predict_breakout_batch(
     image_paths: Sequence[str],
     tabular_features_batch: Sequence[Sequence[float]],
     model_path: str | None = None,
-    threshold: float = DEFAULT_THRESHOLD,
+    threshold: float | None = None,
+    session_key: str | None = None,
     batch_size: int = 16,
 ) -> list[dict[str, Any] | None]:
     """Batch inference for multiple chart snapshots.
@@ -1041,7 +1169,12 @@ def predict_breakout_batch(
         image_paths: List of PNG paths.
         tabular_features_batch: List of tabular feature vectors (one per image).
         model_path: Explicit model path (default: latest).
-        threshold: Signal threshold.
+        threshold: Signal threshold.  When None (default), the per-session
+                   threshold from ``SESSION_THRESHOLDS`` is used via
+                   ``session_key``.  Passing an explicit float overrides it.
+        session_key: ORBSession.key (e.g. "london", "tokyo", "us") used to
+                     look up the per-session threshold.  Ignored if
+                     *threshold* is explicitly set.
         batch_size: Max images per GPU forward pass.
 
     Returns:
@@ -1058,6 +1191,9 @@ def predict_breakout_batch(
     model = _load_model(model_path)
     if model is None:
         return [None] * len(image_paths)
+
+    # Resolve the effective threshold once for the whole batch.
+    effective_threshold = threshold if threshold is not None else get_session_threshold(session_key)
 
     device = next(model.parameters()).device
     transform = get_inference_transform()
@@ -1100,18 +1236,21 @@ def predict_breakout_batch(
 
         for j, global_idx in enumerate(valid_indices):
             prob_good = float(probs[j].item())
-            if prob_good >= 0.90:
+            # Relative confidence bucketing — mirrors predict_breakout so
+            # "high"/"medium"/"low" mean the same quality bar across sessions.
+            if prob_good >= effective_threshold + 0.08:
                 confidence = "high"
-            elif prob_good >= 0.75:
+            elif prob_good >= effective_threshold - 0.04:
                 confidence = "medium"
             else:
                 confidence = "low"
 
             results[global_idx] = {
                 "prob": round(prob_good, 4),
-                "signal": prob_good >= threshold,
+                "signal": prob_good >= effective_threshold,
                 "confidence": confidence,
-                "threshold": threshold,
+                "threshold": effective_threshold,
+                "session_key": session_key or "",
                 "model_path": _cached_model_path or "",
             }
 

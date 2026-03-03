@@ -518,10 +518,18 @@ async def proxy_journal(request: Request, path: str):
 
 @app.api_route(
     "/cnn/{path:path}",
-    methods=["GET", "POST"],
+    methods=["GET", "POST", "PUT", "DELETE"],
 )
 async def proxy_cnn(request: Request, path: str):
-    """Proxy all /cnn/* requests to the data service (CNN model management)."""
+    """Proxy all /cnn/* requests to the data service (CNN model management).
+
+    Methods include PUT and DELETE for the per-session CNN gate endpoints:
+        GET    /cnn/gate                  — view all gate states
+        PUT    /cnn/gate/{session_key}    — enable/disable gate for one session
+        DELETE /cnn/gate/{session_key}    — remove Redis override for one session
+        DELETE /cnn/gate                  — remove all overrides
+        GET    /cnn/gate/html             — dashboard HTML fragment
+    """
     return await _proxy_request(request, f"/cnn/{path}")
 
 

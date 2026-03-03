@@ -748,6 +748,10 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                 if result.breakout_detected:
                     breakouts_found += 1
 
+                    # Resolve session key once — used by filters, CNN inference,
+                    # and the per-session CNN gate lookup below.
+                    _session_key = getattr(orb_session, "key", "us")
+
                     # ── Quality Filter Gate ──────────────────────────
                     # Run all enabled filters before publishing.  If any
                     # hard filter fails, the breakout is logged but NOT
@@ -1142,12 +1146,33 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                             except Exception:
                                 pass
 
-                        # Optional CNN gate: if ORB_CNN_GATE=1, block low-prob signals
-                        _cnn_gate = os.environ.get("ORB_CNN_GATE", "0") == "1"
+                        # Optional CNN gate — per-session Redis override, with
+                        # global ORB_CNN_GATE env-var as fallback.
+                        #
+                        # Resolution order:
+                        #   1. Redis key  engine:config:cnn_gate:{session_key}
+                        #      ("1" = enabled, "0" = disabled)
+                        #      Set via: set_cnn_gate("tokyo", True)  or the
+                        #      /config/cnn-gate dashboard endpoint.
+                        #   2. ORB_CNN_GATE env var ("1" = enabled globally).
+                        #   3. Default: disabled.
+                        #
+                        # This lets you enable the hard gate for overnight
+                        # sessions selectively once signal quality is validated,
+                        # without touching the env var or restarting the engine.
+                        try:
+                            from lib.core.redis_helpers import get_cnn_gate as _get_cnn_gate
+
+                            _cnn_gate = _get_cnn_gate(_session_key)
+                        except Exception:
+                            # Fallback to env var if the helper is unavailable
+                            _cnn_gate = os.environ.get("ORB_CNN_GATE", "0") == "1"
+
                         if _cnn_gate and not cnn_signal:
                             breakouts_filtered += 1
                             logger.info(
-                                "🚫 ORB CNN-GATED: %s %s — P(good)=%.3f < threshold",
+                                "🚫 ORB CNN-GATED [%s]: %s %s — P(good)=%.3f < threshold",
+                                _session_key,
                                 result.direction,
                                 symbol,
                                 cnn_prob or 0.0,
@@ -1156,13 +1181,14 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                             _persist_orb_enrichment(
                                 _orb_row_id,
                                 {
-                                    "orb_session": getattr(orb_session, "key", "us"),
+                                    "orb_session": _session_key,
                                     "filter_passed": True,
                                     "filter_summary": filter_summary,
                                     "cnn_prob": cnn_prob,
                                     "cnn_confidence": cnn_confidence,
                                     "cnn_signal": cnn_signal,
                                     "cnn_gated": True,
+                                    "cnn_gate_source": "redis" if _cnn_gate else "env",
                                     "published": False,
                                 },
                             )
@@ -1424,6 +1450,7 @@ def _handle_generate_chart_dataset(engine) -> None:
         "MHG",
         # Micro energy
         "MCL",
+        "MNG",  # Micro Natural Gas (data via NG=F)
         # Micro equity index
         "MES",
         "MNQ",
@@ -1431,12 +1458,21 @@ def _handle_generate_chart_dataset(engine) -> None:
         "MYM",
         # Micro crypto
         "MBT",
-        # FX futures (CME standard)
+        "MET",  # Micro Ether
+        # FX futures (CME standard + micro)
         "6E",
         "6B",
         "6J",
         "6A",
         "6C",
+        "6S",  # Swiss Franc
+        # Interest rate futures (CBOT)
+        "ZN",  # 10-Year T-Note
+        "ZB",  # 30-Year T-Bond
+        # Agricultural futures (CBOT)
+        "ZC",  # Corn
+        "ZS",  # Soybeans
+        "ZW",  # Wheat
     ]
 
     # Prefer daily focus list as a priority override; fall back to full universe.

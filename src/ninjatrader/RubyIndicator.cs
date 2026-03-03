@@ -27,7 +27,7 @@ using WpfSolidColorBrush = System.Windows.Media.SolidColorBrush;
 #endregion
 
 // =============================================================================
-// Ruby — v2 : Opening Range Breakout + Session Bias
+// Ruby : Opening Range Breakout + Session Bias
 // =============================================================================
 //
 // Philosophy: QUALITY over QUANTITY.  One clean breakout per session, not 20
@@ -50,6 +50,21 @@ using WpfSolidColorBrush = System.Windows.Media.SolidColorBrush;
 //   - Opening range drawn as a shaded region
 //   - Breakout level as a horizontal line
 //
+// Supported markets (NinjaTrader instrument symbols):
+//   Metals      : MGC  SIL  MHG
+//   Energy      : MCL  MNG
+//   Equity Index: MES  MNQ  M2K  MYM
+//   FX Futures  : 6E   6B   6J   6A   6C   6S
+//   Rates (CBOT): ZN   ZB
+//   Ags  (CBOT) : ZC   ZS   ZW
+//   Crypto      : MBT  MET
+//
+// Signals are forwarded to Bridge (strategy) via SignalBus (in-process,
+// works in both Strategy Analyzer backtests and live/sim trading) and
+// optionally via HTTP POST to the Bridge listener in Realtime state.
+// Model training is handled by the dedicated trainer service — no
+// overnight scheduling or session-title logic is required here.
+//
 // Plot index map (15 plots — same as v1 for compatibility):
 //   0  Resistance        (adaptive S/R high)     — hidden by default
 //   1  MidBand           (adaptive S/R mid)      — hidden by default
@@ -70,7 +85,7 @@ using WpfSolidColorBrush = System.Windows.Media.SolidColorBrush;
 // Installation:
 //   1. NinjaTrader 8 → New → NinjaScript Editor → Indicators
 //   2. Paste this file → Compile (F5)
-//   3. Drag Ruby onto any chart (MGC, MES, MNQ, MCL, etc.)
+//   3. Drag Ruby onto any chart — any of the 22 supported instruments above
 // =============================================================================
 
 namespace NinjaTrader.NinjaScript.Indicators
@@ -193,8 +208,8 @@ namespace NinjaTrader.NinjaScript.Indicators
         {
             if (State == State.SetDefaults)
             {
-                Description = "Ruby — Opening Range Breakout + Session Bias | Quality over Quantity";
-                Name = "Ruby";
+                Description = "RubyIndicator — Opening Range Breakout + Session Bias | Quality over Quantity";
+                Name = "RubyIndicator";
                 Calculate = Calculate.OnBarClose;
                 IsOverlay = true;
                 IsSuspendedWhileInactive = true;

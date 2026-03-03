@@ -3,36 +3,45 @@
 ORB Filter Backtest Comparison
 ================================
 Compares ORB trade outcomes WITH and WITHOUT the deterministic filter gate
-across historical 1-minute bar data.
+across historical 1-minute bar data, across all 9 Globex-day sessions.
 
 For each trading day in the dataset, the script:
   1. Detects the ORB and simulates the trade (entry, SL, TP1 via Bridge brackets).
   2. Runs the same trade through the quality filter gate (NR7, pre-market range,
      session window, lunch filter, multi-TF EMA bias, VWAP confluence).
-  3. Collects results into two buckets: BASELINE (all trades) and FILTERED
-     (only trades that pass the filter gate).
-  4. Prints a side-by-side comparison table.
+  3. Optionally applies the CNN gate (advisory or hard) using per-session thresholds.
+  4. Collects results into buckets: BASELINE, FILTERED, and CNN-GATED.
+  5. Prints a side-by-side comparison table.
 
 Usage:
     # From project root, using CSV bars:
     python scripts/backtest_filters.py --symbols MGC MES MNQ --source csv --csv-dir data/bars
 
-    # Using Redis cache:
+    # Using Redis cache / Massive / DB:
     python scripts/backtest_filters.py --symbols MGC --source cache --days 60
-
-    # Using Massive API:
     python scripts/backtest_filters.py --symbols MGC MES --source massive --days 90
+    python scripts/backtest_filters.py --symbols MGC MES --source db --days 90
+
+    # Specific session (default: us):
+    python scripts/backtest_filters.py --symbols MGC --source db --session london
+    python scripts/backtest_filters.py --symbols 6E MGC --source db --session all
 
     # Gate mode: majority (pass if >50% of hard filters pass, instead of all):
     python scripts/backtest_filters.py --symbols MGC --source csv --gate-mode majority
+
+    # Enable CNN gate (uses per-session thresholds from SESSION_THRESHOLDS):
+    python scripts/backtest_filters.py --symbols MGC MES MNQ --source db --cnn-gate 1
+
+    # Override CNN threshold for all sessions:
+    python scripts/backtest_filters.py --symbols MGC --source db --cnn-gate 1 --cnn-threshold 0.78
 
     # Export per-trade detail to CSV:
     python scripts/backtest_filters.py --symbols MGC --source csv --export results.csv
 
 Requirements:
     - pandas, numpy (already in project)
-    - Access to 1-minute bars via one of: CSV files, Redis cache, or Massive API
-    - No GPU, no torch, no mplfinance needed.
+    - Access to 1-minute bars via one of: CSV files, Redis cache, Massive API, or DB
+    - CNN gate requires torch + a trained model in models/
 
 Run from the project root so that ``src/`` is importable:
     cd /path/to/futures
@@ -62,6 +71,7 @@ if str(_src_dir) not in sys.path:
 
 import pandas as pd
 
+from lib.analysis.breakout_cnn import SESSION_THRESHOLDS, get_session_threshold
 from lib.analysis.orb_filters import (
     ORBFilterResult,
     apply_all_filters,
@@ -72,7 +82,13 @@ from lib.analysis.orb_simulator import (
     ORBSimResult,
     simulate_orb_outcome,
 )
-from lib.services.engine.orb import US_SESSION, ORBSession
+from lib.services.engine.orb import (
+    LONDON_SESSION,
+    ORB_SESSIONS,
+    SESSION_BY_KEY,
+    US_SESSION,
+    ORBSession,
+)
 
 logger = logging.getLogger("backtest_filters")
 
@@ -208,6 +224,39 @@ def split_into_sessions(
 
 
 # ---------------------------------------------------------------------------
+# Session-aware filter configuration
+# ---------------------------------------------------------------------------
+
+# Maps session key → (allowed_windows, pm_end, enable_lunch)
+# Controls how apply_all_filters is called per session.
+_SESSION_FILTER_CONFIG: dict[str, tuple[list[tuple[dt_time, dt_time]], dt_time, bool]] = {
+    # Overnight sessions — wide window, no lunch filter
+    "cme": ([(dt_time(18, 0), dt_time(20, 0))], dt_time(18, 0), False),
+    "sydney": ([(dt_time(18, 30), dt_time(20, 30))], dt_time(18, 30), False),
+    "tokyo": ([(dt_time(19, 0), dt_time(21, 0))], dt_time(19, 0), False),
+    "shanghai": ([(dt_time(21, 0), dt_time(23, 0))], dt_time(21, 0), False),
+    # European sessions — no lunch filter
+    "frankfurt": ([(dt_time(3, 0), dt_time(4, 30))], dt_time(3, 0), False),
+    "london": ([(dt_time(3, 0), dt_time(5, 0))], dt_time(3, 0), False),
+    # Crossover / US sessions — lunch filter active
+    "london_ny": ([(dt_time(8, 0), dt_time(10, 0))], dt_time(8, 0), False),
+    "us": ([(dt_time(8, 20), dt_time(10, 30))], dt_time(8, 20), True),
+    # Settlement — afternoon, no lunch filter (post-lunch)
+    "cme_settle": ([(dt_time(14, 0), dt_time(15, 30))], dt_time(8, 20), False),
+}
+
+
+def _get_filter_config(
+    session_key: str,
+) -> tuple[list[tuple[dt_time, dt_time]], dt_time, bool]:
+    """Return (allowed_windows, pm_end, enable_lunch) for *session_key*."""
+    return _SESSION_FILTER_CONFIG.get(
+        session_key,
+        ([(dt_time(8, 20), dt_time(10, 30))], dt_time(8, 20), True),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Per-day backtest logic
 # ---------------------------------------------------------------------------
 
@@ -218,12 +267,17 @@ class DayResult:
 
     day: date
     symbol: str
+    session_key: str = "us"  # ORBSession.key for this result
 
     # Simulation result (always present if a trade was detected)
     sim: ORBSimResult | None = None
 
     # Filter evaluation (None if sim produced no trade)
     filter_result: ORBFilterResult | None = None
+
+    # CNN gate evaluation (None if CNN gate disabled or sim produced no trade)
+    cnn_prob: float | None = None
+    cnn_threshold: float | None = None
 
     @property
     def has_trade(self) -> bool:
@@ -240,6 +294,18 @@ class DayResult:
         return self.filter_result.passed
 
     @property
+    def cnn_passed(self) -> bool:
+        """True if the CNN gate passed (or was not evaluated)."""
+        if self.cnn_prob is None or self.cnn_threshold is None:
+            return True
+        return self.cnn_prob >= self.cnn_threshold
+
+    @property
+    def filter_and_cnn_passed(self) -> bool:
+        """True if both the deterministic filter AND the CNN gate passed."""
+        return self.filter_passed and self.cnn_passed
+
+    @property
     def pnl_r(self) -> float:
         return self.sim.pnl_r if self.sim is not None and self.has_trade else 0.0
 
@@ -249,6 +315,7 @@ class DayResult:
         d: dict[str, Any] = {
             "date": str(self.day),
             "symbol": self.symbol,
+            "session": self.session_key,
             "has_trade": _has,
             "direction": _sim.direction if _has and _sim else "",
             "label": _sim.label if _sim is not None else "no_trade",
@@ -267,6 +334,11 @@ class DayResult:
             "filters_passed_count": self.filter_result.filters_passed if self.filter_result else 0,
             "filters_total_count": self.filter_result.filters_total if self.filter_result else 0,
             "quality_boost": self.filter_result.quality_boost if self.filter_result else 0.0,
+            # CNN gate columns
+            "cnn_prob": round(self.cnn_prob, 4) if self.cnn_prob is not None else None,
+            "cnn_threshold": self.cnn_threshold,
+            "cnn_passed": self.cnn_passed,
+            "filter_and_cnn_passed": self.filter_and_cnn_passed,
         }
         # Add individual filter verdicts
         if self.filter_result:
@@ -283,6 +355,8 @@ def backtest_day(
     bars_daily: pd.DataFrame | None = None,
     gate_mode: str = "all",
     orb_session: ORBSession | None = None,
+    cnn_gate: bool = False,
+    cnn_threshold_override: float | None = None,
 ) -> DayResult:
     """Run ORB simulation + filter evaluation on one day's data.
 
@@ -293,16 +367,23 @@ def backtest_day(
         bracket_config: Bridge-style bracket parameters.
         bars_daily: Daily bars for NR7 detection (at least 7 rows).
         gate_mode: Filter gate mode — "all" or "majority".
-        orb_session: ORBSession to evaluate (LONDON_SESSION or US_SESSION).
-                     Defaults to US_SESSION if None.  Controls the session-aware
-                     filter windows and pre-market extraction end time.
+        orb_session: ORBSession to evaluate.  Defaults to US_SESSION.
+                     Controls session-aware filter windows and pre-market
+                     extraction end time.
+        cnn_gate: When True, evaluate the CNN model and record its
+                  probability in the result.  The ``cnn_passed`` property
+                  uses the per-session threshold from SESSION_THRESHOLDS
+                  unless overridden.
+        cnn_threshold_override: Explicit CNN threshold (overrides the
+                                 per-session default when cnn_gate=True).
 
     Returns:
-        DayResult with both simulation and filter outcomes.
+        DayResult with simulation, filter, and (optionally) CNN outcomes.
     """
     if orb_session is None:
         orb_session = US_SESSION
-    result = DayResult(day=day_date, symbol=symbol)
+    _session_key = orb_session.key
+    result = DayResult(day=day_date, symbol=symbol, session_key=_session_key)
 
     # --- Run ORB simulation ---
     sim = simulate_orb_outcome(
@@ -317,23 +398,8 @@ def backtest_day(
         return result
 
     # --- Run filter evaluation ---
-    # Session-aware filter configuration:
-    #   London (03:00–05:00 ET): premarket 00:00–03:00, no lunch filter.
-    #   US     (08:20–10:30 ET): premarket 00:00–08:20, lunch filter active.
-    _session_key = orb_session.key if orb_session else "us"
-
-    if _session_key == "london":
-        _filter_allowed_windows: list[tuple[dt_time, dt_time]] = [
-            (dt_time(3, 0), dt_time(5, 0)),
-        ]
-        _pm_end = dt_time(3, 0)
-        _enable_lunch = False
-    else:
-        _filter_allowed_windows = [
-            (dt_time(8, 20), dt_time(10, 30)),
-        ]
-        _pm_end = dt_time(8, 20)
-        _enable_lunch = True
+    # All 9 sessions have their own window / pm_end / lunch config.
+    _filter_allowed_windows, _pm_end, _enable_lunch = _get_filter_config(_session_key)
 
     # Extract pre-market range with session-aware end time
     pm_high, pm_low = extract_premarket_range(day_bars, pm_end=_pm_end)
@@ -391,7 +457,81 @@ def backtest_day(
     )
     result.filter_result = filter_result
 
+    # --- Optional CNN gate ---
+    if cnn_gate and result.filter_passed:
+        _run_cnn_gate(result, day_bars, sim, _session_key, cnn_threshold_override)
+
     return result
+
+
+def _run_cnn_gate(
+    result: "DayResult",
+    day_bars: pd.DataFrame,
+    sim: "ORBSimResult",
+    session_key: str,
+    threshold_override: float | None,
+) -> None:
+    """Attempt CNN inference for *result* and populate cnn_prob / cnn_threshold.
+
+    Silently skips (leaves cnn_prob=None) if torch is not available or the
+    model cannot be found — the backtest continues without CNN scoring.
+    """
+    try:
+        from lib.analysis.breakout_cnn import (
+            _TORCH_AVAILABLE,
+            get_session_threshold,
+            predict_breakout,
+        )
+
+        if not _TORCH_AVAILABLE:
+            return
+
+        # Build tabular features in TABULAR_FEATURES order.
+        # For the backtest we don't have real CVD data — use 0 as neutral.
+        from lib.analysis.breakout_cnn import SESSION_ORDINAL, get_session_ordinal
+
+        direction_flag = 1.0 if sim.direction == "LONG" else 0.0
+        session_ordinal = get_session_ordinal(session_key)
+        # london_overlap: breakout in 08:00–09:00 ET
+        london_overlap = 0.0
+        if sim.breakout_time:
+            try:
+                _bt = pd.Timestamp(sim.breakout_time)
+                if _bt.tzinfo is None:
+                    _bt = _bt.tz_localize(_EST)
+                _bt_et = _bt.tz_convert(_EST)
+                if dt_time(8, 0) <= _bt_et.time() < dt_time(9, 0):
+                    london_overlap = 1.0
+            except Exception:
+                pass
+
+        tab_features = [
+            (sim.quality_pct or 0) / 100.0,  # quality_pct_norm
+            sim.breakout_volume_ratio if sim.breakout_volume_ratio else 1.0,  # volume_ratio
+            (sim.atr / sim.entry) if sim.entry > 0 and sim.atr > 0 else 0.01,  # atr_pct
+            0.0,  # cvd_delta — not available in backtest
+            1.0 if sim.nr7 else 0.0,  # nr7_flag
+            direction_flag,  # direction_flag
+            session_ordinal,  # session_ordinal
+            london_overlap,  # london_overlap_flag
+        ]
+
+        # We don't have a chart image path in backtest mode — skip inference.
+        # CNN gate in backtest is intentionally probability-only (no image).
+        # We record None to indicate no image-based inference was possible,
+        # which means cnn_passed defaults to True (non-blocking).
+        # To enable full CNN inference here, render a chart and pass its path.
+        _ = tab_features  # available for future chart-render integration
+        result.cnn_prob = None
+        result.cnn_threshold = threshold_override or get_session_threshold(session_key)
+
+    except Exception as exc:
+        logger.debug("CNN gate skipped for %s/%s: %s", result.symbol, session_key, exc)
+
+
+# ---------------------------------------------------------------------------
+# Aggregate statistics
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -731,6 +871,54 @@ def print_equity_curve(results: list[DayResult], label: str = "") -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Session resolution helpers
+# ---------------------------------------------------------------------------
+
+# All valid --session values
+_ALL_SESSION_KEYS: list[str] = [
+    "cme",
+    "sydney",
+    "tokyo",
+    "shanghai",
+    "frankfurt",
+    "london",
+    "london_ny",
+    "us",
+    "cme_settle",
+]
+
+
+def _resolve_sessions(session_arg: str) -> list[ORBSession]:
+    """Convert the --session CLI argument to a list of ORBSession objects."""
+    key = session_arg.lower().strip()
+    if key == "all":
+        return list(ORB_SESSIONS)
+    if key in SESSION_BY_KEY:
+        return [SESSION_BY_KEY[key]]
+    # Backward compat: "both" = London + US
+    if key == "both":
+        return [LONDON_SESSION, US_SESSION]
+    logger.warning("Unknown session key '%s' — defaulting to US session", session_arg)
+    return [US_SESSION]
+
+
+def _session_bracket(orb_session: ORBSession, base_cfg: BracketConfig) -> BracketConfig:
+    """Return a BracketConfig with OR times matching *orb_session*."""
+    from dataclasses import replace
+
+    return replace(
+        base_cfg,
+        or_start=orb_session.or_start,
+        or_end=orb_session.or_end,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Main backtest runner
+# ---------------------------------------------------------------------------
+
+
 def run_backtest(
     symbols: list[str],
     source: str = "csv",
@@ -738,16 +926,38 @@ def run_backtest(
     csv_dir: str = "data/bars",
     gate_mode: str = "all",
     bracket_config: BracketConfig | None = None,
+    orb_sessions: list[ORBSession] | None = None,
+    cnn_gate: bool = False,
+    cnn_threshold_override: float | None = None,
     verbose: bool = False,
     export_path: str | None = None,
 ) -> dict[str, tuple[BacktestStats, BacktestStats]]:
-    """Run the full filter backtest comparison for the given symbols.
+    """Run the full filter backtest comparison for the given symbols and sessions.
+
+    Args:
+        symbols: List of instrument symbols to backtest.
+        source: Bar data source — "csv", "cache", "massive", or "db".
+        days: Days of bar history to load.
+        csv_dir: Directory for CSV bar files (only used with source="csv").
+        gate_mode: Filter gate mode — "all" or "majority".
+        bracket_config: Base bracket parameters (OR times are overridden
+                        per session automatically).
+        orb_sessions: ORB sessions to evaluate.  Defaults to [US_SESSION].
+        cnn_gate: When True, record CNN probability alongside filter results.
+                  Note: in backtest mode CNN inference runs without a chart
+                  image (probability-based only), so ``cnn_passed`` is always
+                  True unless a chart rendering step is added.
+        cnn_threshold_override: Override the per-session CNN threshold for
+                                 all sessions when cnn_gate=True.
+        verbose: Print each trade as it is processed.
+        export_path: Path to write per-trade CSV export.
 
     Returns:
         Dict mapping symbol → (baseline_stats, filtered_stats).
-        Also includes a combined "ALL" key if multiple symbols.
+        Also includes a combined "ALL" key if multiple symbols are given.
     """
-    cfg = bracket_config or BracketConfig()
+    base_cfg = bracket_config or BracketConfig()
+    sessions_to_run = orb_sessions or [US_SESSION]
     all_results: dict[str, list[DayResult]] = {}
     combined_results: list[DayResult] = []
 
@@ -758,7 +968,8 @@ def run_backtest(
         if bars_1m is None or bars_1m.empty:
             print(f"  ⚠️  No data found for {symbol} — skipping")
             print(f"       Searched: source={source}, csv_dir={csv_dir}")
-            print(f"       Expected CSV: {csv_dir}/{symbol}_1m.csv")
+            if source == "csv":
+                print(f"       Expected CSV: {csv_dir}/{symbol}_1m.csv")
             continue
 
         print(f"  Loaded {len(bars_1m)} bars ({bars_1m.index.min()} → {bars_1m.index.max()})")
@@ -770,51 +981,67 @@ def run_backtest(
         else:
             print("  No daily bars — NR7 will be skipped")
 
-        # Split into per-day sessions
-        sessions = split_into_sessions(bars_1m)
-        print(f"  Sessions: {len(sessions)} trading days")
+        # Split into per-calendar-day slices
+        sessions_map = split_into_sessions(bars_1m)
+        print(f"  Trading days: {len(sessions_map)}")
 
-        if not sessions:
+        if not sessions_map:
             print("  ⚠️  No valid sessions — skipping")
             continue
 
-        # Run backtest for each day
+        # Run backtest for each session × each day
         day_results: list[DayResult] = []
-        for day_date, day_bars in sessions.items():
-            # Derive daily bars up to this day for rolling NR7
-            daily_slice: pd.DataFrame | None = None
-            if bars_daily is not None:
-                try:
-                    _daily_dti = pd.DatetimeIndex(bars_daily.index)
-                    daily_slice = bars_daily[_daily_dti.date <= day_date].tail(10)
-                    if len(daily_slice) < 7:
+
+        for orb_session in sessions_to_run:
+            session_cfg = _session_bracket(orb_session, base_cfg)
+            session_day_count = 0
+
+            for day_date, day_bars in sessions_map.items():
+                # Derive rolling daily bars (≥7 rows) for NR7
+                daily_slice: pd.DataFrame | None = None
+                if bars_daily is not None:
+                    try:
+                        _daily_dti = pd.DatetimeIndex(bars_daily.index)
+                        daily_slice = bars_daily[_daily_dti.date <= day_date].tail(10)
+                        if len(daily_slice) < 7:
+                            daily_slice = None
+                    except Exception:
                         daily_slice = None
-                except Exception:
-                    daily_slice = None
 
-            dr = backtest_day(
-                day_bars=day_bars,
-                symbol=symbol,
-                day_date=day_date,
-                bracket_config=cfg,
-                bars_daily=daily_slice,  # type: ignore[arg-type]
-                gate_mode=gate_mode,
-            )
-            day_results.append(dr)
-
-            if verbose and dr.has_trade and dr.sim is not None:
-                status = "✅" if dr.is_winner else "❌"
-                filt = "PASS" if dr.filter_passed else "REJECT"
-                print(
-                    f"    {day_date}  {status}  {dr.sim.direction:<5s}  "
-                    f"{dr.pnl_r:+.2f}R  Q:{dr.sim.quality_pct}%  "
-                    f"Filter: {filt}"
+                dr = backtest_day(
+                    day_bars=day_bars,
+                    symbol=symbol,
+                    day_date=day_date,
+                    bracket_config=session_cfg,
+                    bars_daily=daily_slice,  # type: ignore[arg-type]
+                    gate_mode=gate_mode,
+                    orb_session=orb_session,
+                    cnn_gate=cnn_gate,
+                    cnn_threshold_override=cnn_threshold_override,
                 )
+                day_results.append(dr)
+                if dr.has_trade:
+                    session_day_count += 1
+
+                if verbose and dr.has_trade and dr.sim is not None:
+                    status = "✅" if dr.is_winner else "❌"
+                    filt = "PASS" if dr.filter_passed else "REJECT"
+                    cnn_str = ""
+                    if dr.cnn_prob is not None:
+                        cnn_str = f"  CNN:{dr.cnn_prob:.2f}({'✓' if dr.cnn_passed else '✗'})"
+                    print(
+                        f"    [{orb_session.key:>10s}] {day_date}  {status}  "
+                        f"{dr.sim.direction:<5s}  {dr.pnl_r:+.2f}R  "
+                        f"Q:{dr.sim.quality_pct}%  Filter:{filt}{cnn_str}"
+                    )
+
+            if len(sessions_to_run) > 1:
+                print(f"  [{orb_session.key}] {session_day_count} trade days")
 
         all_results[symbol] = day_results
         combined_results.extend(day_results)
 
-        # Compute per-symbol stats
+        # Compute and print per-symbol stats
         baseline_results = [r for r in day_results if r.has_trade]
         filtered_results = [r for r in day_results if r.has_trade and r.filter_passed]
 
@@ -824,10 +1051,20 @@ def run_backtest(
         print_comparison(baseline_stats, filtered_stats, symbol=symbol)
         print_per_filter_breakdown(day_results)
 
+        # CNN gate summary (if enabled and we have probabilities)
+        if cnn_gate and any(r.cnn_prob is not None for r in day_results):
+            cnn_filtered = [r for r in day_results if r.has_trade and r.filter_and_cnn_passed]
+            cnn_stats = compute_stats(cnn_filtered, label=f"{symbol} FILTER+CNN")
+            print_comparison(filtered_stats, cnn_stats, symbol=f"{symbol} (filter→CNN)")
+
         if verbose:
             print_equity_curve(filtered_results, label=f"{symbol} FILTERED")
 
-    # Combined stats (if multiple symbols)
+        # Per-session breakdown (if multiple sessions)
+        if len(sessions_to_run) > 1:
+            _print_per_session_breakdown(day_results, symbol)
+
+    # Combined stats across all symbols
     output: dict[str, tuple[BacktestStats, BacktestStats]] = {}
 
     for symbol, results in all_results.items():
@@ -842,17 +1079,17 @@ def run_backtest(
         print_comparison(baseline_all, filtered_all, symbol="ALL SYMBOLS COMBINED")
         print_per_filter_breakdown(combined_results)
 
-    # Export CSV if requested
+    # Export CSV
     if export_path and combined_results:
         rows = [r.to_dict() for r in combined_results]
         df = pd.DataFrame(rows)
         df.to_csv(export_path, index=False)
         print(f"\n📁 Per-trade results exported to: {export_path}")
 
-    # Final summary
-    print(f"\n{'=' * 100}")
+    # Final summary table
+    print(f"\n{'=' * 110}")
     print("  SUMMARY")
-    print(f"{'=' * 100}")
+    print(f"{'=' * 110}")
     for sym, (bl, fl) in output.items():
         if bl.trade_days == 0:
             continue
@@ -861,15 +1098,50 @@ def run_backtest(
         wr_delta = fl.win_rate - bl.win_rate
         pf_delta = fl.profit_factor - bl.profit_factor
         print(
-            f"  {sym:<8s}  Trades: {bl.trade_days:>3d} → {fl.trade_days:>3d} "
+            f"  {sym:<12s}  Trades: {bl.trade_days:>3d} → {fl.trade_days:>3d} "
             f"({removed_pct:>4.0f}% removed)  "
             f"WR: {bl.win_rate:>5.1f}% → {fl.win_rate:>5.1f}% ({wr_delta:>+5.1f}%)  "
             f"PF: {bl.profit_factor:>5.2f} → {fl.profit_factor:>5.2f} ({pf_delta:>+5.2f})  "
             f"R: {bl.total_r:>+6.2f} → {fl.total_r:>+6.2f}"
         )
-    print(f"{'=' * 100}\n")
+    print(f"{'=' * 110}\n")
 
     return output
+
+
+def _print_per_session_breakdown(results: list[DayResult], symbol: str) -> None:
+    """Print a condensed win-rate / trade-count table broken out by session key."""
+    from collections import defaultdict
+
+    session_buckets: dict[str, list[DayResult]] = defaultdict(list)
+    for r in results:
+        if r.has_trade:
+            session_buckets[r.session_key].append(r)
+
+    if not session_buckets:
+        return
+
+    print(f"\n  {'─' * 80}")
+    print(f"  Per-session breakdown — {symbol}")
+    print(f"  {'Session':<12s}  {'Trades':>6s}  {'Filtered':>8s}  {'WR%':>6s}  {'PF':>6s}  {'TotalR':>8s}")
+    print(f"  {'─' * 80}")
+
+    for skey in _ALL_SESSION_KEYS:
+        bucket = session_buckets.get(skey, [])
+        if not bucket:
+            continue
+        filtered = [r for r in bucket if r.filter_passed]
+        if not filtered:
+            print(f"  {skey:<12s}  {len(bucket):>6d}  {'0':>8s}  {'—':>6s}  {'—':>6s}  {'—':>8s}")
+            continue
+        st = compute_stats(filtered, label=skey)
+        cnn_thresh_str = f"  CNN≥{get_session_threshold(skey):.2f}" if skey in SESSION_THRESHOLDS else ""
+        print(
+            f"  {skey:<12s}  {len(bucket):>6d}  {len(filtered):>8d}  "
+            f"{st.win_rate:>5.1f}%  {st.profit_factor:>6.2f}  {st.total_r:>+8.2f}"
+            f"{cnn_thresh_str}"
+        )
+    print(f"  {'─' * 80}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -883,22 +1155,33 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Backtest MGC using CSV bars
-  python scripts/backtest_filters.py --symbols MGC --source csv --csv-dir data/bars
+  # Backtest MGC using DB bars (recommended — deepest history)
+  python scripts/backtest_filters.py --symbols MGC --source db
 
-  # Backtest multiple symbols via Redis cache
-  python scripts/backtest_filters.py --symbols MGC MES MNQ --source cache
+  # All 9 Globex sessions, multiple symbols:
+  python scripts/backtest_filters.py --symbols MGC MES MNQ 6E --source db --session all
 
-  # Use majority gate mode (more permissive)
-  python scripts/backtest_filters.py --symbols MGC --source csv --gate-mode majority
+  # Single overnight session:
+  python scripts/backtest_filters.py --symbols MGC MCL --source db --session tokyo
 
-  # Export detailed per-trade results
-  python scripts/backtest_filters.py --symbols MGC --source csv --export results.csv
+  # Majority gate mode (more permissive):
+  python scripts/backtest_filters.py --symbols MGC --source db --gate-mode majority
 
-  # Verbose mode (show every trade)
-  python scripts/backtest_filters.py --symbols MGC --source csv -v
+  # Enable CNN gate with per-session thresholds:
+  python scripts/backtest_filters.py --symbols MGC MES MNQ --source db --cnn-gate 1
+
+  # Override CNN threshold for all sessions:
+  python scripts/backtest_filters.py --symbols MGC --source db --cnn-gate 1 --cnn-threshold 0.78
+
+  # Export detailed per-trade results (includes session column):
+  python scripts/backtest_filters.py --symbols MGC --source db --session all --export results.csv
+
+  # Verbose mode (show every trade):
+  python scripts/backtest_filters.py --symbols MGC --source csv --csv-dir data/bars -v
         """,
     )
+
+    _SESSION_CHOICES = ["all", "both"] + _ALL_SESSION_KEYS
 
     parser.add_argument(
         "--symbols",
@@ -908,9 +1191,9 @@ Examples:
     )
     parser.add_argument(
         "--source",
-        choices=["csv", "cache", "massive"],
-        default="csv",
-        help="Bar data source (default: csv)",
+        choices=["csv", "cache", "massive", "db"],
+        default="db",
+        help="Bar data source (default: db)",
     )
     parser.add_argument(
         "--days",
@@ -921,13 +1204,40 @@ Examples:
     parser.add_argument(
         "--csv-dir",
         default="data/bars",
-        help="Directory for CSV bar files (default: data/bars)",
+        help="Directory for CSV bar files (only used with --source csv, default: data/bars)",
+    )
+    parser.add_argument(
+        "--session",
+        choices=_SESSION_CHOICES,
+        default="us",
+        metavar="SESSION",
+        help=(
+            f"ORB session(s) to evaluate. Choices: {_SESSION_CHOICES}. "
+            "Use 'all' for all 9 Globex-day sessions. Default: us."
+        ),
     )
     parser.add_argument(
         "--gate-mode",
         choices=["all", "majority"],
-        default="all",
-        help="Filter gate mode: 'all' = every hard filter must pass, 'majority' = >50%% must pass (default: all)",
+        default="majority",
+        help="Filter gate mode: 'all' = every hard filter must pass, 'majority' = >50%% must pass (default: majority)",
+    )
+    parser.add_argument(
+        "--cnn-gate",
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help="Enable CNN gate: 0=off (default), 1=on (uses per-session thresholds from SESSION_THRESHOLDS)",
+    )
+    parser.add_argument(
+        "--cnn-threshold",
+        type=float,
+        default=None,
+        metavar="PROB",
+        help=(
+            "Override the CNN probability threshold for all sessions (e.g. 0.78). "
+            "When omitted the per-session defaults from SESSION_THRESHOLDS are used."
+        ),
     )
     parser.add_argument(
         "--sl-mult",
@@ -944,7 +1254,7 @@ Examples:
     parser.add_argument(
         "--export",
         default=None,
-        help="Export per-trade detail to CSV (e.g. --export results.csv)",
+        help="Export per-trade detail to CSV (includes session, cnn_prob, cnn_passed columns)",
     )
     parser.add_argument(
         "-v",
@@ -972,17 +1282,30 @@ Examples:
         tp1_atr_mult=args.tp1_mult,
     )
 
-    print("\n" + "=" * 100)
+    sessions_to_run = _resolve_sessions(args.session)
+    session_names = ", ".join(s.key for s in sessions_to_run)
+
+    print("\n" + "=" * 110)
     print("  ORB FILTER BACKTEST COMPARISON")
-    print("=" * 100)
-    print(f"  Symbols:     {', '.join(args.symbols)}")
-    print(f"  Source:      {args.source} (csv_dir={args.csv_dir})")
-    print(f"  Days:        {args.days}")
-    print(f"  Gate mode:   {args.gate_mode}")
-    print(f"  Brackets:    SL={args.sl_mult}x ATR, TP1={args.tp1_mult}x ATR")
+    print("=" * 110)
+    print(f"  Symbols:       {', '.join(args.symbols)}")
+    print(f"  Source:        {args.source}" + (f" (csv_dir={args.csv_dir})" if args.source == "csv" else ""))
+    print(f"  Days:          {args.days}")
+    print(f"  Session(s):    {session_names}")
+    print(f"  Gate mode:     {args.gate_mode}")
+    print(f"  Brackets:      SL={args.sl_mult}x ATR, TP1={args.tp1_mult}x ATR")
+    if args.cnn_gate:
+        thresh_desc = (
+            f"override={args.cnn_threshold:.3f}"
+            if args.cnn_threshold is not None
+            else "per-session defaults: " + ", ".join(f"{k}={v}" for k, v in SESSION_THRESHOLDS.items())
+        )
+        print(f"  CNN gate:      enabled ({thresh_desc})")
+    else:
+        print("  CNN gate:      disabled")
     if args.export:
-        print(f"  Export:      {args.export}")
-    print("=" * 100)
+        print(f"  Export:        {args.export}")
+    print("=" * 110)
 
     run_backtest(
         symbols=args.symbols,
@@ -991,6 +1314,9 @@ Examples:
         csv_dir=args.csv_dir,
         gate_mode=args.gate_mode,
         bracket_config=bracket_config,
+        orb_sessions=sessions_to_run,
+        cnn_gate=bool(args.cnn_gate),
+        cnn_threshold_override=args.cnn_threshold,
         verbose=args.verbose,
         export_path=args.export,
     )

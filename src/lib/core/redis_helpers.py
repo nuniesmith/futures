@@ -29,6 +29,21 @@ stream_add(stream, data, maxlen)             — XADD to a Redis stream
 get_redis()                                  -> redis.Redis | None
 is_available()                               -> bool
 
+Per-session CNN gate API
+------------------------
+get_cnn_gate(session_key)                    -> bool
+set_cnn_gate(session_key, enabled)           -> bool
+get_all_cnn_gates()                          -> dict[str, bool]
+reset_cnn_gate(session_key)                  -> bool
+reset_all_cnn_gates()                        -> int
+
+The per-session CNN gate lets you enable the hard CNN filter on individual
+ORB sessions without touching the global ORB_CNN_GATE env var.  Redis keys
+are of the form ``engine:config:cnn_gate:{session_key}`` and contain either
+``"1"`` (enabled) or ``"0"`` (disabled).  When a key is absent the global
+env-var fallback (``ORB_CNN_GATE``) is used, which preserves backward
+compatibility.
+
 Channel constants
 -----------------
 CH_LIVE, CH_RISK, CH_ORB, CH_ORB_LONDON, CH_ORB_US,
@@ -40,7 +55,8 @@ Key constants
 KEY_DAILY_FOCUS, KEY_DAILY_FOCUS_TS, KEY_ENGINE_STATUS,
 KEY_RISK_STATUS, KEY_GROK_UPDATE, KEY_DAILY_REPORT,
 KEY_RETRAIN_CMD, KEY_RETRAIN_STATUS, KEY_BACKFILL_STATUS,
-KEY_BARS_1M, KEY_BARS_15M, KEY_BARS_DAILY
+KEY_BARS_1M, KEY_BARS_15M, KEY_BARS_DAILY,
+KEY_CNN_GATE_PREFIX
 
 TTL constants
 -------------
@@ -52,6 +68,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, cast
 
 logger = logging.getLogger("redis_helpers")
@@ -113,6 +130,24 @@ KEY_RETRAIN_CMD = "engine:retrain_cmd"
 KEY_RETRAIN_STATUS = "engine:retrain_status"
 KEY_BACKFILL_STATUS = "engine:backfill_status"
 KEY_MODEL_HEALTH = "engine:model_health"
+
+# Per-session CNN gate config keys: ``engine:config:cnn_gate:{session_key}``
+# Value is ``"1"`` (gate enabled) or ``"0"`` (gate disabled).
+# Absence of the key means "fall back to ORB_CNN_GATE env var".
+KEY_CNN_GATE_PREFIX = "engine:config:cnn_gate:"
+
+# All known session keys — used for bulk operations.
+_ALL_SESSION_KEYS: tuple[str, ...] = (
+    "cme",
+    "sydney",
+    "tokyo",
+    "shanghai",
+    "frankfurt",
+    "london",
+    "london_ny",
+    "us",
+    "cme_settle",
+)
 
 
 def bars_1m_key(symbol: str) -> str:
@@ -352,11 +387,171 @@ def stream_add(stream: str, data: dict[str, str], maxlen: int = 100) -> bool:
         logger.debug("stream_add(%s): Redis unavailable — skipped", stream)
         return False
     try:
-        r.xadd(stream, cast(Any, data), maxlen=maxlen, approximate=True)
+        r.xadd(stream, cast("Any", data), maxlen=maxlen, approximate=True)
         return True
     except Exception as exc:
         logger.debug("stream_add(%s) failed: %s", stream, exc)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Per-session CNN gate helpers
+# ---------------------------------------------------------------------------
+
+
+def _cnn_gate_key(session_key: str) -> str:
+    """Return the Redis key for the CNN gate flag of *session_key*."""
+    return f"{KEY_CNN_GATE_PREFIX}{session_key.lower().strip()}"
+
+
+def get_cnn_gate(session_key: str | None) -> bool:
+    """Return whether the CNN hard gate is enabled for *session_key*.
+
+    Resolution order:
+      1. Redis key ``engine:config:cnn_gate:{session_key}`` — per-session
+         override set via :func:`set_cnn_gate` or the dashboard.
+      2. ``ORB_CNN_GATE`` environment variable (``"1"`` = enabled globally).
+      3. Default: **disabled** (``False``).
+
+    This means you can enable the gate for overnight sessions selectively
+    without flipping the global env var::
+
+        # Enable CNN gate for overnight sessions only:
+        set_cnn_gate("cme", True)
+        set_cnn_gate("sydney", True)
+        set_cnn_gate("tokyo", True)
+        set_cnn_gate("shanghai", True)
+
+        # Daytime sessions still use the env-var default (off by default):
+        get_cnn_gate("london")   # → False  (unless ORB_CNN_GATE=1)
+        get_cnn_gate("cme")      # → True   (Redis override)
+
+    Args:
+        session_key: ORBSession.key string (e.g. ``"london"``, ``"tokyo"``).
+                     ``None`` or empty string falls through to the env var.
+
+    Returns:
+        ``True`` if the CNN hard gate should block low-probability signals
+        for this session; ``False`` otherwise.
+    """
+    if session_key:
+        raw = cache_get_raw(_cnn_gate_key(session_key))
+        if raw is not None:
+            val = raw.decode("utf-8").strip()
+            return val == "1"
+
+    # Fall back to global env var
+    return os.environ.get("ORB_CNN_GATE", "0").strip() == "1"
+
+
+def set_cnn_gate(session_key: str, enabled: bool, ttl: int = TTL_DAY * 30) -> bool:
+    """Enable or disable the CNN hard gate for *session_key* in Redis.
+
+    The value persists for *ttl* seconds (default 30 days) so it survives
+    engine restarts.  Use :func:`reset_cnn_gate` to remove the override and
+    revert to the env-var default.
+
+    Args:
+        session_key: ORBSession.key string (e.g. ``"cme"``, ``"us"``).
+        enabled: ``True`` to enable the hard gate; ``False`` to disable.
+        ttl: Key lifetime in seconds (default: 30 days).
+
+    Returns:
+        ``True`` if the value was stored successfully; ``False`` on error.
+
+    Example::
+
+        # Enable gate for overnight sessions after signal quality validates:
+        from lib.core.redis_helpers import set_cnn_gate
+        set_cnn_gate("cme", True)
+        set_cnn_gate("sydney", True)
+        set_cnn_gate("tokyo", True)
+        set_cnn_gate("shanghai", True)
+    """
+    key = _cnn_gate_key(session_key)
+    value = b"1" if enabled else b"0"
+    ok = cache_set_raw(key, value, ttl)
+    if ok:
+        logger.info(
+            "CNN gate %s for session '%s' (key=%s, ttl=%ds)",
+            "ENABLED" if enabled else "DISABLED",
+            session_key,
+            key,
+            ttl,
+        )
+    else:
+        logger.warning("Failed to set CNN gate for session '%s' in Redis", session_key)
+    return ok
+
+
+def get_all_cnn_gates() -> dict[str, bool | None]:
+    """Return the CNN gate state for every known session.
+
+    Returns a dict mapping session key → gate state:
+      - ``True``  — gate explicitly enabled in Redis.
+      - ``False`` — gate explicitly disabled in Redis.
+      - ``None``  — no Redis override; effective value comes from
+        ``ORB_CNN_GATE`` env var (see :func:`get_cnn_gate`).
+
+    The global env-var fallback is shown separately under the special key
+    ``"_global_env"`` so the caller can display the full picture.
+
+    Returns:
+        Dict of session key → ``True`` / ``False`` / ``None``, plus
+        ``"_global_env"`` → ``True`` / ``False``.
+
+    Example::
+
+        gates = get_all_cnn_gates()
+        # {'cme': True, 'sydney': True, 'tokyo': None, ..., '_global_env': False}
+    """
+    result: dict[str, bool | None] = {}
+    for sk in _ALL_SESSION_KEYS:
+        raw = cache_get_raw(_cnn_gate_key(sk))
+        if raw is None:
+            result[sk] = None  # no override — env-var fallback applies
+        else:
+            val = raw.decode("utf-8").strip()
+            result[sk] = val == "1"
+
+    # Show the global env-var default so callers can compute effective values
+    result["_global_env"] = os.environ.get("ORB_CNN_GATE", "0").strip() == "1"
+    return result
+
+
+def reset_cnn_gate(session_key: str) -> bool:
+    """Remove the per-session CNN gate override for *session_key*.
+
+    After this call, :func:`get_cnn_gate` for the session will fall back
+    to the ``ORB_CNN_GATE`` env var.
+
+    Args:
+        session_key: ORBSession.key string.
+
+    Returns:
+        ``True`` on success (including if the key didn't exist).
+    """
+    ok = delete(_cnn_gate_key(session_key))
+    if ok:
+        logger.info("CNN gate override removed for session '%s' — now using env-var default", session_key)
+    return ok
+
+
+def reset_all_cnn_gates() -> int:
+    """Remove all per-session CNN gate overrides.
+
+    After this call every session falls back to the ``ORB_CNN_GATE`` env var.
+
+    Returns:
+        Number of keys that were deleted (0 if none were set).
+    """
+    count = 0
+    for sk in _ALL_SESSION_KEYS:
+        if delete(_cnn_gate_key(sk)):
+            count += 1
+    if count:
+        logger.info("Removed %d CNN gate override(s) — all sessions now use env-var default", count)
+    return count
 
 
 # ---------------------------------------------------------------------------

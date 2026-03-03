@@ -79,11 +79,26 @@ YAHOO_TO_MASSIVE_PRODUCT: dict[str, str] = {
     # Micro FX futures (CME)
     "M6E=F": "M6E",  # Micro Euro FX
     "M6B=F": "M6B",  # Micro British Pound
+    "M6J=F": "M6J",  # Micro Japanese Yen
     # Crypto futures (CME)
     "MBT=F": "MBT",  # Micro Bitcoin
     "BTC=F": "BTC",  # Bitcoin (full-size)
     "MET=F": "MET",  # Micro Ether
     "ETH=F": "ETH",  # Ether (full-size)
+    # Energy futures (NYMEX)
+    "NG=F": "NG",  # Natural Gas
+    "MNG=F": "MNG",  # Micro Natural Gas
+    # Interest rate futures (CBOT)
+    "ZN=F": "ZN",  # 10-Year T-Note
+    "ZB=F": "ZB",  # 30-Year T-Bond
+    "ZF=F": "ZF",  # 5-Year T-Note
+    "ZT=F": "ZT",  # 2-Year T-Note
+    # Agricultural futures (CBOT)
+    "ZC=F": "ZC",  # Corn
+    "ZS=F": "ZS",  # Soybeans
+    "ZW=F": "ZW",  # Wheat
+    "ZL=F": "ZL",  # Soybean Oil
+    "ZM=F": "ZM",  # Soybean Meal
 }
 
 # Reverse: product code → Yahoo ticker (for WebSocket → cache mapping)

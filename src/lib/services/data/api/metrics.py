@@ -542,7 +542,7 @@ def _collect_live_gauges() -> None:
 
                 # Model staleness: compare promoted_at to now
                 try:
-                    from datetime import datetime, timedelta
+                    from datetime import datetime
                     from zoneinfo import ZoneInfo
 
                     _EST = ZoneInfo("America/New_York")

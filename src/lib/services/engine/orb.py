@@ -979,17 +979,11 @@ def _check_breakout_bar_quality(
     bar_close: float = float(row.get("Close", row.get("close", 0.0)))
 
     # Depth: how far the close penetrated beyond the OR level
-    if direction == "LONG":
-        depth = max(bar_close - or_high, 0.0)
-    else:
-        depth = max(or_low - bar_close, 0.0)
+    depth = max(bar_close - or_high, 0.0) if direction == "LONG" else max(or_low - bar_close, 0.0)
 
     # Body ratio: fraction of bar range covered by the candle body
     bar_range = bar_high - bar_low
-    if bar_range > 0:
-        body_ratio = abs(bar_close - bar_open) / bar_range
-    else:
-        body_ratio = 0.0
+    body_ratio = abs(bar_close - bar_open) / bar_range if bar_range > 0 else 0.0
     body_ratio = min(body_ratio, 1.0)
 
     # Evaluate thresholds
@@ -1099,6 +1093,12 @@ def detect_opening_range_breakout(
         result.error = "ATR is zero — cannot compute breakout thresholds"
         return result
 
+    # --- Compute breakout levels (always set so callers can read them) ---
+    threshold = atr * _breakout_mult
+    result.breakout_threshold = threshold
+    result.long_trigger = or_high + threshold
+    result.short_trigger = or_low - threshold
+
     # --- OR-size quality gate ---
     or_size_ok, or_size_reason = _check_or_size(result.or_range, atr, session)
     result.or_size_ok = or_size_ok
@@ -1111,12 +1111,6 @@ def detect_opening_range_breakout(
             or_size_reason,
         )
         return result
-
-    # --- Compute breakout levels ---
-    threshold = atr * _breakout_mult
-    result.breakout_threshold = threshold
-    result.long_trigger = or_high + threshold
-    result.short_trigger = or_low - threshold
 
     # --- If OR isn't complete yet, just return the levels (no scan) ---
     if not or_complete:

@@ -136,7 +136,39 @@ class RetrainConfig:
     """All tunables for the overnight retraining pipeline."""
 
     # Dataset generation
-    symbols: list[str] = field(default_factory=lambda: ["MGC", "MES", "MNQ", "MCL", "6E", "MBT"])
+    symbols: list[str] = field(
+        default_factory=lambda: [
+            # ── Micro metals ──────────────────────────────────────────────
+            "MGC",  # Micro Gold
+            "SIL",  # Micro Silver
+            "MHG",  # Micro Copper
+            # ── Micro energy ──────────────────────────────────────────────
+            "MCL",  # Micro Crude Oil
+            "MNG",  # Micro Natural Gas (data via NG=F)
+            # ── Micro equity index ────────────────────────────────────────
+            "MES",  # Micro S&P 500
+            "MNQ",  # Micro Nasdaq-100
+            "M2K",  # Micro Russell 2000
+            "MYM",  # Micro Dow Jones
+            # ── FX (CME standard + micro) ─────────────────────────────────
+            "6E",  # Euro FX
+            "6B",  # British Pound
+            "6J",  # Japanese Yen
+            "6A",  # Australian Dollar
+            "6C",  # Canadian Dollar
+            "6S",  # Swiss Franc
+            # ── Interest rates (CBOT) ─────────────────────────────────────
+            "ZN",  # 10-Year T-Note
+            "ZB",  # 30-Year T-Bond
+            # ── Agricultural (CBOT) ───────────────────────────────────────
+            "ZC",  # Corn
+            "ZS",  # Soybeans
+            "ZW",  # Wheat
+            # ── Crypto ────────────────────────────────────────────────────
+            "MBT",  # Micro Bitcoin
+            "MET",  # Micro Ether
+        ]
+    )
     days_back: int = 90
     skip_existing_images: bool = True
     chart_dpi: int = 150
@@ -146,7 +178,7 @@ class RetrainConfig:
     # "massive"— call Massive REST API directly (live, no DB caching).
     # "csv"    — read from local CSV files (offline / synthetic data).
     bars_source: str = "db"
-    orb_session: str = "both"  # "us", "london", or "both"
+    orb_session: str = "all"  # "us" | "london" | "both" | "all" | any named session key
 
     # Train/val split
     val_fraction: float = 0.15
@@ -201,6 +233,14 @@ class RetrainConfig:
         cfg.min_recall = float(os.getenv("CNN_RETRAIN_MIN_RECALL", str(cfg.min_recall)))
         cfg.min_improvement = float(os.getenv("CNN_RETRAIN_IMPROVEMENT", str(cfg.min_improvement)))
         cfg.orb_session = os.getenv("CNN_RETRAIN_ORB_SESSION", cfg.orb_session)
+        # CNN_ORB_SESSION is the alias used in the todo Quick Commands and
+        # docker-compose.train.yml — takes precedence if both are set.
+        cfg.orb_session = os.getenv("CNN_ORB_SESSION", cfg.orb_session)
+
+        # RETRAIN_IMMEDIATE=1 mirrors the --immediate CLI flag so that
+        # docker-compose.train.yml can set it without overriding the CMD.
+        if os.getenv("RETRAIN_IMMEDIATE", "0").strip() in ("1", "true", "yes"):
+            cfg.immediate = True
 
         return cfg
 
@@ -1390,11 +1430,31 @@ Examples:
         default=None,
         help="Data source for bars (default: cache)",
     )
+    # All valid session keys — mirrors _ALL_SESSION_KEYS in dataset_generator.py
+    _SESSION_CHOICES = [
+        "all",  # Full 24-hour Globex-day coverage (9 sessions — recommended)
+        "both",  # London + US (backward-compatible two-session alias)
+        "us",  # US Equity Open  09:30–10:00 ET
+        "london",  # London Open  03:00–03:30 ET
+        "london_ny",  # London-NY Crossover  08:00–08:30 ET
+        "frankfurt",  # Frankfurt/Xetra  03:00–03:30 ET
+        "cme",  # CME Globex re-open  18:00–18:30 ET
+        "sydney",  # Sydney/ASX  18:30–19:00 ET
+        "tokyo",  # Tokyo/TSE  19:00–19:30 ET
+        "shanghai",  # Shanghai/HK  21:00–21:30 ET
+        "cme_settle",  # CME Settlement  14:00–14:30 ET
+    ]
     parser.add_argument(
         "--session",
-        choices=["us", "london", "both"],
+        choices=_SESSION_CHOICES,
         default=None,
-        help="ORB session for dataset generation: 'us', 'london', or 'both' (default: both)",
+        metavar="SESSION",
+        help=(
+            "ORB session for dataset generation. "
+            "Choices: %(choices)s. "
+            "Use 'all' for full 24-hour Globex coverage (9 sessions, recommended for 10k+ dataset). "
+            "Default: both (London + US)."
+        ),
     )
 
     # Training options
@@ -1450,6 +1510,11 @@ Examples:
         cfg.bars_source = args.bars_source
     if args.session is not None:
         cfg.orb_session = args.session
+
+    # --immediate can also be set via RETRAIN_IMMEDIATE env var (already
+    # applied in from_env()); CLI flag always wins if explicitly passed.
+    if args.immediate:
+        cfg.immediate = True
 
     # Training options
     if args.epochs is not None:

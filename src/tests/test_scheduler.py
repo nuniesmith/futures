@@ -60,13 +60,13 @@ class TestSessionMode:
         now = datetime(2026, 2, 27, 12, 0, 0, tzinfo=_EST)
         assert ScheduleManager.get_session_mode(now) == SessionMode.OFF_HOURS
 
-    def test_6pm_is_off_hours(self):
+    def test_6pm_is_evening(self):
         now = datetime(2026, 2, 27, 18, 0, 0, tzinfo=_EST)
-        assert ScheduleManager.get_session_mode(now) == SessionMode.OFF_HOURS
+        assert ScheduleManager.get_session_mode(now) == SessionMode.EVENING
 
-    def test_11pm_is_off_hours(self):
+    def test_11pm_is_evening(self):
         now = datetime(2026, 2, 27, 23, 0, 0, tzinfo=_EST)
-        assert ScheduleManager.get_session_mode(now) == SessionMode.OFF_HOURS
+        assert ScheduleManager.get_session_mode(now) == SessionMode.EVENING
 
 
 # ---------------------------------------------------------------------------
@@ -374,11 +374,12 @@ class TestGetStatus:
 class TestTimeUntilNextSession:
     def test_premarket_to_active(self):
         mgr = ScheduleManager()
-        now = datetime(2026, 2, 27, 4, 0, 0, tzinfo=_EST)
+        # 01:00 AM is in PRE_MARKET (00:00–03:00), next session is ACTIVE at 03:00
+        now = datetime(2026, 2, 27, 1, 0, 0, tzinfo=_EST)
         next_session, seconds = mgr.time_until_next_session(now)
         assert next_session == SessionMode.ACTIVE
-        # 4:00 AM → 5:00 AM = 3600 seconds
-        assert 3500 < seconds <= 3600
+        # 1:00 AM → 3:00 AM = 7200 seconds
+        assert 7100 < seconds <= 7200
 
     def test_active_to_off_hours(self):
         mgr = ScheduleManager()
