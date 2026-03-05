@@ -549,10 +549,7 @@ def _load_bars_from_kraken(symbol: str, days: int = 90) -> pd.DataFrame | None:
 
     # Resolve to canonical Kraken pair (strip "KRAKEN:" prefix for the API)
     ticker = _resolve_ticker(symbol)
-    if ticker.upper().startswith("KRAKEN:"):
-        pair = ticker[7:]  # e.g. "XBTUSD"
-    else:
-        pair = ticker  # already stripped
+    pair = ticker[7:] if ticker.upper().startswith("KRAKEN:") else ticker
 
     # Kraken public OHLC endpoint — 1-minute bars
     _KRAKEN_OHLC_URL = "https://api.kraken.com/0/public/OHLC"
@@ -885,11 +882,11 @@ def _bracket_configs_for_session(
 
 def _run_simulators_for_breakout_type(
     breakout_type_str: str,
-    bars_1m: "pd.DataFrame",
+    bars_1m: pd.DataFrame,
     symbol: str,
-    cfg: "DatasetConfig",
-    bars_daily: "pd.DataFrame | None",
-) -> "list[Any]":
+    cfg: DatasetConfig,
+    bars_daily: pd.DataFrame | None,
+) -> list[Any]:
     """Dispatch to the correct simulator(s) based on *breakout_type_str*.
 
     Returns a flat list of :class:`~orb_simulator.ORBSimResult` objects with
@@ -1979,10 +1976,7 @@ def _cli():
 
         # Resolve breakout type(s)
         _bt_arg = getattr(args, "breakout_type", "ORB")
-        if _bt_arg == "all":
-            _breakout_types = list(BreakoutType)
-        else:
-            _breakout_types = [breakout_type_from_name(_bt_arg)]
+        _breakout_types = list(BreakoutType) if _bt_arg == "all" else [breakout_type_from_name(_bt_arg)]
 
         # Build a single DatasetConfig using the resolved breakout type(s).
         # If the user passed "--breakout-type all" we pass "all" directly so

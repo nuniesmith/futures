@@ -50,16 +50,19 @@ Both are written by the engine's ``_handle_grok_morning_brief`` /
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
-from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 logger = logging.getLogger("api.grok")
 
@@ -143,10 +146,8 @@ def _cache_briefing(text: str) -> None:
 
         # Notify SSE subscribers via Redis pub/sub
         if REDIS_AVAILABLE and _r is not None:
-            try:
+            with contextlib.suppress(Exception):
                 _r.publish("dashboard:grok", payload_str)
-            except Exception:
-                pass
     except Exception as exc:
         logger.debug("Grok briefing cache write error: %s", exc)
 
@@ -166,10 +167,8 @@ def _cache_live_update(text: str) -> None:
         cache_set("engine:grok_update", payload_str.encode(), ttl=900)
 
         if REDIS_AVAILABLE and _r is not None:
-            try:
+            with contextlib.suppress(Exception):
                 _r.publish("dashboard:grok", payload_str)
-            except Exception:
-                pass
     except Exception as exc:
         logger.debug("Grok live update cache write error: %s", exc)
 
@@ -195,9 +194,7 @@ def _build_context(engine) -> dict[str, Any] | None:
     Falls back to a minimal stub so streaming endpoints can still run.
     """
     try:
-        import io
 
-        import pandas as pd
 
         from lib.core.cache import cache_get
         from lib.integrations.grok_helper import format_live_compact
@@ -253,10 +250,8 @@ def _build_context(engine) -> dict[str, Any] | None:
         ]:
             raw = cache_get(cache_key)
             if raw:
-                try:
+                with contextlib.suppress(Exception):
                     context[key] = raw.decode() if isinstance(raw, bytes) else raw
-                except Exception:
-                    pass
 
         return context
     except Exception as exc:
@@ -311,7 +306,7 @@ async def _stream_briefing_sse(context: dict[str, Any], api_key: str) -> AsyncGe
     while True:
         try:
             token = await asyncio.wait_for(queue.get(), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Heartbeat to keep the connection alive during slow generation
             yield _format_sse(".", event="grok-heartbeat")
             continue
@@ -383,7 +378,7 @@ async def _stream_live_update_sse(
     while True:
         try:
             token = await asyncio.wait_for(queue.get(), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             yield _format_sse(".", event="grok-heartbeat")
             continue
 

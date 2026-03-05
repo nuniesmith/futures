@@ -458,7 +458,7 @@ def cnn_watcher_status():
     and whether the watcher thread is alive.
     """
     try:
-        from lib.services.engine.model_watcher import _WATCHDOG_AVAILABLE, ModelWatcher, _find_model_dir
+        from lib.services.engine.model_watcher import _WATCHDOG_AVAILABLE, _find_model_dir
 
         # Try to access the engine's running watcher instance
         try:
@@ -693,9 +693,9 @@ def cnn_gate_html():
 
     env_badge = '<span style="color:#4ade80">ON</span>' if global_env else '<span style="color:#71717a">off</span>'
 
-    bulk_html = f"""
+    bulk_html = """
         <div style="display:flex;gap:4px;margin-top:8px;padding-top:6px;border-top:1px solid var(--border-subtle)">
-            <button onclick="['cme','sydney','tokyo','shanghai'].forEach(function(s){{htmx.ajax('PUT','/cnn/gate/'+s+'?enabled=true',{{target:'#cnn-gate-panel',swap:'innerHTML'}})}});return false;"
+            <button onclick="['cme','sydney','tokyo','shanghai'].forEach(function(s){htmx.ajax('PUT','/cnn/gate/'+s+'?enabled=true',{target:'#cnn-gate-panel',swap:'innerHTML'})});return false;"
                     style="flex:1;font-size:10px;padding:4px 6px;border-radius:4px;background:var(--bg-input);
                            color:var(--text-muted);border:1px solid var(--border-panel);cursor:pointer">
                 🌙 Enable overnight

@@ -963,10 +963,8 @@ def _init_audit_tables(conn, use_postgres: bool) -> None:
                 conn.execute(stmt)
             except Exception as exc:
                 logger.debug("ORB events column migration (pg, non-fatal): %s", exc)
-        try:
+        with contextlib.suppress(Exception):
             conn.commit()
-        except Exception:
-            pass
     else:
         conn.executescript(_SCHEMA_RISK_EVENTS_SQLITE)
         conn.executescript(_SCHEMA_ORB_EVENTS_SQLITE)
@@ -980,10 +978,8 @@ def _init_audit_tables(conn, use_postgres: bool) -> None:
                     # "duplicate column name" is expected on existing DBs — ignore
                     if "duplicate column" not in str(exc).lower():
                         logger.debug("ORB events column migration (sqlite, non-fatal): %s", exc)
-        try:
+        with contextlib.suppress(Exception):
             conn.commit()
-        except Exception:
-            pass
 
     logger.info("Audit tables initialised (risk_events, orb_events)")
 

@@ -851,7 +851,7 @@ def export_csv(stats: list[SessionStats], path: str) -> None:
 def push_to_redis(stats: list[SessionStats]) -> bool:
     """Push session quality data to Redis for Grafana / dashboard consumption."""
     try:
-        from lib.core.redis_helpers import cache_set_json, TTL_DAY
+        from lib.core.redis_helpers import TTL_DAY, cache_set_json
 
         data = {
             "generated_at": datetime.now(tz=_EST).isoformat(),

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -709,12 +709,14 @@ def kraken_chart_html(
     # Interval selector
     intervals = [("1m", "1m"), ("5m", "5m"), ("15m", "15m"), ("30m", "30m"), ("1h", "1h"), ("4h", "4h")]
     interval_opts = "".join(
-        f'<option value="{v}" {"selected" if v == interval else ""}>{l}</option>' for v, l in intervals
+        f'<option value="{v}" {"selected" if v == interval else ""}>{label}</option>' for v, label in intervals
     )
 
     # Period selector
     periods = [("1d", "1D"), ("2d", "2D"), ("5d", "5D"), ("10d", "10D")]
-    period_opts = "".join(f'<option value="{v}" {"selected" if v == period else ""}>{l}</option>' for v, l in periods)
+    period_opts = "".join(
+        f'<option value="{v}" {"selected" if v == period else ""}>{label}</option>' for v, label in periods
+    )
 
     now_str = datetime.now(tz=_EST).strftime("%H:%M ET")
     bar_count = len(bars)
@@ -890,7 +892,7 @@ def kraken_account_html():
         open_orders = raw_orders.get("open", {})
         if open_orders:
             rows = ""
-            for txid, order in list(open_orders.items())[:8]:  # cap at 8
+            for _txid, order in list(open_orders.items())[:8]:  # cap at 8
                 descr = order.get("descr", {})
                 side = descr.get("type", "?").upper()
                 pair = descr.get("pair", "?")
@@ -938,26 +940,21 @@ def kraken_account_html():
             # Sort by time descending
             sorted_trades = sorted(trades.items(), key=lambda kv: float(kv[1].get("time", 0)), reverse=True)[:8]
             rows = ""
-            for txid, trade in sorted_trades:
+            for _txid, trade in sorted_trades:
                 pair = trade.get("pair", "?")
                 side = trade.get("type", "?").upper()
                 price = float(trade.get("price", 0))
                 vol = float(trade.get("vol", 0))
                 cost = float(trade.get("cost", 0))
                 fee = float(trade.get("fee", 0))
-                net = cost - fee if side == "BUY" else -(cost + fee)
+                cost - fee if side == "BUY" else -(cost + fee)
                 t = float(trade.get("time", 0))
                 try:
-                    from datetime import timezone
-
-                    ts_str = datetime.fromtimestamp(t, tz=timezone.utc).strftime("%m/%d %H:%M")
+                    ts_str = datetime.fromtimestamp(t, tz=UTC).strftime("%m/%d %H:%M")
                 except Exception:
                     ts_str = "—"
                 side_color = "#22c55e" if side == "BUY" else "#ef4444"
-                if price >= 100:
-                    price_str = f"${price:,.2f}"
-                else:
-                    price_str = f"${price:,.4f}"
+                price_str = f"${price:,.2f}" if price >= 100 else f"${price:,.4f}"
                 rows += (
                     f'<tr style="border-bottom:1px solid var(--border-subtle,#27272a)">'
                     f'<td style="padding:2px 4px;font-size:8px;color:var(--text-faint);white-space:nowrap">{ts_str}</td>'
@@ -1022,7 +1019,7 @@ def _pearson_corr(xs: list[float], ys: list[float]) -> float:
         return float("nan")
     mx = sum(xs) / n
     my = sum(ys) / n
-    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=False))
     denom_x = math.sqrt(sum((x - mx) ** 2 for x in xs))
     denom_y = math.sqrt(sum((y - my) ** 2 for y in ys))
     if denom_x == 0 or denom_y == 0:
@@ -1121,12 +1118,12 @@ def kraken_correlation_html(
 
     # Period + interval selectors
     period_opts = "".join(
-        f'<option value="{v}" {"selected" if v == period else ""}>{l}</option>'
-        for v, l in [("5d", "5D"), ("10d", "10D"), ("30d", "30D")]
+        f'<option value="{v}" {"selected" if v == period else ""}>{label}</option>'
+        for v, label in [("5d", "5D"), ("10d", "10D"), ("30d", "30D")]
     )
     interval_opts = "".join(
-        f'<option value="{v}" {"selected" if v == interval else ""}>{l}</option>'
-        for v, l in [("15m", "15m"), ("1h", "1h"), ("4h", "4h")]
+        f'<option value="{v}" {"selected" if v == interval else ""}>{label}</option>'
+        for v, label in [("15m", "15m"), ("1h", "1h"), ("4h", "4h")]
     )
 
     # ── Fetch price series ─────────────────────────────────────────────────

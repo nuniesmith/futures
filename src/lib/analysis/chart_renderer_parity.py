@@ -61,9 +61,12 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger("analysis.chart_renderer_parity")
 
@@ -205,7 +208,7 @@ def _resolve_box_style(breakout_type: str | None) -> tuple[tuple, tuple, bool]:
 
 
 def _draw_dashed_hline(
-    draw: "ImageDraw.ImageDraw",
+    draw: ImageDraw.ImageDraw,
     x0: int,
     x1: int,
     y: int,
@@ -274,7 +277,7 @@ def render_parity_snapshot(
     vwap_values: Sequence[float] | None = None,
     direction: str | None = None,
     breakout_type: str | None = None,
-) -> "Image.Image | None":
+) -> Image.Image | None:
     """Render a 224×224 chart image matching C# OrbChartRenderer.Render().
 
     This replicates the exact rendering pipeline from the C# method
@@ -430,7 +433,7 @@ def render_parity_snapshot(
     #       using (var vb = new SolidBrush(vc))
     #           g.FillRectangle(vb, x, vy, bodyW, vh);
     #   }
-    vol_panel_top = H - VOL_PANEL_H
+    H - VOL_PANEL_H
     for i in range(n):
         x = LEFT_PAD + i * bar_w
         bar = bars[i]

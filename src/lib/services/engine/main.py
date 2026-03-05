@@ -31,7 +31,13 @@ import os
 import signal
 import time
 from datetime import datetime
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from lib.services.engine.breakout import BreakoutResult
 
 from lib.core.logging_config import get_logger, setup_logging
 
@@ -1535,8 +1541,6 @@ def _fetch_bars_1m(engine, ticker: str, symbol: str) -> "pd.DataFrame | None":
 def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "us") -> None:
     """Publish a non-ORB breakout result to Redis for SSE / dashboard consumption."""
     try:
-        import time as _time
-
         from lib.core.cache import cache_set
 
         payload = result.to_dict()
@@ -1630,7 +1634,7 @@ def _handle_check_pdr(engine, session_key: str = "london_ny") -> None:
     try:
         import pandas as pd
 
-        from lib.services.engine.breakout import BreakoutType, RangeConfig, detect_pdr_breakout
+        from lib.services.engine.breakout import detect_pdr_breakout
 
         assets = _get_assets_for_session_key(session_key)
         if not assets:

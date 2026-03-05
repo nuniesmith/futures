@@ -39,6 +39,7 @@ Environment:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 from datetime import date, datetime, timedelta
@@ -178,10 +179,7 @@ def _format_time(ts: str) -> str:
     """Extract HH:MM ET from an ISO timestamp."""
     try:
         dt = datetime.fromisoformat(ts)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=_EST)
-        else:
-            dt = dt.astimezone(_EST)
+        dt = dt.replace(tzinfo=_EST) if dt.tzinfo is None else dt.astimezone(_EST)
         return dt.strftime("%H:%M ET")
     except Exception:
         return ts[:16] if len(ts) >= 16 else ts
@@ -224,10 +222,8 @@ def build_daily_report(target_date: date) -> dict:
         # CNN probability
         prob = meta.get("cnn_prob")
         if prob is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 cnn_probs.append(float(prob))
-            except (TypeError, ValueError):
-                pass
         # Filter outcome
         fp = meta.get("filter_passed")
         if fp is True:
@@ -359,7 +355,7 @@ def _get_model_info() -> dict:
                         header = lines[0].split(",")
                         last = lines[-1].split(",")
                         if len(header) == len(last):
-                            last_epoch = dict(zip(header, last))
+                            last_epoch = dict(zip(header, last, strict=False))
                             info["last_training"] = {
                                 k: v
                                 for k, v in last_epoch.items()
@@ -381,10 +377,8 @@ def _get_model_info() -> dict:
     for ddir in [_PROJECT_ROOT / "dataset", Path("/app/dataset")]:
         stats_file = ddir / "dataset_stats.json"
         if stats_file.is_file():
-            try:
+            with contextlib.suppress(Exception):
                 info["dataset_stats"] = json.loads(stats_file.read_text())
-            except Exception:
-                pass
             break
         labels_file = ddir / "labels.csv"
         if labels_file.is_file():

@@ -1218,9 +1218,9 @@ def simulate_batch_prev_day(
     symbol: str = "",
     config: BracketConfig | None = None,
     bars_daily: pd.DataFrame | None = None,
-    rth_start: "dt_time | None" = None,
-    rth_end: "dt_time | None" = None,
-    session_end: "dt_time | None" = None,
+    rth_start: dt_time | None = None,
+    rth_end: dt_time | None = None,
+    session_end: dt_time | None = None,
 ) -> list[ORBSimResult]:
     """Simulate Previous Day High/Low breakouts across all days in *bars_1m*.
 
@@ -1274,7 +1274,7 @@ def simulate_batch_prev_day(
 
     highs_all = np.asarray(df["High"].astype(float).values)
     lows_all = np.asarray(df["Low"].astype(float).values)
-    closes_all = np.asarray(df["Close"].astype(float).values)
+    np.asarray(df["Close"].astype(float).values)
 
     try:
         times_all = pd.DatetimeIndex(df.index).time  # type: ignore[attr-defined]
@@ -1382,9 +1382,9 @@ def simulate_batch_ib(
     symbol: str = "",
     config: BracketConfig | None = None,
     bars_daily: pd.DataFrame | None = None,
-    ib_start: "dt_time | None" = None,
-    ib_end: "dt_time | None" = None,
-    session_end: "dt_time | None" = None,
+    ib_start: dt_time | None = None,
+    ib_end: dt_time | None = None,
+    session_end: dt_time | None = None,
 ) -> list[ORBSimResult]:
     """Simulate Initial Balance breakouts across all RTH sessions in *bars_1m*.
 
@@ -1607,8 +1607,8 @@ def simulate_batch_consolidation(
     bars_daily: pd.DataFrame | None = None,
     min_consolidation_bars: int = 12,
     max_range_pct: float = 0.003,
-    session_start: "dt_time | None" = None,
-    session_end: "dt_time | None" = None,
+    session_start: dt_time | None = None,
+    session_end: dt_time | None = None,
 ) -> list[ORBSimResult]:
     """Simulate Consolidation breakouts detected algorithmically in *bars_1m*.
 
@@ -1855,8 +1855,8 @@ def simulate_batch_weekly(
     symbol: str = "",
     config: BracketConfig | None = None,
     bars_daily: pd.DataFrame | None = None,
-    rth_start: "dt_time | None" = None,
-    rth_end: "dt_time | None" = None,
+    rth_start: dt_time | None = None,
+    rth_end: dt_time | None = None,
 ) -> list[ORBSimResult]:
     """Simulate Weekly Range breakouts — prior week's high/low as the range.
 
@@ -2000,8 +2000,8 @@ def simulate_batch_monthly(
     symbol: str = "",
     config: BracketConfig | None = None,
     bars_daily: pd.DataFrame | None = None,
-    rth_start: "dt_time | None" = None,
-    rth_end: "dt_time | None" = None,
+    rth_start: dt_time | None = None,
+    rth_end: dt_time | None = None,
 ) -> list[ORBSimResult]:
     """Simulate Monthly Range breakouts — prior month's high/low as the range.
 
@@ -2130,10 +2130,10 @@ def simulate_batch_asian(
     symbol: str = "",
     config: BracketConfig | None = None,
     bars_daily: pd.DataFrame | None = None,
-    asian_start: "dt_time | None" = None,
-    asian_end: "dt_time | None" = None,
-    scan_start: "dt_time | None" = None,
-    scan_end: "dt_time | None" = None,
+    asian_start: dt_time | None = None,
+    asian_end: dt_time | None = None,
+    scan_start: dt_time | None = None,
+    scan_end: dt_time | None = None,
 ) -> list[ORBSimResult]:
     """Simulate Asian Session Range breakouts (19:00–02:00 ET).
 
@@ -2327,8 +2327,8 @@ def simulate_batch_bollinger_squeeze(
     symbol: str = "",
     config: BracketConfig | None = None,
     bars_daily: pd.DataFrame | None = None,
-    session_start: "dt_time | None" = None,
-    session_end: "dt_time | None" = None,
+    session_start: dt_time | None = None,
+    session_end: dt_time | None = None,
     bb_period: int = 20,
     bb_std: float = 2.0,
     kc_period: int = 20,
@@ -2541,8 +2541,8 @@ def simulate_batch_value_area(
     symbol: str = "",
     config: BracketConfig | None = None,
     bars_daily: pd.DataFrame | None = None,
-    rth_start: "dt_time | None" = None,
-    rth_end: "dt_time | None" = None,
+    rth_start: dt_time | None = None,
+    rth_end: dt_time | None = None,
     tick_size: float = 0.25,
     va_pct: float = 0.70,
 ) -> list[ORBSimResult]:
@@ -2673,8 +2673,8 @@ def simulate_batch_inside_day(
     symbol: str = "",
     config: BracketConfig | None = None,
     bars_daily: pd.DataFrame | None = None,
-    rth_start: "dt_time | None" = None,
-    rth_end: "dt_time | None" = None,
+    rth_start: dt_time | None = None,
+    rth_end: dt_time | None = None,
 ) -> list[ORBSimResult]:
     """Simulate Inside Day breakouts.
 
@@ -2821,8 +2821,8 @@ def simulate_batch_gap_rejection(
     symbol: str = "",
     config: BracketConfig | None = None,
     bars_daily: pd.DataFrame | None = None,
-    rth_start: "dt_time | None" = None,
-    rth_end: "dt_time | None" = None,
+    rth_start: dt_time | None = None,
+    rth_end: dt_time | None = None,
     min_gap_atr_pct: float = 0.15,
 ) -> list[ORBSimResult]:
     """Simulate Gap Rejection breakouts.
@@ -3002,8 +3002,8 @@ def simulate_batch_pivot_points(
     symbol: str = "",
     config: BracketConfig | None = None,
     bars_daily: pd.DataFrame | None = None,
-    rth_start: "dt_time | None" = None,
-    rth_end: "dt_time | None" = None,
+    rth_start: dt_time | None = None,
+    rth_end: dt_time | None = None,
     pivot_formula: str = "classic",
 ) -> list[ORBSimResult]:
     """Simulate Pivot Point breakouts — classic floor pivot R1/S1 as range.
@@ -3161,8 +3161,8 @@ def simulate_batch_fibonacci(
     symbol: str = "",
     config: BracketConfig | None = None,
     bars_daily: pd.DataFrame | None = None,
-    rth_start: "dt_time | None" = None,
-    rth_end: "dt_time | None" = None,
+    rth_start: dt_time | None = None,
+    rth_end: dt_time | None = None,
     fib_upper: float = 0.618,
     fib_lower: float = 0.382,
     swing_lookback_bars: int = 100,

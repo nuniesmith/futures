@@ -256,7 +256,7 @@ def _render_journal_panel(
         notes = str(entry.get("notes", ""))
         tags_raw = str(entry.get("tags", ""))
         num_contracts = int(entry.get("num_contracts", 0))
-        row_id = entry.get("id", "")
+        entry.get("id", "")
 
         net_c = "#22c55e" if net > 0 else ("#ef4444" if net < 0 else "#a1a1aa")
         net_sign = "+" if net > 0 else ""
@@ -417,7 +417,6 @@ def _render_journal_panel(
         )
 
     # ── Limit selector ───────────────────────────────────────────────────────
-    tag_param = f"&tag={active_tag}" if active_tag else ""
     limit_opts = "".join(
         f'<option value="{n}" {"selected" if n == limit else ""}>{n} days</option>' for n in [14, 30, 60, 90, 180]
     )

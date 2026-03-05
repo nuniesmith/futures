@@ -77,10 +77,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import pandas as pd
 
 if TYPE_CHECKING:
-    from lib.analysis.orb_filters import FilterVerdict as _FilterVerdict
+    import pandas as pd
+    pass
 
 logger = logging.getLogger("analysis.mtf_analyzer")
 
@@ -476,9 +476,7 @@ def analyze_mtf(
         score += _W_EMA_STACK
 
     # EMA slope direction (15%)
-    if dir_upper == "LONG" and result.ema_slope_direction == "UP":
-        score += _W_EMA_SLOPE
-    elif dir_upper == "SHORT" and result.ema_slope_direction == "DOWN":
+    if dir_upper == "LONG" and result.ema_slope_direction == "UP" or dir_upper == "SHORT" and result.ema_slope_direction == "DOWN":
         score += _W_EMA_SLOPE
     elif result.ema_slope_direction == "FLAT":
         score += _W_EMA_SLOPE * 0.5  # neutral slope is half credit
@@ -488,9 +486,7 @@ def analyze_mtf(
         score += _W_MACD_HIST
 
     # MACD histogram slope agrees (15%)
-    if dir_upper == "LONG" and hist_slope > 0:
-        score += _W_MACD_SLOPE
-    elif dir_upper == "SHORT" and hist_slope < 0:
+    if dir_upper == "LONG" and hist_slope > 0 or dir_upper == "SHORT" and hist_slope < 0:
         score += _W_MACD_SLOPE
 
     # No opposing divergence (15%)

@@ -443,20 +443,15 @@ def _fetch_chunk_kraken(ticker: str, start_dt: datetime, end_dt: datetime) -> pd
             # Normalise index to UTC
             try:
                 dti = pd.DatetimeIndex(df.index)
-                if dti.tzinfo is None:
-                    dti = dti.tz_localize("UTC")
-                else:
-                    dti = dti.tz_convert("UTC")
+                dti = dti.tz_localize("UTC") if dti.tzinfo is None else dti.tz_convert("UTC")
                 df.index = dti
             except Exception:
                 pass
 
             # Trim anything beyond end_dt
             end_cutoff = pd.Timestamp(end_ts, unit="s", tz="UTC")
-            try:
+            with contextlib.suppress(Exception):
                 df = df[df.index <= end_cutoff]
-            except Exception:
-                pass
 
             if not df.empty:
                 all_frames.append(df)

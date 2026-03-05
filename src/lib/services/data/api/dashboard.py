@@ -601,10 +601,8 @@ def _render_volume_profile_panel(
 
     # Current price estimate = last close
     current_price = 0.0
-    try:
+    with contextlib.suppress(Exception):
         current_price = float(df["Close"].iloc[-1])
-    except Exception:
-        pass
 
     # Naked POCs
     naked_pocs = find_naked_pocs(session_profiles, current_price=current_price, max_distance_points=200.0)
@@ -3359,10 +3357,8 @@ def get_orb_history_html(
                 # Show MACD slope arrow if available
                 slope_arrow = ""
                 if macd_slope_val is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         slope_arrow = " ↑" if float(macd_slope_val) > 0 else " ↓"
-                    except Exception:
-                        pass
                 # Divergence indicator
                 div_icon = ""
                 if divergence_val == "confirming":
@@ -3635,10 +3631,7 @@ def get_alerts_html():
                 icon = "🟠"
 
             # Format worst-gap duration
-            if worst >= 60:
-                dur_str = f"{worst // 60}h {worst % 60}m"
-            else:
-                dur_str = f"{worst}m"
+            dur_str = f"{worst // 60}h {worst % 60}m" if worst >= 60 else f"{worst}m"
 
             gap_rows += f"""
 <div style="display:flex;align-items:center;justify-content:space-between;

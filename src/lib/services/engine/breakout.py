@@ -485,10 +485,7 @@ def _check_bar_quality(
     body = abs(bar_close - bar_open)
     body_ratio = body / bar_range
 
-    if direction == "LONG":
-        depth = bar_close - level
-    else:
-        depth = level - bar_close
+    depth = bar_close - level if direction == "LONG" else level - bar_close
 
     min_depth = config.min_depth_atr_pct * atr if atr > 0 else 0.0
     depth_ok = depth >= min_depth
@@ -561,12 +558,12 @@ def _build_pdr_range(
         today_et = bars_et.index[-1].to_pydatetime().date()
         cutoff = pd.Timestamp(today_et, tz=_ET)
         prev_bars = bars_et[bars_et.index < cutoff]
-        curr_bars = bars_et[bars_et.index >= cutoff]
+        bars_et[bars_et.index >= cutoff]
     else:
         # The most recent session-start boundary
         latest_start = today_session_starts[-1]
         prev_bars = bars_et[bars_et.index < latest_start]
-        curr_bars = bars_et[bars_et.index >= latest_start]
+        bars_et[bars_et.index >= latest_start]
 
     if len(prev_bars) < config.min_bars:
         # Fall back to daily bars if available: use the penultimate day's H/L
