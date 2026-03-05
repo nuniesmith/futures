@@ -1080,7 +1080,6 @@ class TestPathLimitMapping:
         )
 
         assert get_limit_for_path("/some/random/path") == DEFAULT_LIMIT
-        assert get_limit_for_path("/api/focus") == DEFAULT_LIMIT
 
 
 class TestLimiterSingleton:

@@ -689,6 +689,7 @@ class TestApplyAllFilters:
             enable_multi_tf=False,
             enable_vwap=False,
             enable_nr7=False,
+            enable_mtf_analyzer=False,
         )
         assert result.passed is True
         assert result.filters_total == 0
@@ -706,6 +707,7 @@ class TestApplyAllFilters:
             enable_multi_tf=False,
             enable_vwap=False,
             enable_nr7=True,
+            enable_mtf_analyzer=False,
         )
         assert result.passed is True
         assert result.filters_total == 1
