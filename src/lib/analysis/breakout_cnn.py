@@ -236,6 +236,27 @@ MODEL_PREFIX = "breakout_cnn_"
 _model_lock = threading.Lock()
 _cached_model: Any | None = None
 _cached_model_path: str | None = None
+_cached_model_mtime: float = 0.0
+
+
+def invalidate_model_cache() -> bool:
+    """Invalidate the cached CNN model so the next inference reloads from disk.
+
+    Thread-safe.  Returns True if a cached model was actually evicted,
+    False if the cache was already empty.
+
+    Called by the engine's hot-reload watcher when it detects that the
+    champion model file has changed on disk (new ``st_mtime``).
+    """
+    global _cached_model, _cached_model_path, _cached_model_mtime
+    with _model_lock:
+        had_model = _cached_model is not None
+        _cached_model = None
+        _cached_model_path = None
+        _cached_model_mtime = 0.0
+    if had_model:
+        logger.info("CNN model cache invalidated — next inference will reload from disk")
+    return had_model
 
 
 # ---------------------------------------------------------------------------
@@ -863,10 +884,7 @@ def train_model(
     )
 
     # Invalidate cached model so next inference picks up the new one
-    global _cached_model, _cached_model_path
-    with _model_lock:
-        _cached_model = None
-        _cached_model_path = None
+    invalidate_model_cache()
 
     return result_path
 

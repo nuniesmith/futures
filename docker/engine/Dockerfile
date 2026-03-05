@@ -28,12 +28,14 @@ RUN pip install --no-cache-dir .
 # ---------------------------------------------------------------------------
 FROM python:3.13-slim AS runtime
 
-# libpq5 — psycopg binary needs the Postgres client lib at runtime
+# libpq5  — psycopg binary needs the Postgres client lib at runtime
 # libgomp1 — needed by numpy/scipy compiled extensions
+# bash     — entrypoint.sh uses #!/bin/bash (dash/sh lacks wait -n)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libpq5 \
         libgomp1 \
+        bash \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

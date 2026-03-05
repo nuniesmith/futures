@@ -10,6 +10,7 @@ set -euo pipefail
 #   ./run.sh --local      Run locally with a Python virtual environment
 #   ./run.sh --down       Stop Docker Compose services
 #   ./run.sh --test       Run tests + lint only (no compose)
+#   ./run.sh --sync-models Force re-pull CNN models from orb repo
 #   ./run.sh --monitoring Include Prometheus + Grafana
 #   ./run.sh --help       Show this help message
 #
@@ -41,12 +42,13 @@ gen_secret() {
 }
 
 usage() {
-    echo "Usage: ./run.sh [--local | --down | --test | --monitoring | --help]"
+    echo "Usage: ./run.sh [--local | --down | --test | --sync-models | --monitoring | --help]"
     echo ""
     echo "  (no args)       Build, test, lint, then start Docker Compose"
     echo "  --local         Run locally with a Python virtual environment"
     echo "  --down          Stop Docker Compose services"
     echo "  --test          Run tests + lint only (skip Docker build)"
+    echo "  --sync-models   Force re-pull CNN models from orb repo (even if present)"
     echo "  --monitoring    Include Prometheus + Grafana (monitoring profile)"
     echo "  --help          Show this help message"
 }
@@ -150,6 +152,24 @@ ensure_models() {
     else
         warn "CNN model not found — pulling from orb repo..."
         bash scripts/sync_models.sh
+    fi
+}
+
+force_sync_models() {
+    log "Force re-pulling CNN models from orb repo..."
+    bash scripts/sync_models.sh
+    local exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+        ok "Models synced successfully"
+        # Restart engine if it's running so it picks up the new model
+        if docker compose ps --status running 2>/dev/null | grep -q engine; then
+            log "Restarting engine container to pick up new model..."
+            docker compose restart engine
+            ok "Engine restarted"
+        fi
+    else
+        err "Model sync failed (exit code $exit_code)"
+        exit $exit_code
     fi
 }
 
@@ -278,6 +298,10 @@ while [[ $# -gt 0 ]]; do
             POSITIONAL+=("test")
             shift
             ;;
+        --sync-models)
+            POSITIONAL+=("sync-models")
+            shift
+            ;;
         --help|-h)
             usage
             exit 0
@@ -308,6 +332,9 @@ case "$ACTION" in
         run_tests
         run_lint
         ok "All checks passed"
+        ;;
+    sync-models)
+        force_sync_models
         ;;
     docker)
         # Full pipeline: venv → env → test → lint → build → up

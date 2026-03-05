@@ -31,6 +31,7 @@ import os
 import signal
 import time
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from lib.core.logging_config import get_logger, setup_logging
@@ -40,6 +41,70 @@ logger = get_logger("engine_service")
 
 _EST = ZoneInfo("America/New_York")
 HEALTH_FILE = "/tmp/engine_health.json"
+
+# ---------------------------------------------------------------------------
+# CNN model hot-reload — detect when breakout_cnn_best.pt changes on disk
+# ---------------------------------------------------------------------------
+_MODEL_CHECK_INTERVAL = 30  # seconds between stat() checks
+_model_last_checked: float = 0.0
+_model_last_mtime: float = 0.0
+
+# Candidate directories (Docker vs bare-metal)
+_MODEL_DIR_CANDIDATES = [
+    Path("/app/models"),
+    Path(__file__).resolve().parents[4] / "models",
+]
+
+
+def _get_champion_path() -> Path | None:
+    """Return the path to breakout_cnn_best.pt if it exists, else None."""
+    for d in _MODEL_DIR_CANDIDATES:
+        p = d / "breakout_cnn_best.pt"
+        if p.is_file():
+            return p
+    return None
+
+
+def _check_model_hot_reload() -> None:
+    """Poll the champion model file's mtime and invalidate the cache if it changed.
+
+    Called once per engine loop iteration.  Only stat()s the file every
+    ``_MODEL_CHECK_INTERVAL`` seconds to avoid I/O overhead.
+    """
+    global _model_last_checked, _model_last_mtime
+
+    now = time.monotonic()
+    if now - _model_last_checked < _MODEL_CHECK_INTERVAL:
+        return
+    _model_last_checked = now
+
+    champion = _get_champion_path()
+    if champion is None:
+        return
+
+    try:
+        current_mtime = champion.stat().st_mtime
+    except OSError:
+        return
+
+    if _model_last_mtime == 0.0:
+        # First check — just record the baseline, don't reload
+        _model_last_mtime = current_mtime
+        return
+
+    if current_mtime != _model_last_mtime:
+        _model_last_mtime = current_mtime
+        logger.info(
+            "🔄 CNN model file changed on disk (%s) — invalidating cache for hot-reload",
+            champion.name,
+        )
+        try:
+            from lib.analysis.breakout_cnn import invalidate_model_cache
+
+            invalidate_model_cache()
+            logger.info("✅ CNN model cache invalidated — next ORB check will use the new model")
+        except Exception as exc:
+            logger.warning("CNN hot-reload cache invalidation failed (non-fatal): %s", exc)
 
 
 def _write_health(healthy: bool, status: str, **extras):
@@ -1530,14 +1595,84 @@ def _send_daily_report_email(to_addr: str, report: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _check_module_health() -> dict:
+    """Check per-module health for Redis, Postgres, and Massive WS.
+
+    Returns a dict with keys: redis, postgres, massive — each containing
+    ``{"status": "ok"|"error"|"unavailable", ...}``.
+    """
+    modules: dict = {}
+
+    # Redis
+    try:
+        from lib.core.cache import REDIS_AVAILABLE, _r
+
+        if REDIS_AVAILABLE and _r is not None:
+            _r.ping()
+            modules["redis"] = {"status": "ok", "connected": True}
+        else:
+            modules["redis"] = {"status": "unavailable", "connected": False}
+    except Exception as exc:
+        modules["redis"] = {"status": "error", "connected": False, "error": str(exc)}
+
+    # Postgres
+    try:
+        database_url = os.getenv("DATABASE_URL", "")
+        if not database_url.startswith("postgresql"):
+            modules["postgres"] = {"status": "not_configured", "connected": False}
+        else:
+            from lib.core.models import _get_conn
+
+            conn = _get_conn()
+            try:
+                conn.execute("SELECT 1")
+                modules["postgres"] = {"status": "ok", "connected": True}
+            finally:
+                conn.close()
+    except Exception as exc:
+        modules["postgres"] = {"status": "error", "connected": False, "error": str(exc)}
+
+    # Massive WebSocket
+    try:
+        from lib.core.cache import get_data_source
+
+        ds = get_data_source()
+        if ds == "Massive":
+            modules["massive"] = {"status": "ok", "data_source": "Massive", "connected": True}
+        else:
+            modules["massive"] = {"status": "fallback", "data_source": ds, "connected": False}
+    except Exception as exc:
+        modules["massive"] = {"status": "error", "connected": False, "error": str(exc)}
+
+    # CNN model
+    champion = _get_champion_path()
+    if champion is not None:
+        try:
+            stat = champion.stat()
+            size_mb = round(stat.st_size / (1024 * 1024), 1)
+            modules["cnn_model"] = {
+                "status": "ok",
+                "available": True,
+                "size_mb": size_mb,
+                "path": str(champion),
+            }
+        except OSError:
+            modules["cnn_model"] = {"status": "error", "available": False}
+    else:
+        modules["cnn_model"] = {"status": "missing", "available": False}
+
+    return modules
+
+
 def _publish_engine_status(engine, session_mode: str, scheduler_status: dict) -> None:
-    """Publish engine status + scheduler state to Redis for data-service."""
+    """Publish engine status + scheduler state + per-module health to Redis."""
     try:
         from lib.core.cache import cache_set
 
         status = engine.get_status()
         status["session_mode"] = session_mode
         status["scheduler"] = scheduler_status
+        status["modules"] = _check_module_health()
         cache_set(
             "engine:status",
             json.dumps(status, default=str).encode(),
@@ -1683,6 +1818,9 @@ def main():
 
             # Check for dashboard-triggered commands via Redis
             _check_redis_commands(action_handlers)
+
+            # Check if CNN model file changed on disk (hot-reload)
+            _check_model_hot_reload()
 
             # Execute pending actions
             for action in pending:

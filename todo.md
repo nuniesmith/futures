@@ -19,31 +19,21 @@
 
 ## Active
 
-- [x] Dashboard polish — improve mobile responsiveness of HTMX panels
-- [x] SSE reconnect reliability — handle Redis connection drops gracefully in SSE stream
-- [x] Health endpoint improvements — surface model staleness, last sync time
-- [x] Add model sync status to dashboard CNN panel (last pull time, version from meta.json)
-
-## Backlog
-
-### Dashboard & Web UI
-- [ ] Dark/light theme toggle (currently dark only)
-- [ ] Per-session ORB signal history view (table + chart)
-- [ ] Trade journal UI improvements — inline editing, tag filtering
 - [ ] Grok AI analyst — streaming response display (SSE from Grok API)
 - [ ] Volume profile chart visualization in dashboard
 - [ ] Historical performance charts (win rate over time, equity curve from journal)
 
+## Backlog
+
+### Dashboard & Web UI
+- [ ] Trade journal UI improvements — inline editing, tag filtering
+
 ### Engine & Analysis
 - [ ] Improve regime detection display — show current HMM state on dashboard
 - [ ] Add session-level performance stats to daily report
-- [ ] Engine hot-reload of CNN model when `models/breakout_cnn_best.pt` changes (inotify/polling)
 - [ ] Backfill gap detection — alert when historical bars have gaps > N minutes
 
 ### Infrastructure
-- [ ] Add `--sync-models` flag to `run.sh` (force re-pull even if present)
-- [ ] Healthcheck improvements — engine should report per-module health (Redis, Postgres, Massive WS)
-- [ ] Structured error responses across all API endpoints (consistent JSON shape)
 - [ ] Rate limiting tuning — review slowapi config for SSE vs REST endpoints
 - [ ] CI/CD — GitHub Actions for test + lint on PR
 
@@ -56,6 +46,16 @@
 
 ## Completed
 
+- [x] Dark/light theme toggle (CSS custom properties + localStorage persistence)
+- [x] Per-session ORB signal history view (table + summary + session/breakout filters)
+- [x] Engine hot-reload of CNN model when `models/breakout_cnn_best.pt` changes (polling st_mtime)
+- [x] Add `--sync-models` flag to `run.sh` (force re-pull even if present, auto-restart engine)
+- [x] Healthcheck improvements — engine reports per-module health (Redis, Postgres, Massive WS, CNN model)
+- [x] Structured error responses across all API endpoints (consistent JSON shape)
+- [x] Dashboard polish — improve mobile responsiveness of HTMX panels
+- [x] SSE reconnect reliability — handle Redis connection drops gracefully in SSE stream
+- [x] Health endpoint improvements — surface model staleness, last sync time
+- [x] Add model sync status to dashboard CNN panel (last pull time, version from meta.json)
 - [x] Split repo into three: futures (this), orb (training), ninjatrader (C# execution)
 - [x] Remove training code, scripts, dataset generation, NinjaTrader C# source
 - [x] Add `scripts/sync_models.sh` to pull CNN model from orb repo
@@ -71,3 +71,4 @@
 - [x] Grok AI morning briefing + live updates
 - [x] Daily report generation + email
 - [x] NT8 Bridge health monitoring in dashboard
+- [x] Docker consolidation — engine + data service merged into single container

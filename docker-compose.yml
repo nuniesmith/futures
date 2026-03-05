@@ -107,7 +107,7 @@ services:
             - DB_PATH=/app/data/futures_journal.db
             - DATA_SERVICE_HOST=0.0.0.0
             - DATA_SERVICE_PORT=8000
-            - ENGINE_MODE=local
+            - ENGINE_MODE=remote
             - ORB_FILTER_GATE=${ORB_FILTER_GATE:-majority}
             - ORB_CNN_GATE=${ORB_CNN_GATE:-0}
             - NT_BRIDGE_HOST=${NT_BRIDGE_HOST:-100.113.72.63}

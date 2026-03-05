@@ -480,7 +480,7 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
 
     return f"""
     <div id="asset-card-{symbol_lower}"
-         class="border {border_color} rounded-lg p-3 sm:p-4 {bias_bg} {opacity} transition-all duration-300"
+         class="border {border_color} rounded-lg p-3 sm:p-4 {bias_bg} {opacity} transition-all duration-300 t-panel"
          data-quality="{quality_pct}"
          data-wave="{wave_ratio}"
          data-bias="{bias}"
@@ -493,10 +493,10 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
         <div class="flex items-center justify-between mb-2 sm:mb-3">
             <div class="flex items-center gap-2 min-w-0">
                 <span class="text-xl sm:text-2xl shrink-0">{bias_emoji}</span>
-                <h3 class="text-base sm:text-lg font-bold text-white truncate">{symbol}</h3>
+                <h3 class="text-base sm:text-lg font-bold t-text truncate">{symbol}</h3>
             </div>
             <div class="text-right shrink-0 ml-2">
-                <div class="text-lg sm:text-xl font-mono font-bold text-white">{last_price:,.2f}</div>
+                <div class="text-lg sm:text-xl font-mono font-bold t-text">{last_price:,.2f}</div>
                 <div class="text-xs {bias_text} font-semibold">{bias}</div>
             </div>
         </div>
@@ -504,39 +504,39 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
         <!-- Quality & Wave -->
         <div class="grid grid-cols-2 gap-2 mb-2 sm:mb-3">
             <div>
-                <div class="text-xs text-zinc-400 mb-1">Quality</div>
-                <div class="w-full bg-zinc-700 rounded-full h-2">
+                <div class="text-xs t-text-muted mb-1">Quality</div>
+                <div class="w-full t-bar rounded-full h-2">
                     <div class="{q_color} h-2 rounded-full transition-all duration-500"
                          style="width: {min(quality_pct, 100):.0f}%"></div>
                 </div>
-                <div class="text-xs text-zinc-300 mt-0.5">{quality_pct:.0f}%</div>
+                <div class="text-xs t-text-secondary mt-0.5">{quality_pct:.0f}%</div>
             </div>
             <div>
-                <div class="text-xs text-zinc-400 mb-1">Wave Ratio</div>
-                <div class="text-lg font-mono font-bold text-white">{wave_ratio:.2f}x</div>
+                <div class="text-xs t-text-muted mb-1">Wave Ratio</div>
+                <div class="text-lg font-mono font-bold t-text">{wave_ratio:.2f}x</div>
             </div>
         </div>
 
         <!-- Levels -->
         <div class="grid grid-cols-3 gap-1 mb-2 sm:mb-3 text-xs">
-            <div class="bg-zinc-800/60 rounded p-1 sm:p-1.5 text-center">
-                <div class="text-zinc-500 text-[10px] sm:text-xs">Entry</div>
-                <div class="text-zinc-200 font-mono text-[10px] sm:text-xs">{entry_low:,.2f}</div>
-                <div class="text-zinc-400 font-mono text-[10px] sm:text-xs">– {entry_high:,.2f}</div>
+            <div class="t-panel-inner rounded p-1 sm:p-1.5 text-center">
+                <div class="t-text-muted text-[10px] sm:text-xs">Entry</div>
+                <div class="t-text-secondary font-mono text-[10px] sm:text-xs">{entry_low:,.2f}</div>
+                <div class="t-text-muted font-mono text-[10px] sm:text-xs">– {entry_high:,.2f}</div>
             </div>
-            <div class="bg-zinc-800/60 rounded p-1 sm:p-1.5 text-center">
-                <div class="text-zinc-500 text-[10px] sm:text-xs">Stop</div>
+            <div class="t-panel-inner rounded p-1 sm:p-1.5 text-center">
+                <div class="t-text-muted text-[10px] sm:text-xs">Stop</div>
                 <div class="text-red-400 font-mono text-[10px] sm:text-xs">{stop:,.2f}</div>
             </div>
-            <div class="bg-zinc-800/60 rounded p-1 sm:p-1.5 text-center">
-                <div class="text-zinc-500 text-[10px] sm:text-xs">TP1 / TP2</div>
+            <div class="t-panel-inner rounded p-1 sm:p-1.5 text-center">
+                <div class="t-text-muted text-[10px] sm:text-xs">TP1 / TP2</div>
                 <div class="text-green-400 font-mono text-[10px] sm:text-xs">{tp1:,.2f}</div>
                 <div class="text-green-300 font-mono text-[10px] sm:text-xs">{tp2:,.2f}</div>
             </div>
         </div>
 
         <!-- Meta row — wraps gracefully on mobile -->
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] sm:text-xs text-zinc-400">
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] sm:text-xs t-text-muted">
             <span>{trend_dir}</span>
             <span>Vol: {vol_cluster} ({vol_pct:.0%})</span>
             <span>{position_size} micros / ${risk_dollars:,.0f} risk</span>
@@ -548,7 +548,7 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
     """
 
 
-def _render_no_trade_banner(reason: str) -> str:
+def _render_no_trade_banner(reason: str = "Low-conviction day") -> str:
     """Render the NO TRADE warning banner."""
     return f"""
     <div id="no-trade-banner"
@@ -599,20 +599,20 @@ def _render_positions_panel(
     # Stats row
     stats_html = f"""
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-1 mb-2 text-center">
-        <div class="bg-zinc-800/60 rounded py-1">
-            <div class="text-[9px] text-zinc-500">Daily P&L</div>
+        <div class="t-panel-inner rounded py-1">
+            <div class="text-[9px] t-text-muted">Daily P&L</div>
             <div class="{daily_color} font-mono text-xs font-bold">{pnl_sign}${daily_pnl:,.0f}</div>
         </div>
-        <div class="bg-zinc-800/60 rounded py-1">
-            <div class="text-[9px] text-zinc-500">Positions</div>
+        <div class="t-panel-inner rounded py-1">
+            <div class="text-[9px] t-text-muted">Positions</div>
             <div class="{trade_color} font-mono text-xs">{open_count}/{max_trades}</div>
         </div>
-        <div class="bg-zinc-800/60 rounded py-1">
-            <div class="text-[9px] text-zinc-500">Exposure</div>
+        <div class="t-panel-inner rounded py-1">
+            <div class="text-[9px] t-text-muted">Exposure</div>
             <div class="{risk_color} font-mono text-xs">{risk_pct:.1f}%</div>
         </div>
-        <div class="bg-zinc-800/60 rounded py-1">
-            <div class="text-[9px] text-zinc-500">L-Streak</div>
+        <div class="t-panel-inner rounded py-1">
+            <div class="text-[9px] t-text-muted">L-Streak</div>
             <div class="{streak_color} font-mono text-xs">{consecutive}</div>
         </div>
     </div>
@@ -620,11 +620,11 @@ def _render_positions_panel(
 
     if not positions:
         return f"""
-        <div id="positions-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
+        <div id="positions-panel" class="t-panel border t-border rounded-lg p-3"
              hx-swap-oob="true">
-            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">Positions &amp; P&amp;L</h3>
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">Positions &amp; P&amp;L</h3>
             {block_html}{stats_html}
-            <div class="text-xs text-zinc-600 flex items-center gap-1.5">
+            <div class="text-xs t-text-faint flex items-center gap-1.5">
                 <span class="text-green-500">✓</span> No open positions
             </div>
         </div>
@@ -642,28 +642,28 @@ def _render_positions_panel(
         side_color = "text-green-400" if side in ("LONG", "BUY") else "text-red-400"
         pnl_color = "text-green-400" if unrealized >= 0 else "text-red-400"
         rows += f"""
-        <tr class="border-b border-zinc-800/60">
-            <td class="py-0.5 text-white font-mono text-xs">{sym}</td>
+        <tr class="border-b t-border-subtle">
+            <td class="py-0.5 t-text font-mono text-xs">{sym}</td>
             <td class="py-0.5 {side_color} text-xs font-semibold">{side}</td>
-            <td class="py-0.5 text-zinc-300 text-xs text-center">{qty}</td>
-            <td class="py-0.5 text-zinc-400 font-mono text-xs text-right hidden sm:table-cell">{avg_price:,.2f}</td>
+            <td class="py-0.5 t-text-secondary text-xs text-center">{qty}</td>
+            <td class="py-0.5 t-text-muted font-mono text-xs text-right hidden sm:table-cell">{avg_price:,.2f}</td>
             <td class="py-0.5 {pnl_color} font-mono text-xs text-right font-bold">${unrealized:,.2f}</td>
         </tr>
         """
 
     total_color = "text-green-400" if total_pnl >= 0 else "text-red-400"
     return f"""
-    <div id="positions-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
+    <div id="positions-panel" class="t-panel border t-border rounded-lg p-3"
          hx-swap-oob="true">
         <div class="flex items-center justify-between mb-2">
-            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Positions &amp; P&amp;L</h3>
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">Positions &amp; P&amp;L</h3>
             <span class="{total_color} font-mono text-xs font-bold">Open: ${total_pnl:,.2f}</span>
         </div>
         {block_html}{stats_html}
         <div class="overflow-x-auto -mx-1 px-1">
         <table class="w-full min-w-[200px]">
             <thead>
-                <tr class="text-[9px] text-zinc-600 border-b border-zinc-700">
+                <tr class="text-[9px] t-text-faint border-b t-border">
                     <th class="text-left pb-0.5">Sym</th>
                     <th class="text-left pb-0.5">Side</th>
                     <th class="text-center pb-0.5">Qty</th>
@@ -682,10 +682,10 @@ def _render_risk_panel(risk_status: dict[str, Any] | None) -> str:
     """Render condensed risk rules panel."""
     if not risk_status:
         return """
-        <div id="risk-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
+        <div id="risk-panel" class="t-panel border t-border rounded-lg p-3"
              hx-swap-oob="true">
-            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">Risk Rules</h3>
-            <div class="text-zinc-600 text-xs">Waiting for risk engine...</div>
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-1">Risk Rules</h3>
+            <div class="t-text-faint text-xs">Waiting for risk engine...</div>
         </div>
         """
 
@@ -703,28 +703,28 @@ def _render_risk_panel(risk_status: dict[str, Any] | None) -> str:
     bar_color = "bg-green-500" if daily_pnl >= 0 else ("bg-red-500" if pnl_pct > 60 else "bg-yellow-500")
 
     return f"""
-    <div id="risk-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
+    <div id="risk-panel" class="t-panel border t-border rounded-lg p-3"
          hx-swap-oob="true">
         <div class="flex items-center justify-between mb-2">
-            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Risk Rules</h3>
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">Risk Rules</h3>
             <span class="flex items-center gap-1 {status_color} text-xs font-bold">
                 <span class="w-1.5 h-1.5 rounded-full {status_dot} inline-block"></span>
                 {status_text}
             </span>
         </div>
         <div class="mb-1.5">
-            <div class="flex justify-between text-[10px] text-zinc-500 mb-0.5">
+            <div class="flex justify-between text-[10px] t-text-muted mb-0.5">
                 <span>Daily P&amp;L</span>
                 <span class="{pnl_color} font-mono">${daily_pnl:,.0f} / ${max_daily:,.0f}</span>
             </div>
-            <div class="w-full bg-zinc-700 rounded-full h-1">
+            <div class="w-full t-bar rounded-full h-1">
                 <div class="{bar_color} h-1 rounded-full" style="width:{pnl_pct:.0f}%"></div>
             </div>
         </div>
-        <div class="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-zinc-500">
-            <div>Max/trade: <span class="text-zinc-300 font-mono">${risk_per_trade:,.0f}</span></div>
-            <div>No entry: <span class="text-zinc-300 font-mono">{rules.get("no_entry_after", "10:00")} ET</span></div>
-            <div>Close by: <span class="text-zinc-300 font-mono">{rules.get("session_end", "12:00")} ET</span></div>
+        <div class="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] t-text-muted">
+            <div>Max/trade: <span class="t-text-secondary font-mono">${risk_per_trade:,.0f}</span></div>
+            <div>No entry: <span class="t-text-secondary font-mono">{rules.get("no_entry_after", "10:00")} ET</span></div>
+            <div>Close by: <span class="t-text-secondary font-mono">{rules.get("session_end", "12:00")} ET</span></div>
         </div>
     </div>
     """
@@ -734,10 +734,10 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
     """Render condensed Grok AI brief panel."""
     if not grok_data:
         return """
-        <div id="grok-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
+        <div id="grok-panel" class="t-panel border t-border rounded-lg p-3"
              hx-swap-oob="true">
-            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">🤖 AI Brief</h3>
-            <div class="text-zinc-600 text-xs">Waiting for next update...</div>
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-1">🤖 AI Brief</h3>
+            <div class="t-text-faint text-xs">Waiting for next update...</div>
         </div>
         """
 
@@ -752,7 +752,7 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
         if stripped.upper().startswith("DO NOW"):
             lines_html += f'<div class="text-yellow-300 font-bold text-[10px] mt-1 border-l-2 border-yellow-400 pl-1.5">{stripped}</div>'
         else:
-            css = "text-zinc-400"
+            css = "t-text-muted"
             if "🟢" in stripped:
                 css = "text-green-300"
             elif "🔴" in stripped:
@@ -760,11 +760,11 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
             lines_html += f'<div class="{css} font-mono text-[10px]">{stripped}</div>'
 
     return f"""
-    <div id="grok-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
+    <div id="grok-panel" class="t-panel border t-border rounded-lg p-3"
          hx-swap-oob="true">
         <div class="flex items-center justify-between mb-1.5">
-            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">🤖 AI Brief</h3>
-            <span class="text-[9px] text-zinc-600">{time_et}</span>
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">🤖 AI Brief</h3>
+            <span class="text-[9px] t-text-faint">{time_et}</span>
         </div>
         <div class="space-y-0.5 max-h-28 overflow-y-auto">
             {lines_html}
@@ -777,12 +777,12 @@ def _render_orb_session_card(session_data: dict[str, Any] | None, session_label:
     """Render a single ORB session sub-card (London or US)."""
     if not session_data:
         return f"""
-        <div class="bg-zinc-800/40 rounded px-3 py-2">
+        <div class="t-panel-inner rounded px-3 py-2">
             <div class="flex items-center justify-between mb-1">
-                <span class="text-zinc-400 text-xs font-semibold">{session_label}</span>
-                <span class="text-zinc-600 text-[10px]">{session_times}</span>
+                <span class="t-text-muted text-xs font-semibold">{session_label}</span>
+                <span class="t-text-faint text-[10px]">{session_times}</span>
             </div>
-            <div class="text-zinc-600 text-xs">Waiting for opening range...</div>
+            <div class="t-text-faint text-xs">Waiting for opening range...</div>
         </div>
         """
 
@@ -805,12 +805,12 @@ def _render_orb_session_card(session_data: dict[str, Any] | None, session_label:
 
     if error:
         return f"""
-        <div class="bg-zinc-800/40 rounded px-3 py-2">
+        <div class="t-panel-inner rounded px-3 py-2">
             <div class="flex items-center justify-between mb-1">
-                <span class="text-zinc-400 text-xs font-semibold">{session_label}</span>
-                <span class="text-zinc-600 text-[10px]">{session_times}</span>
+                <span class="t-text-muted text-xs font-semibold">{session_label}</span>
+                <span class="t-text-faint text-[10px]">{session_times}</span>
             </div>
-            <div class="text-zinc-500 text-xs">{error}</div>
+            <div class="t-text-muted text-xs">{error}</div>
         </div>
         """
 
@@ -876,19 +876,19 @@ def _render_orb_session_card(session_data: dict[str, Any] | None, session_label:
         status_text = "Waiting"
 
     return f"""
-    <div class="bg-zinc-800/40 border {border} rounded px-3 py-2">
+    <div class="t-panel-inner border {border} rounded px-3 py-2">
         <div class="flex items-center justify-between mb-1">
-            <span class="text-zinc-400 text-xs font-semibold">{session_label}{cnn_html}{filter_html}</span>
+            <span class="t-text-muted text-xs font-semibold">{session_label}{cnn_html}{filter_html}</span>
             <span class="{s_color} text-[10px] font-bold">{s_emoji} {status_text}</span>
         </div>
         {breakout_html}
         <div class="grid grid-cols-2 sm:grid-cols-3 gap-x-2 gap-y-0.5 text-[10px]">
-            <div class="text-zinc-500">High: <span class="text-green-300 font-mono">{or_high:,.2f}</span></div>
-            <div class="text-zinc-500">Low: <span class="text-red-300 font-mono">{or_low:,.2f}</span></div>
-            <div class="text-zinc-500">Range: <span class="text-zinc-300 font-mono">{or_range:,.2f}</span></div>
-            <div class="text-zinc-500">ATR: <span class="text-zinc-300 font-mono">{atr_value:,.2f}</span></div>
-            <div class="text-zinc-500">L↑: <span class="text-green-400 font-mono">{long_trigger:,.2f}</span></div>
-            <div class="text-zinc-500">S↓: <span class="text-red-400 font-mono">{short_trigger:,.2f}</span></div>
+            <div class="t-text-muted">High: <span class="text-green-300 font-mono">{or_high:,.2f}</span></div>
+            <div class="t-text-muted">Low: <span class="text-red-300 font-mono">{or_low:,.2f}</span></div>
+            <div class="t-text-muted">Range: <span class="t-text-secondary font-mono">{or_range:,.2f}</span></div>
+            <div class="t-text-muted">ATR: <span class="t-text-secondary font-mono">{atr_value:,.2f}</span></div>
+            <div class="t-text-muted">L↑: <span class="text-green-400 font-mono">{long_trigger:,.2f}</span></div>
+            <div class="t-text-muted">S↓: <span class="text-red-400 font-mono">{short_trigger:,.2f}</span></div>
         </div>
     </div>
     """
@@ -903,11 +903,11 @@ def _render_orb_panel(orb_data: dict[str, Any] | None) -> str:
     """
     if not orb_data:
         return """
-        <div id="orb-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4"
+        <div id="orb-panel" class="t-panel border t-border rounded-lg p-4"
              hx-swap-oob="true">
-            <h3 class="text-sm font-semibold text-zinc-400 mb-2">📊 OPENING RANGE</h3>
-            <div class="text-zinc-500 text-sm">Waiting for ORB sessions...</div>
-            <div class="text-zinc-600 text-xs mt-1">London 03:00 ET · US 09:30 ET</div>
+            <h3 class="text-sm font-semibold t-text-muted mb-2">📊 OPENING RANGE</h3>
+            <div class="t-text-muted text-sm">Waiting for ORB sessions...</div>
+            <div class="t-text-faint text-xs mt-1">London 03:00 ET · US 09:30 ET</div>
         </div>
         """
 
@@ -950,11 +950,11 @@ def _render_orb_panel(orb_data: dict[str, Any] | None) -> str:
     us_html = _render_orb_session_card(us_data, "🇺🇸 US Equity Open", "09:30–10:00 ET")
 
     return f"""
-    <div id="orb-panel" class="bg-zinc-900/60 border {border_color} rounded-lg p-4"
+    <div id="orb-panel" class="t-panel border {border_color} rounded-lg p-4"
          hx-swap-oob="true">
         <div class="flex items-center justify-between mb-2">
-            <h3 class="text-sm font-semibold text-zinc-400">📊 OPENING RANGE</h3>
-            <span class="text-zinc-600 text-xs">{time_str}</span>
+            <h3 class="text-sm font-semibold t-text-muted">📊 OPENING RANGE</h3>
+            <span class="t-text-faint text-xs">{time_str}</span>
         </div>
         <div class="space-y-2">
             {london_html}
@@ -967,7 +967,7 @@ def _render_orb_panel(orb_data: dict[str, Any] | None) -> str:
 def _render_market_events_panel() -> str:
     """Render a live market events / activity feed panel for the sidebar."""
     return """
-    <div id="market-events-panel" class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3">
+    <div id="market-events-panel" class="t-panel border t-border rounded-lg p-3">
         <div class="flex items-center justify-between mb-1.5">
             <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Market Events</h3>
             <span class="text-[9px] text-zinc-600" id="events-ts">—</span>
@@ -988,7 +988,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             cards_html += _render_asset_card(asset)
     else:
         cards_html = """
-        <div class="col-span-2 text-center py-12 text-zinc-500">
+        <div class="col-span-2 text-center py-12 t-text-muted">
             <div class="text-4xl mb-4">📊</div>
             <div class="text-lg">Waiting for engine to compute daily focus...</div>
             <div class="text-sm mt-2">Data will appear automatically when ready.</div>
@@ -1042,6 +1042,14 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>ORB Co-Pilot</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+    <!-- Apply saved theme BEFORE paint to prevent flash -->
+    <script>
+        (function() {{
+            var t = localStorage.getItem('theme');
+            if (t === 'light') document.documentElement.classList.remove('dark');
+            else document.documentElement.classList.add('dark');
+        }})();
+    </script>
     <script>
         (function() {{
             var origWarn = console.warn;
@@ -1052,11 +1060,88 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         }})();
     </script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {{ darkMode: 'class' }};
+    </script>
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/hyperscript.org@0.9.14"></script>
     <style>
-        body {{ font-family: 'Inter', system-ui, -apple-system, sans-serif; -webkit-text-size-adjust: 100%; }}
+        /* ── Theme CSS custom properties ────────────────────────────── */
+        /* Every panel renderer uses these variables so we only need   */
+        /* to flip values here rather than adding dark: classes to     */
+        /* hundreds of inline HTML strings.                             */
+        :root {{
+            --bg-body:        #f4f4f5;   /* zinc-100 */
+            --bg-panel:       rgba(255,255,255,0.80);
+            --bg-panel-inner: rgba(244,244,245,0.60);  /* zinc-100/60 */
+            --bg-input:       #e4e4e7;   /* zinc-200 */
+            --bg-bar:         #d4d4d8;   /* zinc-300 */
+            --border-panel:   #d4d4d8;   /* zinc-300 */
+            --border-subtle:  #e4e4e7;   /* zinc-200 */
+            --text-primary:   #18181b;   /* zinc-900 */
+            --text-secondary: #3f3f46;   /* zinc-700 */
+            --text-muted:     #71717a;   /* zinc-500 */
+            --text-faint:     #a1a1aa;   /* zinc-400 */
+            --scrollbar-track: #f4f4f5;
+            --scrollbar-thumb: #a1a1aa;
+        }}
+        .dark {{
+            --bg-body:        #09090b;   /* zinc-950 */
+            --bg-panel:       rgba(24,24,27,0.60);     /* zinc-900/60 */
+            --bg-panel-inner: rgba(39,39,42,0.40);     /* zinc-800/40 */
+            --bg-input:       #27272a;   /* zinc-800 */
+            --bg-bar:         #3f3f46;   /* zinc-700 */
+            --border-panel:   #3f3f46;   /* zinc-700 */
+            --border-subtle:  #27272a;   /* zinc-800 */
+            --text-primary:   #ffffff;
+            --text-secondary: #d4d4d8;   /* zinc-300 */
+            --text-muted:     #71717a;   /* zinc-500 */
+            --text-faint:     #52525b;   /* zinc-600 */
+            --scrollbar-track: #18181b;
+            --scrollbar-thumb: #3f3f46;
+        }}
+
+        body {{
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            -webkit-text-size-adjust: 100%;
+            background: var(--bg-body);
+            color: var(--text-primary);
+        }}
         * {{ box-sizing: border-box; }}
+
+        /* Panels — used by every _render_*_panel function */
+        .t-panel {{
+            background: var(--bg-panel);
+            border-color: var(--border-panel);
+        }}
+        .t-panel-inner {{
+            background: var(--bg-panel-inner);
+        }}
+        .t-input {{
+            background: var(--bg-input);
+        }}
+        .t-bar {{
+            background: var(--bg-bar);
+        }}
+        .t-border {{
+            border-color: var(--border-panel);
+        }}
+        .t-border-subtle {{
+            border-color: var(--border-subtle);
+        }}
+        .t-text {{
+            color: var(--text-primary);
+        }}
+        .t-text-secondary {{
+            color: var(--text-secondary);
+        }}
+        .t-text-muted {{
+            color: var(--text-muted);
+        }}
+        .t-text-faint {{
+            color: var(--text-faint);
+        }}
+
         @media (max-width: 640px) {{
             .mobile-scroll {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
             .mobile-hide {{ display: none !important; }}
@@ -1083,34 +1168,41 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         .val-mismatch {{ background: rgba(239,68,68,0.06); }}
         /* Slim scrollbar */
         ::-webkit-scrollbar {{ width:4px; height:4px; }}
-        ::-webkit-scrollbar-track {{ background:#18181b; }}
-        ::-webkit-scrollbar-thumb {{ background:#3f3f46; border-radius:2px; }}
+        ::-webkit-scrollbar-track {{ background: var(--scrollbar-track); }}
+        ::-webkit-scrollbar-thumb {{ background: var(--scrollbar-thumb); border-radius:2px; }}
     </style>
 </head>
-<body class="bg-zinc-950 text-white min-h-screen">
+<body class="min-h-screen transition-colors duration-200">
 <div id="sse-container">
 <div class="max-w-screen-2xl mx-auto px-2 sm:px-3 py-2 sm:py-3">
 
     <!-- ═══════════════════════════════════════════════════════════════
          HEADER: compact single row — logo | health bar | clock | tools
     ═══════════════════════════════════════════════════════════════════ -->
-    <header class="mb-2 sm:mb-3 border-b border-zinc-800 pb-2 sm:pb-2.5">
+    <header class="mb-2 sm:mb-3 border-b t-border-subtle pb-2 sm:pb-2.5">
         <!-- Top row: title | clock -->
         <div class="flex items-center justify-between">
             <!-- Left: title + SSE dot -->
             <div class="flex items-center gap-2 min-w-0">
                 <div>
-                    <span class="text-base sm:text-lg font-bold text-white leading-none">ORB Co-Pilot</span>
-                    <div class="text-[10px] text-zinc-600 mt-0.5">
+                    <span class="text-base sm:text-lg font-bold t-text leading-none">ORB Co-Pilot</span>
+                    <div class="text-[10px] t-text-faint mt-0.5">
                         <span class="hidden sm:inline">{session["date"]} · </span>
                         <span id="sse-status-dot" class="connecting" title="SSE">●</span>
-                        <span id="sse-status-text" class="text-zinc-700">connecting</span>
+                        <span id="sse-status-text" class="t-text-faint">connecting</span>
                     </div>
                 </div>
             </div>
 
-            <!-- Right: clock + session + NT8 tools -->
+            <!-- Right: theme toggle + clock + session + NT8 tools -->
             <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                <button id="theme-toggle"
+                        onclick="toggleTheme()"
+                        class="p-1 rounded-md t-input t-text-muted border t-border
+                               hover:opacity-80 transition-colors text-sm leading-none"
+                        title="Toggle dark/light theme">
+                    <span id="theme-icon">☀️</span>
+                </button>
                 <div class="text-right">
                     <div id="clock" class="text-lg sm:text-xl font-mono font-bold {session["css_class"]} leading-none">
                         {session["time_et"]}
@@ -1129,14 +1221,14 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 
         <!-- Bottom row (tablet+): health indicators -->
         <div id="nt8-health-bar"
-             class="hidden md:flex items-center gap-1 flex-wrap mt-2"
+             class="hidden md:flex items-center gap-1 flex-wrap mt-2 t-text-secondary"
              hx-get="/api/nt8/health/html"
              hx-trigger="load, every 10s"
              hx-swap="innerHTML">
             <!-- skeleton dots shown until HTMX loads real content -->
-            <div class="flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800">
-                <span class="w-1.5 h-1.5 rounded-full bg-zinc-600"></span>
-                <span class="text-[10px] text-zinc-600">Loading...</span>
+            <div class="flex items-center gap-1 px-2 py-0.5 rounded t-panel-inner border t-border">
+                <span class="w-1.5 h-1.5 rounded-full t-text-faint"></span>
+                <span class="text-[10px] t-text-faint">Loading...</span>
             </div>
         </div>
     </header>
@@ -1156,20 +1248,20 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 
     <!-- Focus summary bar -->
     <div id="focus-summary"
-         class="flex flex-wrap items-center justify-between gap-y-1 bg-zinc-900/60 border border-zinc-800 rounded-lg px-3 py-1.5 mb-2 sm:mb-3">
+         class="flex flex-wrap items-center justify-between gap-y-1 t-panel border t-border rounded-lg px-3 py-1.5 mb-2 sm:mb-3">
         <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
-            <span class="text-zinc-500 uppercase tracking-wide font-semibold">Today's Focus</span>
-            <span id="focus-count" class="text-zinc-300 font-mono">{tradeable}/{total} tradeable</span>
-            <span id="focus-updated" class="text-zinc-600 hidden sm:inline">Updated: {computed}</span>
+            <span class="t-text-muted uppercase tracking-wide font-semibold">Today's Focus</span>
+            <span id="focus-count" class="t-text-secondary font-mono">{tradeable}/{total} tradeable</span>
+            <span id="focus-updated" class="t-text-faint hidden sm:inline">Updated: {computed}</span>
         </div>
         <div class="flex items-center gap-2">
             <button hx-get="/api/focus/html"
                     hx-target="#focus-grid"
                     hx-swap="innerHTML"
                     hx-indicator="#refresh-spinner"
-                    class="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 rounded text-[11px] text-zinc-400
-                           border border-zinc-700 transition-colors">↻ Refresh</button>
-            <span id="refresh-spinner" class="htmx-indicator text-zinc-600 text-xs">…</span>
+                    class="px-2 py-0.5 t-input hover:opacity-80 rounded text-[11px] t-text-muted
+                           border t-border transition-colors">↻ Refresh</button>
+            <span id="refresh-spinner" class="htmx-indicator t-text-faint text-xs">…</span>
         </div>
     </div>
 
@@ -1182,32 +1274,49 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         <div class="xl:col-span-2 space-y-2 sm:space-y-3">
 
             <!-- ORB Panel — primary focus, full width, always visible -->
-            <div id="orb-container"
+            <div id="orb-container" class="t-panel border t-border rounded-lg"
                  hx-get="/api/orb/html"
                  hx-trigger="every 20s"
                  hx-swap="innerHTML">
                 {orb_html}
             </div>
 
+            <!-- ORB Signal History — collapsible -->
+            <details class="group">
+                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide
+                                flex items-center gap-1 py-1 select-none hover:opacity-80">
+                    <span class="transition-transform group-open:rotate-90">▶</span>
+                    ORB Signal History
+                </summary>
+                <div id="orb-history-container"
+                     hx-get="/api/orb/history/html"
+                     hx-trigger="revealed"
+                     hx-swap="innerHTML">
+                    <div class="t-panel border t-border rounded-lg p-4 text-center t-text-faint text-xs">
+                        Loading history...
+                    </div>
+                </div>
+            </details>
+
             <!-- NT8 / Ruby Validation Panel -->
             <div id="nt8-validation-panel"
-                 class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
+                 class="t-panel border t-border rounded-lg p-3"
                  hx-get="/api/nt8/health/html?detail=1"
                  hx-trigger="load, every 15s"
                  hx-swap="outerHTML">
                 <div class="flex items-center justify-between mb-2">
-                    <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">
+                    <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">
                         NinjaTrader / Ruby Validation
                     </h3>
-                    <span class="text-[9px] text-zinc-600">Compares engine metrics vs NT8 bridge</span>
+                    <span class="text-[9px] t-text-faint">Compares engine metrics vs NT8 bridge</span>
                 </div>
-                <div class="text-xs text-zinc-600">Loading NT8 data...</div>
+                <div class="text-xs t-text-faint">Loading NT8 data...</div>
             </div>
 
             <!-- Asset Focus Cards -->
             <div>
                 <div class="flex items-center justify-between mb-1.5">
-                    <h3 class="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Asset Focus</h3>
+                    <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">Asset Focus</h3>
                 </div>
                 <div id="focus-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3"
                      hx-get="/api/focus/html"
@@ -1250,12 +1359,12 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 
             <!-- CNN Model — always visible -->
             <div id="cnn-panel"
-                 class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3"
+                 class="t-panel border t-border rounded-lg p-3"
                  hx-get="/cnn/status/html"
                  hx-trigger="load, every 15s"
                  hx-swap="innerHTML">
-                <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">🧠 CNN Model</h3>
-                <div class="text-zinc-600 text-xs">Loading...</div>
+                <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-1">🧠 CNN Model</h3>
+                <div class="t-text-faint text-xs">Loading...</div>
             </div>
 
             <!-- Alerts -->
@@ -1263,38 +1372,38 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                  hx-get="/api/alerts/html"
                  hx-trigger="every 30s"
                  hx-swap="innerHTML">
-                <div class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-3">
-                    <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">Alerts</h3>
-                    <div class="text-zinc-600 text-xs">No alerts</div>
+                <div class="t-panel border t-border rounded-lg p-3">
+                    <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-1">Alerts</h3>
+                    <div class="t-text-faint text-xs">No alerts</div>
                 </div>
             </div>
 
             <!-- Engine + SSE status — compact -->
-            <div class="bg-zinc-900/40 border border-zinc-800 rounded-lg p-2.5 space-y-1">
+            <div class="t-panel-inner border t-border-subtle rounded-lg p-2.5 space-y-1">
                 <div class="flex items-center justify-between">
-                    <span class="text-[10px] text-zinc-600 uppercase tracking-wide">Engine</span>
+                    <span class="text-[10px] t-text-faint uppercase tracking-wide">Engine</span>
                     <div id="engine-status"
                          hx-get="/api/time"
                          hx-trigger="every 5s"
                          hx-swap="innerHTML"
-                         class="text-[10px] text-zinc-500">—</div>
+                         class="text-[10px] t-text-muted">—</div>
                 </div>
                 <div class="flex items-center justify-between">
-                    <span class="text-[10px] text-zinc-600 uppercase tracking-wide">Live Feed</span>
-                    <div id="sse-heartbeat" class="text-[10px] text-zinc-500">—</div>
+                    <span class="text-[10px] t-text-faint uppercase tracking-wide">Live Feed</span>
+                    <div id="sse-heartbeat" class="text-[10px] t-text-muted">—</div>
                 </div>
-                <div id="sse-last-update" class="text-[9px] text-zinc-700">—</div>
+                <div id="sse-last-update" class="text-[9px] t-text-faint">—</div>
             </div>
 
         </div>
     </div>
 
     <!-- Footer -->
-    <footer class="mt-4 pt-2 border-t border-zinc-800/60 text-center text-[10px] text-zinc-700 px-2">
+    <footer class="mt-4 pt-2 border-t t-border-subtle text-center text-[10px] t-text-faint px-2">
         <span class="hidden sm:inline">ORB Co-Pilot — Pre-market 00–03 ET | London 03–08 ET | US 08–12 ET | Off-hours 12–00 ET
         &nbsp;·&nbsp;</span>
-        <a href="/sse/health" class="underline hover:text-zinc-500">SSE</a>
-        &nbsp;·&nbsp;<a href="/api/info" class="underline hover:text-zinc-500">API</a>
+        <a href="/sse/health" class="underline hover:opacity-80">SSE</a>
+        &nbsp;·&nbsp;<a href="/api/info" class="underline hover:opacity-80">API</a>
     </footer>
 </div>
 </div><!-- end sse-container -->
@@ -1407,6 +1516,30 @@ function _pushEvent(emoji, msg, color) {{
              + '</div>';
     }}).join('');
 }}
+</script>
+
+<!-- ═══════════════════════════════════════════════════
+     THEME TOGGLE
+═══════════════════════════════════════════════════════ -->
+<script>
+function toggleTheme() {{
+    var html = document.documentElement;
+    var icon = document.getElementById('theme-icon');
+    if (html.classList.contains('dark')) {{
+        html.classList.remove('dark');
+        localStorage.setItem('theme', 'light');
+        if (icon) icon.textContent = '🌙';
+    }} else {{
+        html.classList.add('dark');
+        localStorage.setItem('theme', 'dark');
+        if (icon) icon.textContent = '☀️';
+    }}
+}}
+// Set correct icon on load
+(function() {{
+    var icon = document.getElementById('theme-icon');
+    if (icon) icon.textContent = document.documentElement.classList.contains('dark') ? '☀️' : '🌙';
+}})();
 </script>
 
 <!-- ═══════════════════════════════════════════════════
@@ -1691,6 +1824,239 @@ def get_orb_html():
     """Return Opening Range Breakout panel as HTML fragment (TASK-801)."""
     orb_data = _get_orb_data()
     return HTMLResponse(content=_render_orb_panel(orb_data))
+
+
+@router.get("/api/orb/history/html", response_class=HTMLResponse)
+def get_orb_history_html(
+    session: str | None = None,
+    symbol: str | None = None,
+    days: int = 7,
+    breakout_only: bool = False,
+):
+    """Return per-session ORB signal history as an HTML table + summary.
+
+    Query params:
+        session      — Filter by session key (e.g. "london", "us")
+        symbol       — Filter by symbol (e.g. "MGC=F")
+        days         — Lookback window in calendar days (default 7)
+        breakout_only — If true, only show events with a breakout detected
+    """
+    from datetime import timedelta
+
+    since = (datetime.now(tz=_EST) - timedelta(days=days)).isoformat()
+
+    try:
+        from lib.core.models import get_orb_events as _get_orb_events
+
+        events = _get_orb_events(
+            limit=200,
+            symbol=symbol,
+            breakout_only=breakout_only,
+            since=since,
+        )
+    except Exception:
+        events = []
+
+    # Optionally filter by session (stored in the 'session' column or metadata)
+    if session:
+        filtered = []
+        for ev in events:
+            ev_session = ev.get("session", "")
+            # Also check metadata for session_key
+            meta = {}
+            if ev.get("metadata_json"):
+                with contextlib.suppress(json.JSONDecodeError, TypeError):
+                    meta = json.loads(ev["metadata_json"])
+            sk = meta.get("session_key", ev_session)
+            if session.lower() in (ev_session.lower(), sk.lower()):
+                filtered.append(ev)
+        events = filtered
+
+    # Summary stats
+    total = len(events)
+    breakouts = sum(1 for e in events if e.get("breakout_detected"))
+    longs = sum(1 for e in events if e.get("direction") == "LONG")
+    shorts = sum(1 for e in events if e.get("direction") == "SHORT")
+    bo_rate = f"{breakouts / total * 100:.0f}%" if total > 0 else "—"
+
+    # Filter tabs
+    session_filter = session or "all"
+    tab_classes_all = (
+        "t-text font-bold border-b-2 border-blue-500" if session_filter == "all" else "t-text-muted hover:opacity-80"
+    )
+    tab_classes_lon = (
+        "t-text font-bold border-b-2 border-blue-500" if session_filter == "london" else "t-text-muted hover:opacity-80"
+    )
+    tab_classes_us = (
+        "t-text font-bold border-b-2 border-blue-500" if session_filter == "us" else "t-text-muted hover:opacity-80"
+    )
+
+    # Checkbox state
+    bo_checked = "checked" if breakout_only else ""
+
+    # Build table rows
+    rows_html = ""
+    for ev in events[:50]:  # Cap at 50 rows
+        ts_raw = ev.get("timestamp", "")
+        ts_display = ts_raw
+        if ts_raw and "T" in ts_raw:
+            try:
+                dt = datetime.fromisoformat(ts_raw)
+                ts_display = dt.strftime("%m/%d %H:%M")
+            except Exception:
+                pass
+
+        sym = ev.get("symbol", "?")
+        bd = bool(ev.get("breakout_detected"))
+        direction = ev.get("direction", "")
+        trigger = ev.get("trigger_price", 0)
+        or_range = ev.get("or_range", 0)
+        atr = ev.get("atr_value", 0)
+        ev_session = ev.get("session", "")
+
+        # Parse metadata for CNN/filter info
+        meta = {}
+        if ev.get("metadata_json"):
+            with contextlib.suppress(json.JSONDecodeError, TypeError):
+                meta = json.loads(ev["metadata_json"])
+
+        cnn_prob = meta.get("cnn_prob")
+        filter_passed = meta.get("filter_passed")
+        sk = meta.get("session_key", ev_session)
+
+        # Row styling
+        if bd and direction == "LONG":
+            row_bg = "background: rgba(34,197,94,0.08);"
+            dir_html = '<span class="text-green-400 font-bold">🟢 LONG</span>'
+        elif bd and direction == "SHORT":
+            row_bg = "background: rgba(239,68,68,0.08);"
+            dir_html = '<span class="text-red-400 font-bold">🔴 SHORT</span>'
+        elif bd:
+            row_bg = "background: rgba(234,179,8,0.08);"
+            dir_html = f'<span class="text-yellow-400">{direction or "—"}</span>'
+        else:
+            row_bg = ""
+            dir_html = '<span class="t-text-faint">—</span>'
+
+        # CNN badge
+        cnn_html = ""
+        if cnn_prob is not None:
+            pct = cnn_prob * 100
+            c = "text-green-400" if pct >= 65 else ("text-yellow-400" if pct >= 45 else "text-red-400")
+            cnn_html = f'<span class="{c} font-mono">{pct:.0f}%</span>'
+        else:
+            cnn_html = '<span class="t-text-faint">—</span>'
+
+        # Filter badge
+        if filter_passed is True:
+            filt_html = '<span class="text-green-500">✅</span>'
+        elif filter_passed is False:
+            filt_html = '<span class="text-red-500">🚫</span>'
+        else:
+            filt_html = '<span class="t-text-faint">—</span>'
+
+        # Session badge
+        if "london" in sk.lower():
+            sess_badge = '<span class="text-blue-400 text-[10px]">🇬🇧 LON</span>'
+        elif "us" in sk.lower():
+            sess_badge = '<span class="text-emerald-400 text-[10px]">🇺🇸 US</span>'
+        else:
+            sess_badge = f'<span class="t-text-faint text-[10px]">{sk[:6]}</span>'
+
+        rows_html += f"""
+        <tr class="border-b t-border-subtle text-[10px]" style="{row_bg}">
+            <td class="py-1 px-1.5 t-text-muted font-mono whitespace-nowrap">{ts_display}</td>
+            <td class="py-1 px-1.5">{sess_badge}</td>
+            <td class="py-1 px-1.5 t-text-secondary font-mono">{sym}</td>
+            <td class="py-1 px-1.5">{dir_html}</td>
+            <td class="py-1 px-1.5 t-text-secondary font-mono text-right">{trigger:,.2f}</td>
+            <td class="py-1 px-1.5 t-text-muted font-mono text-right">{or_range:,.2f}</td>
+            <td class="py-1 px-1.5 t-text-muted font-mono text-right">{atr:,.2f}</td>
+            <td class="py-1 px-1.5 text-center">{cnn_html}</td>
+            <td class="py-1 px-1.5 text-center">{filt_html}</td>
+        </tr>"""
+
+    if not rows_html:
+        rows_html = """
+        <tr>
+            <td colspan="9" class="py-6 text-center t-text-faint text-xs">
+                No ORB events found for the selected filters.
+            </td>
+        </tr>"""
+
+    return HTMLResponse(
+        content=f"""
+    <div class="t-panel border t-border rounded-lg p-4">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-semibold t-text-muted">📊 ORB Signal History</h3>
+            <span class="t-text-faint text-[10px]">Last {days} days · {total} events</span>
+        </div>
+
+        <!-- Summary stats -->
+        <div class="grid grid-cols-4 gap-2 mb-3">
+            <div class="t-panel-inner rounded p-2 text-center">
+                <div class="text-lg font-bold t-text font-mono">{total}</div>
+                <div class="text-[10px] t-text-muted">Total</div>
+            </div>
+            <div class="t-panel-inner rounded p-2 text-center">
+                <div class="text-lg font-bold text-green-400 font-mono">{breakouts}</div>
+                <div class="text-[10px] t-text-muted">Breakouts</div>
+            </div>
+            <div class="t-panel-inner rounded p-2 text-center">
+                <div class="text-lg font-bold text-blue-400 font-mono">{bo_rate}</div>
+                <div class="text-[10px] t-text-muted">BO Rate</div>
+            </div>
+            <div class="t-panel-inner rounded p-2 text-center">
+                <div class="text-[11px] font-mono t-text-secondary">{longs}L / {shorts}S</div>
+                <div class="text-[10px] t-text-muted">Direction</div>
+            </div>
+        </div>
+
+        <!-- Session filter tabs -->
+        <div class="flex items-center gap-3 mb-2 text-[11px] border-b t-border-subtle pb-1.5">
+            <a hx-get="/api/orb/history/html?days={days}&breakout_only={"true" if breakout_only else "false"}"
+               hx-target="#orb-history-container" hx-swap="innerHTML"
+               class="cursor-pointer pb-0.5 {tab_classes_all}">All</a>
+            <a hx-get="/api/orb/history/html?session=london&days={days}&breakout_only={"true" if breakout_only else "false"}"
+               hx-target="#orb-history-container" hx-swap="innerHTML"
+               class="cursor-pointer pb-0.5 {tab_classes_lon}">🇬🇧 London</a>
+            <a hx-get="/api/orb/history/html?session=us&days={days}&breakout_only={"true" if breakout_only else "false"}"
+               hx-target="#orb-history-container" hx-swap="innerHTML"
+               class="cursor-pointer pb-0.5 {tab_classes_us}">🇺🇸 US</a>
+            <label class="ml-auto flex items-center gap-1 cursor-pointer t-text-muted">
+                <input type="checkbox" {bo_checked}
+                       hx-get="/api/orb/history/html?{"session=" + session + "&" if session else ""}days={days}&breakout_only={{this.checked}}"
+                       hx-target="#orb-history-container" hx-swap="innerHTML"
+                       hx-trigger="change"
+                       class="rounded">
+                <span class="text-[10px]">Breakouts only</span>
+            </label>
+        </div>
+
+        <!-- Table -->
+        <div class="overflow-x-auto max-h-72 overflow-y-auto">
+            <table class="w-full text-left">
+                <thead>
+                    <tr class="border-b t-border text-[9px] t-text-faint uppercase tracking-wider">
+                        <th class="py-1 px-1.5">Time</th>
+                        <th class="py-1 px-1.5">Session</th>
+                        <th class="py-1 px-1.5">Symbol</th>
+                        <th class="py-1 px-1.5">Signal</th>
+                        <th class="py-1 px-1.5 text-right">Trigger</th>
+                        <th class="py-1 px-1.5 text-right">Range</th>
+                        <th class="py-1 px-1.5 text-right">ATR</th>
+                        <th class="py-1 px-1.5 text-center">CNN</th>
+                        <th class="py-1 px-1.5 text-center">Filter</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+    )
 
 
 @router.get("/api/alerts/html", response_class=HTMLResponse)

@@ -25,9 +25,11 @@ from typing import Any
 # All imports use fully-qualified `lib.*` paths.
 # PYTHONPATH only needs /app/src so that `lib` is discoverable.
 # ---------------------------------------------------------------------------
-from fastapi import Depends, FastAPI  # noqa: E402
+from fastapi import Depends, FastAPI, Request  # noqa: E402
+from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse, Response  # noqa: E402
+from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +338,91 @@ app = FastAPI(
     default_response_class=SafeJSONResponse,
     dependencies=[Depends(require_api_key)],
 )
+
+
+# ---------------------------------------------------------------------------
+# Structured error responses — consistent JSON shape for all error types
+# ---------------------------------------------------------------------------
+# Every error response follows:
+#   { "error": "<short_code>", "detail": "<human message>", "status": <int> }
+# This replaces FastAPI's default {"detail": ...} shape so clients can
+# rely on a single schema for error handling.
+# ---------------------------------------------------------------------------
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Handle all HTTP exceptions (404, 403, 405, 422, 500, etc.)."""
+    status = exc.status_code
+    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+
+    # Map common status codes to short error codes
+    code_map = {
+        400: "bad_request",
+        401: "unauthorized",
+        403: "forbidden",
+        404: "not_found",
+        405: "method_not_allowed",
+        409: "conflict",
+        422: "validation_error",
+        429: "rate_limit_exceeded",
+        500: "internal_error",
+        502: "bad_gateway",
+        503: "service_unavailable",
+    }
+    error_code = code_map.get(status, f"http_{status}")
+
+    return JSONResponse(
+        status_code=status,
+        content={
+            "error": error_code,
+            "detail": detail,
+            "status": status,
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Handle Pydantic / query-param validation errors with structured JSON."""
+    errors = exc.errors()
+    # Build a human-readable summary from the validation error list
+    messages = []
+    for err in errors:
+        loc = " → ".join(str(part) for part in err.get("loc", []))
+        msg = err.get("msg", "invalid")
+        messages.append(f"{loc}: {msg}" if loc else msg)
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "validation_error",
+            "detail": "; ".join(messages) if messages else "Request validation failed",
+            "status": 422,
+            "errors": errors,
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all for unhandled exceptions — log and return structured 500."""
+    logger.error(
+        "Unhandled exception on %s %s: %s",
+        request.method,
+        request.url.path,
+        exc,
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_error",
+            "detail": f"Internal server error: {type(exc).__name__}",
+            "status": 500,
+        },
+    )
+
 
 # CORS — allow local dev origins + Tailscale IPs
 # NOTE: allow_credentials must be False when using wildcard origins.
