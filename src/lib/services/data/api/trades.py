@@ -104,13 +104,9 @@ class TradeResponse(BaseModel):
     strategy: str = ""
     # Risk fields (populated on create only)
     risk_checked: bool = Field(False, description="Whether a risk check was performed")
-    risk_blocked: bool = Field(
-        False, description="True if risk rules would block this trade"
-    )
+    risk_blocked: bool = Field(False, description="True if risk rules would block this trade")
     risk_reason: str = Field("", description="Risk block reason (empty if allowed)")
-    risk_details: dict[str, Any] | None = Field(
-        None, description="Full risk check details"
-    )
+    risk_details: dict[str, Any] | None = Field(None, description="Full risk check details")
 
 
 # ---------------------------------------------------------------------------

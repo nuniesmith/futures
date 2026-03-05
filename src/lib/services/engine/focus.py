@@ -447,15 +447,12 @@ def should_not_trade(
     # Condition 2: Any asset has extreme volatility
     vol_percentiles = [_safe_float(a.get("vol_percentile", 0)) for a in focus_assets]
     extreme_vols = [
-        a.get("symbol", "?")
-        for a in focus_assets
-        if _safe_float(a.get("vol_percentile", 0)) > EXTREME_VOL_THRESHOLD
+        a.get("symbol", "?") for a in focus_assets if _safe_float(a.get("vol_percentile", 0)) > EXTREME_VOL_THRESHOLD
     ]
     if extreme_vols:
         max_vol = max(vol_percentiles)
         return True, (
-            f"Extreme volatility on {', '.join(extreme_vols)} "
-            f"({max_vol:.0%} percentile) — high risk of stop hunts"
+            f"Extreme volatility on {', '.join(extreme_vols)} ({max_vol:.0%} percentile) — high risk of stop hunts"
         )
 
     # Condition 5: Time-based (after 10 AM and no high-quality setups)

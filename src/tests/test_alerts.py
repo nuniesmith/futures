@@ -304,9 +304,7 @@ class TestAlertDispatcherSendRegimeChange:
             "normal",
             "high_vol",
         ):
-            result = d.send_regime_change(
-                asset="Gold", old_regime="trending", new_regime=regime
-            )
+            result = d.send_regime_change(asset="Gold", old_regime="trending", new_regime=regime)
             assert isinstance(result, bool)
 
 
@@ -320,9 +318,7 @@ class TestAlertDispatcherSendConfluenceAlert:
         """Only score == 3 should trigger a confluence alert."""
         d = _fresh_dispatcher()
         for score in (0, 1, 2):
-            result = d.send_confluence_alert(
-                asset="Gold", score=score, direction="bullish"
-            )
+            result = d.send_confluence_alert(asset="Gold", score=score, direction="bullish")
             assert result is False
 
     def test_confluence_score_3_no_channels(self):
@@ -464,9 +460,7 @@ class TestGetDispatcher:
 
     def test_dispatcher_reads_discord_env(self, monkeypatch):
         reset_dispatcher()
-        monkeypatch.setenv(
-            "DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/env_test"
-        )
+        monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/env_test")
         d = get_dispatcher()
         assert "Discord" in d.channels_configured
 

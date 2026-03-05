@@ -141,9 +141,7 @@ def setup_logging(
     structlog.contextvars.bind_contextvars(service=service)
 
 
-def get_logger(
-    name: str | None = None, **initial_binds: Any
-) -> structlog.stdlib.BoundLogger:
+def get_logger(name: str | None = None, **initial_binds: Any) -> structlog.stdlib.BoundLogger:
     """Return a structured logger, optionally bound with extra context.
 
     Parameters

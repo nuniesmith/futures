@@ -398,14 +398,8 @@ def cvd_summary(df: pd.DataFrame) -> dict[str, Any]:
         }
 
     cvd_val = float(df["cvd"].iloc[-1]) if not np.isnan(df["cvd"].iloc[-1]) else 0.0
-    delta_val = (
-        float(df["delta"].iloc[-1]) if not np.isnan(df["delta"].iloc[-1]) else 0.0
-    )
-    slope_val = (
-        float(df["cvd_slope"].iloc[-1])
-        if not np.isnan(df["cvd_slope"].iloc[-1])
-        else 0.0
-    )
+    delta_val = float(df["delta"].iloc[-1]) if not np.isnan(df["delta"].iloc[-1]) else 0.0
+    slope_val = float(df["cvd_slope"].iloc[-1]) if not np.isnan(df["cvd_slope"].iloc[-1]) else 0.0
 
     # Determine bias from slope
     if slope_val > 0.5:
@@ -420,9 +414,7 @@ def cvd_summary(df: pd.DataFrame) -> dict[str, Any]:
 
     # Check for absorption at latest bar
     absorption_signals = detect_absorption_candles(df)
-    latest_absorption = (
-        int(absorption_signals.iloc[-1]) if len(absorption_signals) > 0 else 0
-    )
+    latest_absorption = int(absorption_signals.iloc[-1]) if len(absorption_signals) > 0 else 0
 
     # Check for recent divergences
     divergences = detect_cvd_divergences(df, lookback=30)
@@ -507,9 +499,7 @@ def divergences_to_dataframe(divergences: list[dict[str, Any]]) -> pd.DataFrame:
     CVD Move, Strength.
     """
     if not divergences:
-        return pd.DataFrame(
-            columns=pd.Index(["Type", "Datetime", "Price Move", "CVD Move", "Strength"])
-        )
+        return pd.DataFrame(columns=pd.Index(["Type", "Datetime", "Price Move", "CVD Move", "Strength"]))
 
     rows = []
     for d in divergences:

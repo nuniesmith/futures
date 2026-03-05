@@ -318,9 +318,7 @@ def estimate_trade_costs(
         "total_cost": round(total_cost, 2),
         "cost_per_contract": round(total_cost / max(contracts, 1), 2),
         "break_even_move": round(break_even_move, 4),
-        "break_even_ticks": round(
-            break_even_move / model["tick_size"] if model["tick_size"] > 0 else 0, 1
-        ),
+        "break_even_ticks": round(break_even_move / model["tick_size"] if model["tick_size"] > 0 else 0, 1),
         "session": session,
         "multiplier": multiplier,
     }
@@ -415,9 +413,7 @@ def should_use_full_contracts(
 
     full_costs = estimate_trade_costs(asset_name, full_contracts, "rth", "full")
     remainder_costs = (
-        estimate_trade_costs(asset_name, remainder, "rth", "micro")
-        if remainder > 0
-        else {"total_cost": 0}
+        estimate_trade_costs(asset_name, remainder, "rth", "micro") if remainder > 0 else {"total_cost": 0}
     )
 
     mixed_cost = full_costs["total_cost"] + remainder_costs["total_cost"]
@@ -426,8 +422,7 @@ def should_use_full_contracts(
     return {
         "recommend_full": savings > 0 and full_contracts >= 1,
         "reason": (
-            f"Switch to {full_contracts} full + {remainder} micro: "
-            f"save ${savings:.2f}/trade"
+            f"Switch to {full_contracts} full + {remainder} micro: save ${savings:.2f}/trade"
             if savings > 0
             else "Micro contracts are more cost-effective at this size"
         ),

@@ -194,8 +194,6 @@ def _build_context(engine) -> dict[str, Any] | None:
     Falls back to a minimal stub so streaming endpoints can still run.
     """
     try:
-
-
         from lib.core.cache import cache_get
         from lib.integrations.grok_helper import format_live_compact
         from lib.services.engine.scheduler import ScheduleManager

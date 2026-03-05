@@ -80,6 +80,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     import pandas as pd
+
     pass
 
 logger = logging.getLogger("analysis.mtf_analyzer")
@@ -476,7 +477,12 @@ def analyze_mtf(
         score += _W_EMA_STACK
 
     # EMA slope direction (15%)
-    if dir_upper == "LONG" and result.ema_slope_direction == "UP" or dir_upper == "SHORT" and result.ema_slope_direction == "DOWN":
+    if (
+        dir_upper == "LONG"
+        and result.ema_slope_direction == "UP"
+        or dir_upper == "SHORT"
+        and result.ema_slope_direction == "DOWN"
+    ):
         score += _W_EMA_SLOPE
     elif result.ema_slope_direction == "FLAT":
         score += _W_EMA_SLOPE * 0.5  # neutral slope is half credit

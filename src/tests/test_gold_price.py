@@ -13,7 +13,6 @@ _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("DISABLE_REDIS", "1")
 
 
-
 def test_gold_price_no_scaling():
     """Gold micro (MGC) data_ticker must be MGC=F, not GC=F.
 
@@ -33,9 +32,7 @@ def test_gold_price_no_scaling():
     )
 
     # When in micro mode (default), ASSETS["Gold"] should resolve to MGC=F
-    assert ASSETS.get("Gold") == "MGC=F", (
-        f"ASSETS['Gold'] is '{ASSETS.get('Gold')}', expected 'MGC=F'"
-    )
+    assert ASSETS.get("Gold") == "MGC=F", f"ASSETS['Gold'] is '{ASSETS.get('Gold')}', expected 'MGC=F'"
 
 
 def test_gold_point_value_is_micro():
@@ -44,8 +41,7 @@ def test_gold_point_value_is_micro():
 
     gold_micro = MICRO_CONTRACT_SPECS["Gold"]
     assert gold_micro["point"] == 10, (
-        f"Gold micro point value is {gold_micro['point']}, expected 10 (micro). "
-        "Full-size GC uses 100."
+        f"Gold micro point value is {gold_micro['point']}, expected 10 (micro). Full-size GC uses 100."
     )
 
 
@@ -53,9 +49,7 @@ def test_gold_massive_product_mapping():
     """Massive client must map MGC=F to the MGC product code."""
     from lib.integrations.massive_client import YAHOO_TO_MASSIVE_PRODUCT
 
-    assert YAHOO_TO_MASSIVE_PRODUCT.get("MGC=F") == "MGC", (
-        "MGC=F must map to MGC product code in Massive client"
-    )
+    assert YAHOO_TO_MASSIVE_PRODUCT.get("MGC=F") == "MGC", "MGC=F must map to MGC product code in Massive client"
 
 
 def test_gold_price_passthrough_no_multiplier():

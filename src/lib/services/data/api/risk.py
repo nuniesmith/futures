@@ -43,14 +43,10 @@ class RiskCheckRequest(BaseModel):
     symbol: str = Field(..., description="Instrument symbol, e.g. 'MGC', 'MNQ'")
     side: str = Field(..., description="LONG or SHORT")
     size: int = Field(1, ge=1, description="Number of contracts")
-    risk_per_contract: float = Field(
-        0.0, ge=0, description="Dollar risk per contract (stop distance × point value)"
-    )
+    risk_per_contract: float = Field(0.0, ge=0, description="Dollar risk per contract (stop distance × point value)")
     is_stack: bool = Field(False, description="True if adding to an existing position")
     wave_ratio: float = Field(1.0, description="Current wave ratio for stacking check")
-    unrealized_r: float = Field(
-        0.0, description="Current unrealized P&L in R-multiples for stacking check"
-    )
+    unrealized_r: float = Field(0.0, description="Current unrealized P&L in R-multiples for stacking check")
 
 
 class RiskCheckResponse(BaseModel):
@@ -129,9 +125,7 @@ def _get_local_risk_manager():
 
             account_size = int(os.getenv("ACCOUNT_SIZE", "50000"))
             _local_risk_manager = RiskManager(account_size=account_size)
-            logger.info(
-                "Local RiskManager initialised (account=$%s)", f"{account_size:,}"
-            )
+            logger.info("Local RiskManager initialised (account=$%s)", f"{account_size:,}")
         except ImportError:
             logger.warning("Could not import RiskManager — risk checks unavailable")
             return None
@@ -386,13 +380,9 @@ def evaluate_position_risk(positions: list[dict[str, Any]]) -> dict[str, Any]:
     if status.get("is_overnight_warning"):
         warnings.append("Session ending — close or protect open positions")
     if status.get("consecutive_losses", 0) >= 2:
-        warnings.append(
-            f"{status['consecutive_losses']} consecutive losses — consider pausing"
-        )
+        warnings.append(f"{status['consecutive_losses']} consecutive losses — consider pausing")
     if status.get("risk_pct_of_account", 0) > 3.0:
-        warnings.append(
-            f"Total exposure {status['risk_pct_of_account']:.1f}% of account"
-        )
+        warnings.append(f"Total exposure {status['risk_pct_of_account']:.1f}% of account")
 
     return {
         "can_trade": status["can_trade"],

@@ -671,13 +671,9 @@ def results_to_summary(results: list[dict[str, Any]], max_focus: int = 3) -> str
 
         detail_parts = []
         if r["catalyst_detail"]["matching_events"]:
-            detail_parts.append(
-                f"Events: {', '.join(r['catalyst_detail']['matching_events'])}"
-            )
+            detail_parts.append(f"Events: {', '.join(r['catalyst_detail']['matching_events'])}")
         if r["gap_detail"]["gap_pct"] > 0.05:
-            detail_parts.append(
-                f"Gap: {r['gap_detail']['gap_direction']} {r['gap_detail']['gap_pct']:.2f}%"
-            )
+            detail_parts.append(f"Gap: {r['gap_detail']['gap_direction']} {r['gap_detail']['gap_pct']:.2f}%")
         detail_parts.append(f"RVOL: {r['rvol_detail']['rvol']:.1f}×")
         detail_parts.append(f"Momentum: {r['momentum_detail']['direction']}")
 
