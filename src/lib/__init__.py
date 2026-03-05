@@ -8,6 +8,8 @@ All business logic modules live under organised sub-packages:
     from lib.core.models import init_db, ASSETS
     from lib.core.alerts import get_dispatcher
     from lib.core.logging_config import setup_logging, get_logger
+    from lib.core.breakout_types import BreakoutType, get_range_config
+    from lib.core.multi_session import get_session, all_sessions, ORBSession
 
     # Analysis modules
     from lib.analysis.volatility import kmeans_volatility_clusters
@@ -19,6 +21,8 @@ All business logic modules live under organised sub-packages:
     from lib.analysis.scorer import PreMarketScorer
     from lib.analysis.signal_quality import compute_signal_quality
     from lib.analysis.volume_profile import compute_volume_profile
+    from lib.analysis.chart_renderer import render_ruby_snapshot
+    from lib.analysis.chart_renderer_parity import render_parity_snapshot
 
     # Trading modules
     from lib.trading.engine import get_engine, DashboardEngine
@@ -27,13 +31,19 @@ All business logic modules live under organised sub-packages:
     from lib.integrations.grok_helper import GrokSession
     from lib.integrations.massive_client import get_massive_provider
 
-Services (data-service, engine, web) are sub-packages:
+    # Training (GPU-only — dataset generation, CNN training, simulation)
+    from lib.training.dataset_generator import generate_dataset, DatasetConfig
+    from lib.training.orb_simulator import simulate_batch, BracketConfig
+
+Services (data-service, engine, web, trainer) are sub-packages:
 
     from lib.services.data.main import app
     from lib.services.engine.focus import compute_daily_focus
-    from lib.services.web.app import main
+    from lib.services.web.main import app
+    from lib.training.trainer_server import app  # GPU training server
 
 Install in editable mode for development:
 
-    pip install -e .
+    pip install -e .          # CPU-only (engine, web, dashboard)
+    pip install -e ".[gpu]"   # + PyTorch/CUDA for training
 """

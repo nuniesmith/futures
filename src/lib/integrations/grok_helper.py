@@ -89,6 +89,205 @@ def _call_grok(
         return None
 
 
+def _stream_grok(
+    prompt: str,
+    api_key: str,
+    max_tokens: int = 2000,
+    temperature: float = DEFAULT_TEMPERATURE,
+    system_prompt: str | None = None,
+):
+    """Stream the Grok API response using server-sent events (SSE).
+
+    Yields incremental text chunks as they arrive from the API.  Each
+    yielded value is a plain string token (may be a word, sub-word, or
+    punctuation fragment).  The caller is responsible for assembling them
+    into a full response if needed.
+
+    On error, yields a single chunk starting with "ERROR: " so the SSE
+    consumer can surface it without raising.
+
+    Args:
+        prompt: The user message to send.
+        api_key: xAI API key (Bearer token).
+        max_tokens: Maximum tokens to generate.
+        temperature: Sampling temperature (default 0.3).
+        system_prompt: Optional system message prepended to the chat.
+
+    Yields:
+        str — incremental text fragments from the model.
+    """
+    import json as _json
+
+    if not api_key:
+        yield "ERROR: No Grok API key configured"
+        return
+
+    messages: list[dict] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    try:
+        resp = requests.post(
+            GROK_API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "text/event-stream",
+            },
+            json={
+                "model": GROK_MODEL,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": True,
+            },
+            stream=True,
+            timeout=120,
+        )
+        resp.raise_for_status()
+
+        for raw_line in resp.iter_lines():
+            if not raw_line:
+                continue
+
+            line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+
+            # SSE lines begin with "data: "
+            if not line.startswith("data: "):
+                continue
+
+            data_str = line[len("data: ") :]
+
+            # OpenAI-compatible stream terminator
+            if data_str.strip() == "[DONE]":
+                break
+
+            try:
+                chunk = _json.loads(data_str)
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                token = delta.get("content", "")
+                if token:
+                    yield token
+            except (_json.JSONDecodeError, IndexError, KeyError):
+                # Malformed chunk — skip silently
+                continue
+
+    except requests.exceptions.Timeout:
+        logger.error("Grok streaming API timeout after 120s")
+        yield "ERROR: Grok API timeout"
+    except requests.exceptions.HTTPError as e:
+        logger.error("Grok streaming API HTTP error: %s", e)
+        yield f"ERROR: Grok API HTTP {e.response.status_code if e.response else 'unknown'}"
+    except Exception as e:
+        logger.error("Grok streaming API unexpected error: %s", e)
+        yield f"ERROR: {e}"
+
+
+def stream_morning_briefing(context: dict, api_key: str):
+    """Stream the pre-market morning briefing from the Grok API.
+
+    Identical prompt to ``run_morning_briefing`` but uses the streaming
+    endpoint so the dashboard can display tokens as they arrive.
+
+    Yields:
+        str — incremental text fragments.  The caller should accumulate
+        them to reconstruct the full briefing for caching.
+    """
+    prompt = f"""Pre-market briefing for {context["time"]}.
+
+Account: USD {context["account_size"]:,} | Risk/trade: USD {context["risk_dollars"]:,} | Max contracts: {context["max_contracts"]}
+Session: {context["session_status"]}
+
+CONTRACT SPECS:
+{context["specs_text"]}
+
+MARKET SCANNER (Last = current price):
+{context["scanner_text"]}
+
+OPTIMIZED STRATEGIES (auto-selected by engine):
+{context["opt_text"]}
+
+BACKTESTS (session-hours only):
+{context["bt_text"]}
+
+ICT LEVELS (FVGs, Order Blocks, Sweeps):
+{context["ict_text"]}
+
+CONFLUENCE (Multi-Timeframe):
+{context["conf_text"]}
+
+CVD (Volume Delta):
+{context["cvd_text"]}
+
+Ruby WAVE ANALYSIS (Bull/Bear wave dominance, trend speed, market phase):
+{context.get("fks_wave_text", "Not available")}
+
+Ruby VOLATILITY CLUSTERS (K-Means adaptive ATR, position sizing):
+{context.get("fks_vol_text", "Not available")}
+
+Ruby SIGNAL QUALITY (multi-factor score: vol sweet-spot, velocity, trend speed, candle patterns, HTF bias):
+{context.get("fks_sq_text", "Not available")}
+
+PRE-MARKET SCORES:
+{context["scorer_text"]}
+
+Give me today's game plan:
+1. **Market Bias** — overall read on the session (1-2 sentences)
+2. **Top 3 Focus Assets** — rank by setup quality, explain why each
+3. **Key Levels to Watch** — entry zones, SL, TP for each focus asset (use scanner prices + ICT levels)
+4. **Correlations** — what pairs to monitor together
+5. **Risk Warnings** — anything that could trip us up today
+6. **Session Plan** — when to be aggressive vs. patient
+7. **Wave & Volatility Context** — note any assets with strong wave dominance (>1.5x ratio), high-vol clusters (widen stops / reduce size), or low-vol breakout setups
+8. **Signal Quality** — highlight assets with high quality scores (>60%), note which have premium setup conditions, and flag any with poor quality (<40%) to avoid
+
+Keep it actionable. No fluff. This is my reference card for the trading session."""
+
+    yield from _stream_grok(
+        prompt,
+        api_key,
+        max_tokens=DEFAULT_MAX_TOKENS_BRIEFING,
+        system_prompt=_MORNING_SYSTEM,
+    )
+
+
+def stream_live_analysis(
+    context: dict,
+    api_key: str,
+    previous_briefing: str | None = None,
+    update_number: int = 1,
+):
+    """Stream a live 15-minute market update from the Grok API.
+
+    Uses the same compact prompt as ``_run_live_compact`` but streams the
+    response token-by-token so the dashboard can render it progressively.
+
+    Yields:
+        str — incremental text fragments.
+    """
+    brief_section = ""
+    if previous_briefing:
+        brief_section = f"\nMORNING BRIEFING CONTEXT:\n{previous_briefing[:600]}\n"
+
+    prompt = f"""Live update #{update_number} at {context["time"]}.
+{brief_section}
+CURRENT MARKET DATA:
+{context["scanner_text"]}
+
+ICT LEVELS: {context.get("ict_text", "N/A")}
+CVD DELTA: {context.get("cvd_text", "N/A")}
+SIGNAL QUALITY: {context.get("fks_sq_text", "N/A")}
+
+What changed? What should I do right now? Keep it to ≤8 lines."""
+
+    yield from _stream_grok(
+        prompt,
+        api_key,
+        max_tokens=DEFAULT_MAX_TOKENS_LIVE_COMPACT,
+        system_prompt=_COMPACT_SYSTEM,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Market context builder
 # ---------------------------------------------------------------------------

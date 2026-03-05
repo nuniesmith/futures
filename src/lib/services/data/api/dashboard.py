@@ -1,16 +1,16 @@
 """
 Dashboard API Router
 =====================
-ORB-centric trading dashboard for NinjaTrader + Ruby indicator workflow.
+ORB-centric futures trading co-pilot dashboard.
 
 Layout:
   - Header bar: service health dots + market session clock strip
   - Session strip: live visual timeline of all major futures sessions
     with overlap highlighting and current-time cursor
-  - Main (2/3): ORB detection cards per symbol, with CNN probability,
-    filter results, and NT8/Ruby metric validation side-by-side
-  - Sidebar (1/3): live positions + P&L, risk status, market events feed,
-    Grok brief, CNN model status
+  - Main (2/3): ORB detection cards per symbol, with CNN probability
+    and filter results
+  - Sidebar (1/3): live positions + P&L, risk status, CNN model,
+    market events feed, Grok brief, alerts, engine status
   - Footer: session schedule reference
 
 Endpoints:
@@ -26,6 +26,7 @@ Endpoints:
     GET /api/market-session/html — Session clock strip HTML
     GET /api/time               — Formatted time string with session indicator
     GET /api/no-trade           — No-trade banner HTML (if applicable)
+    GET /api/regime/html        — HMM regime state panel HTML fragment
 """
 
 import contextlib
@@ -35,7 +36,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 logger = logging.getLogger("api.dashboard")
@@ -125,27 +126,32 @@ def _get_session_info() -> dict[str, str]:
         emoji = "🌙"
         label = "PRE-MARKET"
         css_class = "text-purple-400"
+        color_hex = "#c084fc"
     elif 3 <= hour < 8:
         mode = "active"
         emoji = "🟢"
         label = "LONDON OPEN"
         css_class = "text-green-400"
+        color_hex = "#4ade80"
     elif 8 <= hour < 12:
         mode = "active"
         emoji = "🟢"
         label = "US OPEN"
         css_class = "text-green-400"
+        color_hex = "#4ade80"
     else:
         mode = "off-hours"
         emoji = "⚙️"
         label = "OFF-HOURS"
         css_class = "text-zinc-400"
+        color_hex = "#a1a1aa"
 
     return {
         "mode": mode,
         "emoji": emoji,
         "label": label,
         "css_class": css_class,
+        "color_hex": color_hex,
         "time": now.strftime("%H:%M:%S"),
         "date": now.strftime("%A, %B %d, %Y"),
         "time_et": now.strftime("%I:%M:%S %p ET"),
@@ -406,6 +412,714 @@ def _get_orb_data() -> dict[str, Any] | None:
     except Exception:
         pass
     return None
+
+
+# ---------------------------------------------------------------------------
+# Volume Profile helpers
+# ---------------------------------------------------------------------------
+
+
+def _fetch_bars_for_vp(symbol: str, days_back: int = 5) -> "Any":
+    """Fetch stored 1m bars for volume profile computation."""
+    try:
+        from lib.services.data.api.bars import _fetch_stored_bars
+
+        return _fetch_stored_bars(symbol, interval="1m", days_back=days_back)
+    except Exception:
+        return None
+
+
+def _render_vp_svg(
+    bin_centers: "Any",
+    bin_volumes: "Any",
+    poc: float,
+    vah: float,
+    val: float,
+    hvn: list[float],
+    lvn: list[float],
+    current_price: float = 0.0,
+    naked_pocs: list[dict] | None = None,
+    width: int = 260,
+    height: int = 280,
+) -> str:
+    """Render a horizontal volume-profile histogram as an inline SVG.
+
+    The chart is drawn with price on the Y-axis (highest at top) and
+    volume on the X-axis.  Key levels (POC, VAH, VAL, naked POCs) are
+    annotated with horizontal lines and labels.
+    """
+    import math as _math
+
+    import numpy as np
+
+    if bin_centers is None or len(bin_centers) == 0:
+        return (
+            f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">'
+            f'<text x="{width // 2}" y="{height // 2}" fill="#71717a" font-size="11" '
+            f'text-anchor="middle">No data</text></svg>'
+        )
+
+    centers = np.asarray(bin_centers, dtype=np.float64)
+    volumes = np.asarray(bin_volumes, dtype=np.float64)
+    max_vol = float(volumes.max()) if volumes.max() > 0 else 1.0
+
+    n = len(centers)
+    price_min = float(centers[0])
+    price_max = float(centers[-1])
+    price_range = price_max - price_min if price_max > price_min else 1.0
+
+    # Layout constants
+    PAD_L = 4
+    PAD_R = 52  # right side for price labels
+    PAD_T = 8
+    PAD_B = 8
+    bar_area_w = width - PAD_L - PAD_R
+    bar_area_h = height - PAD_T - PAD_B
+    bin_h = bar_area_h / max(n, 1)
+
+    def price_to_y(price: float) -> float:
+        """Map price to SVG y (high price = low y = top of chart)."""
+        frac = (price - price_min) / price_range
+        return PAD_T + bar_area_h - frac * bar_area_h
+
+    def vol_to_w(vol: float) -> float:
+        return max(1.0, vol / max_vol * bar_area_w)
+
+    # Build bar elements
+    bars_svg = []
+    for i in range(n):
+        bh = _math.ceil(bin_h) + 1  # +1 to avoid gaps
+        by = PAD_T + bar_area_h - (i + 1) * bin_h
+        bw = vol_to_w(float(volumes[i]))
+        price = float(centers[i])
+
+        # Color: POC=amber, HVN=blue, VA=green tint, LVN=dim, default=steel
+        is_poc = abs(price - poc) < price_range / max(n, 1)
+        in_va = val <= price <= vah
+        is_hvn = any(abs(price - h) < price_range / max(n, 1) for h in hvn)
+        is_lvn = any(abs(price - lv) < price_range / max(n, 1) for lv in lvn)
+
+        if is_poc:
+            fill = "#f59e0b"
+            opacity = "0.90"
+        elif in_va:
+            fill = "#3b82f6" if is_hvn else "#1d4ed8"
+            opacity = "0.70" if is_hvn else "0.45"
+        elif is_lvn:
+            fill = "#3f3f46"
+            opacity = "0.50"
+        else:
+            fill = "#52525b"
+            opacity = "0.65"
+
+        bars_svg.append(
+            f'<rect x="{PAD_L}" y="{by:.1f}" width="{bw:.1f}" height="{bh:.1f}" '
+            f'fill="{fill}" fill-opacity="{opacity}"/>'
+        )
+
+    # Key-level horizontal lines + right-side labels
+    def h_line(price: float, color: str, label: str, dash: str = "") -> str:
+        y = price_to_y(price)
+        dash_attr = f' stroke-dasharray="{dash}"' if dash else ""
+        label_x = PAD_L + bar_area_w + 2
+        return (
+            f'<line x1="{PAD_L}" y1="{y:.1f}" x2="{PAD_L + bar_area_w}" y2="{y:.1f}" '
+            f'stroke="{color}" stroke-width="1.2"{dash_attr}/>'
+            f'<text x="{label_x}" y="{y + 3.5:.1f}" fill="{color}" '
+            f'font-size="8" font-family="monospace">{label}</text>'
+        )
+
+    lines_svg = []
+
+    # VAH / VAL shading rectangle
+    vah_y = price_to_y(vah)
+    val_y = price_to_y(val)
+    lines_svg.append(
+        f'<rect x="{PAD_L}" y="{vah_y:.1f}" width="{bar_area_w}" '
+        f'height="{val_y - vah_y:.1f}" fill="#1d4ed8" fill-opacity="0.08"/>'
+    )
+
+    lines_svg.append(h_line(poc, "#f59e0b", f"POC {poc:.1f}"))
+    lines_svg.append(h_line(vah, "#3b82f6", f"VAH {vah:.1f}", "3 2"))
+    lines_svg.append(h_line(val, "#3b82f6", f"VAL {val:.1f}", "3 2"))
+
+    # Naked POC lines
+    if naked_pocs:
+        for np_entry in naked_pocs[:3]:
+            np_price = float(np_entry.get("poc", 0))
+            if price_min <= np_price <= price_max:
+                np_date = str(np_entry.get("date", ""))[-5:]  # MM-DD
+                lines_svg.append(h_line(np_price, "#c084fc", f"nPOC {np_date}", "4 3"))
+
+    # Current price line
+    if current_price and price_min <= current_price <= price_max:
+        y_cp = price_to_y(current_price)
+        lines_svg.append(
+            f'<line x1="{PAD_L}" y1="{y_cp:.1f}" x2="{PAD_L + bar_area_w}" y2="{y_cp:.1f}" '
+            f'stroke="#22c55e" stroke-width="1.5" stroke-dasharray="2 2"/>'
+            f'<text x="{PAD_L + bar_area_w + 2}" y="{y_cp + 3.5:.1f}" fill="#22c55e" '
+            f'font-size="8" font-family="monospace">{current_price:.1f}</text>'
+        )
+
+    svg_body = "\n".join(bars_svg) + "\n" + "\n".join(lines_svg)
+    return (
+        f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" '
+        f'style="overflow:visible">\n{svg_body}\n</svg>'
+    )
+
+
+def _render_volume_profile_panel(
+    symbol: str,
+    days_back: int = 5,
+    bins: int = 40,
+) -> str:
+    """Render a volume profile chart panel for *symbol*.
+
+    Shows the last *days_back* sessions aggregated into a single profile
+    plus the most-recent session's profile side-by-side.  Naked POC
+    levels from prior sessions are overlaid in purple.
+    """
+    try:
+        from lib.analysis.volume_profile import (
+            compute_session_profiles,
+            compute_volume_profile,
+            find_naked_pocs,
+        )
+
+        df = _fetch_bars_for_vp(symbol, days_back=days_back)
+    except Exception as exc:
+        return f'<div class="t-text-faint text-xs text-center py-4">VP unavailable: {exc}</div>'
+
+    if df is None or df.empty:
+        return '<div class="t-text-faint text-xs text-center py-4">No bar data for VP</div>'
+
+    # Composite profile (all bars)
+    composite = compute_volume_profile(df, n_bins=bins)
+
+    # Session-by-session profiles (for naked POC tracking)
+    session_profiles = compute_session_profiles(df, n_bins=bins, max_sessions=10)
+
+    # Current price estimate = last close
+    current_price = 0.0
+    try:
+        current_price = float(df["Close"].iloc[-1])
+    except Exception:
+        pass
+
+    # Naked POCs
+    naked_pocs = find_naked_pocs(session_profiles, current_price=current_price, max_distance_points=200.0)
+
+    # Composite profile SVG
+    svg_composite = _render_vp_svg(
+        bin_centers=composite.get("bin_centers"),
+        bin_volumes=composite.get("bin_volumes"),
+        poc=composite.get("poc", 0.0),
+        vah=composite.get("vah", 0.0),
+        val=composite.get("val", 0.0),
+        hvn=composite.get("hvn", []),
+        lvn=composite.get("lvn", []),
+        current_price=current_price,
+        naked_pocs=naked_pocs,
+        width=220,
+        height=260,
+    )
+
+    # Most-recent session profile
+    svg_latest = ""
+    latest_label = "—"
+    if session_profiles:
+        latest = session_profiles[-1]
+        latest_label = str(latest.get("date", ""))
+        svg_latest = _render_vp_svg(
+            bin_centers=latest.get("bin_centers"),
+            bin_volumes=latest.get("bin_volumes"),
+            poc=latest.get("poc", 0.0),
+            vah=latest.get("vah", 0.0),
+            val=latest.get("val", 0.0),
+            hvn=latest.get("hvn", []),
+            lvn=latest.get("lvn", []),
+            current_price=current_price,
+            naked_pocs=[],
+            width=220,
+            height=260,
+        )
+
+    # Naked POC summary list
+    naked_html = ""
+    if naked_pocs:
+        items = []
+        for npoc in naked_pocs[:5]:
+            dist = npoc.get("distance", 0.0)
+            direction = "↑" if dist > 0 else "↓"
+            color = "#c084fc"
+            items.append(
+                f'<div style="display:flex;justify-content:space-between;font-size:9px">'
+                f'<span style="color:{color};font-family:monospace">{npoc["poc"]:.2f}</span>'
+                f'<span style="color:#a1a1aa">{npoc.get("date", "")}</span>'
+                f'<span style="color:{color}">{direction}{abs(dist):.1f}pts</span>'
+                f"</div>"
+            )
+        naked_html = (
+            '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border-subtle)">'
+            '<div style="font-size:9px;color:var(--text-faint);margin-bottom:3px">🎯 Naked POCs</div>'
+            + "".join(items)
+            + "</div>"
+        )
+    else:
+        naked_html = '<div style="font-size:9px;color:var(--text-faint);margin-top:4px">No naked POCs in range</div>'
+
+    # VP stats summary pills
+    poc_v = composite.get("poc", 0.0)
+    vah_v = composite.get("vah", 0.0)
+    val_v = composite.get("val", 0.0)
+    stats_html = f"""
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;margin-bottom:6px;text-align:center">
+        <div style="background:rgba(245,158,11,0.1);border-radius:4px;padding:2px 4px">
+            <div style="font-size:8px;color:#a1a1aa">POC</div>
+            <div style="font-size:9px;color:#f59e0b;font-family:monospace">{poc_v:.2f}</div>
+        </div>
+        <div style="background:rgba(59,130,246,0.1);border-radius:4px;padding:2px 4px">
+            <div style="font-size:8px;color:#a1a1aa">VAH</div>
+            <div style="font-size:9px;color:#60a5fa;font-family:monospace">{vah_v:.2f}</div>
+        </div>
+        <div style="background:rgba(59,130,246,0.1);border-radius:4px;padding:2px 4px">
+            <div style="font-size:8px;color:#a1a1aa">VAL</div>
+            <div style="font-size:9px;color:#60a5fa;font-family:monospace">{val_v:.2f}</div>
+        </div>
+    </div>
+    """
+
+    # Symbol selector (common futures)
+    _vp_symbols = ["MGC=F", "MES=F", "MNQ=F", "MCL=F", "M2K=F", "MYM=F", "MHG=F", "SIL=F"]
+    sym_opts = "".join(f'<option value="{s}" {"selected" if s == symbol else ""}>{s}</option>' for s in _vp_symbols)
+    # Add Kraken tickers if available
+    try:
+        from lib.core.models import ENABLE_KRAKEN_CRYPTO
+
+        if ENABLE_KRAKEN_CRYPTO:
+            from lib.integrations.kraken_client import KRAKEN_PAIRS
+
+            for _pair_info in list(KRAKEN_PAIRS.values())[:5]:
+                _tk = _pair_info.get("internal_ticker", "")
+                if _tk and _tk not in _vp_symbols:
+                    sym_opts += f'<option value="{_tk}" {"selected" if _tk == symbol else ""}>{_tk}</option>'
+    except Exception:
+        pass
+
+    return f"""
+    <div id="vp-panel-inner">
+        <!-- Header with symbol selector -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <div style="font-size:9px;color:var(--text-faint)">{days_back}d composite · {bins} bins</div>
+            <div style="display:flex;align-items:center;gap:4px">
+                <select id="vp-symbol-select" style="font-size:9px;background:var(--bg-input);color:var(--text-secondary);border:1px solid var(--border-panel);border-radius:3px;padding:1px 3px"
+                    hx-get="/api/volume-profile/html"
+                    hx-trigger="change"
+                    hx-target="#vp-panel-inner"
+                    hx-swap="outerHTML"
+                    name="symbol">
+                    {sym_opts}
+                </select>
+                <select style="font-size:9px;background:var(--bg-input);color:var(--text-secondary);border:1px solid var(--border-panel);border-radius:3px;padding:1px 3px"
+                    hx-get="/api/volume-profile/html"
+                    hx-trigger="change"
+                    hx-target="#vp-panel-inner"
+                    hx-swap="outerHTML"
+                    name="days">
+                    <option value="3" {"selected" if days_back == 3 else ""}>3d</option>
+                    <option value="5" {"selected" if days_back == 5 else ""}>5d</option>
+                    <option value="10" {"selected" if days_back == 10 else ""}>10d</option>
+                </select>
+            </div>
+        </div>
+
+        {stats_html}
+
+        <!-- Charts: composite + latest session -->
+        <div style="display:flex;gap:8px;overflow-x:auto">
+            <div>
+                <div style="font-size:8px;color:var(--text-faint);margin-bottom:2px;text-align:center">
+                    Composite ({days_back}d)
+                </div>
+                {svg_composite}
+            </div>
+            {"<div><div style='font-size:8px;color:var(--text-faint);margin-bottom:2px;text-align:center'>" + latest_label + "</div>" + svg_latest + "</div>" if svg_latest else ""}
+        </div>
+
+        <!-- Legend -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+            <span style="font-size:8px;color:#f59e0b">■ POC</span>
+            <span style="font-size:8px;color:#3b82f6">■ Value Area</span>
+            <span style="font-size:8px;color:#c084fc">— Naked POC</span>
+            <span style="font-size:8px;color:#22c55e">— Current</span>
+        </div>
+
+        {naked_html}
+    </div>
+    """
+
+
+# ---------------------------------------------------------------------------
+# Performance chart helpers
+# ---------------------------------------------------------------------------
+
+
+def _render_equity_curve_svg(
+    dates: list[str],
+    cumulative_pnl: list[float],
+    width: int = 300,
+    height: int = 100,
+) -> str:
+    """Render a compact equity curve line chart as inline SVG."""
+    if not dates or not cumulative_pnl or len(cumulative_pnl) < 2:
+        return (
+            f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">'
+            f'<text x="{width // 2}" y="{height // 2}" fill="#71717a" font-size="11" '
+            f'text-anchor="middle">No data</text></svg>'
+        )
+
+    n = len(cumulative_pnl)
+    PAD_L, PAD_R, PAD_T, PAD_B = 32, 8, 8, 18
+    chart_w = width - PAD_L - PAD_R
+    chart_h = height - PAD_T - PAD_B
+
+    y_min = min(cumulative_pnl)
+    y_max = max(cumulative_pnl)
+    y_range = y_max - y_min if y_max != y_min else 1.0
+
+    def px(i: int) -> float:
+        return PAD_L + i / max(n - 1, 1) * chart_w
+
+    def py(v: float) -> float:
+        return PAD_T + chart_h - (v - y_min) / y_range * chart_h
+
+    # Zero line
+    zero_y = py(0.0)
+    zero_line = ""
+    if y_min < 0 < y_max:
+        zero_line = (
+            f'<line x1="{PAD_L}" y1="{zero_y:.1f}" x2="{PAD_L + chart_w}" y2="{zero_y:.1f}" '
+            f'stroke="#52525b" stroke-width="0.8" stroke-dasharray="3 2"/>'
+        )
+
+    # Area fill (gradient from first point)
+    points_for_area = " ".join(f"{px(i):.1f},{py(v):.1f}" for i, v in enumerate(cumulative_pnl))
+    final_x = px(n - 1)
+    base_y = py(0.0) if y_min < 0 < y_max else PAD_T + chart_h
+    area_color = "#22c55e" if cumulative_pnl[-1] >= 0 else "#ef4444"
+    area_poly = (
+        f'<polygon points="{PAD_L},{base_y:.1f} {points_for_area} {final_x:.1f},{base_y:.1f}" '
+        f'fill="{area_color}" fill-opacity="0.12"/>'
+    )
+
+    # Line path
+    path_d = " ".join(("M" if i == 0 else "L") + f"{px(i):.1f},{py(v):.1f}" for i, v in enumerate(cumulative_pnl))
+    line_color = "#22c55e" if cumulative_pnl[-1] >= 0 else "#ef4444"
+    line_path = f'<path d="{path_d}" stroke="{line_color}" stroke-width="1.5" fill="none"/>'
+
+    # Y-axis labels (min/max/current)
+    def money(v: float) -> str:
+        sign = "+" if v >= 0 else ""
+        return f"{sign}${v:,.0f}"
+
+    y_labels = (
+        f'<text x="{PAD_L - 2}" y="{PAD_T + 8:.1f}" fill="#71717a" font-size="7" text-anchor="end">{money(y_max)}</text>'
+        f'<text x="{PAD_L - 2}" y="{PAD_T + chart_h:.1f}" fill="#71717a" font-size="7" text-anchor="end">{money(y_min)}</text>'
+        f'<text x="{PAD_L + chart_w}" y="{py(cumulative_pnl[-1]) - 2:.1f}" fill="{line_color}" font-size="7" text-anchor="end">{money(cumulative_pnl[-1])}</text>'
+    )
+
+    # X-axis date labels (first + last)
+    x_labels = ""
+    if dates:
+        first_label = dates[0][-5:] if len(dates[0]) >= 5 else dates[0]
+        last_label = dates[-1][-5:] if len(dates[-1]) >= 5 else dates[-1]
+        x_labels = (
+            f'<text x="{PAD_L}" y="{height - 2}" fill="#71717a" font-size="7" text-anchor="start">{first_label}</text>'
+            f'<text x="{PAD_L + chart_w}" y="{height - 2}" fill="#71717a" font-size="7" text-anchor="end">{last_label}</text>'
+        )
+
+    svg_body = "\n".join([zero_line, area_poly, line_path, y_labels, x_labels])
+    return f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">\n{svg_body}\n</svg>'
+
+
+def _render_winrate_bar_svg(
+    dates: list[str],
+    win_flags: list[bool],
+    rolling_window: int = 10,
+    width: int = 300,
+    height: int = 60,
+) -> str:
+    """Render a rolling win-rate sparkline as inline SVG."""
+    if not win_flags or len(win_flags) < 2:
+        return (
+            f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">'
+            f'<text x="{width // 2}" y="{height // 2}" fill="#71717a" font-size="11" '
+            f'text-anchor="middle">No data</text></svg>'
+        )
+
+    # Compute rolling win rate
+    rolling: list[float] = []
+    for i in range(len(win_flags)):
+        start = max(0, i - rolling_window + 1)
+        window = win_flags[start : i + 1]
+        rolling.append(sum(window) / len(window) * 100.0)
+
+    n = len(rolling)
+    PAD_L, PAD_R, PAD_T, PAD_B = 26, 8, 4, 14
+    chart_w = width - PAD_L - PAD_R
+    chart_h = height - PAD_T - PAD_B
+
+    def px(i: int) -> float:
+        return PAD_L + i / max(n - 1, 1) * chart_w
+
+    def py(v: float) -> float:
+        return PAD_T + chart_h - v / 100.0 * chart_h
+
+    # 50% reference line
+    mid_y = py(50.0)
+    mid_line = (
+        f'<line x1="{PAD_L}" y1="{mid_y:.1f}" x2="{PAD_L + chart_w}" y2="{mid_y:.1f}" '
+        f'stroke="#52525b" stroke-width="0.8" stroke-dasharray="3 2"/>'
+        f'<text x="{PAD_L - 2}" y="{mid_y + 3:.1f}" fill="#52525b" font-size="7" text-anchor="end">50%</text>'
+    )
+
+    # Area
+    pts = " ".join(f"{px(i):.1f},{py(v):.1f}" for i, v in enumerate(rolling))
+    area_poly = (
+        f'<polygon points="{PAD_L},{PAD_T + chart_h:.1f} {pts} {px(n - 1):.1f},{PAD_T + chart_h:.1f}" '
+        f'fill="#3b82f6" fill-opacity="0.15"/>'
+    )
+
+    # Line
+    path_d = " ".join(("M" if i == 0 else "L") + f"{px(i):.1f},{py(v):.1f}" for i, v in enumerate(rolling))
+    cur_color = "#22c55e" if rolling[-1] >= 50 else "#f87171"
+    line_path = f'<path d="{path_d}" stroke="{cur_color}" stroke-width="1.5" fill="none"/>'
+
+    # Labels
+    cur_wr = rolling[-1]
+    y_labels = (
+        f'<text x="{PAD_L - 2}" y="{PAD_T + 8}" fill="#71717a" font-size="7" text-anchor="end">100%</text>'
+        f'<text x="{PAD_L - 2}" y="{PAD_T + chart_h}" fill="#71717a" font-size="7" text-anchor="end">0%</text>'
+        f'<text x="{PAD_L + chart_w}" y="{py(cur_wr) - 2:.1f}" fill="{cur_color}" font-size="7" text-anchor="end">{cur_wr:.0f}%</text>'
+    )
+    x_labels = ""
+    if dates:
+        first_label = dates[0][-5:] if len(dates[0]) >= 5 else dates[0]
+        last_label = dates[-1][-5:] if len(dates[-1]) >= 5 else dates[-1]
+        x_labels = (
+            f'<text x="{PAD_L}" y="{height - 2}" fill="#71717a" font-size="7" text-anchor="start">{first_label}</text>'
+            f'<text x="{PAD_L + chart_w}" y="{height - 2}" fill="#71717a" font-size="7" text-anchor="end">{last_label}</text>'
+        )
+
+    svg_body = "\n".join([mid_line, area_poly, line_path, y_labels, x_labels])
+    return f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">\n{svg_body}\n</svg>'
+
+
+def _render_monthly_bar_svg(
+    labels: list[str],
+    values: list[float],
+    width: int = 300,
+    height: int = 70,
+) -> str:
+    """Render a monthly P&L bar chart as inline SVG."""
+    if not labels or not values:
+        return (
+            f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">'
+            f'<text x="{width // 2}" y="{height // 2}" fill="#71717a" font-size="11" '
+            f'text-anchor="middle">No data</text></svg>'
+        )
+
+    n = len(values)
+    PAD_L, PAD_R, PAD_T, PAD_B = 32, 8, 8, 14
+    chart_w = width - PAD_L - PAD_R
+    chart_h = height - PAD_T - PAD_B
+
+    y_max = max(abs(v) for v in values) or 1.0
+    y_min_v = min(values)
+    y_max_v = max(values)
+
+    # Zero baseline
+    zero_frac = abs(y_min_v) / (abs(y_min_v) + abs(y_max_v)) if y_min_v < 0 else 0.0
+    zero_y = PAD_T + chart_h * (1.0 - zero_frac)
+
+    bar_w = max(2.0, chart_w / max(n, 1) * 0.75)
+    gap = chart_w / max(n, 1)
+
+    bars_svg = []
+    for i, v in enumerate(values):
+        bar_x = PAD_L + i * gap + (gap - bar_w) / 2
+        frac = abs(v) / max(y_max, 1.0)
+        bar_h = max(1.0, frac * chart_h * (abs(y_min_v) + abs(y_max_v)) / (2 * y_max))
+        if v >= 0:
+            bar_y = zero_y - bar_h
+            fill = "#22c55e"
+        else:
+            bar_y = zero_y
+            fill = "#ef4444"
+        bars_svg.append(
+            f'<rect x="{bar_x:.1f}" y="{bar_y:.1f}" width="{bar_w:.1f}" height="{bar_h:.1f}" '
+            f'fill="{fill}" fill-opacity="0.75"/>'
+        )
+        # Month label
+        lbl = labels[i][-7:] if len(labels[i]) > 7 else labels[i]
+        bars_svg.append(
+            f'<text x="{bar_x + bar_w / 2:.1f}" y="{height - 2}" fill="#71717a" '
+            f'font-size="6" text-anchor="middle">{lbl}</text>'
+        )
+
+    zero_line = (
+        f'<line x1="{PAD_L}" y1="{zero_y:.1f}" x2="{PAD_L + chart_w}" y2="{zero_y:.1f}" '
+        f'stroke="#52525b" stroke-width="0.8"/>'
+    )
+    y_labels = (
+        f'<text x="{PAD_L - 2}" y="{PAD_T + 8}" fill="#71717a" font-size="7" text-anchor="end">${y_max_v:,.0f}</text>'
+    )
+    if y_min_v < 0:
+        y_labels += f'<text x="{PAD_L - 2}" y="{PAD_T + chart_h}" fill="#71717a" font-size="7" text-anchor="end">${y_min_v:,.0f}</text>'
+
+    svg_body = "\n".join(bars_svg) + "\n" + zero_line + "\n" + y_labels
+    return f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">\n{svg_body}\n</svg>'
+
+
+def _render_performance_panel(days_back: int = 90) -> str:
+    """Render historical performance charts panel (equity curve, win rate, monthly bars).
+
+    Data source: ``daily_journal`` table via ``get_daily_journal()``.
+    """
+    try:
+        from lib.core.models import get_daily_journal, get_journal_stats
+    except ImportError as exc:
+        return f'<div class="t-text-faint text-xs text-center py-4">Stats unavailable: {exc}</div>'
+
+    try:
+        df = get_daily_journal(limit=days_back)
+        stats = get_journal_stats()
+    except Exception as exc:
+        return f'<div class="t-text-faint text-xs text-center py-4">DB error: {exc}</div>'
+
+    if df is None or (hasattr(df, "empty") and df.empty):
+        return '<div class="t-text-faint text-xs text-center py-4">No journal data yet</div>'
+
+    try:
+        records = df.to_dict(orient="records") if hasattr(df, "to_dict") else list(df)
+    except Exception:
+        records = []
+
+    if not records:
+        return '<div class="t-text-faint text-xs text-center py-4">No journal entries found</div>'
+
+    # Sort ascending by date
+    records = sorted(records, key=lambda r: str(r.get("trade_date", "")))
+
+    dates = [str(r.get("trade_date", "")) for r in records]
+    net_pnls = [float(r.get("net_pnl", 0.0)) for r in records]
+    win_flags = [p > 0 for p in net_pnls]
+    cumulative = []
+    running = 0.0
+    for p in net_pnls:
+        running += p
+        cumulative.append(running)
+
+    # Monthly aggregates
+    monthly: dict[str, float] = {}
+    for r in records:
+        d = str(r.get("trade_date", ""))
+        month_key = d[:7] if len(d) >= 7 else d  # YYYY-MM
+        monthly[month_key] = monthly.get(month_key, 0.0) + float(r.get("net_pnl", 0.0))
+
+    month_labels = sorted(monthly.keys())
+    month_vals = [monthly[m] for m in month_labels]
+
+    # Render charts
+    equity_svg = _render_equity_curve_svg(dates, cumulative, width=300, height=100)
+    winrate_svg = _render_winrate_bar_svg(dates, win_flags, rolling_window=10, width=300, height=60)
+    monthly_svg = _render_monthly_bar_svg(month_labels, month_vals, width=300, height=70)
+
+    # Key stats
+    total_days = stats.get("total_days", 0)
+    win_rate = stats.get("win_rate", 0.0)
+    total_net = stats.get("total_net", 0.0)
+    best_day = stats.get("best_day", 0.0)
+    worst_day = stats.get("worst_day", 0.0)
+    avg_daily = stats.get("avg_daily_net", 0.0)
+    streak = stats.get("current_streak", 0)
+    net_color = "#22c55e" if total_net >= 0 else "#ef4444"
+    wr_color = "#22c55e" if win_rate >= 50 else "#f87171"
+    streak_color = "#22c55e" if streak > 0 else ("#ef4444" if streak < 0 else "#a1a1aa")
+    streak_str = f"+{streak}W" if streak > 0 else (f"{streak}L" if streak < 0 else "—")
+
+    days_opts = "".join(
+        f'<option value="{d}" {"selected" if d == days_back else ""}>{d}d</option>' for d in [30, 60, 90, 180, 365]
+    )
+
+    return f"""
+    <div id="perf-panel-inner">
+        <!-- Controls -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <div style="font-size:9px;color:var(--text-faint)">{total_days} trading days recorded</div>
+            <select style="font-size:9px;background:var(--bg-input);color:var(--text-secondary);border:1px solid var(--border-panel);border-radius:3px;padding:1px 3px"
+                hx-get="/api/performance/html"
+                hx-trigger="change"
+                hx-target="#perf-panel-inner"
+                hx-swap="outerHTML"
+                name="days">
+                {days_opts}
+            </select>
+        </div>
+
+        <!-- Key metrics row -->
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:3px;margin-bottom:8px;text-align:center">
+            <div style="background:var(--bg-inner);border-radius:4px;padding:3px 2px">
+                <div style="font-size:8px;color:var(--text-faint)">Total Net</div>
+                <div style="font-size:10px;font-family:monospace;color:{net_color};font-weight:700">
+                    {"+" if total_net >= 0 else ""}${total_net:,.0f}
+                </div>
+            </div>
+            <div style="background:var(--bg-inner);border-radius:4px;padding:3px 2px">
+                <div style="font-size:8px;color:var(--text-faint)">Win Rate</div>
+                <div style="font-size:10px;font-family:monospace;color:{wr_color};font-weight:700">{win_rate:.1f}%</div>
+            </div>
+            <div style="background:var(--bg-inner);border-radius:4px;padding:3px 2px">
+                <div style="font-size:8px;color:var(--text-faint)">Streak</div>
+                <div style="font-size:10px;font-family:monospace;color:{streak_color};font-weight:700">{streak_str}</div>
+            </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:3px;margin-bottom:8px;text-align:center">
+            <div style="background:var(--bg-inner);border-radius:4px;padding:3px 2px">
+                <div style="font-size:8px;color:var(--text-faint)">Avg/Day</div>
+                <div style="font-size:10px;font-family:monospace;color:var(--text-secondary)">
+                    {"+" if avg_daily >= 0 else ""}${avg_daily:,.0f}
+                </div>
+            </div>
+            <div style="background:var(--bg-inner);border-radius:4px;padding:3px 2px">
+                <div style="font-size:8px;color:var(--text-faint)">Best Day</div>
+                <div style="font-size:10px;font-family:monospace;color:#22c55e">+${best_day:,.0f}</div>
+            </div>
+            <div style="background:var(--bg-inner);border-radius:4px;padding:3px 2px">
+                <div style="font-size:8px;color:var(--text-faint)">Worst Day</div>
+                <div style="font-size:10px;font-family:monospace;color:#f87171">${worst_day:,.0f}</div>
+            </div>
+        </div>
+
+        <!-- Equity Curve -->
+        <div style="margin-bottom:8px">
+            <div style="font-size:8px;color:var(--text-faint);margin-bottom:2px">📈 Equity Curve (Cumulative Net P&amp;L)</div>
+            {equity_svg}
+        </div>
+
+        <!-- Rolling Win Rate -->
+        <div style="margin-bottom:8px">
+            <div style="font-size:8px;color:var(--text-faint);margin-bottom:2px">🎯 Rolling Win Rate (10-day)</div>
+            {winrate_svg}
+        </div>
+
+        <!-- Monthly P&L bars -->
+        <div>
+            <div style="font-size:8px;color:var(--text-faint);margin-bottom:2px">📅 Monthly Net P&amp;L</div>
+            {monthly_svg}
+        </div>
+    </div>
+    """
 
 
 def _get_grok_update() -> dict[str, Any] | None:
@@ -731,45 +1445,229 @@ def _render_risk_panel(risk_status: dict[str, Any] | None) -> str:
 
 
 def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
-    """Render condensed Grok AI brief panel."""
+    """Render condensed Grok AI brief panel with streaming controls.
+
+    The panel has two zones:
+    - **Cached brief** — the last completed update, rendered from Redis.
+    - **Stream area** — hidden by default; shown while a Grok SSE stream
+      is active so tokens appear progressively as they arrive.
+
+    Two action buttons live in the header:
+    - 📋 Brief  → opens /sse/grok/briefing  (morning briefing)
+    - ⚡ Update → opens /sse/grok/update    (compact live update)
+
+    The JS that drives the stream is emitted inline once and reused
+    across re-renders via the ``_grokStreamInit`` guard flag.
+    """
     if not grok_data:
-        return """
-        <div id="grok-panel" class="t-panel border t-border rounded-lg p-3"
-             hx-swap-oob="true">
-            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-1">🤖 AI Brief</h3>
-            <div class="t-text-faint text-xs">Waiting for next update...</div>
+        cached_html = '<div class="t-text-faint text-xs" id="grok-cached-text">Waiting for next update...</div>'
+        time_et = ""
+        update_type = ""
+    else:
+        text = grok_data.get("text", "")
+        time_et = grok_data.get("time_et", "")
+        update_type = grok_data.get("type", "")
+
+        lines_html = ""
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.upper().startswith("DO NOW"):
+                lines_html += (
+                    f'<div class="text-yellow-300 font-bold text-[10px] mt-1 border-l-2 border-yellow-400 pl-1.5">'
+                    f"{stripped}</div>"
+                )
+            else:
+                css = "t-text-muted"
+                if "🟢" in stripped:
+                    css = "text-green-300"
+                elif "🔴" in stripped:
+                    css = "text-red-300"
+                lines_html += f'<div class="{css} font-mono text-[10px]">{stripped}</div>'
+
+        type_badge = ""
+        if update_type == "briefing":
+            type_badge = '<span style="font-size:9px;padding:1px 5px;border-radius:9999px;background:rgba(96,165,250,0.15);color:#60a5fa;margin-left:4px">briefing</span>'
+        elif update_type == "live_update":
+            type_badge = '<span style="font-size:9px;padding:1px 5px;border-radius:9999px;background:rgba(52,211,153,0.15);color:#34d399;margin-left:4px">live</span>'
+
+        cached_html = f"""
+        <div id="grok-cached-text" style="display:flex;align-items:flex-start;gap:4px">
+            {type_badge}
+            <div class="space-y-0.5 w-full">{lines_html}</div>
         </div>
         """
 
-    text = grok_data.get("text", "")
-    time_et = grok_data.get("time_et", "")
-
-    lines_html = ""
-    for line in text.split("\n"):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.upper().startswith("DO NOW"):
-            lines_html += f'<div class="text-yellow-300 font-bold text-[10px] mt-1 border-l-2 border-yellow-400 pl-1.5">{stripped}</div>'
-        else:
-            css = "t-text-muted"
-            if "🟢" in stripped:
-                css = "text-green-300"
-            elif "🔴" in stripped:
-                css = "text-red-300"
-            lines_html += f'<div class="{css} font-mono text-[10px]">{stripped}</div>'
-
     return f"""
     <div id="grok-panel" class="t-panel border t-border rounded-lg p-3"
+         style="border-left:3px solid rgba(251,191,36,0.4)"
          hx-swap-oob="true">
+
+        <!-- Header row: title + time + stream buttons -->
         <div class="flex items-center justify-between mb-1.5">
-            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">🤖 AI Brief</h3>
-            <span class="text-[9px] t-text-faint">{time_et}</span>
+            <div class="flex items-center gap-1.5">
+                <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">🤖 AI Analyst</h3>
+                <span id="grok-stream-status" style="font-size:9px;display:none;color:#fbbf24">● streaming</span>
+            </div>
+            <div class="flex items-center gap-1">
+                <span class="text-[9px] t-text-faint" id="grok-time-label">{time_et}</span>
+                <button onclick="grokStream('briefing')"
+                        title="Stream morning briefing"
+                        style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(96,165,250,0.15);border:1px solid rgba(96,165,250,0.3);color:#93c5fd;cursor:pointer"
+                        id="grok-btn-brief">📋 Brief</button>
+                <button onclick="grokStream('update')"
+                        title="Stream live update"
+                        style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(52,211,153,0.15);border:1px solid rgba(52,211,153,0.3);color:#6ee7b7;cursor:pointer"
+                        id="grok-btn-update">⚡ Update</button>
+            </div>
         </div>
-        <div class="space-y-0.5 max-h-28 overflow-y-auto">
-            {lines_html}
+
+        <!-- Cached text area (shown when not streaming) -->
+        <div id="grok-cached-area" class="max-h-36 overflow-y-auto">
+            {cached_html}
         </div>
+
+        <!-- Streaming area (hidden until a stream starts) -->
+        <div id="grok-stream-area"
+             style="display:none;max-height:14rem;overflow-y:auto;border-top:1px solid var(--border-subtle);margin-top:6px;padding-top:6px">
+            <div id="grok-stream-text"
+                 style="font-size:10px;color:var(--text-secondary);font-family:monospace;white-space:pre-wrap;line-height:1.55"></div>
+            <div id="grok-stream-cursor"
+                 style="display:inline-block;width:7px;height:12px;background:#fbbf24;vertical-align:text-bottom;animation:pulse 0.8s steps(1) infinite"></div>
+        </div>
+
+        <!-- Error toast -->
+        <div id="grok-stream-error"
+             style="display:none;margin-top:4px;padding:3px 8px;border-radius:4px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);font-size:9px;color:#fca5a5"></div>
     </div>
+
+    <script>
+    (function() {{
+        // Guard: only initialise once even if the panel is re-rendered by HTMX
+        if (window._grokStreamInit) return;
+        window._grokStreamInit = true;
+
+        var _grokEs = null;
+
+        window.grokStream = function(type) {{
+            // Close any existing stream first
+            if (_grokEs) {{ try {{ _grokEs.close(); }} catch(e) {{}} _grokEs = null; }}
+
+            var url = type === 'briefing' ? '/sse/grok/briefing' : '/sse/grok/update?update_number=1';
+            var streamArea  = document.getElementById('grok-stream-area');
+            var streamText  = document.getElementById('grok-stream-text');
+            var streamCursor = document.getElementById('grok-stream-cursor');
+            var cachedArea  = document.getElementById('grok-cached-area');
+            var statusDot   = document.getElementById('grok-stream-status');
+            var errDiv      = document.getElementById('grok-stream-error');
+            var timeLabel   = document.getElementById('grok-time-label');
+            var btnBrief    = document.getElementById('grok-btn-brief');
+            var btnUpdate   = document.getElementById('grok-btn-update');
+
+            if (!streamArea || !streamText) return;
+
+            // Reset UI
+            streamText.textContent = '';
+            if (streamCursor) streamCursor.style.display = 'inline-block';
+            streamArea.style.display = 'block';
+            if (cachedArea) cachedArea.style.display = 'none';
+            if (statusDot) statusDot.style.display = 'inline';
+            if (errDiv) errDiv.style.display = 'none';
+            if (btnBrief)  btnBrief.disabled  = true;
+            if (btnUpdate) btnUpdate.disabled = true;
+
+            _grokEs = new EventSource(url);
+            var accumulated = '';
+
+            _grokEs.addEventListener('grok-start', function(e) {{
+                if (timeLabel) timeLabel.textContent = 'streaming…';
+            }});
+
+            _grokEs.addEventListener('grok-token', function(e) {{
+                accumulated += e.data;
+                if (streamText) {{
+                    streamText.textContent = accumulated;
+                    // Auto-scroll to bottom
+                    var parent = streamArea;
+                    if (parent) parent.scrollTop = parent.scrollHeight;
+                }}
+            }});
+
+            _grokEs.addEventListener('grok-heartbeat', function(e) {{
+                // keep-alive — no visible action needed
+            }});
+
+            _grokEs.addEventListener('grok-done', function(e) {{
+                _grokEs.close(); _grokEs = null;
+                if (streamCursor) streamCursor.style.display = 'none';
+                if (statusDot) statusDot.style.display = 'none';
+                if (btnBrief)  btnBrief.disabled  = false;
+                if (btnUpdate) btnUpdate.disabled = false;
+
+                // Parse completion meta
+                try {{
+                    var meta = JSON.parse(e.data);
+                    var now = new Date().toLocaleTimeString('en-US',{{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false}});
+                    if (timeLabel) timeLabel.textContent = now + ' ET';
+                }} catch(ex) {{}}
+
+                // After a short delay, swap the streamed text back into the
+                // cached area so it persists after the next HTMX re-render
+                setTimeout(function() {{
+                    if (cachedArea) {{
+                        var badge = type === 'briefing'
+                            ? '<span style="font-size:9px;padding:1px 5px;border-radius:9999px;background:rgba(96,165,250,0.15);color:#60a5fa;margin-right:4px">briefing</span>'
+                            : '<span style="font-size:9px;padding:1px 5px;border-radius:9999px;background:rgba(52,211,153,0.15);color:#34d399;margin-right:4px">live</span>';
+                        cachedArea.innerHTML = '<div id="grok-cached-text" style="display:flex;align-items:flex-start;gap:4px">'
+                            + badge
+                            + '<div style="font-size:10px;color:var(--text-secondary);font-family:monospace;white-space:pre-wrap;line-height:1.55">'
+                            + accumulated.replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                            + '</div></div>';
+                        cachedArea.style.display = 'block';
+                        streamArea.style.display = 'none';
+                    }}
+                }}, 800);
+            }});
+
+            _grokEs.addEventListener('grok-error', function(e) {{
+                _grokEs.close(); _grokEs = null;
+                if (streamCursor) streamCursor.style.display = 'none';
+                if (statusDot) statusDot.style.display = 'none';
+                if (btnBrief)  btnBrief.disabled  = false;
+                if (btnUpdate) btnUpdate.disabled = false;
+                if (cachedArea) cachedArea.style.display = 'block';
+                streamArea.style.display = 'none';
+                try {{
+                    var errData = JSON.parse(e.data);
+                    if (errDiv) {{
+                        errDiv.textContent = '⚠ ' + (errData.error || 'Unknown error');
+                        errDiv.style.display = 'block';
+                    }}
+                }} catch(ex) {{}}
+            }});
+
+            _grokEs.onerror = function() {{
+                if (_grokEs && _grokEs.readyState === EventSource.CLOSED) {{
+                    _grokEs = null;
+                    if (streamCursor) streamCursor.style.display = 'none';
+                    if (statusDot) statusDot.style.display = 'none';
+                    if (btnBrief)  btnBrief.disabled  = false;
+                    if (btnUpdate) btnUpdate.disabled = false;
+                    // Only hide stream area if we got no content
+                    if (!accumulated) {{
+                        if (cachedArea) cachedArea.style.display = 'block';
+                        streamArea.style.display = 'none';
+                        if (errDiv) {{
+                            errDiv.textContent = '⚠ Connection lost — check API key / network';
+                            errDiv.style.display = 'block';
+                        }}
+                    }}
+                }}
+            }};
+        }};
+    }})();
+    </script>
     """
 
 
@@ -969,18 +1867,23 @@ def _render_market_events_panel() -> str:
     return """
     <div id="market-events-panel" class="t-panel border t-border rounded-lg p-3">
         <div class="flex items-center justify-between mb-1.5">
-            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Market Events</h3>
-            <span class="text-[9px] text-zinc-600" id="events-ts">—</span>
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">Market Events</h3>
+            <span class="text-[9px] t-text-faint" id="events-ts">—</span>
         </div>
         <div id="market-events-feed" class="space-y-1 max-h-36 overflow-y-auto text-[10px]">
-            <div class="text-zinc-600">Listening for ORB signals, fills, and alerts...</div>
+            <div class="t-text-faint">Listening for ORB signals, fills, and alerts...</div>
         </div>
     </div>
     """
 
 
 def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str, str]) -> str:
-    """Render the complete dashboard HTML page."""
+    """Render the complete dashboard HTML page.
+
+    Self-contained CSS — no Tailwind CDN dependency.  All utility classes
+    are defined in the embedded <style> block so the dashboard renders
+    correctly even when there is no internet access on the host.
+    """
     # Asset cards grid
     cards_html = ""
     if focus_data and focus_data.get("assets"):
@@ -988,10 +1891,10 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             cards_html += _render_asset_card(asset)
     else:
         cards_html = """
-        <div class="col-span-2 text-center py-12 t-text-muted">
-            <div class="text-4xl mb-4">📊</div>
-            <div class="text-lg">Waiting for engine to compute daily focus...</div>
-            <div class="text-sm mt-2">Data will appear automatically when ready.</div>
+        <div class="col-span-2" style="text-align:center;padding:3rem 0">
+            <div style="font-size:2.5rem;margin-bottom:1rem">📊</div>
+            <div class="t-text-muted" style="font-size:1.1rem">Waiting for engine to compute daily focus...</div>
+            <div class="t-text-faint" style="font-size:0.85rem;margin-top:0.5rem">Data will appear automatically when ready.</div>
         </div>
         """
 
@@ -999,8 +1902,6 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     no_trade_html = ""
     if focus_data and focus_data.get("no_trade"):
         no_trade_html = _render_no_trade_banner(str(focus_data.get("no_trade_reason", "Low-conviction day")))
-
-    # Determine if we're in off-hours (hide trading panels)
 
     # Positions panel with risk status
     positions = _get_positions()
@@ -1036,11 +1937,11 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             pass
 
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>ORB Co-Pilot</title>
+    <title>Futures Trading Co-Pilot</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
     <!-- Apply saved theme BEFORE paint to prevent flash -->
     <script>
@@ -1050,106 +1951,289 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             else document.documentElement.classList.add('dark');
         }})();
     </script>
-    <script>
-        (function() {{
-            var origWarn = console.warn;
-            console.warn = function() {{
-                if (arguments.length > 0 && typeof arguments[0] === 'string' && arguments[0].includes('cdn.tailwindcss.com')) return;
-                origWarn.apply(console, arguments);
-            }};
-        }})();
-    </script>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {{ darkMode: 'class' }};
-    </script>
+    <!-- HTMX for live fragment swaps -->
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/hyperscript.org@0.9.14"></script>
     <style>
-        /* ── Theme CSS custom properties ────────────────────────────── */
-        /* Every panel renderer uses these variables so we only need   */
-        /* to flip values here rather than adding dark: classes to     */
-        /* hundreds of inline HTML strings.                             */
+        /* ═══════════════════════════════════════════════════════════
+           SELF-CONTAINED CSS — Futures Trading Co-Pilot
+           No Tailwind CDN needed.  All utility classes are defined
+           below so the dashboard works on air-gapped hosts.
+        ═══════════════════════════════════════════════════════════ */
+
+        /* ── Reset ────────────────────────────────────────────── */
+        *, *::before, *::after {{ box-sizing: border-box; margin:0; padding:0; }}
+        html {{ -webkit-text-size-adjust: 100%; }}
+
+        /* ── Theme variables ──────────────────────────────────── */
         :root {{
-            --bg-body:        #f4f4f5;   /* zinc-100 */
+            --bg-body:        #f4f4f5;
             --bg-panel:       rgba(255,255,255,0.80);
-            --bg-panel-inner: rgba(244,244,245,0.60);  /* zinc-100/60 */
-            --bg-input:       #e4e4e7;   /* zinc-200 */
-            --bg-bar:         #d4d4d8;   /* zinc-300 */
-            --border-panel:   #d4d4d8;   /* zinc-300 */
-            --border-subtle:  #e4e4e7;   /* zinc-200 */
-            --text-primary:   #18181b;   /* zinc-900 */
-            --text-secondary: #3f3f46;   /* zinc-700 */
-            --text-muted:     #71717a;   /* zinc-500 */
-            --text-faint:     #a1a1aa;   /* zinc-400 */
+            --bg-panel-inner: rgba(244,244,245,0.60);
+            --bg-input:       #e4e4e7;
+            --bg-bar:         #d4d4d8;
+            --border-panel:   #d4d4d8;
+            --border-subtle:  #e4e4e7;
+            --text-primary:   #18181b;
+            --text-secondary: #3f3f46;
+            --text-muted:     #71717a;
+            --text-faint:     #a1a1aa;
             --scrollbar-track: #f4f4f5;
             --scrollbar-thumb: #a1a1aa;
         }}
         .dark {{
-            --bg-body:        #09090b;   /* zinc-950 */
-            --bg-panel:       rgba(24,24,27,0.60);     /* zinc-900/60 */
-            --bg-panel-inner: rgba(39,39,42,0.40);     /* zinc-800/40 */
-            --bg-input:       #27272a;   /* zinc-800 */
-            --bg-bar:         #3f3f46;   /* zinc-700 */
-            --border-panel:   #3f3f46;   /* zinc-700 */
-            --border-subtle:  #27272a;   /* zinc-800 */
+            --bg-body:        #09090b;
+            --bg-panel:       rgba(24,24,27,0.60);
+            --bg-panel-inner: rgba(39,39,42,0.40);
+            --bg-input:       #27272a;
+            --bg-bar:         #3f3f46;
+            --border-panel:   #3f3f46;
+            --border-subtle:  #27272a;
             --text-primary:   #ffffff;
-            --text-secondary: #d4d4d8;   /* zinc-300 */
-            --text-muted:     #71717a;   /* zinc-500 */
-            --text-faint:     #52525b;   /* zinc-600 */
+            --text-secondary: #d4d4d8;
+            --text-muted:     #71717a;
+            --text-faint:     #52525b;
             --scrollbar-track: #18181b;
             --scrollbar-thumb: #3f3f46;
         }}
 
         body {{
-            font-family: 'Inter', system-ui, -apple-system, sans-serif;
-            -webkit-text-size-adjust: 100%;
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: var(--bg-body);
             color: var(--text-primary);
-        }}
-        * {{ box-sizing: border-box; }}
-
-        /* Panels — used by every _render_*_panel function */
-        .t-panel {{
-            background: var(--bg-panel);
-            border-color: var(--border-panel);
-        }}
-        .t-panel-inner {{
-            background: var(--bg-panel-inner);
-        }}
-        .t-input {{
-            background: var(--bg-input);
-        }}
-        .t-bar {{
-            background: var(--bg-bar);
-        }}
-        .t-border {{
-            border-color: var(--border-panel);
-        }}
-        .t-border-subtle {{
-            border-color: var(--border-subtle);
-        }}
-        .t-text {{
-            color: var(--text-primary);
-        }}
-        .t-text-secondary {{
-            color: var(--text-secondary);
-        }}
-        .t-text-muted {{
-            color: var(--text-muted);
-        }}
-        .t-text-faint {{
-            color: var(--text-faint);
+            min-height: 100vh;
+            line-height: 1.5;
         }}
 
-        @media (max-width: 640px) {{
-            .mobile-scroll {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
-            .mobile-hide {{ display: none !important; }}
-            .mobile-full {{ width: 100% !important; }}
-        }}
-        .glow-green {{ box-shadow: 0 0 12px rgba(34,197,94,0.25); }}
-        .glow-red   {{ box-shadow: 0 0 12px rgba(239,68,68,0.25); }}
-        .glow-blue  {{ box-shadow: 0 0 12px rgba(59,130,246,0.25); }}
+        /* ── Theme utility classes (used by panel renderers) ─── */
+        .t-panel        {{ background: var(--bg-panel); border-color: var(--border-panel); }}
+        .t-panel-inner  {{ background: var(--bg-panel-inner); }}
+        .t-input        {{ background: var(--bg-input); }}
+        .t-bar          {{ background: var(--bg-bar); }}
+        .t-border       {{ border-color: var(--border-panel); }}
+        .t-border-subtle {{ border-color: var(--border-subtle); }}
+        .t-text         {{ color: var(--text-primary); }}
+        .t-text-secondary {{ color: var(--text-secondary); }}
+        .t-text-muted   {{ color: var(--text-muted); }}
+        .t-text-faint   {{ color: var(--text-faint); }}
+
+        /* ── Layout utilities ─────────────────────────────────── */
+        .flex {{ display: flex; }}
+        .inline-flex {{ display: inline-flex; }}
+        .grid {{ display: grid; }}
+        .block {{ display: block; }}
+        .inline-block {{ display: inline-block; }}
+        .hidden {{ display: none; }}
+        .relative {{ position: relative; }}
+        .absolute {{ position: absolute; }}
+        .items-center {{ align-items: center; }}
+        .items-start {{ align-items: flex-start; }}
+        .justify-between {{ justify-content: space-between; }}
+        .justify-center {{ justify-content: center; }}
+        .flex-wrap {{ flex-wrap: wrap; }}
+        .shrink-0 {{ flex-shrink: 0; }}
+        .min-w-0 {{ min-width: 0; }}
+        .w-full {{ width: 100%; }}
+        .overflow-hidden {{ overflow: hidden; }}
+        .overflow-x-auto {{ overflow-x: auto; }}
+        .overflow-y-auto {{ overflow-y: auto; }}
+        .truncate {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+        .whitespace-nowrap {{ white-space: nowrap; }}
+        .select-none {{ user-select: none; }}
+        .pointer-events-none {{ pointer-events: none; }}
+        .cursor-pointer {{ cursor: pointer; }}
+
+        /* ── Gaps ──────────────────────────────────────────────── */
+        .gap-0\\.5 {{ gap: 0.125rem; }}
+        .gap-1    {{ gap: 0.25rem; }}
+        .gap-1\\.5 {{ gap: 0.375rem; }}
+        .gap-2    {{ gap: 0.5rem; }}
+        .gap-3    {{ gap: 0.75rem; }}
+        .gap-4    {{ gap: 1rem; }}
+        .gap-x-2  {{ column-gap: 0.5rem; }}
+        .gap-x-3  {{ column-gap: 0.75rem; }}
+        .gap-y-0\\.5 {{ row-gap: 0.125rem; }}
+        .gap-y-1  {{ row-gap: 0.25rem; }}
+
+        /* ── Spacing ───────────────────────────────────────────── */
+        .p-1    {{ padding: 0.25rem; }}
+        .p-1\\.5 {{ padding: 0.375rem; }}
+        .p-2    {{ padding: 0.5rem; }}
+        .p-2\\.5 {{ padding: 0.625rem; }}
+        .p-3    {{ padding: 0.75rem; }}
+        .p-4    {{ padding: 1rem; }}
+        .px-1   {{ padding-left: 0.25rem; padding-right: 0.25rem; }}
+        .px-1\\.5 {{ padding-left: 0.375rem; padding-right: 0.375rem; }}
+        .px-2   {{ padding-left: 0.5rem; padding-right: 0.5rem; }}
+        .px-3   {{ padding-left: 0.75rem; padding-right: 0.75rem; }}
+        .px-4   {{ padding-left: 1rem; padding-right: 1rem; }}
+        .py-0\\.5 {{ padding-top: 0.125rem; padding-bottom: 0.125rem; }}
+        .py-1   {{ padding-top: 0.25rem; padding-bottom: 0.25rem; }}
+        .py-1\\.5 {{ padding-top: 0.375rem; padding-bottom: 0.375rem; }}
+        .py-2   {{ padding-top: 0.5rem; padding-bottom: 0.5rem; }}
+        .py-3   {{ padding-top: 0.75rem; padding-bottom: 0.75rem; }}
+        .py-6   {{ padding-top: 1.5rem; padding-bottom: 1.5rem; }}
+        .py-12  {{ padding-top: 3rem; padding-bottom: 3rem; }}
+        .pb-0\\.5 {{ padding-bottom: 0.125rem; }}
+        .pb-1\\.5 {{ padding-bottom: 0.375rem; }}
+        .pb-2   {{ padding-bottom: 0.5rem; }}
+        .pt-2   {{ padding-top: 0.5rem; }}
+        .pt-3   {{ padding-top: 0.75rem; }}
+        .mb-0\\.5 {{ margin-bottom: 0.125rem; }}
+        .mb-1   {{ margin-bottom: 0.25rem; }}
+        .mb-1\\.5 {{ margin-bottom: 0.375rem; }}
+        .mb-2   {{ margin-bottom: 0.5rem; }}
+        .mb-3   {{ margin-bottom: 0.75rem; }}
+        .mb-4   {{ margin-bottom: 1rem; }}
+        .mt-0\\.5 {{ margin-top: 0.125rem; }}
+        .mt-1   {{ margin-top: 0.25rem; }}
+        .mt-2   {{ margin-top: 0.5rem; }}
+        .mt-3   {{ margin-top: 0.75rem; }}
+        .mt-4   {{ margin-top: 1rem; }}
+        .ml-1   {{ margin-left: 0.25rem; }}
+        .ml-1\\.5 {{ margin-left: 0.375rem; }}
+        .ml-2   {{ margin-left: 0.5rem; }}
+        .ml-auto {{ margin-left: auto; }}
+        .mr-1   {{ margin-right: 0.25rem; }}
+        .-mx-1  {{ margin-left: -0.25rem; margin-right: -0.25rem; }}
+
+        /* ── Sizing ────────────────────────────────────────────── */
+        .h-1    {{ height: 0.25rem; }}
+        .h-2    {{ height: 0.5rem; }}
+        .h-6    {{ height: 1.5rem; }}
+        .w-0\\.5 {{ width: 0.125rem; }}
+        .w-1    {{ width: 0.25rem; }}
+        .w-1\\.5 {{ width: 0.375rem; }}
+        .w-2    {{ width: 0.5rem; }}
+        .max-h-28 {{ max-height: 7rem; }}
+        .max-h-36 {{ max-height: 9rem; }}
+        .max-h-72 {{ max-height: 18rem; }}
+        .min-w-\\[200px\\] {{ min-width: 200px; }}
+        .min-w-\\[320px\\] {{ min-width: 320px; }}
+
+        /* ── Typography ────────────────────────────────────────── */
+        .text-\\[9px\\]  {{ font-size: 9px; line-height: 1.2; }}
+        .text-\\[10px\\] {{ font-size: 10px; line-height: 1.3; }}
+        .text-\\[11px\\] {{ font-size: 11px; line-height: 1.3; }}
+        .text-xs       {{ font-size: 0.75rem; line-height: 1rem; }}
+        .text-sm       {{ font-size: 0.875rem; line-height: 1.25rem; }}
+        .text-base     {{ font-size: 1rem; line-height: 1.5rem; }}
+        .text-lg       {{ font-size: 1.125rem; line-height: 1.75rem; }}
+        .text-xl       {{ font-size: 1.25rem; line-height: 1.75rem; }}
+        .text-2xl      {{ font-size: 1.5rem; line-height: 2rem; }}
+        .text-3xl      {{ font-size: 1.875rem; line-height: 2.25rem; }}
+        .text-4xl      {{ font-size: 2.25rem; line-height: 2.5rem; }}
+        .font-mono     {{ font-family: 'SF Mono', 'Cascadia Code', 'Consolas', 'Liberation Mono', monospace; }}
+        .font-bold     {{ font-weight: 700; }}
+        .font-semibold {{ font-weight: 600; }}
+        .italic        {{ font-style: italic; }}
+        .uppercase     {{ text-transform: uppercase; }}
+        .tracking-wide {{ letter-spacing: 0.025em; }}
+        .tracking-wider {{ letter-spacing: 0.05em; }}
+        .leading-none  {{ line-height: 1; }}
+        .leading-tight {{ line-height: 1.25; }}
+        .text-center   {{ text-align: center; }}
+        .text-left     {{ text-align: left; }}
+        .text-right    {{ text-align: right; }}
+        .underline     {{ text-decoration: underline; }}
+        .no-underline  {{ text-decoration: none; }}
+
+        /* ── Colors (static — used in panel renderers) ─────── */
+        .text-white     {{ color: #ffffff; }}
+        .text-green-300 {{ color: #86efac; }}
+        .text-green-400 {{ color: #4ade80; }}
+        .text-green-500 {{ color: #22c55e; }}
+        .text-red-300   {{ color: #fca5a5; }}
+        .text-red-400   {{ color: #f87171; }}
+        .text-red-500   {{ color: #ef4444; }}
+        .text-yellow-300 {{ color: #fde047; }}
+        .text-yellow-400 {{ color: #facc15; }}
+        .text-blue-400  {{ color: #60a5fa; }}
+        .text-purple-400 {{ color: #c084fc; }}
+        .text-emerald-400 {{ color: #34d399; }}
+        .text-zinc-200  {{ color: #e4e4e7; }}
+        .text-zinc-400  {{ color: #a1a1aa; }}
+        .text-zinc-500  {{ color: #71717a; }}
+        .text-zinc-600  {{ color: #52525b; }}
+        .text-zinc-700  {{ color: #3f3f46; }}
+
+        .bg-green-500   {{ background-color: #22c55e; }}
+        .bg-green-900\\/40 {{ background: rgba(20,83,45,0.4); }}
+        .bg-red-500     {{ background-color: #ef4444; }}
+        .bg-red-900\\/40 {{ background: rgba(127,29,29,0.4); }}
+        .bg-red-900\\/60 {{ background: rgba(127,29,29,0.6); }}
+        .bg-yellow-500  {{ background-color: #eab308; }}
+        .bg-yellow-400\\/10 {{ background: rgba(250,204,21,0.1); }}
+        .bg-zinc-800\\/40 {{ background: rgba(39,39,42,0.4); }}
+        .bg-zinc-800\\/60 {{ background: rgba(39,39,42,0.6); }}
+        .bg-zinc-900\\/60 {{ background: rgba(24,24,27,0.6); }}
+        .bg-zinc-900\\/80 {{ background: rgba(24,24,27,0.8); }}
+        .bg-white\\/5     {{ background: rgba(255,255,255,0.05); }}
+        .bg-white\\/60    {{ background: rgba(255,255,255,0.60); }}
+        .bg-white\\/80    {{ background: rgba(255,255,255,0.80); }}
+        .bg-white         {{ background: #ffffff; }}
+        .bg-blue-700      {{ background-color: #1d4ed8; }}
+        .bg-emerald-700   {{ background-color: #047857; }}
+        .bg-slate-600     {{ background-color: #475569; }}
+        .bg-indigo-700    {{ background-color: #4338ca; }}
+        .bg-teal-800      {{ background-color: #115e59; }}
+
+        .text-white\\/60   {{ color: rgba(255,255,255,0.6); }}
+        .text-slate-300   {{ color: #cbd5e1; }}
+        .text-indigo-200  {{ color: #c7d2fe; }}
+        .text-blue-200    {{ color: #bfdbfe; }}
+        .text-emerald-200 {{ color: #a7f3d0; }}
+        .text-teal-300    {{ color: #5eead4; }}
+
+        .border-green-500 {{ border-color: #22c55e; }}
+        .border-green-600\\/40 {{ border-color: rgba(22,163,74,0.4); }}
+        .border-green-600\\/50 {{ border-color: rgba(22,163,74,0.5); }}
+        .border-red-500   {{ border-color: #ef4444; }}
+        .border-red-600\\/40 {{ border-color: rgba(220,38,38,0.4); }}
+        .border-red-600\\/50 {{ border-color: rgba(220,38,38,0.5); }}
+        .border-red-700   {{ border-color: #b91c1c; }}
+        .border-yellow-400\\/30 {{ border-color: rgba(250,204,21,0.3); }}
+        .border-yellow-400\\/40 {{ border-color: rgba(250,204,21,0.4); }}
+        .border-zinc-600  {{ border-color: #52525b; }}
+        .border-zinc-700  {{ border-color: #3f3f46; }}
+        .border-zinc-700\\/40 {{ border-color: rgba(63,63,70,0.4); }}
+        .border-zinc-700\\/50 {{ border-color: rgba(63,63,70,0.5); }}
+        .border-zinc-800  {{ border-color: #27272a; }}
+        .border-zinc-800\\/40 {{ border-color: rgba(39,39,42,0.4); }}
+        .border-blue-400  {{ border-color: #60a5fa; }}
+        .border-blue-500  {{ border-color: #3b82f6; }}
+        .border-emerald-400 {{ border-color: #34d399; }}
+
+        /* ── Border / Rounded ──────────────────────────────────── */
+        .border    {{ border-width: 1px; border-style: solid; }}
+        .border-b  {{ border-bottom-width: 1px; border-bottom-style: solid; }}
+        .border-t  {{ border-top-width: 1px; border-top-style: solid; }}
+        .border-l  {{ border-left-width: 1px; border-left-style: solid; }}
+        .border-r  {{ border-right-width: 1px; border-right-style: solid; }}
+        .border-l-2 {{ border-left-width: 2px; border-left-style: solid; }}
+        .border-r-2 {{ border-right-width: 2px; border-right-style: solid; }}
+        .border-b-2 {{ border-bottom-width: 2px; border-bottom-style: solid; }}
+        .rounded    {{ border-radius: 0.25rem; }}
+        .rounded-sm {{ border-radius: 0.125rem; }}
+        .rounded-md {{ border-radius: 0.375rem; }}
+        .rounded-lg {{ border-radius: 0.5rem; }}
+        .rounded-full {{ border-radius: 9999px; }}
+
+        /* ── Grid ──────────────────────────────────────────────── */
+        .grid-cols-1 {{ grid-template-columns: repeat(1, minmax(0, 1fr)); }}
+        .grid-cols-2 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+        .grid-cols-3 {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+        .grid-cols-4 {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }}
+        .col-span-2 {{ grid-column: span 2 / span 2; }}
+
+        /* ── Transitions / Animations ──────────────────────────── */
+        .transition-all     {{ transition: all 0.15s ease; }}
+        .transition-colors  {{ transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease; }}
+        .transition-transform {{ transition: transform 0.15s ease; }}
+        .duration-200 {{ transition-duration: 200ms; }}
+        .duration-500 {{ transition-duration: 500ms; }}
+        @keyframes pulse {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.5; }} }}
+        .animate-pulse {{ animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }}
         @keyframes sse-flash {{
             0%   {{ outline: 2px solid rgba(34,197,94,0.9); outline-offset:-2px; }}
             100% {{ outline: 2px solid transparent; outline-offset:-2px; }}
@@ -1160,75 +2244,200 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             50%      {{ box-shadow: 0 0 0 6px rgba(34,197,94,0); }}
         }}
         .breakout-active {{ animation: breakout-pulse 2s ease-in-out infinite; }}
+
+        /* ── Positioning ───────────────────────────────────────── */
+        .inset-0  {{ top:0; right:0; bottom:0; left:0; }}
+        .top-0    {{ top: 0; }}
+        .bottom-0 {{ bottom: 0; }}
+        .left-0   {{ left: 0; }}
+        .right-0  {{ right: 0; }}
+        .-top-1   {{ top: -0.25rem; }}
+        .top-0\\.5 {{ top: 2px; }}
+        .left-0\\.5 {{ left: 2px; }}
+        .left-1\\/2 {{ left: 50%; }}
+        .-translate-x-1\\/2 {{ transform: translateX(-50%); }}
+
+        /* ── Effects ───────────────────────────────────────────── */
+        .glow-green {{ box-shadow: 0 0 12px rgba(34,197,94,0.25); }}
+        .glow-red   {{ box-shadow: 0 0 12px rgba(239,68,68,0.25); }}
+        .glow-blue  {{ box-shadow: 0 0 12px rgba(59,130,246,0.25); }}
+        .opacity-50 {{ opacity: 0.5; }}
+        .hover\\:opacity-80:hover {{ opacity: 0.8; }}
+        .z-10 {{ z-index: 10; }}
+        .self-center {{ align-self: center; }}
+
+        /* ── Status dots ───────────────────────────────────────── */
         #sse-status-dot.connected    {{ color: #22c55e; }}
         #sse-status-dot.disconnected {{ color: #ef4444; }}
         #sse-status-dot.connecting   {{ color: #eab308; }}
-        /* Validation match/mismatch row colours */
         .val-match    {{ background: rgba(34,197,94,0.06); }}
         .val-mismatch {{ background: rgba(239,68,68,0.06); }}
-        /* Slim scrollbar */
+
+        /* ── Table ─────────────────────────────────────────────── */
+        table {{ border-collapse: collapse; }}
+        td, th {{ border-color: inherit; }}
+
+        /* ── HTMX indicator ────────────────────────────────────── */
+        .htmx-indicator {{ display: none; }}
+        .htmx-request .htmx-indicator, .htmx-request.htmx-indicator {{ display: inline; }}
+
+        /* ── Scrollbar ─────────────────────────────────────────── */
         ::-webkit-scrollbar {{ width:4px; height:4px; }}
         ::-webkit-scrollbar-track {{ background: var(--scrollbar-track); }}
         ::-webkit-scrollbar-thumb {{ background: var(--scrollbar-thumb); border-radius:2px; }}
+
+        /* ── Space-y utility (vertical spacing between children) ─ */
+        .space-y-0\\.5 > * + * {{ margin-top: 0.125rem; }}
+        .space-y-1 > * + * {{ margin-top: 0.25rem; }}
+        .space-y-2 > * + * {{ margin-top: 0.5rem; }}
+        .space-y-2\\.5 > * + * {{ margin-top: 0.625rem; }}
+        .space-y-3 > * + * {{ margin-top: 0.75rem; }}
+
+        /* ── Details/summary ───────────────────────────────────── */
+        details > summary {{ list-style: none; }}
+        details > summary::-webkit-details-marker {{ display: none; }}
+        details[open] > summary .rotate-on-open {{ transform: rotate(90deg); }}
+
+        /* ── Health dot bar (Co-Pilot header) ──────────────────── */
+        .health-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }}
+        .health-dot.green {{ background: #22c55e; }}
+        .health-dot.red   {{ background: #ef4444; }}
+        .health-dot.gray  {{ background: #52525b; }}
+        .health-dot.yellow {{ background: #eab308; }}
+        .health-label {{ font-size: 11px; margin-right: 12px; vertical-align: middle; }}
+
+        /* ── Co-Pilot clock ─────────────────────────────────────── */
+        .copilot-clock {{
+            font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+        }}
+
+        /* ── Buttons ───────────────────────────────────────────── */
+        .co-btn {{
+            background: var(--bg-input);
+            border: 1px solid var(--border-panel);
+            border-radius: 0.375rem;
+            padding: 4px 10px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }}
+        .co-btn:hover {{ opacity: 0.8; }}
+
+        /* ── Container ─────────────────────────────────────────── */
+        .container {{
+            max-width: 1536px;
+            margin: 0 auto;
+            padding: 0.5rem 0.75rem;
+        }}
+
+        /* ── Responsive grid ───────────────────────────────────── */
+        @media (min-width: 640px) {{
+            .sm\\:grid-cols-2 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+            .sm\\:grid-cols-3 {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+            .sm\\:grid-cols-4 {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }}
+            .sm\\:inline {{ display: inline; }}
+            .sm\\:flex {{ display: flex; }}
+            .sm\\:block {{ display: block; }}
+            .sm\\:table-cell {{ display: table-cell; }}
+            .hidden.sm\\:flex {{ display: flex !important; }}
+            .hidden.sm\\:inline {{ display: inline !important; }}
+            .sm\\:px-3 {{ padding-left: 0.75rem; padding-right: 0.75rem; }}
+            .sm\\:px-4 {{ padding-left: 1rem; padding-right: 1rem; }}
+            .sm\\:py-3 {{ padding-top: 0.75rem; padding-bottom: 0.75rem; }}
+            .sm\\:p-4 {{ padding: 1rem; }}
+            .sm\\:p-1\\.5 {{ padding: 0.375rem; }}
+            .sm\\:text-xs {{ font-size: 0.75rem; }}
+            .sm\\:text-lg {{ font-size: 1.125rem; }}
+            .sm\\:text-xl {{ font-size: 1.25rem; }}
+            .sm\\:text-2xl {{ font-size: 1.5rem; }}
+            .sm\\:text-\\[11px\\] {{ font-size: 11px; }}
+            .sm\\:gap-1\\.5 {{ gap: 0.375rem; }}
+            .sm\\:gap-2 {{ gap: 0.5rem; }}
+            .sm\\:gap-3 {{ gap: 0.75rem; }}
+            .sm\\:mb-3 {{ margin-bottom: 0.75rem; }}
+            .sm\\:mb-4 {{ margin-bottom: 1rem; }}
+            .sm\\:pb-2\\.5 {{ padding-bottom: 0.625rem; }}
+            .sm\\:pb-6 {{ padding-bottom: 1.5rem; }}
+            .sm\\:mt-3 {{ margin-top: 0.75rem; }}
+            .sm\\:space-y-2\\.5 > * + * {{ margin-top: 0.625rem; }}
+            .sm\\:space-y-3 > * + * {{ margin-top: 0.75rem; }}
+            .sm\\:flex {{ display: flex; }}
+        }}
+        @media (min-width: 768px) {{
+            .md\\:flex {{ display: flex; }}
+        }}
+        @media (min-width: 1280px) {{
+            .xl\\:grid-cols-3 {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+            .xl\\:col-span-2 {{ grid-column: span 2 / span 2; }}
+        }}
+        @media (max-width: 639px) {{
+            .hidden.sm\\:inline {{ display: none !important; }}
+            .hidden.sm\\:flex {{ display: none !important; }}
+            .hidden.sm\\:table-cell {{ display: none !important; }}
+            .mobile-scroll {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
+            .mobile-hide {{ display: none !important; }}
+        }}
+
+        /* ── Link styling ──────────────────────────────────────── */
+        a {{ color: inherit; }}
     </style>
 </head>
-<body class="min-h-screen transition-colors duration-200">
+<body>
 <div id="sse-container">
-<div class="max-w-screen-2xl mx-auto px-2 sm:px-3 py-2 sm:py-3">
+<div class="container">
 
     <!-- ═══════════════════════════════════════════════════════════════
-         HEADER: compact single row — logo | health bar | clock | tools
+         HEADER — Futures Trading Co-Pilot
+         Left: Title + date + live badge
+         Centre: Health dot bar
+         Right: Clock + session badge + theme toggle
     ═══════════════════════════════════════════════════════════════════ -->
-    <header class="mb-2 sm:mb-3 border-b t-border-subtle pb-2 sm:pb-2.5">
-        <!-- Top row: title | clock -->
-        <div class="flex items-center justify-between">
-            <!-- Left: title + SSE dot -->
-            <div class="flex items-center gap-2 min-w-0">
-                <div>
-                    <span class="text-base sm:text-lg font-bold t-text leading-none">ORB Co-Pilot</span>
-                    <div class="text-[10px] t-text-faint mt-0.5">
-                        <span class="hidden sm:inline">{session["date"]} · </span>
-                        <span id="sse-status-dot" class="connecting" title="SSE">●</span>
-                        <span id="sse-status-text" class="t-text-faint">connecting</span>
-                    </div>
+    <header style="margin-bottom:0.75rem;padding-bottom:0.5rem;border-bottom:1px solid var(--border-subtle)">
+        <div class="flex items-center justify-between" style="flex-wrap:wrap;gap:0.5rem">
+            <!-- LEFT: Title + date -->
+            <div class="min-w-0">
+                <div style="font-size:1.35rem;font-weight:700;line-height:1.2">
+                    <span style="color:#a78bfa">Futures</span> <span class="t-text">Trading Co-Pilot</span>
+                </div>
+                <div style="font-size:11px;margin-top:2px" class="t-text-muted">
+                    {session["date"]}
+                    <span style="margin-left:6px">
+                        <span id="sse-status-dot" class="connecting" title="SSE" style="font-size:10px">●</span>
+                        <span id="sse-status-text" class="t-text-faint" style="font-size:10px">connecting</span>
+                    </span>
                 </div>
             </div>
 
-            <!-- Right: theme toggle + clock + session + NT8 tools -->
-            <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                <button id="theme-toggle"
-                        onclick="toggleTheme()"
-                        class="p-1 rounded-md t-input t-text-muted border t-border
-                               hover:opacity-80 transition-colors text-sm leading-none"
-                        title="Toggle dark/light theme">
-                    <span id="theme-icon">☀️</span>
-                </button>
-                <div class="text-right">
-                    <div id="clock" class="text-lg sm:text-xl font-mono font-bold {session["css_class"]} leading-none">
+            <!-- CENTRE: Health indicators (loaded via HTMX) -->
+            <div id="health-bar"
+                 class="flex items-center"
+                 style="gap:3px;flex-wrap:wrap"
+                 hx-get="/api/nt8/health/html"
+                 hx-trigger="load, every 10s"
+                 hx-swap="innerHTML">
+                <span class="health-dot gray"></span><span class="health-label t-text-faint">Loading...</span>
+            </div>
+
+            <!-- RIGHT: Clock + session badge + theme toggle -->
+            <div class="flex items-center" style="gap:0.75rem">
+                <div style="text-align:right">
+                    <div id="clock" class="copilot-clock" style="color:{session["color_hex"]}">
                         {session["time_et"]}
                     </div>
-                    <div id="session-badge" class="text-[10px] sm:text-[11px] font-semibold {session["css_class"]} mt-0.5 text-right">
+                    <div id="session-badge" style="font-size:11px;font-weight:600;text-align:right;margin-top:2px;color:{session["color_hex"]}">
                         {session["emoji"]} {session["label"]}
                     </div>
                 </div>
-                <div id="nt8-toolbar-container"
-                     hx-get="/api/nt8/panel/html"
-                     hx-trigger="load"
-                     hx-swap="innerHTML">
-                </div>
-            </div>
-        </div>
-
-        <!-- Bottom row (tablet+): health indicators -->
-        <div id="nt8-health-bar"
-             class="hidden md:flex items-center gap-1 flex-wrap mt-2 t-text-secondary"
-             hx-get="/api/nt8/health/html"
-             hx-trigger="load, every 10s"
-             hx-swap="innerHTML">
-            <!-- skeleton dots shown until HTMX loads real content -->
-            <div class="flex items-center gap-1 px-2 py-0.5 rounded t-panel-inner border t-border">
-                <span class="w-1.5 h-1.5 rounded-full t-text-faint"></span>
-                <span class="text-[10px] t-text-faint">Loading...</span>
+                <button id="theme-toggle"
+                        onclick="toggleTheme()"
+                        class="co-btn"
+                        title="Toggle dark/light theme"
+                        style="padding:4px 8px;font-size:14px;line-height:1">
+                    <span id="theme-icon">☀️</span>
+                </button>
             </div>
         </div>
     </header>
@@ -1248,32 +2457,32 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 
     <!-- Focus summary bar -->
     <div id="focus-summary"
-         class="flex flex-wrap items-center justify-between gap-y-1 t-panel border t-border rounded-lg px-3 py-1.5 mb-2 sm:mb-3">
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
-            <span class="t-text-muted uppercase tracking-wide font-semibold">Today's Focus</span>
-            <span id="focus-count" class="t-text-secondary font-mono">{tradeable}/{total} tradeable</span>
-            <span id="focus-updated" class="t-text-faint hidden sm:inline">Updated: {computed}</span>
+         class="t-panel border t-border rounded-lg flex items-center justify-between"
+         style="padding:6px 12px;margin-bottom:0.75rem;flex-wrap:wrap;gap:0.25rem 0">
+        <div class="flex items-center" style="gap:0.75rem;flex-wrap:wrap">
+            <span class="t-text-muted uppercase tracking-wide font-semibold text-xs">Today's Focus</span>
+            <span id="focus-count" class="t-text-secondary font-mono text-xs">{tradeable}/{total} tradeable</span>
+            <span id="focus-updated" class="t-text-faint text-xs hidden sm:inline">Updated: {computed}</span>
         </div>
         <div class="flex items-center gap-2">
             <button hx-get="/api/focus/html"
                     hx-target="#focus-grid"
                     hx-swap="innerHTML"
                     hx-indicator="#refresh-spinner"
-                    class="px-2 py-0.5 t-input hover:opacity-80 rounded text-[11px] t-text-muted
-                           border t-border transition-colors">↻ Refresh</button>
+                    class="co-btn" style="font-size:11px">↻ Refresh</button>
             <span id="refresh-spinner" class="htmx-indicator t-text-faint text-xs">…</span>
         </div>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════
-         MAIN GRID  — 3 cols: ORB signals (2) | Sidebar (1)
+         MAIN GRID  — 3 cols: Content (2) | Sidebar (1)
     ═══════════════════════════════════════════════════════════════════ -->
-    <div class="grid grid-cols-1 xl:grid-cols-3 gap-2 sm:gap-3">
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-3">
 
-        <!-- ── LEFT/CENTRE: ORB detection + asset cards ─────────────── -->
-        <div class="xl:col-span-2 space-y-2 sm:space-y-3">
+        <!-- ── LEFT/CENTRE: ORB + asset cards ───────────────────── -->
+        <div class="xl:col-span-2 space-y-3">
 
-            <!-- ORB Panel — primary focus, full width, always visible -->
+            <!-- ORB Panel — primary focus -->
             <div id="orb-container" class="t-panel border t-border rounded-lg"
                  hx-get="/api/orb/html"
                  hx-trigger="every 20s"
@@ -1282,43 +2491,28 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             </div>
 
             <!-- ORB Signal History — collapsible -->
-            <details class="group">
-                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide
-                                flex items-center gap-1 py-1 select-none hover:opacity-80">
-                    <span class="transition-transform group-open:rotate-90">▶</span>
+            <details>
+                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
+                         style="padding:4px 0">
+                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
                     ORB Signal History
                 </summary>
                 <div id="orb-history-container"
                      hx-get="/api/orb/history/html"
                      hx-trigger="revealed"
                      hx-swap="innerHTML">
-                    <div class="t-panel border t-border rounded-lg p-4 text-center t-text-faint text-xs">
+                    <div class="t-panel border t-border rounded-lg p-4 t-text-faint text-xs" style="text-align:center">
                         Loading history...
                     </div>
                 </div>
             </details>
-
-            <!-- NT8 / Ruby Validation Panel -->
-            <div id="nt8-validation-panel"
-                 class="t-panel border t-border rounded-lg p-3"
-                 hx-get="/api/nt8/health/html?detail=1"
-                 hx-trigger="load, every 15s"
-                 hx-swap="outerHTML">
-                <div class="flex items-center justify-between mb-2">
-                    <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">
-                        NinjaTrader / Ruby Validation
-                    </h3>
-                    <span class="text-[9px] t-text-faint">Compares engine metrics vs NT8 bridge</span>
-                </div>
-                <div class="text-xs t-text-faint">Loading NT8 data...</div>
-            </div>
 
             <!-- Asset Focus Cards -->
             <div>
                 <div class="flex items-center justify-between mb-1.5">
                     <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">Asset Focus</h3>
                 </div>
-                <div id="focus-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3"
+                <div id="focus-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-3"
                      hx-get="/api/focus/html"
                      hx-trigger="every 30s"
                      hx-swap="innerHTML">
@@ -1327,8 +2521,8 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             </div>
         </div>
 
-        <!-- ── SIDEBAR ───────────────────────────────────────────────── -->
-        <div class="space-y-2 sm:space-y-2.5">
+        <!-- ── SIDEBAR ───────────────────────────────────────────── -->
+        <div class="space-y-2.5">
 
             <!-- Positions & P&L -->
             <div id="positions-container"
@@ -1338,7 +2532,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 {positions_html}
             </div>
 
-            <!-- Risk Rules — always visible -->
+            <!-- Risk Rules -->
             <div id="risk-container"
                  hx-get="/api/risk/html"
                  hx-trigger="every 15s"
@@ -1346,8 +2540,149 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 {risk_html}
             </div>
 
-            <!-- Market Events feed -->
-            {market_events_html}
+            <!-- CNN Model -->
+            <div id="cnn-panel"
+                 class="t-panel border t-border rounded-lg p-3"
+                 hx-get="/cnn/status/html"
+                 hx-trigger="load, every 15s"
+                 hx-swap="innerHTML">
+                <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-1">🧠 CNN Model</h3>
+                <div class="t-text-faint text-xs">Loading...</div>
+            </div>
+
+            <!-- Kraken Crypto health + prices -->
+            <div id="kraken-panel"
+                 class="t-panel border t-border rounded-lg p-3"
+                 style="border-left:3px solid #f7931a"
+                 hx-get="/kraken/health/html"
+                 hx-trigger="load, every 10s"
+                 hx-swap="innerHTML">
+                <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-1">🪙 Crypto (Kraken)</h3>
+                <div class="t-text-faint text-xs">Loading...</div>
+            </div>
+
+            <!-- Kraken Candlestick Chart -->
+            <details>
+                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
+                         style="padding:4px 0">
+                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
+                    Crypto Chart
+                </summary>
+                <div class="t-panel border t-border rounded-lg p-3"
+                     style="border-left:3px solid rgba(247,147,26,0.5)">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">📈 Crypto Chart</h3>
+                    </div>
+                    <div id="kraken-chart-container"
+                         hx-get="/kraken/chart/html"
+                         hx-trigger="revealed"
+                         hx-swap="innerHTML">
+                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- Kraken Account (private API) -->
+            <details>
+                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
+                         style="padding:4px 0">
+                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
+                    Kraken Account
+                </summary>
+                <div class="t-panel border t-border rounded-lg p-3"
+                     style="border-left:3px solid rgba(247,147,26,0.4)">
+                    <div id="kraken-account-container"
+                         hx-get="/kraken/account/html"
+                         hx-trigger="revealed, every 30s"
+                         hx-swap="innerHTML">
+                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- Crypto/Futures Correlation -->
+            <details>
+                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
+                         style="padding:4px 0">
+                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
+                    Correlation
+                </summary>
+                <div class="t-panel border t-border rounded-lg p-3"
+                     style="border-left:3px solid rgba(99,102,241,0.5)">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">🔗 Crypto / Futures Correlation</h3>
+                    </div>
+                    <div id="correlation-container"
+                         hx-get="/kraken/correlation/html"
+                         hx-trigger="revealed, every 300s"
+                         hx-swap="innerHTML">
+                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- Volume Profile -->
+            <details>
+                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
+                         style="padding:4px 0">
+                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
+                    Volume Profile
+                </summary>
+                <div class="t-panel border t-border rounded-lg p-3"
+                     style="border-left:3px solid rgba(245,158,11,0.5)">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">📊 Volume Profile</h3>
+                    </div>
+                    <div id="vp-container"
+                         hx-get="/api/volume-profile/html"
+                         hx-trigger="revealed"
+                         hx-swap="innerHTML">
+                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- Performance Charts -->
+            <details>
+                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
+                         style="padding:4px 0">
+                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
+                    Performance
+                </summary>
+                <div class="t-panel border t-border rounded-lg p-3"
+                     style="border-left:3px solid rgba(34,197,94,0.4)">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">📈 Performance</h3>
+                    </div>
+                    <div id="perf-container"
+                         hx-get="/api/performance/html"
+                         hx-trigger="revealed"
+                         hx-swap="innerHTML">
+                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- Trade Journal -->
+            <details>
+                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
+                         style="padding:4px 0">
+                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
+                    Trade Journal
+                </summary>
+                <div class="t-panel border t-border rounded-lg p-3"
+                     style="border-left:3px solid rgba(167,139,250,0.5)">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">📓 Trade Journal</h3>
+                    </div>
+                    <div id="journal-panel-inner"
+                         hx-get="/journal/html"
+                         hx-trigger="revealed"
+                         hx-swap="innerHTML">
+                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
+                    </div>
+                </div>
+            </details>
 
             <!-- Grok AI Brief -->
             <div id="grok-container"
@@ -1357,15 +2692,8 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 {grok_html}
             </div>
 
-            <!-- CNN Model — always visible -->
-            <div id="cnn-panel"
-                 class="t-panel border t-border rounded-lg p-3"
-                 hx-get="/cnn/status/html"
-                 hx-trigger="load, every 15s"
-                 hx-swap="innerHTML">
-                <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-1">🧠 CNN Model</h3>
-                <div class="t-text-faint text-xs">Loading...</div>
-            </div>
+            <!-- Market Events feed -->
+            {market_events_html}
 
             <!-- Alerts -->
             <div id="alerts-panel"
@@ -1378,32 +2706,63 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 </div>
             </div>
 
-            <!-- Engine + SSE status — compact -->
-            <div class="t-panel-inner border t-border-subtle rounded-lg p-2.5 space-y-1">
-                <div class="flex items-center justify-between">
-                    <span class="text-[10px] t-text-faint uppercase tracking-wide">Engine</span>
-                    <div id="engine-status"
-                         hx-get="/api/time"
-                         hx-trigger="every 5s"
-                         hx-swap="innerHTML"
-                         class="text-[10px] t-text-muted">—</div>
+            <!-- Market Regime (HMM) -->
+            <div id="regime-container"
+                 hx-get="/api/regime/html"
+                 hx-trigger="load, every 60s"
+                 hx-swap="innerHTML">
+                <div class="t-panel border t-border rounded-lg p-3" style="border-left:3px solid #7c3aed">
+                    <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-1">🧮 Market Regime</h3>
+                    <div class="t-text-faint text-xs">Loading...</div>
                 </div>
+            </div>
+
+            <!-- Engine Status -->
+            <div class="t-panel border t-border rounded-lg p-3">
+                <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-1">ENGINE STATUS</h3>
+                <div id="engine-status"
+                     hx-get="/api/time"
+                     hx-trigger="every 5s"
+                     hx-swap="innerHTML"
+                     class="text-xs t-text-muted">—</div>
+            </div>
+
+            <!-- Live Feed -->
+            <div class="t-panel border t-border rounded-lg p-3">
+                <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-1">LIVE FEED</h3>
                 <div class="flex items-center justify-between">
-                    <span class="text-[10px] t-text-faint uppercase tracking-wide">Live Feed</span>
-                    <div id="sse-heartbeat" class="text-[10px] t-text-muted">—</div>
+                    <div id="sse-heartbeat" class="text-xs t-text-muted">Waiting for heartbeat...</div>
                 </div>
-                <div id="sse-last-update" class="text-[9px] t-text-faint">—</div>
+                <div id="sse-last-update" class="text-[9px] t-text-faint mt-1">—</div>
+            </div>
+
+            <!-- Next Session / Schedule -->
+            <div class="t-panel border t-border rounded-lg p-3" style="border-left:3px solid #7c3aed">
+                <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">📅 NEXT SESSION</h3>
+                <div class="space-y-1 text-xs">
+                    <div>🌙 Pre-market: <span class="font-mono" style="color:#c084fc">00:00–03:00 ET</span></div>
+                    <div>🟢 London Open: <span class="font-mono" style="color:#4ade80">03:00–08:00 ET</span></div>
+                    <div>🟢 US Open: <span class="font-mono" style="color:#4ade80">08:00–12:00 ET</span></div>
+                    <div>⚙️ Off-hours: <span class="font-mono t-text-muted">12:00–00:00 ET</span></div>
+                </div>
+                <div class="t-text-faint text-[10px]" style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--border-subtle)">
+                    Engine is running backfill, optimization, and next-day prep.
+                    Trading panels will appear when the next session begins.
+                </div>
             </div>
 
         </div>
     </div>
 
     <!-- Footer -->
-    <footer class="mt-4 pt-2 border-t t-border-subtle text-center text-[10px] t-text-faint px-2">
-        <span class="hidden sm:inline">ORB Co-Pilot — Pre-market 00–03 ET | London 03–08 ET | US 08–12 ET | Off-hours 12–00 ET
-        &nbsp;·&nbsp;</span>
-        <a href="/sse/health" class="underline hover:opacity-80">SSE</a>
-        &nbsp;·&nbsp;<a href="/api/info" class="underline hover:opacity-80">API</a>
+    <footer style="margin-top:1.5rem;padding-top:0.5rem;border-top:1px solid var(--border-subtle);text-align:center">
+        <span class="t-text-faint" style="font-size:10px">
+            Pilot v1.0 — Session rules: Pre-market 00–03 | Active 03–12 | Off-hours 12–00 ET
+            &nbsp;|&nbsp;
+            <a href="/sse/health" class="underline hover:opacity-80">SSE Health</a>
+            &nbsp;|&nbsp;
+            <a href="/api/info" class="underline hover:opacity-80">API Info</a>
+        </span>
     </footer>
 </div>
 </div><!-- end sse-container -->
@@ -1416,7 +2775,6 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 (function() {{
     var HOUR_PCT = 100.0 / 24.0;
 
-    // Sessions: [label, startH(ET), endH(ET), openColor, closedColor]
     var SESSIONS = [
         ['Sydney',    17, 26, '#22d3ee', '#3f3f46'],
         ['Tokyo',     19, 28, '#818cf8', '#3f3f46'],
@@ -1433,22 +2791,15 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     }}
 
     function _isOpen(startH, endH, h) {{
-        if (endH > 24) {{
-            // wraps midnight
-            return h >= startH || h < (endH - 24);
-        }}
+        if (endH > 24) return h >= startH || h < (endH - 24);
         return h >= startH && h < endH;
     }}
 
     function updateStrip() {{
         var h = _etHour();
         var cursor = document.getElementById('session-cursor');
-        if (cursor) {{
-            var pct = (h * HOUR_PCT);
-            cursor.style.left = pct.toFixed(2) + '%';
-        }}
+        if (cursor) cursor.style.left = (h * HOUR_PCT).toFixed(2) + '%';
 
-        // Render badges
         var badgesEl = document.getElementById('session-badges');
         if (!badgesEl) return;
         var html = '';
@@ -1458,13 +2809,12 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             var color = open ? s[3] : '#52525b';
             var bgColor = open ? 'rgba(255,255,255,0.05)' : 'transparent';
             var border = open ? '1px solid ' + s[3] + '44' : '1px solid #3f3f46';
-            html += '<span style="color:' + color + ';background:' + bgColor + ';border:' + border + ';font-size:9px;padding:1px 6px;border-radius:9999px;white-space:nowrap">';
+            html += '<span style="color:' + color + ';background:' + bgColor + ';border:' + border + ';font-size:9px;padding:1px 6px;border-radius:9999px;white-space:nowrap;display:inline-block;margin:1px">';
             html += (open ? '● ' : '○ ') + s[0];
             html += '</span>';
         }}
-        // Overlap badge
         if (_isOpen(9, 12, h)) {{
-            html += '<span style="color:#fbbf24;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);font-size:9px;padding:1px 6px;border-radius:9999px">⚡ London/US Overlap</span>';
+            html += '<span style="color:#fbbf24;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);font-size:9px;padding:1px 6px;border-radius:9999px;display:inline-block;margin:1px">⚡ London/US Overlap</span>';
         }}
         badgesEl.innerHTML = html;
     }}
@@ -1475,21 +2825,37 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 </script>
 
 <!-- ═══════════════════════════════════════════════════
-     LIVE CLOCK
+     LIVE CLOCK — updates every second
 ═══════════════════════════════════════════════════════ -->
 <script>
 function updateClock() {{
     var now = new Date();
-    var et = now.toLocaleTimeString('en-US',{{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true}}) + ' ET';
+    var h = now.toLocaleString('en-US',{{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}});
+    var parts = h.split(':');
+    // Build the big formatted clock: HH:MM:SS  PM  ET
+    var ampm = parseInt(parts[0]) >= 12 ? 'PM' : 'AM';
+    var h12 = parseInt(parts[0]) % 12 || 12;
+    var clockStr = (h12 < 10 ? '0' : '') + h12 + ':' + parts[1] + ':' + parts[2] + '  ' + ampm + '  ET';
     var el = document.getElementById('clock');
-    if (el) el.textContent = et;
-    var etHour = parseInt(now.toLocaleString('en-US',{{timeZone:'America/New_York',hour:'numeric',hour12:false}}));
+    if (el) el.textContent = clockStr;
+
+    var etHour = parseInt(parts[0]);
     var badge = document.getElementById('session-badge');
+    var colors = {{
+        pre:    '#c084fc',
+        london: '#4ade80',
+        us:     '#4ade80',
+        off:    '#a1a1aa'
+    }};
     if (badge) {{
-        if (etHour>=0&&etHour<3)  {{ badge.innerHTML='🌙 PRE-MARKET';  badge.className='text-[11px] font-semibold text-purple-400 mt-0.5 text-right'; if(el) el.className='text-xl font-mono font-bold text-purple-400 leading-none'; }}
-        else if (etHour>=3&&etHour<8)  {{ badge.innerHTML='🟢 LONDON';  badge.className='text-[11px] font-semibold text-green-400 mt-0.5 text-right'; if(el) el.className='text-xl font-mono font-bold text-green-400 leading-none'; }}
-        else if (etHour>=8&&etHour<12) {{ badge.innerHTML='🟢 US OPEN'; badge.className='text-[11px] font-semibold text-green-400 mt-0.5 text-right'; if(el) el.className='text-xl font-mono font-bold text-green-400 leading-none'; }}
-        else                           {{ badge.innerHTML='⚙️ OFF-HRS';  badge.className='text-[11px] font-semibold text-zinc-400 mt-0.5 text-right'; if(el) el.className='text-xl font-mono font-bold text-zinc-400 leading-none'; }}
+        var c, txt;
+        if (etHour>=0&&etHour<3)       {{ c=colors.pre; txt='🌙 PRE-MARKET'; }}
+        else if (etHour>=3&&etHour<8)   {{ c=colors.london; txt='🟢 LONDON'; }}
+        else if (etHour>=8&&etHour<12)  {{ c=colors.us; txt='🟢 US OPEN'; }}
+        else                            {{ c=colors.off; txt='⚙️ OFF-HOURS'; }}
+        badge.innerHTML = txt;
+        badge.style.color = c;
+        if (el) el.style.color = c;
     }}
 }}
 setInterval(updateClock, 1000);
@@ -1497,22 +2863,23 @@ updateClock();
 </script>
 
 <!-- ═══════════════════════════════════════════════════
-     MARKET EVENTS FEED — appended to by SSE handlers
+     MARKET EVENTS FEED
 ═══════════════════════════════════════════════════════ -->
 <script>
 var _events = [];
 function _pushEvent(emoji, msg, color) {{
     var now = new Date().toLocaleTimeString('en-US',{{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}});
-    _events.unshift({{t:now,e:emoji,m:msg,c:color||'text-zinc-400'}});
+    _events.unshift({{t:now,e:emoji,m:msg,c:color||''}});
     if (_events.length>40) _events.pop();
     var feed = document.getElementById('market-events-feed');
     if (!feed) return;
     var ts = document.getElementById('events-ts');
     if (ts) ts.textContent = now;
     feed.innerHTML = _events.slice(0,12).map(function(ev){{
-        return '<div class="flex items-start gap-1.5 py-0.5 border-b border-zinc-800/40 last:border-0">'
-             + '<span class="text-[9px] text-zinc-600 font-mono shrink-0 mt-px">' + ev.t + '</span>'
-             + '<span class="' + ev.c + ' text-[10px] leading-tight">' + ev.e + ' ' + ev.m + '</span>'
+        var sc = ev.c ? 'color:' + ev.c : '';
+        return '<div style="display:flex;align-items:flex-start;gap:6px;padding:2px 0;border-bottom:1px solid var(--border-subtle)">'
+             + '<span style="font-size:9px;color:var(--text-faint);font-family:monospace;flex-shrink:0;margin-top:1px">' + ev.t + '</span>'
+             + '<span style="font-size:10px;line-height:1.3;' + sc + '">' + ev.e + ' ' + ev.m + '</span>'
              + '</div>';
     }}).join('');
 }}
@@ -1535,7 +2902,6 @@ function toggleTheme() {{
         if (icon) icon.textContent = '☀️';
     }}
 }}
-// Set correct icon on load
 (function() {{
     var icon = document.getElementById('theme-icon');
     if (icon) icon.textContent = document.documentElement.classList.contains('dark') ? '☀️' : '🌙';
@@ -1543,7 +2909,7 @@ function toggleTheme() {{
 </script>
 
 <!-- ═══════════════════════════════════════════════════
-     SSE — native EventSource
+     SSE — native EventSource with reconnect logic
 ═══════════════════════════════════════════════════════ -->
 <script>
 (function() {{
@@ -1555,9 +2921,9 @@ function toggleTheme() {{
     function _setStatus(state) {{
         var dot = document.getElementById('sse-status-dot');
         var txt = document.getElementById('sse-status-text');
-        if (state==='connected')   {{ if(dot){{dot.className='connected ml-1.5';dot.title='live';}} if(txt){{txt.textContent='live';txt.className='text-zinc-600';}} }}
-        else if(state==='connecting') {{ if(dot){{dot.className='connecting ml-1.5';}} if(txt){{txt.textContent='connecting';txt.className='text-zinc-700';}} }}
-        else {{ if(dot){{dot.className='disconnected ml-1.5';}} if(txt){{txt.textContent='reconnecting';txt.className='text-zinc-700';}} }}
+        if (state==='connected')      {{ if(dot){{dot.className='connected';dot.title='live';}} if(txt){{txt.textContent='live';}} }}
+        else if(state==='connecting') {{ if(dot){{dot.className='connecting';}} if(txt){{txt.textContent='connecting';}} }}
+        else                          {{ if(dot){{dot.className='disconnected';}} if(txt){{txt.textContent='reconnecting';}} }}
     }}
 
     function _connect() {{
@@ -1575,38 +2941,34 @@ function toggleTheme() {{
 
         _es.addEventListener('connected', function() {{ _setStatus('connected'); }});
 
-        // --- Focus update ---
+        // Focus update
         _es.addEventListener('focus-update', function(e) {{
             try {{
                 var focus = JSON.parse(e.data);
                 var countEl = document.getElementById('focus-count');
-                if (countEl) {{
-                    countEl.textContent = (focus.tradeable_assets||0) + '/' + (focus.total_assets||0) + ' tradeable';
-                }}
+                if (countEl) countEl.textContent = (focus.tradeable_assets||0) + '/' + (focus.total_assets||0) + ' tradeable';
                 var updEl = document.getElementById('focus-updated');
                 if (updEl && focus.computed_at) {{
                     var d = new Date(focus.computed_at);
                     updEl.textContent = 'Updated: ' + d.toLocaleTimeString('en-US',{{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:true}}) + ' ET';
                 }}
-                if (typeof htmx!=='undefined') {{
-                    htmx.ajax('GET','/api/focus/html',{{target:'#focus-grid',swap:'innerHTML'}});
-                }}
+                if (typeof htmx!=='undefined') htmx.ajax('GET','/api/focus/html',{{target:'#focus-grid',swap:'innerHTML'}});
             }} catch(err) {{}}
         }});
 
-        // --- Heartbeat ---
+        // Heartbeat
         _es.addEventListener('heartbeat', function(e) {{
             try {{
                 var hb = JSON.parse(e.data);
                 var hbEl = document.getElementById('sse-heartbeat');
-                if (hbEl) hbEl.innerHTML = '<span style="color:#22c55e">●</span> ' + (hb.time_et||'');
+                if (hbEl) hbEl.innerHTML = '<span style="color:#22c55e">●</span> Connected — ' + (hb.time_et||'');
+                var lastEl = document.getElementById('sse-last-update');
+                if (lastEl) lastEl.textContent = 'Last focus: ' + new Date().toLocaleTimeString();
             }} catch(err) {{}}
-            if (typeof htmx!=='undefined') {{
-                htmx.ajax('GET','/api/nt8/health/html',{{target:'#nt8-health-bar',swap:'innerHTML'}});
-            }}
+            if (typeof htmx!=='undefined') htmx.ajax('GET','/api/nt8/health/html',{{target:'#health-bar',swap:'innerHTML'}});
         }});
 
-        // --- Session change ---
+        // Session change
         _es.addEventListener('session-change', function(e) {{
             try {{
                 var sc = JSON.parse(e.data);
@@ -1615,64 +2977,52 @@ function toggleTheme() {{
             }} catch(err) {{}}
         }});
 
-        // --- No-trade ---
+        // No-trade
         _es.addEventListener('no-trade-alert', function(e) {{
             try {{
                 var nt = JSON.parse(e.data);
-                if (nt.no_trade && typeof htmx!=='undefined') {{
-                    htmx.ajax('GET','/api/no-trade',{{target:'#no-trade-container',swap:'innerHTML'}});
-                }}
+                if (nt.no_trade && typeof htmx!=='undefined') htmx.ajax('GET','/api/no-trade',{{target:'#no-trade-container',swap:'innerHTML'}});
             }} catch(err) {{}}
         }});
 
-        // --- Positions update ---
+        // Positions update
         _es.addEventListener('positions-update', function() {{
             if (typeof htmx!=='undefined') {{
                 htmx.ajax('GET','/api/positions/html',{{target:'#positions-container',swap:'innerHTML'}});
-                htmx.ajax('GET','/api/nt8/health/html',{{target:'#nt8-health-bar',swap:'innerHTML'}});
+                htmx.ajax('GET','/api/nt8/health/html',{{target:'#health-bar',swap:'innerHTML'}});
             }}
-            _pushEvent('📋','Position update','text-blue-400');
+            _pushEvent('📋','Position update','#60a5fa');
         }});
 
-        // --- Grok update ---
+        // Grok update
         _es.addEventListener('grok-update', function() {{
-            if (typeof htmx!=='undefined') {{
-                htmx.ajax('GET','/api/grok/html',{{target:'#grok-container',swap:'innerHTML'}});
-            }}
-            var lastUpd = document.getElementById('sse-last-update');
-            if (lastUpd) lastUpd.textContent = 'Grok: ' + new Date().toLocaleTimeString();
+            if (typeof htmx!=='undefined') htmx.ajax('GET','/api/grok/html',{{target:'#grok-container',swap:'innerHTML'}});
         }});
 
-        // --- Risk update ---
+        // Risk update
         _es.addEventListener('risk-update', function() {{
-            if (typeof htmx!=='undefined') {{
-                htmx.ajax('GET','/api/risk/html',{{target:'#risk-container',swap:'innerHTML'}});
-            }}
+            if (typeof htmx!=='undefined') htmx.ajax('GET','/api/risk/html',{{target:'#risk-container',swap:'innerHTML'}});
         }});
 
-        // --- ORB update ---
+        // ORB update
         _es.addEventListener('orb-update', function(e) {{
-            if (typeof htmx!=='undefined') {{
-                htmx.ajax('GET','/api/orb/html',{{target:'#orb-container',swap:'innerHTML'}});
-            }}
+            if (typeof htmx!=='undefined') htmx.ajax('GET','/api/orb/html',{{target:'#orb-container',swap:'innerHTML'}});
             try {{
                 var orbData = JSON.parse(e.data);
                 var dir = orbData.direction||'';
                 var sym = orbData.symbol||'';
                 if (orbData.breakout_detected) {{
-                    var color = dir==='LONG' ? 'text-green-400' : 'text-red-400';
+                    var color = dir==='LONG' ? '#4ade80' : '#f87171';
                     var emoji = dir==='LONG' ? '🟢' : '🔴';
                     _pushEvent(emoji, 'ORB breakout ' + dir + ' — ' + sym, color);
-                    // pulse the ORB container
                     var orbEl = document.getElementById('orb-container');
                     if (orbEl) {{ orbEl.classList.add('breakout-active'); setTimeout(function(){{orbEl.classList.remove('breakout-active');}},6000); }}
                 }} else {{
-                    _pushEvent('📐','ORB update — ' + sym,'text-zinc-400');
+                    _pushEvent('📐','ORB update — ' + sym, '');
                 }}
             }} catch(err) {{}}
         }});
 
-        // --- Per-asset listeners ---
         _es.onmessage = function(e) {{}};
     }}
 
@@ -1681,9 +3031,7 @@ function toggleTheme() {{
             var sym = card.id.replace('asset-card-','');
             if (sym && _es) {{
                 _es.addEventListener(sym+'-update', function() {{
-                    if (typeof htmx!=='undefined') {{
-                        htmx.ajax('GET','/api/focus/'+encodeURIComponent(sym),{{target:card,swap:'outerHTML'}});
-                    }}
+                    if (typeof htmx!=='undefined') htmx.ajax('GET','/api/focus/'+encodeURIComponent(sym),{{target:card,swap:'outerHTML'}});
                     setTimeout(function(){{
                         var u = document.getElementById('asset-card-'+sym);
                         if (u) {{ u.classList.add('sse-updated'); setTimeout(function(){{u.classList.remove('sse-updated');}},1500); }}
@@ -1707,19 +3055,19 @@ function toggleTheme() {{
 # ---------------------------------------------------------------------------
 
 
-@router.get("/", response_class=HTMLResponse)
 @router.get("/api/market-session/html", response_class=HTMLResponse)
 def get_market_session_html():
     """Return the session strip HTML fragment for HTMX polling."""
     return HTMLResponse(_render_session_strip())
 
 
+@router.get("/", response_class=HTMLResponse)
 def dashboard_page(request: Request):
     """Serve the full HTML dashboard page."""
     focus_data = _get_focus_data()
     session = _get_session_info()
     html = _render_full_dashboard(focus_data, session)
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/api/focus")
@@ -1832,14 +3180,16 @@ def get_orb_history_html(
     symbol: str | None = None,
     days: int = 7,
     breakout_only: bool = False,
+    btype: str | None = None,
 ):
-    """Return per-session ORB signal history as an HTML table + summary.
+    """Return per-session signal history as an HTML table + summary.
 
     Query params:
-        session      — Filter by session key (e.g. "london", "us")
-        symbol       — Filter by symbol (e.g. "MGC=F")
-        days         — Lookback window in calendar days (default 7)
+        session       — Filter by session key (e.g. "london", "us")
+        symbol        — Filter by symbol (e.g. "MGC=F")
+        days          — Lookback window in calendar days (default 7)
         breakout_only — If true, only show events with a breakout detected
+        btype         — Filter by breakout type: ORB | PDR | IB | CONS
     """
     from datetime import timedelta
 
@@ -1849,7 +3199,7 @@ def get_orb_history_html(
         from lib.core.models import get_orb_events as _get_orb_events
 
         events = _get_orb_events(
-            limit=200,
+            limit=300,
             symbol=symbol,
             breakout_only=breakout_only,
             since=since,
@@ -1872,12 +3222,27 @@ def get_orb_history_html(
                 filtered.append(ev)
         events = filtered
 
+    # Filter by breakout type if specified
+    if btype and btype.upper() != "ALL":
+        btype_upper = btype.upper()
+        events = [ev for ev in events if (ev.get("breakout_type") or "ORB").upper() == btype_upper]
+
     # Summary stats
     total = len(events)
     breakouts = sum(1 for e in events if e.get("breakout_detected"))
     longs = sum(1 for e in events if e.get("direction") == "LONG")
     shorts = sum(1 for e in events if e.get("direction") == "SHORT")
     bo_rate = f"{breakouts / total * 100:.0f}%" if total > 0 else "—"
+
+    # btype_filter drives the active pill tab highlight in the UI.
+    # It comes directly from the ?btype= query param (already applied above).
+    btype_filter: str = btype or ""
+
+    # Summary: per-type counts for the stats bar
+    type_counts: dict[str, int] = {}
+    for ev in events:
+        bt = ev.get("breakout_type") or "ORB"
+        type_counts[bt] = type_counts.get(bt, 0) + 1
 
     # Filter tabs
     session_filter = session or "all"
@@ -1890,6 +3255,36 @@ def get_orb_history_html(
     tab_classes_us = (
         "t-text font-bold border-b-2 border-blue-500" if session_filter == "us" else "t-text-muted hover:opacity-80"
     )
+
+    # Breakout type tab classes
+    _bt_options = ["ALL", "ORB", "PDR", "IB", "CONS"]
+    _bt_active = btype_filter.upper() if btype_filter else "ALL"
+    _bt_colors = {"ORB": "#60a5fa", "PDR": "#c084fc", "IB": "#34d399", "CONS": "#fbbf24"}
+
+    def _bt_tab(label: str) -> str:
+        active = label == _bt_active
+        color = _bt_colors.get(label, "")
+        base_style = "cursor:pointer;padding:1px 8px;border-radius:9999px;font-size:9px;white-space:nowrap"
+        if active:
+            bg = (
+                f"background:{color}22;border:1px solid {color}55;color:{color}"
+                if color
+                else "background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:var(--text-primary)"
+            )
+        else:
+            bg = "background:transparent;border:1px solid transparent;color:var(--text-muted)"
+        # Build the filter param — combine with current session if set
+        sess_param = f"&session={session}" if session else ""
+        bo_param = f"&breakout_only={'true' if breakout_only else 'false'}"
+        days_param = f"&days={days}"
+        type_param = "" if label == "ALL" else f"&btype={label}"
+        href = f"/api/orb/history/html?{days_param}{bo_param}{sess_param}{type_param}"
+        return (
+            f'<a hx-get="{href}" hx-target="#orb-history-container" hx-swap="innerHTML" '
+            f'style="{base_style};{bg}">{label}</a>'
+        )
+
+    bt_tabs_html = " ".join(_bt_tab(b) for b in _bt_options)
 
     # Checkbox state
     bo_checked = "checked" if breakout_only else ""
@@ -1913,6 +3308,10 @@ def get_orb_history_html(
         or_range = ev.get("or_range", 0)
         atr = ev.get("atr_value", 0)
         ev_session = ev.get("session", "")
+        ev_btype = ev.get("breakout_type") or "ORB"
+        mtf_score_val = ev.get("mtf_score")
+        macd_slope_val = ev.get("macd_slope")
+        divergence_val = ev.get("divergence") or ""
 
         # Parse metadata for CNN/filter info
         meta = {}
@@ -1937,6 +3336,47 @@ def get_orb_history_html(
         else:
             row_bg = ""
             dir_html = '<span class="t-text-faint">—</span>'
+
+        # Breakout type badge
+        _bt_pill_color = {
+            "ORB": ("rgba(96,165,250,0.15)", "#60a5fa"),
+            "PDR": ("rgba(192,132,252,0.15)", "#c084fc"),
+            "IB": ("rgba(52,211,153,0.15)", "#34d399"),
+            "CONS": ("rgba(251,191,36,0.15)", "#fbbf24"),
+        }.get(ev_btype, ("rgba(161,161,170,0.15)", "#a1a1aa"))
+        btype_html = (
+            f'<span style="font-size:8px;padding:0 4px;border-radius:3px;'
+            f'background:{_bt_pill_color[0]};color:{_bt_pill_color[1]};white-space:nowrap">'
+            f"{ev_btype}</span>"
+        )
+
+        # MTF score badge
+        if mtf_score_val is not None:
+            try:
+                ms = float(mtf_score_val)
+                ms_pct = int(ms * 100)
+                ms_color = "#4ade80" if ms >= 0.65 else ("#fbbf24" if ms >= 0.45 else "#f87171")
+                # Show MACD slope arrow if available
+                slope_arrow = ""
+                if macd_slope_val is not None:
+                    try:
+                        slope_arrow = " ↑" if float(macd_slope_val) > 0 else " ↓"
+                    except Exception:
+                        pass
+                # Divergence indicator
+                div_icon = ""
+                if divergence_val == "confirming":
+                    div_icon = " ✓"
+                elif divergence_val == "opposing":
+                    div_icon = " ✗"
+                mtf_html = (
+                    f'<span style="font-size:9px;font-family:monospace;color:{ms_color}">'
+                    f"{ms_pct}%{slope_arrow}{div_icon}</span>"
+                )
+            except Exception:
+                mtf_html = '<span class="t-text-faint">—</span>'
+        else:
+            mtf_html = '<span class="t-text-faint">—</span>'
 
         # CNN badge
         cnn_html = ""
@@ -1968,10 +3408,12 @@ def get_orb_history_html(
             <td class="py-1 px-1.5 t-text-muted font-mono whitespace-nowrap">{ts_display}</td>
             <td class="py-1 px-1.5">{sess_badge}</td>
             <td class="py-1 px-1.5 t-text-secondary font-mono">{sym}</td>
+            <td class="py-1 px-1.5">{btype_html}</td>
             <td class="py-1 px-1.5">{dir_html}</td>
             <td class="py-1 px-1.5 t-text-secondary font-mono text-right">{trigger:,.2f}</td>
             <td class="py-1 px-1.5 t-text-muted font-mono text-right">{or_range:,.2f}</td>
             <td class="py-1 px-1.5 t-text-muted font-mono text-right">{atr:,.2f}</td>
+            <td class="py-1 px-1.5 text-center">{mtf_html}</td>
             <td class="py-1 px-1.5 text-center">{cnn_html}</td>
             <td class="py-1 px-1.5 text-center">{filt_html}</td>
         </tr>"""
@@ -1979,17 +3421,38 @@ def get_orb_history_html(
     if not rows_html:
         rows_html = """
         <tr>
-            <td colspan="9" class="py-6 text-center t-text-faint text-xs">
-                No ORB events found for the selected filters.
+            <td colspan="11" class="py-6 text-center t-text-faint text-xs">
+                No events found for the selected filters.
             </td>
         </tr>"""
+
+    # Per-type summary pills for the stats bar
+    type_pills_html = ""
+    for bt_key in ["ORB", "PDR", "IB", "CONS"]:
+        count = type_counts.get(bt_key, 0)
+        if count == 0:
+            continue
+        pill_bg, pill_fg = {
+            "ORB": ("rgba(96,165,250,0.12)", "#60a5fa"),
+            "PDR": ("rgba(192,132,252,0.12)", "#c084fc"),
+            "IB": ("rgba(52,211,153,0.12)", "#34d399"),
+            "CONS": ("rgba(251,191,36,0.12)", "#fbbf24"),
+        }.get(bt_key, ("rgba(161,161,170,0.12)", "#a1a1aa"))
+        type_pills_html += (
+            f'<span style="font-size:9px;padding:1px 6px;border-radius:9999px;'
+            f'background:{pill_bg};color:{pill_fg};white-space:nowrap">'
+            f"{bt_key}: {count}</span> "
+        )
 
     return HTMLResponse(
         content=f"""
     <div class="t-panel border t-border rounded-lg p-4">
         <div class="flex items-center justify-between mb-3">
-            <h3 class="text-sm font-semibold t-text-muted">📊 ORB Signal History</h3>
-            <span class="t-text-faint text-[10px]">Last {days} days · {total} events</span>
+            <h3 class="text-sm font-semibold t-text-muted">📊 Signal History</h3>
+            <div class="flex items-center gap-2">
+                {type_pills_html}
+                <span class="t-text-faint text-[10px]">Last {days}d · {total} events</span>
+            </div>
         </div>
 
         <!-- Summary stats -->
@@ -2013,7 +3476,7 @@ def get_orb_history_html(
         </div>
 
         <!-- Session filter tabs -->
-        <div class="flex items-center gap-3 mb-2 text-[11px] border-b t-border-subtle pb-1.5">
+        <div class="flex items-center gap-3 mb-1.5 text-[11px] border-b t-border-subtle pb-1.5">
             <a hx-get="/api/orb/history/html?days={days}&breakout_only={"true" if breakout_only else "false"}"
                hx-target="#orb-history-container" hx-swap="innerHTML"
                class="cursor-pointer pb-0.5 {tab_classes_all}">All</a>
@@ -2033,6 +3496,11 @@ def get_orb_history_html(
             </label>
         </div>
 
+        <!-- Breakout-type filter pills -->
+        <div class="flex items-center gap-1 mb-2 flex-wrap">
+            {bt_tabs_html}
+        </div>
+
         <!-- Table -->
         <div class="overflow-x-auto max-h-72 overflow-y-auto">
             <table class="w-full text-left">
@@ -2041,10 +3509,12 @@ def get_orb_history_html(
                         <th class="py-1 px-1.5">Time</th>
                         <th class="py-1 px-1.5">Session</th>
                         <th class="py-1 px-1.5">Symbol</th>
+                        <th class="py-1 px-1.5">Type</th>
                         <th class="py-1 px-1.5">Signal</th>
                         <th class="py-1 px-1.5 text-right">Trigger</th>
                         <th class="py-1 px-1.5 text-right">Range</th>
                         <th class="py-1 px-1.5 text-right">ATR</th>
+                        <th class="py-1 px-1.5 text-center" title="MTF score · MACD slope · Divergence">MTF</th>
                         <th class="py-1 px-1.5 text-center">CNN</th>
                         <th class="py-1 px-1.5 text-center">Filter</th>
                     </tr>
@@ -2054,15 +3524,40 @@ def get_orb_history_html(
                 </tbody>
             </table>
         </div>
+        <div class="mt-1.5 text-[9px] t-text-faint">
+            MTF col: score% · ↑↓ MACD slope · ✓ confirming divergence · ✗ opposing
+        </div>
     </div>
     """
     )
 
 
 @router.get("/api/alerts/html", response_class=HTMLResponse)
+def _get_gap_alerts() -> dict:
+    """Read the latest gap alert payload from Redis.
+
+    Returns the dict published by ``_check_and_alert_gaps()`` in the engine,
+    or an empty dict when no gaps have been detected yet.
+    """
+    try:
+        from lib.core.cache import cache_get
+
+        raw = cache_get("engine:gap_alerts")
+        if raw:
+            return json.loads(raw)
+    except Exception:
+        pass
+    return {}
+
+
 def get_alerts_html():
-    """Return alerts panel as HTML fragment."""
-    # Read alerts from Redis if available
+    """Return alerts panel as HTML fragment.
+
+    Now includes:
+      - Engine-published alert messages (``engine:alerts`` key)
+      - Data-gap warnings from the post-backfill gap scan (``engine:gap_alerts`` key)
+    """
+    # Read engine alerts from Redis
     alerts = []
     try:
         from lib.core.cache import cache_get
@@ -2073,18 +3568,27 @@ def get_alerts_html():
     except Exception:
         pass
 
-    if not alerts:
+    # Read gap alerts
+    gap_data = _get_gap_alerts()
+    gap_alerts = gap_data.get("alerts", [])
+    gap_checked_at = gap_data.get("checked_at", "")
+    gap_threshold = gap_data.get("threshold_minutes", 30)
+
+    has_alerts = bool(alerts) or bool(gap_alerts)
+
+    if not has_alerts:
         return HTMLResponse(
             content="""
-            <div class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4">
-                <h3 class="text-sm font-semibold text-zinc-400 mb-2">ALERTS</h3>
-                <div class="text-zinc-500 text-sm">No alerts</div>
+            <div class="t-panel border t-border rounded-lg p-4">
+                <h3 class="text-sm font-semibold t-text-muted mb-2">ALERTS</h3>
+                <div class="t-text-faint text-sm">No alerts</div>
             </div>
             """
         )
 
+    # ── Engine alert rows ────────────────────────────────────────────────────
     rows = ""
-    for alert in alerts[-10:]:  # Show last 10
+    for alert in alerts[-10:]:
         msg = alert.get("message", alert.get("title", "Alert"))
         _ts = alert.get("timestamp", "")  # noqa: F841
         level = alert.get("level", "info")
@@ -2092,15 +3596,86 @@ def get_alerts_html():
             "warning": "text-yellow-400",
             "error": "text-red-400",
             "success": "text-green-400",
-        }.get(level, "text-zinc-400")
+        }.get(level, "t-text-muted")
+        rows += f'<div class="{color} text-xs py-1 border-b t-border-subtle">{msg}</div>'
 
-        rows += f'<div class="{color} text-xs py-1 border-b border-zinc-800">{msg}</div>'
+    # ── Gap alert rows ────────────────────────────────────────────────────────
+    gap_rows = ""
+    if gap_alerts:
+        # Format the checked_at timestamp nicely
+        checked_str = ""
+        if gap_checked_at:
+            try:
+                dt = datetime.fromisoformat(gap_checked_at)
+                checked_str = dt.strftime("%H:%M ET")
+            except Exception:
+                checked_str = gap_checked_at
+
+        for ga in gap_alerts[:8]:  # cap at 8 rows
+            sym = ga.get("symbol", "?")
+            g_count = ga.get("gap_count", 0)
+            worst = ga.get("worst_gap_minutes", 0)
+            cov = ga.get("coverage_pct", 0)
+
+            # Severity colouring: >4h is critical, >1h is warning
+            if worst >= 240:
+                badge_color = "#ef4444"
+                badge_bg = "rgba(239,68,68,0.12)"
+                badge_border = "rgba(239,68,68,0.35)"
+                icon = "🔴"
+            elif worst >= 60:
+                badge_color = "#fbbf24"
+                badge_bg = "rgba(251,191,36,0.12)"
+                badge_border = "rgba(251,191,36,0.35)"
+                icon = "🟡"
+            else:
+                badge_color = "#fb923c"
+                badge_bg = "rgba(251,146,60,0.12)"
+                badge_border = "rgba(251,146,60,0.35)"
+                icon = "🟠"
+
+            # Format worst-gap duration
+            if worst >= 60:
+                dur_str = f"{worst // 60}h {worst % 60}m"
+            else:
+                dur_str = f"{worst}m"
+
+            gap_rows += f"""
+<div style="display:flex;align-items:center;justify-content:space-between;
+            padding:4px 6px;margin-bottom:3px;
+            background:{badge_bg};border:1px solid {badge_border};border-radius:4px">
+    <div style="display:flex;align-items:center;gap:5px">
+        <span style="font-size:9px">{icon}</span>
+        <span style="font-size:10px;font-weight:600;color:{badge_color};font-family:monospace">{sym}</span>
+        <span style="font-size:9px;color:var(--text-muted)">{g_count} gap(s)</span>
+    </div>
+    <div style="text-align:right">
+        <span style="font-size:9px;font-family:monospace;color:{badge_color}">worst {dur_str}</span>
+        <span style="font-size:8px;color:var(--text-faint);margin-left:4px">{cov:.0f}% cov</span>
+    </div>
+</div>"""
+
+        gap_section = f"""
+<div style="margin-top:6px;padding-top:5px;border-top:1px solid var(--border-subtle,#27272a)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <span style="font-size:9px;font-weight:600;color:var(--text-muted);text-transform:uppercase;
+                     letter-spacing:0.05em">⚠️ Data Gaps (≥{gap_threshold}m)</span>
+        <span style="font-size:8px;color:var(--text-faint)">{checked_str}</span>
+    </div>
+    {gap_rows}
+    <div style="font-size:8px;color:var(--text-faint);margin-top:2px">
+        Set <code>BACKFILL_GAP_ALERT_MINUTES</code> env var to adjust threshold
+    </div>
+</div>"""
+    else:
+        gap_section = ""
 
     return HTMLResponse(
         content=f"""
-        <div class="bg-zinc-900/60 border border-zinc-700 rounded-lg p-4">
-            <h3 class="text-sm font-semibold text-zinc-400 mb-2">ALERTS</h3>
+        <div class="t-panel border t-border rounded-lg p-4">
+            <h3 class="text-sm font-semibold t-text-muted mb-2">ALERTS</h3>
             {rows}
+            {gap_section}
         </div>
         """
     )
@@ -2143,6 +3718,236 @@ def get_time():
         engine_info = f"<div>{session['time_et']}</div>"
 
     return HTMLResponse(content=engine_info)
+
+
+@router.get("/api/volume-profile/html", response_class=HTMLResponse)
+def get_volume_profile_html(
+    symbol: str = Query(default="MGC=F", description="Ticker symbol"),
+    days: int = Query(default=5, ge=1, le=30, description="Days of bar history"),
+    bins: int = Query(default=40, ge=20, le=80, description="Number of price bins"),
+):
+    """Return a volume profile chart panel as an HTML fragment.
+
+    Renders a horizontal histogram with POC, VAH, VAL overlays and naked
+    POC markers from prior sessions.  Uses stored 1-minute bars from the
+    historical_bars DB table.
+
+    Query params:
+        symbol — Yahoo-style ticker (default: MGC=F)
+        days   — days of bar history to use (default: 5)
+        bins   — number of price bins for the profile (default: 40)
+    """
+    html = _render_volume_profile_panel(symbol=symbol, days_back=days, bins=bins)
+    return HTMLResponse(content=html)
+
+
+@router.get("/api/performance/html", response_class=HTMLResponse)
+def get_performance_html(
+    days: int = Query(default=90, ge=7, le=365, description="Days of journal history"),
+):
+    """Return historical performance charts as an HTML fragment.
+
+    Renders an equity curve, rolling win-rate sparkline, and monthly P&L
+    bar chart sourced from the daily_journal table.
+
+    Query params:
+        days — journal lookback window in trading days (default: 90)
+    """
+    html = _render_performance_panel(days_back=days)
+    return HTMLResponse(content=html)
+
+
+# ---------------------------------------------------------------------------
+# Regime panel renderer
+# ---------------------------------------------------------------------------
+
+_REGIME_COLORS = {
+    "trending": ("#4ade80", "rgba(74,222,128,0.12)", "rgba(74,222,128,0.35)"),  # green
+    "volatile": ("#fbbf24", "rgba(251,191,36,0.12)", "rgba(251,191,36,0.35)"),  # amber
+    "choppy": ("#f87171", "rgba(248,113,113,0.12)", "rgba(248,113,113,0.35)"),  # red
+}
+
+_REGIME_LABELS = {
+    "trending": "Trending",
+    "volatile": "Volatile",
+    "choppy": "Choppy",
+}
+
+_REGIME_EMOJI = {
+    "trending": "📈",
+    "volatile": "⚡",
+    "choppy": "🔀",
+}
+
+_REGIME_MULT_LABEL = {
+    "trending": "Full size (1.0×)",
+    "volatile": "Half size (0.5×)",
+    "choppy": "Quarter size (0.25×)",
+}
+
+
+def _render_regime_panel() -> str:
+    """Render the HMM regime detection sidebar panel.
+
+    Reads the consolidated ``engine:regime_states`` Redis key written by
+    ``_publish_regime_states()`` in the engine.  Falls back gracefully when
+    the engine hasn't run yet or hmmlearn is not installed.
+
+    Returns a self-contained HTML string suitable for HTMX swap into
+    ``#regime-container``.
+    """
+    regime_map: dict[str, dict] = {}
+    try:
+        from lib.core.cache import cache_get
+
+        raw = cache_get("engine:regime_states")
+        if raw:
+            regime_map = json.loads(raw)
+    except Exception:
+        pass
+
+    now_str = datetime.now(tz=_EST).strftime("%I:%M %p ET")
+
+    if not regime_map:
+        return f"""
+<div class="t-panel border t-border rounded-lg p-3" style="border-left:3px solid #7c3aed">
+    <div class="flex items-center justify-between mb-1">
+        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">🧮 Market Regime</h3>
+        <span class="t-text-faint" style="font-size:9px">{now_str}</span>
+    </div>
+    <div class="t-text-faint text-xs text-center py-3">
+        Waiting for engine regime data…<br>
+        <span style="font-size:9px">Requires hmmlearn + ≥200 bars of history</span>
+    </div>
+</div>"""
+
+    # Build per-symbol rows
+    rows_html = ""
+    # Sort: trending first, then volatile, then choppy; secondary by confidence desc
+    _order = {"trending": 0, "volatile": 1, "choppy": 2}
+    sorted_items = sorted(
+        regime_map.items(),
+        key=lambda kv: (_order.get(kv[1].get("regime", "choppy"), 2), -float(kv[1].get("confidence", 0))),
+    )
+
+    for sym, info in sorted_items:
+        regime = info.get("regime", "choppy")
+        confidence = float(info.get("confidence", 0.0))
+        confident = bool(info.get("confident", False))
+        multiplier = float(info.get("position_multiplier", 0.25))
+        persistence = int(info.get("persistence", 0))
+        proba = info.get("probabilities", {})
+
+        fg, bg, border_col = _REGIME_COLORS.get(regime, ("#a1a1aa", "rgba(161,161,170,0.12)", "rgba(161,161,170,0.3)"))
+        label = _REGIME_LABELS.get(regime, regime.title())
+        emoji = _REGIME_EMOJI.get(regime, "❓")
+        mult_label = _REGIME_MULT_LABEL.get(regime, f"{multiplier:.2f}×")
+
+        # Confidence bar width (capped at 100%)
+        conf_pct = min(100, int(confidence * 100))
+        conf_color = "#4ade80" if confidence >= 0.7 else ("#fbbf24" if confidence >= 0.5 else "#f87171")
+
+        # Probability mini-bars for trending / volatile / choppy
+        prob_bars = ""
+        for r_key, r_label in [("trending", "T"), ("volatile", "V"), ("choppy", "C")]:
+            p = float(proba.get(r_key, 0.0))
+            r_fg = _REGIME_COLORS.get(r_key, ("#a1a1aa", "", ""))[0]
+            prob_bars += (
+                f'<div style="display:flex;align-items:center;gap:3px;font-size:8px">'
+                f'<span style="color:{r_fg};width:8px;flex-shrink:0">{r_label}</span>'
+                f'<div style="flex:1;height:3px;background:var(--bg-bar);border-radius:2px">'
+                f'<div style="width:{int(p * 100)}%;height:100%;background:{r_fg};border-radius:2px"></div>'
+                f"</div>"
+                f'<span style="color:var(--text-faint);width:22px;text-align:right">{int(p * 100)}%</span>'
+                f"</div>"
+            )
+
+        # Uncertain badge when confidence is below threshold
+        uncertain_badge = (
+            ""
+            if confident
+            else '<span style="font-size:8px;color:#fbbf24;margin-left:4px" title="Below confidence threshold">?</span>'
+        )
+
+        rows_html += f"""
+        <div style="background:{bg};border:1px solid {border_col};border-radius:6px;padding:6px 8px;margin-bottom:5px">
+            <div class="flex items-center justify-between mb-1">
+                <div class="flex items-center gap-1">
+                    <span style="font-size:11px">{emoji}</span>
+                    <span style="font-size:11px;font-weight:600;color:{fg}">{label}</span>
+                    {uncertain_badge}
+                </div>
+                <div class="flex items-center gap-2">
+                    <span style="font-size:9px;color:var(--text-muted);font-family:monospace">{mult_label}</span>
+                    <span style="font-size:9px;color:var(--text-faint);font-family:monospace">{sym}</span>
+                </div>
+            </div>
+            <!-- Confidence bar -->
+            <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px">
+                <span style="font-size:8px;color:var(--text-faint);width:14px;flex-shrink:0">conf</span>
+                <div style="flex:1;height:4px;background:var(--bg-bar);border-radius:2px">
+                    <div style="width:{conf_pct}%;height:100%;background:{conf_color};border-radius:2px"></div>
+                </div>
+                <span style="font-size:8px;color:{conf_color};font-family:monospace;width:28px;text-align:right">{conf_pct}%</span>
+            </div>
+            <!-- Probability breakdown -->
+            <div style="display:flex;flex-direction:column;gap:1px">
+                {prob_bars}
+            </div>
+            <div style="font-size:8px;color:var(--text-faint);margin-top:3px;text-align:right">
+                persistence: {persistence} bars
+            </div>
+        </div>"""
+
+    # Summary: dominant regime across all symbols
+    regime_counts: dict[str, int] = {}
+    for info in regime_map.values():
+        r = info.get("regime", "choppy")
+        regime_counts[r] = regime_counts.get(r, 0) + 1
+
+    dominant = max(regime_counts, key=regime_counts.get) if regime_counts else "choppy"  # type: ignore[arg-type]
+    dom_fg = _REGIME_COLORS.get(dominant, ("#a1a1aa", "", ""))[0]
+    dom_emoji = _REGIME_EMOJI.get(dominant, "❓")
+    dom_label = _REGIME_LABELS.get(dominant, dominant.title())
+
+    summary_pills = " ".join(
+        f'<span style="font-size:9px;padding:1px 5px;border-radius:9999px;'
+        f"background:{_REGIME_COLORS.get(r, ('#a1a1aa', 'rgba(161,161,170,0.12)', ''))[1]};"
+        f'color:{_REGIME_COLORS.get(r, ("#a1a1aa", "", ""))[0]}">'
+        f"{_REGIME_EMOJI.get(r, '❓')} {r.title()}: {cnt}</span>"
+        for r, cnt in sorted(regime_counts.items())
+    )
+
+    return f"""
+<div class="t-panel border t-border rounded-lg p-3" style="border-left:3px solid #7c3aed">
+    <div class="flex items-center justify-between mb-2">
+        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">🧮 Market Regime</h3>
+        <span class="t-text-faint" style="font-size:9px">{now_str}</span>
+    </div>
+    <!-- Dominant regime summary -->
+    <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center gap-1">
+            <span style="font-size:16px">{dom_emoji}</span>
+            <span style="font-size:13px;font-weight:700;color:{dom_fg}">{dom_label}</span>
+        </div>
+        <div class="flex items-center gap-1 flex-wrap" style="justify-content:flex-end">
+            {summary_pills}
+        </div>
+    </div>
+    <!-- Per-symbol rows -->
+    <div>
+        {rows_html}
+    </div>
+    <div style="font-size:9px;color:var(--text-faint);margin-top:4px;border-top:1px solid var(--border-subtle);padding-top:4px">
+        HMM · 3-state Gaussian · forward algorithm (no look-ahead)
+    </div>
+</div>"""
+
+
+@router.get("/api/regime/html", response_class=HTMLResponse)
+def get_regime_html():
+    """Return the HMM regime detection panel as an HTML fragment."""
+    return HTMLResponse(content=_render_regime_panel())
 
 
 @router.get("/api/no-trade", response_class=HTMLResponse)

@@ -4,9 +4,25 @@ lib.core — Core infrastructure modules.
 Re-exports the public API from each sub-module so callers can do:
 
     from lib.core import cache_get, cache_set, ASSETS, init_db
+    from lib.core import BreakoutType, get_range_config, ORBSession, get_session
 """
 
 from lib.core.alerts import AlertDispatcher, get_dispatcher, send_risk_alert
+from lib.core.breakout_types import (
+    DETECTED_BREAKOUT_TYPES,
+    EXCHANGE_BREAKOUT_TYPES,
+    HTF_BREAKOUT_TYPES,
+    RESEARCHED_BREAKOUT_TYPES,
+    BreakoutType,
+    RangeConfig,
+    all_range_configs,
+    breakout_type_from_name,
+    breakout_type_from_ord,
+    breakout_type_ord,
+    get_range_config,
+    types_with_ema_trailing,
+    types_with_tp3,
+)
 from lib.core.cache import (
     REDIS_AVAILABLE,
     TTL_DAILY,
@@ -48,8 +64,43 @@ from lib.core.models import (
     init_db,
     save_daily_journal,
 )
+from lib.core.multi_session import (
+    ALL_SESSION_KEYS,
+    SESSION_BY_KEY,
+    ORBSession,
+    all_sessions,
+    daytime_sessions,
+    get_session,
+    overnight_sessions,
+    session_keys,
+    sessions_for_asset_class,
+)
 
 __all__ = [
+    # breakout_types
+    "BreakoutType",
+    "DETECTED_BREAKOUT_TYPES",
+    "EXCHANGE_BREAKOUT_TYPES",
+    "HTF_BREAKOUT_TYPES",
+    "RESEARCHED_BREAKOUT_TYPES",
+    "RangeConfig",
+    "all_range_configs",
+    "breakout_type_from_name",
+    "breakout_type_from_ord",
+    "breakout_type_ord",
+    "get_range_config",
+    "types_with_ema_trailing",
+    "types_with_tp3",
+    # multi_session
+    "ALL_SESSION_KEYS",
+    "SESSION_BY_KEY",
+    "ORBSession",
+    "all_sessions",
+    "daytime_sessions",
+    "get_session",
+    "overnight_sessions",
+    "session_keys",
+    "sessions_for_asset_class",
     # alerts
     "AlertDispatcher",
     "get_dispatcher",

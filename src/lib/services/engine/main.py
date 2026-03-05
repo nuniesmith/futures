@@ -31,7 +31,6 @@ import os
 import signal
 import time
 from datetime import datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from lib.core.logging_config import get_logger, setup_logging
@@ -45,66 +44,13 @@ HEALTH_FILE = "/tmp/engine_health.json"
 # ---------------------------------------------------------------------------
 # CNN model hot-reload — detect when breakout_cnn_best.pt changes on disk
 # ---------------------------------------------------------------------------
-_MODEL_CHECK_INTERVAL = 30  # seconds between stat() checks
-_model_last_checked: float = 0.0
-_model_last_mtime: float = 0.0
-
-# Candidate directories (Docker vs bare-metal)
-_MODEL_DIR_CANDIDATES = [
-    Path("/app/models"),
-    Path(__file__).resolve().parents[4] / "models",
-]
-
-
-def _get_champion_path() -> Path | None:
-    """Return the path to breakout_cnn_best.pt if it exists, else None."""
-    for d in _MODEL_DIR_CANDIDATES:
-        p = d / "breakout_cnn_best.pt"
-        if p.is_file():
-            return p
-    return None
-
-
-def _check_model_hot_reload() -> None:
-    """Poll the champion model file's mtime and invalidate the cache if it changed.
-
-    Called once per engine loop iteration.  Only stat()s the file every
-    ``_MODEL_CHECK_INTERVAL`` seconds to avoid I/O overhead.
-    """
-    global _model_last_checked, _model_last_mtime
-
-    now = time.monotonic()
-    if now - _model_last_checked < _MODEL_CHECK_INTERVAL:
-        return
-    _model_last_checked = now
-
-    champion = _get_champion_path()
-    if champion is None:
-        return
-
-    try:
-        current_mtime = champion.stat().st_mtime
-    except OSError:
-        return
-
-    if _model_last_mtime == 0.0:
-        # First check — just record the baseline, don't reload
-        _model_last_mtime = current_mtime
-        return
-
-    if current_mtime != _model_last_mtime:
-        _model_last_mtime = current_mtime
-        logger.info(
-            "🔄 CNN model file changed on disk (%s) — invalidating cache for hot-reload",
-            champion.name,
-        )
-        try:
-            from lib.analysis.breakout_cnn import invalidate_model_cache
-
-            invalidate_model_cache()
-            logger.info("✅ CNN model cache invalidated — next ORB check will use the new model")
-        except Exception as exc:
-            logger.warning("CNN hot-reload cache invalidation failed (non-fatal): %s", exc)
+# The ModelWatcher (lib.services.engine.model_watcher) replaces the old
+# inline polling approach.  It uses watchdog (inotify/FSEvents) for instant
+# notification when model files change, with a polling fallback.
+#
+# The watcher is started in main() and stopped on shutdown.
+# ---------------------------------------------------------------------------
+_model_watcher = None  # type: ignore[assignment]
 
 
 def _write_health(healthy: bool, status: str, **extras):
@@ -247,6 +193,114 @@ def _handle_fks_recompute(engine) -> None:
         logger.info("✅ Ruby recomputation complete")
     except Exception as exc:
         logger.warning("Ruby recompute error: %s", exc)
+
+    # Run HMM regime detection for all assets with available bar data and
+    # publish the consolidated state map to Redis so the dashboard panel
+    # and Prometheus metrics scrape can both read it.
+    _publish_regime_states()
+
+
+def _publish_regime_states() -> None:
+    """Run HMM regime detection across all focus assets and publish to Redis.
+
+    Reads bar data from the engine:bars_1m / engine:bars_daily cache keys,
+    fits / updates the per-instrument RegimeDetector, then writes:
+      - ``engine:regime_states``  — JSON map of {symbol → regime_info} (TTL 10 min)
+      - ``engine:regime:{symbol}`` — per-symbol JSON (TTL 10 min)
+
+    Also pushes the results into Prometheus gauges immediately so the next
+    /metrics/prometheus scrape reflects the latest regime.
+    """
+    try:
+        import io
+
+        import pandas as pd
+
+        from lib.analysis.regime import detect_regime_hmm
+        from lib.core.cache import cache_get, cache_set
+
+        raw_focus = cache_get("engine:daily_focus")
+        if not raw_focus:
+            logger.debug("No daily focus — skipping regime update")
+            return
+
+        focus_data = json.loads(raw_focus)
+        assets = focus_data.get("assets", [])
+        if not assets:
+            return
+
+        regime_map: dict[str, dict] = {}
+
+        for asset in assets:
+            symbol = asset.get("symbol", "")
+            ticker = asset.get("ticker", "") or symbol
+            if not symbol:
+                continue
+
+            try:
+                # Prefer daily bars for regime (longer history = better HMM fit)
+                bars = None
+                for cache_key in (
+                    f"engine:bars_daily:{ticker}",
+                    f"engine:bars_1m:{ticker}",
+                ):
+                    raw_bars = cache_get(cache_key)
+                    if raw_bars:
+                        raw_str = raw_bars.decode("utf-8") if isinstance(raw_bars, bytes) else raw_bars
+                        candidate = pd.read_json(io.StringIO(raw_str))
+                        if not candidate.empty and len(candidate) >= 50:
+                            bars = candidate
+                            break
+
+                if bars is None or bars.empty:
+                    logger.debug("No bars for regime detection on %s", symbol)
+                    continue
+
+                info = detect_regime_hmm(ticker, bars)
+                regime_map[symbol] = info
+
+                # Per-symbol key
+                cache_set(
+                    f"engine:regime:{symbol}",
+                    json.dumps(info, default=str).encode(),
+                    ttl=600,
+                )
+            except Exception as exc:
+                logger.debug("Regime detection skipped for %s: %s", symbol, exc)
+                continue
+
+        if not regime_map:
+            return
+
+        # Consolidated map
+        cache_set(
+            "engine:regime_states",
+            json.dumps(regime_map, default=str).encode(),
+            ttl=600,
+        )
+
+        # Push into Prometheus gauges immediately (don't wait for scrape)
+        try:
+            from lib.services.data.api.metrics import update_regime
+
+            for sym, info in regime_map.items():
+                update_regime(
+                    symbol=sym,
+                    regime=info.get("regime", "choppy"),
+                    confidence=float(info.get("confidence", 0.0)),
+                    position_multiplier=float(info.get("position_multiplier", 0.25)),
+                )
+        except Exception:
+            pass
+
+        logger.debug(
+            "Regime states published for %d symbols: %s",
+            len(regime_map),
+            {s: v.get("regime") for s, v in regime_map.items()},
+        )
+
+    except Exception as exc:
+        logger.debug("_publish_regime_states failed (non-fatal): %s", exc)
 
 
 def _handle_publish_focus_update(engine, account_size: int) -> None:
@@ -610,6 +664,40 @@ def _handle_check_orb_cme_settle(engine) -> None:
     _handle_check_orb(engine, orb_session=CME_SETTLEMENT_SESSION)
 
 
+def _handle_check_orb_crypto_utc0(engine) -> None:
+    """Check for Crypto UTC-midnight ORB patterns (19:00–19:30 ET EST / 00:00 UTC).
+
+    High-volume Asia open window for BTC/ETH/SOL and other spot crypto pairs
+    tracked on Kraken.  Uses wider ATR thresholds and looser quality gates
+    via CRYPTO_UTC_MIDNIGHT_SESSION and per-symbol overrides.
+    Only active when ENABLE_KRAKEN_CRYPTO=1.  wraps_midnight=True.
+    """
+    try:
+        from lib.services.engine.orb import CRYPTO_UTC_MIDNIGHT_SESSION
+    except ImportError:
+        logger.warning("CRYPTO_UTC_MIDNIGHT_SESSION not available — crypto ORB disabled")
+        return
+
+    _handle_check_orb(engine, orb_session=CRYPTO_UTC_MIDNIGHT_SESSION)
+
+
+def _handle_check_orb_crypto_utc12(engine) -> None:
+    """Check for Crypto UTC-noon ORB patterns (07:00–07:30 ET EST / 12:00 UTC).
+
+    London morning crypto session.  High-volume pre-US-open positioning
+    window for BTC/ETH/SOL and tracked Kraken pairs.  Uses wider ATR
+    thresholds and per-symbol overrides.
+    Only active when ENABLE_KRAKEN_CRYPTO=1.  wraps_midnight=False.
+    """
+    try:
+        from lib.services.engine.orb import CRYPTO_UTC_NOON_SESSION
+    except ImportError:
+        logger.warning("CRYPTO_UTC_NOON_SESSION not available — crypto ORB disabled")
+        return
+
+    _handle_check_orb(engine, orb_session=CRYPTO_UTC_NOON_SESSION)
+
+
 def _handle_check_orb(engine, orb_session=None) -> None:
     """Check for Opening Range Breakout patterns.
 
@@ -864,6 +952,9 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                             # Gate mode: env var ORB_FILTER_GATE (default "majority")
                             _gate_mode = os.environ.get("ORB_FILTER_GATE", "majority")
 
+                            # Read MTF min_pass_score from env (default 0.55)
+                            _mtf_min_score = float(os.environ.get("ORB_MTF_MIN_SCORE", "0.55"))
+
                             filter_result = apply_all_filters(  # type: ignore[possibly-unbound]
                                 direction=result.direction,
                                 trigger_price=result.trigger_price,
@@ -878,10 +969,31 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                 gate_mode=_gate_mode,
                                 allowed_windows=_filter_allowed_windows,
                                 enable_lunch_filter=_enable_lunch,
+                                enable_mtf_analyzer=True,
+                                mtf_min_pass_score=_mtf_min_score,
                             )
 
                             filter_passed = filter_result.passed
                             filter_summary = filter_result.summary
+
+                            # ── MTF enrichment on the ORB result ──────────────────
+                            # Run the full MTF analyzer independently of the filter
+                            # so we always capture mtf_score / macd_slope / divergence
+                            # in the DB even when the filter gate is in "majority" mode
+                            # and the MTF verdict didn't block the signal.
+                            _orb_mtf_score: float | None = None
+                            _orb_macd_slope: float | None = None
+                            _orb_divergence: str = ""
+                            try:
+                                from lib.analysis.mtf_analyzer import analyze_mtf as _analyze_mtf
+
+                                _mtf_res = _analyze_mtf(bars_htf, direction=result.direction)
+                                if not _mtf_res.error:
+                                    _orb_mtf_score = _mtf_res.mtf_score
+                                    _orb_macd_slope = _mtf_res.macd_histogram_slope
+                                    _orb_divergence = _mtf_res.divergence_type or ""
+                            except Exception:
+                                pass
 
                             if not filter_passed:
                                 breakouts_filtered += 1
@@ -892,7 +1004,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                     result.trigger_price,
                                     filter_summary,
                                 )
-                                # Enrich the audit row with filter rejection
+                                # Enrich the audit row with filter rejection + MTF data
                                 _persist_orb_enrichment(
                                     _orb_row_id,
                                     {
@@ -900,8 +1012,38 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                         "filter_passed": False,
                                         "filter_summary": filter_summary,
                                         "published": False,
+                                        "mtf_score": _orb_mtf_score,
+                                        "macd_slope": _orb_macd_slope,
+                                        "divergence": _orb_divergence,
                                     },
                                 )
+                                # Also update the new dedicated columns
+                                try:
+                                    from lib.core.models import _get_conn, _is_using_postgres
+
+                                    if _orb_row_id is not None and (
+                                        _orb_mtf_score is not None or _orb_macd_slope is not None or _orb_divergence
+                                    ):
+                                        _pg = _is_using_postgres()
+                                        _ph = "%s" if _pg else "?"
+                                        _conn = _get_conn()
+                                        _conn.execute(
+                                            f"UPDATE orb_events SET "
+                                            f"breakout_type={_ph}, mtf_score={_ph}, "
+                                            f"macd_slope={_ph}, divergence={_ph} "
+                                            f"WHERE id={_ph}",
+                                            (
+                                                "ORB",
+                                                _orb_mtf_score,
+                                                _orb_macd_slope,
+                                                _orb_divergence,
+                                                _orb_row_id,
+                                            ),
+                                        )
+                                        _conn.commit()
+                                        _conn.close()
+                                except Exception:
+                                    pass
                                 # Prometheus: filter rejected
                                 try:
                                     from lib.services.data.api.metrics import record_orb_filter_result
@@ -1180,7 +1322,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                 cnn_line,
                             )
 
-                            # Enrich the audit row — published
+                            # Enrich the audit row — published (includes MTF data)
                             _persist_orb_enrichment(
                                 _orb_row_id,
                                 {
@@ -1192,8 +1334,36 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                     "cnn_signal": cnn_signal,
                                     "cnn_gated": False,
                                     "published": True,
+                                    "mtf_score": _orb_mtf_score,
+                                    "macd_slope": _orb_macd_slope,
+                                    "divergence": _orb_divergence,
                                 },
                             )
+                            # Update new dedicated columns
+                            try:
+                                from lib.core.models import _get_conn, _is_using_postgres
+
+                                if _orb_row_id is not None:
+                                    _pg = _is_using_postgres()
+                                    _ph = "%s" if _pg else "?"
+                                    _conn = _get_conn()
+                                    _conn.execute(
+                                        f"UPDATE orb_events SET "
+                                        f"breakout_type={_ph}, mtf_score={_ph}, "
+                                        f"macd_slope={_ph}, divergence={_ph} "
+                                        f"WHERE id={_ph}",
+                                        (
+                                            "ORB",
+                                            _orb_mtf_score,
+                                            _orb_macd_slope,
+                                            _orb_divergence,
+                                            _orb_row_id,
+                                        ),
+                                    )
+                                    _conn.commit()
+                                    _conn.close()
+                            except Exception:
+                                pass
 
                             # Send alert
                             try:
@@ -1307,6 +1477,588 @@ def _persist_orb_enrichment(row_id: int | None, metadata: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Multi-BreakoutType handlers — PDR, IB, CONS, and parallel sweep
+# ---------------------------------------------------------------------------
+
+
+def _get_assets_for_session_key(session_key: str) -> list[dict]:
+    """Return the focus asset list filtered to the given session's asset set.
+
+    Falls back to the full daily focus if no session-specific list is found.
+    """
+    try:
+        from lib.core.cache import cache_get
+        from lib.services.engine.orb import SESSION_ASSETS
+
+        raw_focus = cache_get("engine:daily_focus")
+        if not raw_focus:
+            return []
+
+        focus_data = json.loads(raw_focus)
+        all_assets = focus_data.get("assets", [])
+
+        session_tickers = set(SESSION_ASSETS.get(session_key, []))
+        if not session_tickers:
+            return all_assets
+
+        return [
+            a for a in all_assets if a.get("ticker", "") in session_tickers or a.get("symbol", "") in session_tickers
+        ]
+    except Exception as exc:
+        logger.debug("_get_assets_for_session_key(%s) error: %s", session_key, exc)
+        return []
+
+
+def _fetch_bars_1m(engine, ticker: str, symbol: str) -> "pd.DataFrame | None":
+    """Fetch 1-minute bars from cache or engine data service (best-effort)."""
+    try:
+        import io
+
+        import pandas as pd
+
+        from lib.core.cache import cache_get
+
+        bars_key = f"engine:bars_1m:{ticker or symbol}"
+        raw_bars = cache_get(bars_key)
+        if raw_bars:
+            raw_str = raw_bars.decode("utf-8") if isinstance(raw_bars, bytes) else raw_bars
+            return pd.read_json(io.StringIO(raw_str))
+
+        with contextlib.suppress(Exception):
+            return engine._fetch_tf_safe(ticker or symbol, interval="1m", period="1d")
+    except Exception as exc:
+        logger.debug("_fetch_bars_1m(%s) error: %s", symbol, exc)
+    return None
+
+
+def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "us") -> None:
+    """Publish a non-ORB breakout result to Redis for SSE / dashboard consumption."""
+    try:
+        import time as _time
+
+        from lib.core.cache import cache_set
+
+        payload = result.to_dict()
+        payload["published_at"] = datetime.now(tz=ZoneInfo("America/New_York")).isoformat()
+        payload["orb_session"] = orb_session_key
+
+        key = f"engine:breakout:{result.breakout_type.lower()}:{result.symbol}"
+        cache_set(key, json.dumps(payload), ttl=300)
+
+        # Also publish to the generic breakout channel so the SSE picks it up
+        try:
+            from lib.core.cache import get_redis
+
+            r = get_redis()
+            if r:
+                r.publish("dashboard:breakout", json.dumps(payload))
+        except Exception:
+            pass
+
+        logger.info(
+            "🔔 %s BREAKOUT: %s %s @ %.4f (range %.4f–%.4f)",
+            result.breakout_type.value,
+            result.direction,
+            result.symbol,
+            result.trigger_price,
+            result.range_low,
+            result.range_high,
+        )
+    except Exception as exc:
+        logger.debug("_publish_breakout_result error: %s", exc)
+
+
+def _persist_breakout_result(result: "BreakoutResult", session_key: str = "") -> int | None:
+    """Persist a BreakoutResult to orb_events using the new breakout_type column."""
+    try:
+        from lib.core.models import record_orb_event
+
+        row_id = record_orb_event(
+            symbol=result.symbol,
+            or_high=result.range_high,
+            or_low=result.range_low,
+            or_range=result.range_size,
+            atr_value=result.atr_value,
+            breakout_detected=result.breakout_detected,
+            direction=result.direction,
+            trigger_price=result.trigger_price,
+            long_trigger=result.long_trigger,
+            short_trigger=result.short_trigger,
+            bar_count=result.range_bar_count,
+            session=session_key,
+            metadata=result.extra or {},
+            breakout_type=result.breakout_type.value,
+            mtf_score=result.mtf_score,
+            macd_slope=result.macd_slope,
+            divergence=result.divergence_type or "",
+        )
+        return row_id
+    except Exception as exc:
+        logger.debug("_persist_breakout_result error (non-fatal): %s", exc)
+        return None
+
+
+def _run_mtf_on_result(result: "BreakoutResult", bars_htf: "pd.DataFrame | None") -> "BreakoutResult":
+    """Run the MTF analyzer on a BreakoutResult and enrich it in-place."""
+    if not result.breakout_detected or bars_htf is None or bars_htf.empty:
+        return result
+    try:
+        from lib.analysis.mtf_analyzer import analyze_mtf
+
+        mtf = analyze_mtf(bars_htf, direction=result.direction)
+        result.mtf_score = mtf.mtf_score
+        result.mtf_direction = mtf.ema_slope_direction
+        result.macd_slope = mtf.macd_histogram_slope
+        result.macd_divergence = mtf.divergence_detected
+        result.extra["mtf"] = mtf.to_dict()
+    except Exception as exc:
+        logger.debug("_run_mtf_on_result error (non-fatal): %s", exc)
+    return result
+
+
+def _handle_check_pdr(engine, session_key: str = "london_ny") -> None:
+    """Check for Previous Day Range (PDR) breakouts across session assets.
+
+    The PDR uses yesterday's Globex high/low as the range anchor.  A close
+    beyond either level by at least ``min_depth_atr_pct × ATR`` triggers.
+
+    Strongest sessions: London Open (03:00 ET) and US Equity Open (09:30 ET)
+    where institutional orders cluster around yesterday's levels.
+    """
+    logger.debug("▶ PDR breakout check [session=%s]...", session_key)
+    try:
+        import pandas as pd
+
+        from lib.services.engine.breakout import BreakoutType, RangeConfig, detect_pdr_breakout
+
+        assets = _get_assets_for_session_key(session_key)
+        if not assets:
+            logger.debug("No assets for PDR check (session=%s)", session_key)
+            return
+
+        found = 0
+        for asset in assets:
+            symbol = asset.get("symbol", "")
+            ticker = asset.get("ticker", "")
+            if not symbol:
+                continue
+            try:
+                bars_1m = _fetch_bars_1m(engine, ticker, symbol)
+                if bars_1m is None or bars_1m.empty:
+                    continue
+
+                # Try to get pre-computed PDR levels from daily bars cache
+                prev_high: float | None = None
+                prev_low: float | None = None
+                try:
+                    import io
+
+                    from lib.core.cache import cache_get
+
+                    daily_key = f"engine:bars_daily:{ticker or symbol}"
+                    raw_daily = cache_get(daily_key)
+                    if raw_daily:
+                        raw_daily_str = raw_daily.decode("utf-8") if isinstance(raw_daily, bytes) else raw_daily
+                        bars_daily = pd.read_json(io.StringIO(raw_daily_str))
+                        if len(bars_daily) >= 2:
+                            prev_high = float(bars_daily["High"].iloc[-2])
+                            prev_low = float(bars_daily["Low"].iloc[-2])
+                except Exception:
+                    pass
+
+                result = detect_pdr_breakout(
+                    bars_1m,
+                    symbol=symbol,
+                    prev_day_high=prev_high,
+                    prev_day_low=prev_low,
+                )
+
+                # Fetch HTF bars for MTF enrichment
+                bars_htf = None
+                try:
+                    import io as _io
+
+                    from lib.core.cache import cache_get as _cg
+
+                    htf_raw = _cg(f"engine:bars_15m:{ticker or symbol}")
+                    if htf_raw:
+                        bars_htf = pd.read_json(
+                            _io.StringIO(htf_raw.decode("utf-8") if isinstance(htf_raw, bytes) else htf_raw)
+                        )
+                except Exception:
+                    pass
+
+                if bars_htf is None and bars_1m is not None:
+                    with contextlib.suppress(Exception):
+                        bars_htf = (
+                            bars_1m.resample("15min")
+                            .agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})
+                            .dropna()
+                        )
+
+                result = _run_mtf_on_result(result, bars_htf)
+                _persist_breakout_result(result, session_key=session_key)
+
+                if result.breakout_detected:
+                    found += 1
+                    _publish_breakout_result(result, orb_session_key=session_key)
+                    try:
+                        from lib.core.alerts import send_signal
+
+                        send_signal(
+                            signal_key=f"pdr_{symbol}_{result.direction}",
+                            title=f"📊 PDR {result.direction}: {symbol}",
+                            message=(
+                                f"Previous Day Range Breakout!\n"
+                                f"Direction: {result.direction}\n"
+                                f"Trigger: {result.trigger_price:,.4f}\n"
+                                f"PDR: {result.range_low:,.4f} – {result.range_high:,.4f}\n"
+                                f"ATR: {result.atr_value:,.4f}"
+                                + (f"\nMTF Score: {result.mtf_score:.3f}" if result.mtf_score is not None else "")
+                            ),
+                            asset=symbol,
+                            direction=result.direction,
+                        )
+                    except Exception:
+                        pass
+            except Exception as exc:
+                logger.debug("PDR check failed for %s: %s", symbol, exc)
+
+        logger.debug("PDR check [%s] complete: %d breakout(s)", session_key, found)
+    except Exception as exc:
+        logger.debug("PDR handler error (non-fatal): %s", exc)
+
+
+def _handle_check_ib(engine, session_key: str = "us") -> None:
+    """Check for Initial Balance (IB) breakouts across US session assets.
+
+    The Initial Balance is formed during the first 60 minutes of RTH
+    (09:30–10:30 ET).  Breakouts after 10:30 ET are the classic
+    Dalton/Steidlmayer IB extension trade.  Narrow IB ranges on trend days
+    produce the highest-conviction signals.
+
+    Only fired by the scheduler after 10:30 ET when the IB is complete.
+    """
+    logger.debug("▶ IB breakout check [session=%s]...", session_key)
+    try:
+        import pandas as pd
+
+        from lib.services.engine.breakout import detect_ib_breakout
+
+        assets = _get_assets_for_session_key(session_key)
+        if not assets:
+            logger.debug("No assets for IB check (session=%s)", session_key)
+            return
+
+        found = 0
+        for asset in assets:
+            symbol = asset.get("symbol", "")
+            ticker = asset.get("ticker", "")
+            if not symbol:
+                continue
+            try:
+                bars_1m = _fetch_bars_1m(engine, ticker, symbol)
+                if bars_1m is None or bars_1m.empty:
+                    continue
+
+                result = detect_ib_breakout(bars_1m, symbol=symbol)
+
+                # Enrich with MTF
+                bars_htf = None
+                try:
+                    import io as _io
+
+                    from lib.core.cache import cache_get as _cg
+
+                    htf_raw = _cg(f"engine:bars_15m:{ticker or symbol}")
+                    if htf_raw:
+                        bars_htf = pd.read_json(
+                            _io.StringIO(htf_raw.decode("utf-8") if isinstance(htf_raw, bytes) else htf_raw)
+                        )
+                except Exception:
+                    pass
+
+                if bars_htf is None and bars_1m is not None:
+                    with contextlib.suppress(Exception):
+                        bars_htf = (
+                            bars_1m.resample("15min")
+                            .agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})
+                            .dropna()
+                        )
+
+                result = _run_mtf_on_result(result, bars_htf)
+                _persist_breakout_result(result, session_key=session_key)
+
+                if result.breakout_detected:
+                    found += 1
+                    _publish_breakout_result(result, orb_session_key=session_key)
+                    try:
+                        from lib.core.alerts import send_signal
+
+                        ib_line = f"IB: {result.ib_low:,.4f} – {result.ib_high:,.4f}" if result.ib_high > 0 else ""
+                        send_signal(
+                            signal_key=f"ib_{symbol}_{result.direction}",
+                            title=f"📊 IB {result.direction}: {symbol}",
+                            message=(
+                                f"Initial Balance Breakout!\n"
+                                f"Direction: {result.direction}\n"
+                                f"Trigger: {result.trigger_price:,.4f}\n"
+                                + (f"{ib_line}\n" if ib_line else "")
+                                + f"ATR: {result.atr_value:,.4f}"
+                                + (f"\nMTF Score: {result.mtf_score:.3f}" if result.mtf_score is not None else "")
+                            ),
+                            asset=symbol,
+                            direction=result.direction,
+                        )
+                    except Exception:
+                        pass
+            except Exception as exc:
+                logger.debug("IB check failed for %s: %s", symbol, exc)
+
+        logger.debug("IB check [%s] complete: %d breakout(s)", session_key, found)
+    except Exception as exc:
+        logger.debug("IB handler error (non-fatal): %s", exc)
+
+
+def _handle_check_consolidation(engine, session_key: str = "london_ny") -> None:
+    """Check for Consolidation/Squeeze breakouts across session assets.
+
+    Uses Bollinger Band contraction (BB width < squeeze_atr_mult × ATR for
+    ≥ squeeze_min_bars consecutive bars) to identify compressed price action,
+    then detects the expansion bar that breaks out of the squeeze.
+
+    Valid throughout the full active window — squeeze breakouts can fire at
+    any time once a sustained contraction is detected.
+    """
+    logger.debug("▶ Consolidation/squeeze breakout check [session=%s]...", session_key)
+    try:
+        import pandas as pd
+
+        from lib.services.engine.breakout import detect_consolidation_breakout
+
+        assets = _get_assets_for_session_key(session_key)
+        if not assets:
+            logger.debug("No assets for CONS check (session=%s)", session_key)
+            return
+
+        found = 0
+        for asset in assets:
+            symbol = asset.get("symbol", "")
+            ticker = asset.get("ticker", "")
+            if not symbol:
+                continue
+            try:
+                bars_1m = _fetch_bars_1m(engine, ticker, symbol)
+                if bars_1m is None or bars_1m.empty:
+                    continue
+
+                result = detect_consolidation_breakout(bars_1m, symbol=symbol)
+
+                # Enrich with MTF
+                bars_htf = None
+                try:
+                    import io as _io
+
+                    from lib.core.cache import cache_get as _cg
+
+                    htf_raw = _cg(f"engine:bars_15m:{ticker or symbol}")
+                    if htf_raw:
+                        bars_htf = pd.read_json(
+                            _io.StringIO(htf_raw.decode("utf-8") if isinstance(htf_raw, bytes) else htf_raw)
+                        )
+                except Exception:
+                    pass
+
+                if bars_htf is None and bars_1m is not None:
+                    with contextlib.suppress(Exception):
+                        bars_htf = (
+                            bars_1m.resample("15min")
+                            .agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})
+                            .dropna()
+                        )
+
+                result = _run_mtf_on_result(result, bars_htf)
+                _persist_breakout_result(result, session_key=session_key)
+
+                if result.breakout_detected:
+                    found += 1
+                    _publish_breakout_result(result, orb_session_key=session_key)
+                    try:
+                        from lib.core.alerts import send_signal
+
+                        squeeze_line = (
+                            f"Squeeze: {result.squeeze_bar_count} bars, BB width {result.squeeze_bb_width:.4f}"
+                            if result.squeeze_detected
+                            else ""
+                        )
+                        send_signal(
+                            signal_key=f"cons_{symbol}_{result.direction}",
+                            title=f"📊 SQUEEZE {result.direction}: {symbol}",
+                            message=(
+                                f"Consolidation Squeeze Breakout!\n"
+                                f"Direction: {result.direction}\n"
+                                f"Trigger: {result.trigger_price:,.4f}\n"
+                                f"Range: {result.range_low:,.4f} – {result.range_high:,.4f}\n"
+                                + (f"{squeeze_line}\n" if squeeze_line else "")
+                                + f"ATR: {result.atr_value:,.4f}"
+                                + (f"\nMTF Score: {result.mtf_score:.3f}" if result.mtf_score is not None else "")
+                            ),
+                            asset=symbol,
+                            direction=result.direction,
+                        )
+                    except Exception:
+                        pass
+            except Exception as exc:
+                logger.debug("CONS check failed for %s: %s", symbol, exc)
+
+        logger.debug("CONS check [%s] complete: %d breakout(s)", session_key, found)
+    except Exception as exc:
+        logger.debug("CONS handler error (non-fatal): %s", exc)
+
+
+def _handle_check_breakout_multi(engine, session_key: str = "us", types: list[str] | None = None) -> None:
+    """Run multiple BreakoutType detectors in parallel for a session's assets.
+
+    Dispatches PDR, IB, and/or CONS checks concurrently using
+    ``concurrent.futures.ThreadPoolExecutor`` so a slow fetch for one asset
+    does not block the others.  ORB is intentionally excluded here — it has
+    its own session-specific handlers that run on the same 2-minute cadence.
+
+    Args:
+        engine: The engine singleton.
+        session_key: Session key whose asset list to use.
+        types: List of breakout type strings to check ("PDR", "IB", "CONS").
+               Defaults to ["PDR", "CONS"] if not specified.
+    """
+    if types is None:
+        types = ["PDR", "CONS"]
+
+    logger.debug("▶ Multi-type breakout sweep [session=%s types=%s]...", session_key, types)
+
+    import concurrent.futures
+
+    handler_map = {
+        "PDR": lambda: _handle_check_pdr(engine, session_key=session_key),
+        "IB": lambda: _handle_check_ib(engine, session_key=session_key),
+        "CONS": lambda: _handle_check_consolidation(engine, session_key=session_key),
+    }
+
+    futures_map = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(types), thread_name_prefix="breakout") as executor:
+        for btype in types:
+            handler = handler_map.get(btype)
+            if handler is not None:
+                futures_map[executor.submit(handler)] = btype
+
+        for future in concurrent.futures.as_completed(futures_map, timeout=60):
+            btype = futures_map[future]
+            try:
+                future.result()
+            except Exception as exc:
+                logger.warning("Multi-type sweep [%s/%s] error: %s", session_key, btype, exc)
+
+    logger.debug("Multi-type breakout sweep [%s] complete", session_key)
+
+
+# Configurable gap-alert threshold (minutes).  Gaps larger than this value
+# are reported as warnings after each backfill run.
+_GAP_ALERT_MINUTES = int(os.environ.get("BACKFILL_GAP_ALERT_MINUTES", "30"))
+
+
+def _check_and_alert_gaps(symbols: list[str], gap_threshold_minutes: int = 30) -> None:
+    """Scan stored bars for gaps exceeding ``gap_threshold_minutes`` and log alerts.
+
+    Publishes a Redis key ``engine:gap_alerts`` (TTL 26h) so the dashboard
+    can surface data-quality warnings without requiring a daily-report cycle.
+
+    Only symbols that have *meaningful* gaps (i.e. not just normal overnight /
+    weekend breaks) are included in the alert payload.
+    """
+    try:
+        from lib.services.engine.backfill import get_gap_report
+
+        alerts: list[dict] = []
+        for sym in symbols:
+            try:
+                report = get_gap_report(sym, days_back=3, interval="1m")
+                gaps = [g for g in report.get("gaps", []) if g.get("missing_minutes", 0) >= gap_threshold_minutes]
+                if not gaps:
+                    continue
+                worst = max(gaps, key=lambda g: g.get("missing_minutes", 0))
+                alerts.append(
+                    {
+                        "symbol": sym,
+                        "gap_count": len(gaps),
+                        "worst_gap_minutes": worst.get("missing_minutes", 0),
+                        "worst_gap_start": worst.get("start", ""),
+                        "worst_gap_end": worst.get("end", ""),
+                        "coverage_pct": report.get("coverage_pct", 0),
+                    }
+                )
+                logger.warning(
+                    "⚠️  Gap detected in %s: %d gap(s), worst = %d min (%.1f%% coverage)",
+                    sym,
+                    len(gaps),
+                    worst.get("missing_minutes", 0),
+                    report.get("coverage_pct", 0),
+                )
+            except Exception as exc:
+                logger.debug("Gap check failed for %s: %s", sym, exc)
+
+        if alerts:
+            # Sort by worst gap descending
+            alerts.sort(key=lambda a: a["worst_gap_minutes"], reverse=True)
+            try:
+                from lib.core.cache import REDIS_AVAILABLE, _r, cache_set
+
+                payload = json.dumps(
+                    {
+                        "alerts": alerts,
+                        "threshold_minutes": gap_threshold_minutes,
+                        "checked_at": datetime.now(tz=_EST).isoformat(),
+                        "symbol_count": len(symbols),
+                        "alert_count": len(alerts),
+                    },
+                    default=str,
+                ).encode()
+                cache_set("engine:gap_alerts", payload, ttl=26 * 3600)
+                if REDIS_AVAILABLE and _r is not None:
+                    import contextlib
+
+                    with contextlib.suppress(Exception):
+                        _r.publish(
+                            "dashboard:gap_alerts",
+                            json.dumps({"alert_count": len(alerts)}, default=str),
+                        )
+            except Exception as exc:
+                logger.debug("Failed to publish gap alerts to Redis: %s", exc)
+        else:
+            # Clear stale alert key when all gaps are resolved
+            try:
+                from lib.core.cache import cache_set
+
+                cache_set(
+                    "engine:gap_alerts",
+                    json.dumps(
+                        {
+                            "alerts": [],
+                            "threshold_minutes": gap_threshold_minutes,
+                            "checked_at": datetime.now(tz=_EST).isoformat(),
+                            "symbol_count": len(symbols),
+                            "alert_count": 0,
+                        },
+                        default=str,
+                    ).encode(),
+                    ttl=26 * 3600,
+                )
+            except Exception:
+                pass
+
+    except Exception as exc:
+        logger.debug("Gap alert sweep failed: %s", exc)
+
+
 def _handle_historical_backfill(engine) -> None:
     """Backfill historical 1-min bars to Postgres/SQLite (off-hours).
 
@@ -1316,11 +2068,13 @@ def _handle_historical_backfill(engine) -> None:
       3. Fetches missing chunks from Massive (primary) or yfinance (fallback)
       4. Stores bars idempotently via UPSERT
       5. Publishes summary to Redis for dashboard visibility
+      6. Scans for residual gaps > ``BACKFILL_GAP_ALERT_MINUTES`` and logs
+         warnings + publishes ``engine:gap_alerts`` to Redis.
     """
     logger.info("▶ Historical backfill starting")
 
     try:
-        from lib.services.engine.backfill import run_backfill
+        from lib.services.engine.backfill import _get_backfill_symbols, run_backfill
 
         summary = run_backfill()
 
@@ -1350,6 +2104,18 @@ def _handle_historical_backfill(engine) -> None:
                 duration,
                 "; ".join(errors[:3]) if errors else "unknown error",
             )
+
+        # ── Post-backfill gap scan ─────────────────────────────────────────
+        # Run after every backfill to catch persistent gaps that the
+        # backfiller could not fill (e.g. data not available from any source).
+        try:
+            symbols = _get_backfill_symbols()
+            logger.info(
+                "▶ Running post-backfill gap scan (%d symbols, threshold=%dm)", len(symbols), _GAP_ALERT_MINUTES
+            )
+            _check_and_alert_gaps(symbols, gap_threshold_minutes=_GAP_ALERT_MINUTES)
+        except Exception as exc:
+            logger.debug("Post-backfill gap scan error: %s", exc)
 
     except ImportError as exc:
         logger.warning("Backfill module not available: %s", exc)
@@ -1391,22 +2157,25 @@ def _handle_next_day_prep(engine) -> None:
 
 
 def _handle_generate_chart_dataset(engine) -> None:
-    """No-op — dataset generation has moved to the orb repo.
+    """No-op — dataset generation runs on the dedicated GPU trainer service.
 
-    Use the orb repo's incremental_dataset_build.py or retrain_overnight.py
-    on the dedicated GPU training machine instead.
+    Use the trainer service (lib.training.trainer_server) on the GPU machine:
+        docker compose --profile training up -d
+        curl -X POST http://trainer:8200/train
     """
-    logger.info("⏭️  Chart dataset generation skipped — moved to orb repo")
+    logger.info("⏭️  Chart dataset generation skipped — use trainer service (POST /train)")
 
 
 def _handle_train_breakout_cnn(engine) -> None:
-    """No-op — CNN training has moved to the orb repo.
+    """No-op — CNN training runs on the dedicated GPU trainer service.
 
-    Use the orb repo's trainer_server.py or retrain_overnight.py on
-    the dedicated GPU training machine (docker-compose.train.yml).
-    Sync trained models back with:  bash scripts/sync_models.sh
+    The trainer server (lib.training.trainer_server) handles the full
+    pipeline: dataset generation → training → evaluation → promotion.
+        docker compose --profile training up -d
+        curl -X POST http://trainer:8200/train
+    Trained models are hot-reloaded by the engine via watchdog.
     """
-    logger.info("⏭️  CNN training skipped — moved to orb repo (use GPU trainer)")
+    logger.info("⏭️  CNN training skipped — use trainer service (POST /train)")
 
 
 # ---------------------------------------------------------------------------
@@ -1414,14 +2183,93 @@ def _handle_train_breakout_cnn(engine) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _build_session_stats(today) -> dict:
+    """Compile per-session ORB signal statistics for today's report.
+
+    Queries ``orb_events`` grouped by the ``orb_session`` metadata field
+    to produce a dict like::
+
+        {
+            "us":        {"total": 12, "breakouts": 4, "published": 2, "pass_rate": 50.0},
+            "london":    {"total":  8, "breakouts": 3, "published": 3, "pass_rate": 100.0},
+            "cme":       {"total":  6, "breakouts": 1, "published": 0, "pass_rate": 0.0},
+            ...
+        }
+
+    Falls back gracefully to an empty dict if the table is unavailable or
+    the query fails for any reason.
+    """
+    try:
+        from lib.core.models import get_orb_events
+
+        today_str = today.strftime("%Y-%m-%d")
+        events = get_orb_events(limit=500)
+
+        # Filter to today's events
+        today_events = [
+            e for e in events if str(e.get("evaluated_at", "") or e.get("created_at", "")).startswith(today_str)
+        ]
+
+        if not today_events:
+            return {}
+
+        # Group by session key (stored in metadata JSON or orb_session column)
+        session_buckets: dict[str, dict] = {}
+        for ev in today_events:
+            # Try explicit orb_session column first, then fall back to metadata JSON
+            session_key = ev.get("orb_session", "")
+            if not session_key:
+                try:
+                    meta = json.loads(ev.get("metadata", "{}") or "{}")
+                    session_key = meta.get("orb_session", "unknown")
+                except Exception:
+                    session_key = "unknown"
+
+            if not session_key:
+                session_key = "unknown"
+
+            bucket = session_buckets.setdefault(
+                session_key,
+                {"total": 0, "breakouts": 0, "published": 0, "filter_failed": 0},
+            )
+            bucket["total"] += 1
+            if ev.get("breakout_detected"):
+                bucket["breakouts"] += 1
+            if ev.get("published"):
+                bucket["published"] += 1
+            elif ev.get("breakout_detected"):
+                bucket["filter_failed"] += 1
+
+        # Compute pass rates
+        result = {}
+        for sk, b in sorted(session_buckets.items()):
+            total_bo = b["breakouts"]
+            pub = b["published"]
+            result[sk] = {
+                "total_evaluations": b["total"],
+                "breakouts_detected": total_bo,
+                "published": pub,
+                "filter_failed": b["filter_failed"],
+                "pass_rate": round(pub / total_bo * 100, 1) if total_bo > 0 else 0.0,
+            }
+
+        return result
+
+    except Exception as exc:
+        logger.debug("Could not build session stats: %s", exc)
+        return {}
+
+
 def _handle_daily_report(engine) -> None:
     """Generate the daily trading session report and publish it to Redis.
 
     Builds a structured summary of the just-completed trading session:
       - ORB signal count + filter pass/reject rates
+      - Per-session ORB breakdown (us, london, cme, tokyo, etc.)
       - CNN probability stats (mean, min, max, above-threshold count)
       - Risk events (blocks, warnings, consecutive losses)
       - Model performance snapshot (val accuracy, precision, recall)
+      - Data coverage summary (gap count, coverage % per symbol)
 
     The report is:
       1. Published to Redis key ``engine:daily_report`` (TTL 26h) so the
@@ -1443,11 +2291,50 @@ def _handle_daily_report(engine) -> None:
             report = _build_daily_report(today)
         except Exception as exc:
             logger.debug("Could not build report from audit DB (%s) — using empty report", exc)
+            today = datetime.now(tz=_EST).date()
             report = {"generated_at": datetime.now(tz=_EST).isoformat()}
 
         # Add generation timestamp and session label
         report["generated_at"] = datetime.now(tz=_EST).isoformat()
         report["session"] = "daily"
+
+        # ── Per-session performance breakdown ──────────────────────────────
+        try:
+            session_stats = _build_session_stats(today)
+            if session_stats:
+                report["sessions"] = session_stats
+        except Exception as exc:
+            logger.debug("Session stats build failed: %s", exc)
+
+        # ── Data coverage / gap summary ────────────────────────────────────
+        try:
+            from lib.services.engine.backfill import _get_backfill_symbols, get_gap_report
+
+            symbols = _get_backfill_symbols()[:12]  # cap to avoid long runtime
+            gap_summary: dict[str, dict] = {}
+            total_gaps = 0
+            for sym in symbols:
+                try:
+                    gr = get_gap_report(sym, days_back=1, interval="1m")
+                    g_count = len(gr.get("gaps", []))
+                    total_gaps += g_count
+                    if g_count > 0 or gr.get("coverage_pct", 100) < 90:
+                        gap_summary[sym] = {
+                            "coverage_pct": gr.get("coverage_pct", 0),
+                            "gap_count": g_count,
+                            "total_bars": gr.get("total_bars", 0),
+                        }
+                except Exception:
+                    pass
+            if gap_summary:
+                report["data_coverage"] = {
+                    "symbols_checked": len(symbols),
+                    "symbols_with_gaps": len(gap_summary),
+                    "total_gaps_today": total_gaps,
+                    "details": gap_summary,
+                }
+        except Exception as exc:
+            logger.debug("Data coverage summary failed: %s", exc)
 
         # 1. Publish to Redis
         try:
@@ -1469,6 +2356,8 @@ def _handle_daily_report(engine) -> None:
         filtered = orb_section.get("filter_failed", 0)
         cnn_stats = report.get("cnn", {})
         model_info_d = report.get("model", {})
+        session_breakdown = report.get("sessions", {})
+        coverage = report.get("data_coverage", {})
 
         logger.info("=" * 55)
         logger.info("  📊 Daily Session Report — %s", datetime.now(tz=_EST).strftime("%Y-%m-%d"))
@@ -1477,6 +2366,20 @@ def _handle_daily_report(engine) -> None:
         if orb_count > 0:
             pass_rate = published / orb_count * 100
             logger.info("  Filter pass rate: %.0f%%", pass_rate)
+
+        # Per-session breakdown
+        if session_breakdown:
+            logger.info("  ── Per-Session Breakdown ──────────────────────")
+            for sk, sb in sorted(session_breakdown.items()):
+                logger.info(
+                    "    %-14s  evals=%3d  bo=%2d  pub=%2d  pass=%.0f%%",
+                    sk,
+                    sb.get("total_evaluations", 0),
+                    sb.get("breakouts_detected", 0),
+                    sb.get("published", 0),
+                    sb.get("pass_rate", 0.0),
+                )
+
         if cnn_stats:
             logger.info(
                 "  CNN P(good)    : mean=%.3f  min=%.3f  max=%.3f  n=%d",
@@ -1497,6 +2400,23 @@ def _handle_daily_report(engine) -> None:
                 recall,
                 samples,
             )
+
+        # Data coverage warning
+        if coverage and coverage.get("symbols_with_gaps", 0) > 0:
+            logger.warning(
+                "  ⚠️  Data gaps    : %d symbol(s) have gaps today (total %d gaps)",
+                coverage["symbols_with_gaps"],
+                coverage.get("total_gaps_today", 0),
+            )
+            for sym, detail in list(coverage.get("details", {}).items())[:5]:
+                logger.warning(
+                    "    %s: coverage=%.1f%%  gaps=%d  bars=%d",
+                    sym,
+                    detail.get("coverage_pct", 0),
+                    detail.get("gap_count", 0),
+                    detail.get("total_bars", 0),
+                )
+
         logger.info("=" * 55)
 
         # 3. Optional email alert
@@ -1645,21 +2565,27 @@ def _check_module_health() -> dict:
         modules["massive"] = {"status": "error", "connected": False, "error": str(exc)}
 
     # CNN model
-    champion = _get_champion_path()
-    if champion is not None:
-        try:
-            stat = champion.stat()
-            size_mb = round(stat.st_size / (1024 * 1024), 1)
-            modules["cnn_model"] = {
-                "status": "ok",
-                "available": True,
-                "size_mb": size_mb,
-                "path": str(champion),
-            }
-        except OSError:
-            modules["cnn_model"] = {"status": "error", "available": False}
-    else:
-        modules["cnn_model"] = {"status": "missing", "available": False}
+    try:
+        from lib.services.engine.model_watcher import _find_model_dir
+
+        model_dir = _find_model_dir()
+        champion = model_dir / "breakout_cnn_best.pt" if model_dir else None
+        if champion is not None and champion.is_file():
+            try:
+                stat = champion.stat()
+                size_mb = round(stat.st_size / (1024 * 1024), 1)
+                modules["cnn_model"] = {
+                    "status": "ok",
+                    "available": True,
+                    "size_mb": size_mb,
+                    "path": str(champion),
+                }
+            except OSError:
+                modules["cnn_model"] = {"status": "error", "available": False}
+        else:
+            modules["cnn_model"] = {"status": "missing", "available": False}
+    except ImportError:
+        modules["cnn_model"] = {"status": "unknown", "available": False}
 
     return modules
 
@@ -1714,6 +2640,8 @@ def _publish_engine_status(engine, session_mode: str, scheduler_status: dict) ->
 
 
 def main():
+    global _model_watcher
+
     logger.info("=" * 60)
     logger.info("  Engine Service starting up (session-aware scheduling)")
     logger.info("=" * 60)
@@ -1751,6 +2679,27 @@ def main():
 
     _write_health(True, "running", session=session.value)
 
+    # ---------------------------------------------------------------------------
+    # Start the filesystem-based model watcher (replaces inline polling).
+    # Uses watchdog (inotify) when available, falls back to polling.
+    # ---------------------------------------------------------------------------
+    from lib.services.engine.model_watcher import ModelWatcher
+
+    _model_watcher = ModelWatcher()
+    watcher_started = _model_watcher.start()
+    if watcher_started:
+        watcher_status = _model_watcher.status()
+        logger.info(
+            "Model watcher active: backend=%s  dir=%s",
+            watcher_status["backend"],
+            watcher_status["model_dir"],
+        )
+    else:
+        logger.warning(
+            "Model watcher could not start — CNN hot-reload disabled. "
+            "Ensure models/ directory exists (run scripts/sync_models.sh)."
+        )
+
     # Action dispatch table
     # Initialise the RiskManager early so it's ready for handlers
     _get_risk_manager(account_size)
@@ -1773,6 +2722,33 @@ def main():
         ActionType.CHECK_ORB_LONDON: lambda: _handle_check_orb_london(engine),
         ActionType.CHECK_ORB_LONDON_NY: lambda: _handle_check_orb_london_ny(engine),
         ActionType.CHECK_ORB_CME_SETTLE: lambda: _handle_check_orb_cme_settle(engine),
+        ActionType.CHECK_ORB_CRYPTO_UTC0: lambda: _handle_check_orb_crypto_utc0(engine),
+        ActionType.CHECK_ORB_CRYPTO_UTC12: lambda: _handle_check_orb_crypto_utc12(engine),
+        ActionType.CHECK_PDR: lambda: _handle_check_pdr(
+            engine,
+            session_key=getattr(pending[0] if pending else None, "payload", None)
+            and pending[0].payload.get("session_key", "london_ny")
+            or "london_ny",
+        ),
+        ActionType.CHECK_IB: lambda: _handle_check_ib(
+            engine,
+            session_key=getattr(pending[0] if pending else None, "payload", None)
+            and pending[0].payload.get("session_key", "us")
+            or "us",
+        ),
+        ActionType.CHECK_CONSOLIDATION: lambda: _handle_check_consolidation(
+            engine,
+            session_key=getattr(pending[0] if pending else None, "payload", None)
+            and pending[0].payload.get("session_key", "london_ny")
+            or "london_ny",
+        ),
+        ActionType.CHECK_BREAKOUT_MULTI: lambda: _handle_check_breakout_multi(
+            engine,
+            session_key=getattr(pending[0] if pending else None, "payload", None)
+            and pending[0].payload.get("session_key", "us")
+            or "us",
+            types=getattr(pending[0] if pending else None, "payload", None) and pending[0].payload.get("types") or None,
+        ),
         ActionType.HISTORICAL_BACKFILL: lambda: _handle_historical_backfill(engine),
         ActionType.RUN_OPTIMIZATION: lambda: _handle_run_optimization(engine),
         ActionType.RUN_BACKTEST: lambda: _handle_run_backtest(engine),
@@ -1819,9 +2795,6 @@ def main():
             # Check for dashboard-triggered commands via Redis
             _check_redis_commands(action_handlers)
 
-            # Check if CNN model file changed on disk (hot-reload)
-            _check_model_hot_reload()
-
             # Execute pending actions
             for action in pending:
                 if shutdown:
@@ -1839,7 +2812,26 @@ def main():
                         action.action.value,
                         action.description,
                     )
-                    handler()
+                    # For payload-bearing actions (CHECK_PDR, CHECK_IB, CHECK_CONSOLIDATION,
+                    # CHECK_BREAKOUT_MULTI) the handler needs the action payload to know
+                    # which session key and types to use.  We call the typed handlers
+                    # directly here so the lambdas in action_handlers don't need
+                    # late-binding workarounds.
+                    _payload = getattr(action, "payload", None) or {}
+                    if action.action == ActionType.CHECK_PDR:
+                        _handle_check_pdr(engine, session_key=_payload.get("session_key", "london_ny"))
+                    elif action.action == ActionType.CHECK_IB:
+                        _handle_check_ib(engine, session_key=_payload.get("session_key", "us"))
+                    elif action.action == ActionType.CHECK_CONSOLIDATION:
+                        _handle_check_consolidation(engine, session_key=_payload.get("session_key", "london_ny"))
+                    elif action.action == ActionType.CHECK_BREAKOUT_MULTI:
+                        _handle_check_breakout_multi(
+                            engine,
+                            session_key=_payload.get("session_key", "us"),
+                            types=_payload.get("types"),
+                        )
+                    else:
+                        handler()
                     scheduler.mark_done(action.action)
                 except Exception as exc:
                     scheduler.mark_failed(action.action, str(exc))
@@ -1863,6 +2855,11 @@ def main():
     logger.info("=" * 60)
     logger.info("  Engine Service shutting down")
     logger.info("=" * 60)
+
+    # Stop the model watcher first
+    if _model_watcher is not None:
+        _model_watcher.stop()
+        _model_watcher = None
 
     _write_health(False, "shutting_down")
 

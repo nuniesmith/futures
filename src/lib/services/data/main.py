@@ -112,12 +112,15 @@ from lib.services.data.api.cnn import router as cnn_router  # noqa: E402
 from lib.services.data.api.dashboard import (  # noqa: E402
     router as dashboard_router,
 )
+from lib.services.data.api.grok import router as grok_router  # noqa: E402
+from lib.services.data.api.grok import set_engine as grok_set_engine  # noqa: E402
 from lib.services.data.api.health import (  # noqa: E402
     router as health_router,
 )
 from lib.services.data.api.journal import (  # noqa: E402
     router as journal_router,
 )
+from lib.services.data.api.kraken import router as kraken_router  # noqa: E402
 from lib.services.data.api.market_data import (  # noqa: E402
     router as market_data_router,
 )
@@ -285,6 +288,7 @@ async def lifespan(app: FastAPI):
     # 4. Inject engine into routers that need it
     analysis_set_engine(_engine)
     actions_set_engine(_engine)
+    grok_set_engine(_engine)
 
     # 5. Log data source
     try:
@@ -294,6 +298,26 @@ async def lifespan(app: FastAPI):
         logger.info("Primary data source: %s", ds)
     except Exception:
         logger.info("Primary data source: yfinance (default)")
+
+    # 5b. Start Kraken WebSocket feed for live crypto data (if enabled)
+    _kraken_feed = None
+    try:
+        from lib.core.models import ENABLE_KRAKEN_CRYPTO
+
+        if ENABLE_KRAKEN_CRYPTO:
+            from lib.integrations.kraken_client import start_kraken_feed
+
+            _kraken_feed = start_kraken_feed()
+            logger.info(
+                "Kraken WebSocket feed started: %d pairs",
+                len(_kraken_feed._pairs),
+            )
+        else:
+            logger.info("Kraken crypto disabled (ENABLE_KRAKEN_CRYPTO=0)")
+    except ImportError:
+        logger.debug("Kraken client not available — crypto feed disabled")
+    except Exception as exc:
+        logger.warning("Kraken feed startup failed (non-fatal): %s", exc)
 
     # 6. Warm Redis bar caches from Postgres so the dataset generator and
     #    engine have data available immediately without waiting for a fill.
@@ -312,6 +336,14 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("  Data Service shutting down")
     logger.info("=" * 60)
+
+    # Stop Kraken WebSocket feed
+    if _kraken_feed is not None:
+        try:
+            await _kraken_feed.stop()
+            logger.info("Kraken feed stopped cleanly")
+        except Exception as exc:
+            logger.warning("Kraken feed stop error (non-fatal): %s", exc)
 
     if _engine is not None:
         try:
@@ -499,6 +531,16 @@ app.include_router(nt8_deploy_router, tags=["NT8 Deploy"])
 # NOTE: cnn_router is mounted WITHOUT a prefix — routes are defined with /cnn/ paths.
 app.include_router(cnn_router, tags=["CNN"])
 
+# Kraken: /kraken/health, /kraken/status, /kraken/pairs, /kraken/ticker/{pair},
+#          /kraken/tickers, /kraken/ohlcv/{pair}, /kraken/health/html
+# NOTE: kraken_router is mounted WITHOUT a prefix — routes are defined with /kraken/ paths.
+app.include_router(kraken_router, tags=["Kraken"])
+
+# Grok: /api/grok/latest, /api/grok/briefing, /api/grok/trigger/briefing,
+#        /api/grok/trigger/update, /sse/grok/briefing, /sse/grok/update
+# NOTE: grok_router is mounted WITHOUT a prefix — routes are defined with full paths.
+app.include_router(grok_router, tags=["Grok"])
+
 
 # ---------------------------------------------------------------------------
 # Root endpoint — now served by dashboard_router (GET / returns HTML dashboard)
@@ -541,6 +583,16 @@ def api_info():
             "cnn_retrain_log": "/cnn/retrain/log",
             "cnn_retrain_cancel": "/cnn/retrain/cancel",
             "cnn_history": "/cnn/history",
+            "cnn_sync": "/cnn/sync",
+            "cnn_sync_status": "/cnn/sync/status",
+            "cnn_watcher_status": "/cnn/watcher/status",
+            "kraken_health": "/kraken/health",
+            "kraken_status": "/kraken/status",
+            "kraken_pairs": "/kraken/pairs",
+            "kraken_ticker": "/kraken/ticker/{pair}",
+            "kraken_tickers": "/kraken/tickers",
+            "kraken_ohlcv": "/kraken/ohlcv/{pair}",
+            "kraken_health_html": "/kraken/health/html",
             "bars": "/bars/{symbol}",
             "bars_bulk": "/bars/bulk",
             "bars_status": "/bars/status",

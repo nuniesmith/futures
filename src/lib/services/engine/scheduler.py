@@ -48,6 +48,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
+from typing import Any
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("engine.scheduler")
@@ -100,6 +101,27 @@ class ActionType(StrEnum):
     # CME Settlement  14:00–15:30 ET  (metals/energy settlement window)
     CHECK_ORB_CME_SETTLE = "check_orb_cme_settle"
 
+    # ── Crypto-specific ORB sessions (only active when ENABLE_KRAKEN_CRYPTO=1) ──
+    # UTC 00:00 crypto session  19:00–21:00 ET EST / 20:00–22:00 ET EDT
+    # High-volume Asia open window for BTC/ETH/SOL/etc.
+    CHECK_ORB_CRYPTO_UTC0 = "check_orb_crypto_utc0"
+    # UTC 12:00 crypto session  07:00–09:00 ET EST / 08:00–10:00 ET EDT
+    # London morning crypto window; pre-US-open positioning.
+    CHECK_ORB_CRYPTO_UTC12 = "check_orb_crypto_utc12"
+
+    # ── Multi-breakout-type checks — PDR, IB, and Consolidation ─────────────
+    # PDR (Previous Day Range) — active whenever markets are open
+    # Runs every 2 min during London open, LN-NY cross, and US open.
+    CHECK_PDR = "check_pdr"
+    # IB (Initial Balance) — only relevant during / after 09:30–10:30 ET RTH
+    CHECK_IB = "check_ib"
+    # Consolidation / Squeeze — scans for BB contraction + expansion bar
+    # relevant throughout the full active window.
+    CHECK_CONSOLIDATION = "check_consolidation"
+    # Parallel multi-type sweep: runs ORB + PDR + IB + CONS in one shot
+    # for a given session's asset list.  Fired by session-specific handlers.
+    CHECK_BREAKOUT_MULTI = "check_breakout_multi"
+
     # Off-hours actions (12:00–18:00 ET, run once per session)
     HISTORICAL_BACKFILL = "historical_backfill"
     RUN_OPTIMIZATION = "run_optimization"
@@ -121,6 +143,11 @@ class ScheduledAction:
     action: ActionType
     priority: int = 0  # lower = higher priority
     description: str = ""
+    # Optional payload passed to the handler.  Used by CHECK_BREAKOUT_MULTI
+    # and CHECK_PDR / CHECK_IB / CHECK_CONSOLIDATION to convey which session
+    # key and which BreakoutType subset to run without needing separate
+    # ActionType variants per session.
+    payload: dict[str, Any] | None = None
 
 
 @dataclass
@@ -149,7 +176,7 @@ class ScheduleManager:
     Thread-safe: all state is read/written from a single engine thread.
     """
 
-    # Recurring interval configuration (seconds) — all ORB checks = 2 min
+    # Recurring interval configuration (seconds) — all ORB/breakout checks = 2 min
     RUBY_INTERVAL = 5 * 60  # 5 min during active
     GROK_INTERVAL = 15 * 60  # 15 min during active
     RISK_CHECK_INTERVAL = 60  # 1 min during active
@@ -163,6 +190,13 @@ class ScheduleManager:
     ORB_TOKYO_CHECK_INTERVAL = 2 * 60  # Tokyo / TSE      19:00–21:00 ET
     ORB_SHANGHAI_CHECK_INTERVAL = 2 * 60  # Shanghai / HK    21:00–23:00 ET
     ORB_CME_SETTLE_CHECK_INTERVAL = 2 * 60  # CME settlement   14:00–15:30 ET
+    ORB_CRYPTO_UTC0_CHECK_INTERVAL = 2 * 60  # Crypto UTC 00:00  19:00–21:00 ET
+    ORB_CRYPTO_UTC12_CHECK_INTERVAL = 2 * 60  # Crypto UTC 12:00  07:00–09:00 ET
+    # Multi-breakout-type checks (PDR/IB/CONS) fire on the same cadence.
+    PDR_CHECK_INTERVAL = 2 * 60  # PDR scan  — all active windows
+    IB_CHECK_INTERVAL = 2 * 60  # IB scan   — 10:30–12:00 ET only
+    CONS_CHECK_INTERVAL = 2 * 60  # Squeeze   — all active windows
+    BREAKOUT_MULTI_CHECK_INTERVAL = 2 * 60  # Parallel multi-type sweep
     FOCUS_PUBLISH_INTERVAL = 30  # 30 s during active (throttled downstream)
     STATUS_PUBLISH_INTERVAL = 10  # 10 s always
 
@@ -381,6 +415,8 @@ class ScheduleManager:
 
         Fires CME Globex open, Sydney/ASX, Tokyo/TSE, and Shanghai/HK ORB
         checks every 2 minutes within their respective scan windows.
+        Also fires the crypto UTC-midnight session check (19:00–21:00 ET)
+        when ENABLE_KRAKEN_CRYPTO is active.
         All other costly actions (backfill, CNN, etc.) are deferred to
         off-hours (12:00–18:00 ET) so they don't compete with live data.
         """
@@ -388,6 +424,16 @@ class ScheduleManager:
         now_time = now.time()
 
         from datetime import time as _dt_time
+
+        # Detect whether crypto ORB sessions are enabled (lazy import to avoid
+        # startup failures when the Kraken integration is not installed).
+        _crypto_enabled = False
+        try:
+            from lib.core.models import ENABLE_KRAKEN_CRYPTO as _ekc
+
+            _crypto_enabled = bool(_ekc)
+        except Exception:
+            pass
 
         # --- CME Globex Re-Open ORB — 18:00–20:00 ET ---
         if _dt_time(18, 0) <= now_time <= _dt_time(20, 0) and self._interval_elapsed(
@@ -437,6 +483,24 @@ class ScheduleManager:
                 )
             )
 
+        # --- Crypto UTC 00:00 ORB — 19:00–21:00 ET (EST) / 20:00–22:00 ET (EDT) ---
+        # Uses crypto_utc0 session (wraps_midnight=True); only scans KRAKEN:* tickers.
+        # We check for 19:00 ET here; ZoneInfo handles the EDT offset automatically
+        # so the check fires at the correct wall-clock ET time year-round.
+        if (
+            _crypto_enabled
+            and _dt_time(19, 0) <= now_time <= _dt_time(21, 0)
+            and self._interval_elapsed(ActionType.CHECK_ORB_CRYPTO_UTC0, ts, self.ORB_CRYPTO_UTC0_CHECK_INTERVAL)
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB_CRYPTO_UTC0,
+                    priority=3,
+                    description="Check Crypto UTC-midnight ORB (19:00–19:30 ET / 00:00 UTC window)",
+                    payload={"session_key": "crypto_utc0"},
+                )
+            )
+
         return actions
 
     def _get_pre_market_actions(
@@ -478,6 +542,34 @@ class ScheduleManager:
                 )
             )
 
+        # --- Crypto UTC 12:00 ORB — 07:00–09:00 ET (EST) / 08:00–10:00 ET (EDT) ---
+        # London morning crypto window; high-volume pre-US-open positioning.
+        # Detect crypto enabled flag here too (shared logic with evening actions).
+        _crypto_enabled_pm = False
+        try:
+            from lib.core.models import ENABLE_KRAKEN_CRYPTO as _ekc_pm
+
+            _crypto_enabled_pm = bool(_ekc_pm)
+        except Exception:
+            pass
+
+        from datetime import time as _pm_time
+
+        now_time_pm = now.time() if now is not None else datetime.now(tz=_EST).time()
+        if (
+            _crypto_enabled_pm
+            and _pm_time(7, 0) <= now_time_pm <= _pm_time(9, 0)
+            and self._interval_elapsed(ActionType.CHECK_ORB_CRYPTO_UTC12, ts, self.ORB_CRYPTO_UTC12_CHECK_INTERVAL)
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_ORB_CRYPTO_UTC12,
+                    priority=5,
+                    description="Check Crypto UTC-noon ORB (07:00–07:30 ET / 12:00 UTC window)",
+                    payload={"session_key": "crypto_utc12"},
+                )
+            )
+
         return actions
 
     def _get_active_actions(
@@ -485,13 +577,23 @@ class ScheduleManager:
         ts: float,
         now: datetime,
     ) -> list[ScheduledAction]:
-        """Active (03:00–12:00 ET): live recomputation + ORB checks.
+        """Active (03:00–12:00 ET): live recomputation + ORB + multi-type breakout checks.
 
         Sub-sessions within the active window (ET wall-clock):
           - Frankfurt/Xetra  03:00–04:30 ET  (08:00 CET / 09:00 CEST)
           - London Open      03:00–05:00 ET  (primary ORB session)
           - London-NY Cross  08:00–10:00 ET
           - US Equity Open   09:30–11:00 ET
+
+        In addition to per-session ORB checks, each window fires:
+          - CHECK_PDR        — Previous Day Range breakout scan
+          - CHECK_CONSOLIDATION — Bollinger squeeze expansion scan
+          - CHECK_IB         — Initial Balance breakout (10:30 ET onwards)
+          - CHECK_BREAKOUT_MULTI — parallel PDR+IB+CONS sweep for the session
+
+        All multi-type checks use the same 2-minute cadence as ORB and carry
+        a ``payload={"session_key": "<key>"}`` so the handler knows which
+        session-asset list to use.
         """
         actions: list[ScheduledAction] = []
         today = now.date()
@@ -609,6 +711,76 @@ class ScheduleManager:
                 )
             )
 
+        # ── Multi-BreakoutType parallel checks ────────────────────────────────
+        # PDR (Previous Day Range) — active during all three primary sessions.
+        # Uses the same session-asset list as the ORB check for that window.
+
+        # PDR + CONS during Frankfurt/London window (03:00–05:00 ET)
+        if _dt_time(3, 0) <= now_time <= _dt_time(5, 0) and self._interval_elapsed(
+            ActionType.CHECK_BREAKOUT_MULTI, ts, self.BREAKOUT_MULTI_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_BREAKOUT_MULTI,
+                    priority=7,
+                    description="Multi-type breakout sweep: PDR + CONS (London session assets)",
+                    payload={"session_key": "london", "types": ["PDR", "CONS"]},
+                )
+            )
+
+        # PDR during London-NY crossover (08:00–10:00 ET)
+        if _dt_time(8, 0) <= now_time <= _dt_time(10, 0) and self._interval_elapsed(
+            ActionType.CHECK_PDR, ts, self.PDR_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_PDR,
+                    priority=7,
+                    description="PDR breakout scan (London-NY crossover assets)",
+                    payload={"session_key": "london_ny"},
+                )
+            )
+
+        # CONS (squeeze) during London-NY crossover (08:00–10:00 ET)
+        if _dt_time(8, 0) <= now_time <= _dt_time(10, 0) and self._interval_elapsed(
+            ActionType.CHECK_CONSOLIDATION, ts, self.CONS_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_CONSOLIDATION,
+                    priority=7,
+                    description="Consolidation/squeeze breakout scan (London-NY assets)",
+                    payload={"session_key": "london_ny"},
+                )
+            )
+
+        # IB breakout — only valid after the 60-min IB window closes (10:30 ET)
+        if _dt_time(10, 30) <= now_time <= _dt_time(12, 0) and self._interval_elapsed(
+            ActionType.CHECK_IB, ts, self.IB_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_IB,
+                    priority=7,
+                    description="Initial Balance breakout scan (US session assets)",
+                    payload={"session_key": "us"},
+                )
+            )
+
+        # Full multi-type sweep during US Equity Open (09:30–11:00 ET):
+        # ORB is handled separately above; run PDR + IB + CONS in parallel here.
+        if _dt_time(9, 30) <= now_time <= _dt_time(11, 0) and self._interval_elapsed(
+            ActionType.CHECK_BREAKOUT_MULTI, ts, self.BREAKOUT_MULTI_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_BREAKOUT_MULTI,
+                    priority=7,
+                    description="Multi-type breakout sweep: PDR + IB + CONS (US session assets)",
+                    payload={"session_key": "us", "types": ["PDR", "IB", "CONS"]},
+                )
+            )
+
         return actions
 
     def _get_off_hours_actions(self, ts: float, today: date | None = None) -> list[ScheduledAction]:
@@ -616,7 +788,8 @@ class ScheduleManager:
 
         The overnight ORB windows (CME Globex open, Sydney, Tokyo, Shanghai)
         are now handled by _get_evening_actions() (18:00–00:00 ET).
-        This window handles the daytime settlement ORB and all batch tasks.
+        This window handles the daytime settlement ORB, PDR/CONS scans during
+        the settlement window, and all off-hours batch tasks.
         """
         actions: list[ScheduledAction] = []
         session = SessionMode.OFF_HOURS.value

@@ -2,8 +2,9 @@
 Redis caching layer for market data and computed indicators.
 
 Data source priority:
-  1. Massive.com (formerly Polygon.io) — real-time futures data from CME/CBOT/NYMEX/COMEX
-  2. yfinance — fallback when MASSIVE_API_KEY is not set or Massive call fails
+  1. Kraken REST API — for crypto pairs (KRAKEN:* tickers)
+  2. Massive.com (formerly Polygon.io) — real-time futures data from CME/CBOT/NYMEX/COMEX
+  3. yfinance — fallback when MASSIVE_API_KEY is not set or Massive call fails
 
 Falls back to in-memory dict if Redis is unavailable, so the app
 still works without Docker / Redis running.
@@ -329,12 +330,70 @@ def _try_massive_daily(ticker: str, period: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_data_source() -> str:
+# ---------------------------------------------------------------------------
+# Data source: Kraken exchange (crypto pairs)
+# ---------------------------------------------------------------------------
+
+_kraken_provider = None
+_kraken_checked = False
+
+
+def _get_kraken_provider():
+    """Lazily initialise the Kraken data provider singleton."""
+    global _kraken_provider, _kraken_checked
+    if not _kraken_checked:
+        try:
+            from lib.integrations.kraken_client import get_kraken_provider
+
+            _kraken_provider = get_kraken_provider()
+        except Exception as exc:
+            logger.debug("Kraken provider unavailable: %s", exc)
+            _kraken_provider = None
+        _kraken_checked = True
+    return _kraken_provider
+
+
+def _is_kraken_ticker(ticker: str) -> bool:
+    """Return True if *ticker* is a Kraken crypto pair (KRAKEN:* prefix)."""
+    return ticker.startswith("KRAKEN:")
+
+
+def _try_kraken(ticker: str, interval: str, period: str) -> pd.DataFrame:
+    """Attempt to fetch OHLCV data from Kraken for a KRAKEN:* ticker.
+
+    Returns a non-empty DataFrame on success, or an empty DataFrame
+    if Kraken is unavailable or the call fails.
+    """
+    provider = _get_kraken_provider()
+    if provider is None or not provider.is_available:
+        return pd.DataFrame()
+
+    try:
+        df = provider.get_ohlcv_period(ticker, interval=interval, period=period)
+        if not df.empty:
+            logger.debug("Kraken: got %d bars for %s %s/%s", len(df), ticker, interval, period)
+        return df
+    except Exception as exc:
+        logger.debug("Kraken fetch failed for %s: %s", ticker, exc)
+        return pd.DataFrame()
+
+
+def _try_kraken_daily(ticker: str, period: str) -> pd.DataFrame:
+    """Attempt to fetch daily bars from Kraken for a KRAKEN:* ticker."""
+    return _try_kraken(ticker, interval="1d", period=period)
+
+
+def get_data_source(ticker: str | None = None) -> str:
     """Return the name of the active primary data source.
 
-    Returns 'Massive' if the Massive API is configured and reachable,
-    otherwise 'yfinance'.
+    If *ticker* is provided, returns the specific source that would be
+    used for that ticker.  Otherwise returns the general default.
+
+    Returns 'Kraken' for KRAKEN:* tickers, 'Massive' if the Massive API
+    is configured, otherwise 'yfinance'.
     """
+    if ticker and _is_kraken_ticker(ticker):
+        return "Kraken"
     provider = _get_massive_provider()
     if provider is not None and provider.is_available:
         return "Massive"
@@ -345,13 +404,27 @@ def get_data(ticker: str, interval: str, period: str) -> pd.DataFrame:
     """Fetch OHLCV data, cached in Redis for TTL_INTRADAY seconds.
 
     Data source priority:
-      1. Massive.com REST API (if MASSIVE_API_KEY is set)
-      2. yfinance (fallback)
+      1. Kraken REST API (for KRAKEN:* crypto tickers)
+      2. Massive.com REST API (if MASSIVE_API_KEY is set)
+      3. yfinance (fallback)
 
     Automatically clamps the period to Yahoo Finance's maximum for the
     requested interval to avoid empty responses. Non-standard periods
     (e.g. 10d, 15d) are converted to start/end dates for reliability.
     """
+    # Kraken crypto tickers bypass the Yahoo/Massive pipeline entirely
+    if _is_kraken_ticker(ticker):
+        key = _cache_key("ohlcv", ticker, interval, period)
+        cached = cache_get(key)
+        if cached is not None:
+            return _bytes_to_df(cached)
+
+        df = _try_kraken(ticker, interval, period)
+        if not df.empty:
+            ttl = TTL_MINUTE if interval == "1m" else TTL_INTRADAY
+            cache_set(key, _df_to_bytes(df), ttl)
+        return df
+
     clamped_period = _clamp_period(interval, period)
     key = _cache_key("ohlcv", ticker, interval, clamped_period)
     cached = cache_get(key)
@@ -374,12 +447,20 @@ def get_data(ticker: str, interval: str, period: str) -> pd.DataFrame:
 def get_daily(ticker: str, period: str = "10d") -> pd.DataFrame:
     """Fetch daily bars, cached longer since they change less often.
 
-    Tries Massive first, falls back to yfinance.
+    Routes KRAKEN:* tickers to Kraken REST API.
+    Tries Massive first for futures, falls back to yfinance.
     """
     key = _cache_key("daily", ticker, period)
     cached = cache_get(key)
     if cached is not None:
         return _bytes_to_df(cached)
+
+    # Kraken crypto tickers
+    if _is_kraken_ticker(ticker):
+        df = _try_kraken_daily(ticker, period)
+        if not df.empty:
+            cache_set(key, _df_to_bytes(df), TTL_DAILY)
+        return df
 
     # Try Massive first
     df = _try_massive_daily(ticker, period)

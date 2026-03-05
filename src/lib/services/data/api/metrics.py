@@ -29,6 +29,13 @@ Tracked metrics:
   - ``redis_connected``               — Gauge: 1 if Redis is connected, 0 otherwise
   - ``postgres_connected``            — Gauge: 1 if Postgres is connected, 0 otherwise
   - ``engine_up``                     — Gauge: 1 if engine is running and recently refreshed, 0 otherwise
+  - ``kraken_ws_connected``           — Gauge: 1 if Kraken WebSocket feed is connected, 0 otherwise
+  - ``kraken_ws_reconnect_total``     — Counter: total Kraken WebSocket reconnect attempts
+  - ``kraken_ws_bars_total``          — Gauge: total OHLC bars received from Kraken WS since start
+  - ``kraken_ws_errors_total``        — Gauge: total error count on the Kraken WS feed
+  - ``regime_state``                  — Gauge: current HMM regime per symbol (1=trending, 2=volatile, 3=choppy)
+  - ``regime_confidence``             — Gauge: regime detection confidence (0.0–1.0) per symbol
+  - ``regime_position_multiplier``    — Gauge: position sizing multiplier from regime (0.25–1.0) per symbol
 
 All metrics are collected in-process via ``prometheus_client`` and the ASGI
 middleware automatically instruments request count + latency.
@@ -248,6 +255,63 @@ ENGINE_UP = Gauge(
 )
 
 
+# -- Kraken WebSocket health --
+KRAKEN_WS_CONNECTED = Gauge(
+    "kraken_ws_connected",
+    "Whether the Kraken WebSocket feed is currently connected (1=yes, 0=no)",
+    registry=_registry,
+)
+
+KRAKEN_WS_RECONNECT_TOTAL = Counter(
+    "kraken_ws_reconnect_total",
+    "Total number of Kraken WebSocket reconnect attempts since service start",
+    registry=_registry,
+)
+
+KRAKEN_WS_BARS_TOTAL = Gauge(
+    "kraken_ws_bars_total",
+    "Total OHLC bars received from Kraken WebSocket since feed start",
+    registry=_registry,
+)
+
+KRAKEN_WS_ERRORS_TOTAL = Gauge(
+    "kraken_ws_errors_total",
+    "Total error count on the Kraken WebSocket feed since feed start",
+    registry=_registry,
+)
+
+# -- Regime detection --
+# Encoded as an integer for Grafana state-timeline panels:
+#   1 = trending  (full size)
+#   2 = volatile  (half size)
+#   3 = choppy    (quarter size)
+REGIME_STATE = Gauge(
+    "regime_state",
+    "Current HMM regime state per symbol (1=trending, 2=volatile, 3=choppy)",
+    labelnames=["symbol"],
+    registry=_registry,
+)
+
+REGIME_CONFIDENCE = Gauge(
+    "regime_confidence",
+    "HMM regime detection confidence (0.0–1.0) per symbol",
+    labelnames=["symbol"],
+    registry=_registry,
+)
+
+REGIME_POSITION_MULTIPLIER = Gauge(
+    "regime_position_multiplier",
+    "Position sizing multiplier derived from HMM regime (0.25–1.0) per symbol",
+    labelnames=["symbol"],
+    registry=_registry,
+)
+
+_REGIME_STATE_CODES: dict[str, int] = {"trending": 1, "volatile": 2, "choppy": 3}
+
+# Mutable single-element list — converts absolute reconnect_count to Counter increments.
+_kraken_reconnect_last_seen: list[int] = [0]
+
+
 # ---------------------------------------------------------------------------
 # Helpers for recording metrics from other modules
 # ---------------------------------------------------------------------------
@@ -344,6 +408,47 @@ def update_focus_quality(symbol: str, quality: float) -> None:
 def update_positions_count(count: int) -> None:
     """Update the open positions count gauge."""
     POSITIONS_OPEN_COUNT.set(count)
+
+
+def update_kraken_ws_status(
+    connected: bool,
+    reconnect_count: int = 0,
+    bar_count: int = 0,
+    error_count: int = 0,
+) -> None:
+    """Update all Kraken WebSocket health gauges/counters.
+
+    Args:
+        connected:       True if the feed is currently connected.
+        reconnect_count: Cumulative reconnect attempts (monotonically increasing).
+        bar_count:       Total OHLC bars received since feed start.
+        error_count:     Total errors logged on the feed since start.
+    """
+    KRAKEN_WS_CONNECTED.set(1 if connected else 0)
+    KRAKEN_WS_BARS_TOTAL.set(bar_count)
+    KRAKEN_WS_ERRORS_TOTAL.set(error_count)
+
+    # Counter can only go up — only increment by the delta since last call.
+    # We store the last-seen value in a module-level variable and inc by diff.
+    _delta = max(0, reconnect_count - _kraken_reconnect_last_seen[0])
+    if _delta > 0:
+        KRAKEN_WS_RECONNECT_TOTAL.inc(_delta)
+    _kraken_reconnect_last_seen[0] = reconnect_count
+
+
+def update_regime(symbol: str, regime: str, confidence: float, position_multiplier: float) -> None:
+    """Update regime detection gauges for a single symbol.
+
+    Args:
+        symbol:              Asset ticker / name (used as Prometheus label).
+        regime:              One of "trending", "volatile", "choppy".
+        confidence:          Probability of the detected regime (0.0–1.0).
+        position_multiplier: Sizing multiplier (0.25–1.0).
+    """
+    state_code = _REGIME_STATE_CODES.get(regime, 3)  # default choppy
+    REGIME_STATE.labels(symbol=symbol).set(state_code)
+    REGIME_CONFIDENCE.labels(symbol=symbol).set(float(confidence))
+    REGIME_POSITION_MULTIPLIER.labels(symbol=symbol).set(float(position_multiplier))
 
 
 def update_redis_status(connected: bool) -> None:
@@ -520,6 +625,50 @@ def _collect_live_gauges() -> None:
             risk = _json.loads(raw)
             DAILY_PNL_GAUGE.set(float(risk.get("daily_pnl", 0.0)))
             CONSECUTIVE_LOSSES_GAUGE.set(int(risk.get("consecutive_losses", 0)))
+    except Exception:
+        pass
+
+    # Kraken WebSocket feed health
+    try:
+        import os as _os
+
+        _kraken_enabled = _os.getenv("ENABLE_KRAKEN_CRYPTO", "0").strip() in ("1", "true", "yes")
+        if _kraken_enabled:
+            from lib.integrations.kraken_client import get_kraken_feed
+
+            feed = get_kraken_feed()
+            if feed is not None:
+                _status = feed.get_status()
+                update_kraken_ws_status(
+                    connected=bool(_status.get("connected", False)),
+                    reconnect_count=int(_status.get("reconnect_count", 0)),
+                    bar_count=int(_status.get("bar_count", 0)),
+                    error_count=int(_status.get("error_count", 0)),
+                )
+            else:
+                update_kraken_ws_status(connected=False)
+        else:
+            KRAKEN_WS_CONNECTED.set(0)
+    except Exception:
+        pass
+
+    # HMM regime state — read from Redis key engine:regime:{symbol}
+    try:
+        import json as _json
+
+        from lib.core.cache import cache_get
+
+        # Read the consolidated regime map published by the engine
+        raw_regime_map = cache_get("engine:regime_states")
+        if raw_regime_map:
+            regime_map = _json.loads(raw_regime_map)
+            for sym, info in regime_map.items():
+                update_regime(
+                    symbol=sym,
+                    regime=info.get("regime", "choppy"),
+                    confidence=float(info.get("confidence", 0.0)),
+                    position_multiplier=float(info.get("position_multiplier", 0.25)),
+                )
     except Exception:
         pass
 

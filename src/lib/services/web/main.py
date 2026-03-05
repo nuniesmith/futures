@@ -534,6 +534,25 @@ async def proxy_cnn(request: Request, path: str):
 
 
 @app.api_route(
+    "/kraken/{path:path}",
+    methods=["GET"],
+)
+async def proxy_kraken(request: Request, path: str):
+    """Proxy all /kraken/* requests to the data service (Kraken crypto exchange).
+
+    Endpoints:
+        GET /kraken/health          — Kraken connectivity + auth status
+        GET /kraken/status          — WebSocket feed status + pair list
+        GET /kraken/pairs           — Available Kraken pairs and their mappings
+        GET /kraken/ticker/{pair}   — Current ticker snapshot for a pair
+        GET /kraken/tickers         — All tracked pair tickers in one call
+        GET /kraken/ohlcv/{pair}    — Historical OHLCV bars for a pair
+        GET /kraken/health/html     — Dashboard HTML fragment for Kraken status
+    """
+    return await _proxy_request(request, f"/kraken/{path}")
+
+
+@app.api_route(
     "/data/{path:path}",
     methods=["GET"],
 )

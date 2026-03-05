@@ -213,6 +213,84 @@ def _get_engine_or_none():
         return None
 
 
+def _check_kraken() -> dict[str, Any]:
+    """Check Kraken exchange connectivity and WebSocket feed status.
+
+    Returns a dict with:
+      - ``enabled``: bool — whether ENABLE_KRAKEN_CRYPTO is set
+      - ``status``: ``"ok"`` | ``"degraded"`` | ``"disabled"`` | ``"error"``
+      - ``api_connected``: bool — REST API ping succeeded
+      - ``authenticated``: bool — API key + secret configured
+      - ``ws_connected``: bool — WebSocket feed is connected
+      - ``ws_running``: bool — WebSocket feed thread is alive
+      - ``pairs_count``: int — number of tracked crypto pairs
+      - ``bar_count``: int — total OHLC bars received via WS
+      - ``trade_count``: int — total trades received via WS
+    """
+    result: dict[str, Any] = {
+        "enabled": False,
+        "status": "disabled",
+        "api_connected": False,
+        "authenticated": False,
+        "ws_connected": False,
+        "ws_running": False,
+        "pairs_count": 0,
+        "bar_count": 0,
+        "trade_count": 0,
+    }
+
+    try:
+        from lib.core.models import ENABLE_KRAKEN_CRYPTO
+
+        result["enabled"] = ENABLE_KRAKEN_CRYPTO
+        if not ENABLE_KRAKEN_CRYPTO:
+            return result
+    except ImportError:
+        return result
+
+    # Check REST API connectivity
+    try:
+        from lib.integrations.kraken_client import get_kraken_provider
+
+        provider = get_kraken_provider()
+        if provider is not None and provider.is_available:
+            result["authenticated"] = provider.has_auth
+            try:
+                provider.get_server_time()
+                result["api_connected"] = True
+            except Exception as exc:
+                logger.debug("Kraken API ping failed: %s", exc)
+    except ImportError:
+        pass
+
+    # Check WebSocket feed
+    try:
+        from lib.integrations.kraken_client import KRAKEN_PAIRS, get_kraken_feed
+
+        result["pairs_count"] = len(KRAKEN_PAIRS)
+
+        feed = get_kraken_feed()
+        if feed is not None:
+            result["ws_running"] = feed.is_running
+            result["ws_connected"] = feed.is_connected
+            result["bar_count"] = feed.bar_count
+            result["trade_count"] = feed.trade_count
+    except ImportError:
+        pass
+
+    # Determine overall status
+    if result["api_connected"] and result["ws_connected"]:
+        result["status"] = "ok"
+    elif result["api_connected"]:
+        result["status"] = "degraded"  # REST works but WS is down
+    elif result["enabled"]:
+        result["status"] = "error"
+    else:
+        result["status"] = "disabled"
+
+    return result
+
+
 @router.get("/health")
 def health():
     """Service health check.
@@ -222,13 +300,15 @@ def health():
     - Postgres database connectivity
     - Engine running state
     - Massive WebSocket live feed
-    - Data source (Massive vs yfinance)
+    - Data source (Massive vs yfinance vs Kraken)
     - CNN model existence, accuracy, and staleness
+    - Kraken exchange connectivity + WebSocket feed
     - Database path
     """
     redis_status = _check_redis()
     postgres_status = _check_postgres()
     model_status = _check_model_health()
+    kraken_status = _check_kraken()
     engine = _get_engine_or_none()
 
     engine_status = "not_initialized"
@@ -273,6 +353,7 @@ def health():
             "live_feed": live_feed_status,
             "data_source": data_source,
             "model": model_status,
+            "kraken": kraken_status,
             "database": {"path": db_path},
         },
     }

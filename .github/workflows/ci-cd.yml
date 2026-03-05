@@ -1,0 +1,310 @@
+# =============================================================================
+# Futures — CI/CD Pipeline
+# =============================================================================
+# Automated lint, test, and multi-image Docker build & push to Docker Hub.
+#
+# Pipeline: Lint → Test → Build & Push Docker Images (engine, web, trainer)
+#
+# Single DockerHub repo with tag-per-service:
+#   nuniesmith/futures:engine          — Engine + Data API (arm64 + amd64, runs on Pi)
+#   nuniesmith/futures:web             — HTMX Dashboard (arm64 + amd64, runs on Pi)
+#   nuniesmith/futures:trainer         — GPU Training Server (amd64 only, dedicated rig)
+#   nuniesmith/futures:engine-<sha>    — Pinned engine build
+#   nuniesmith/futures:web-<sha>       — Pinned web build
+#   nuniesmith/futures:trainer-<sha>   — Pinned trainer build
+#   nuniesmith/futures:latest          — Alias for :engine (default pull)
+#
+# Required Secrets:
+#   - DOCKER_USERNAME: Docker Hub username
+#   - DOCKER_TOKEN: Docker Hub access token
+#   - DISCORD_WEBHOOK_ACTIONS: Discord webhook for CI/CD notifications (optional)
+# =============================================================================
+
+name: 🚀 CI/CD Pipeline
+
+on:
+    push:
+        branches: [main]
+        paths-ignore:
+            - "**.md"
+            - "LICENSE"
+            - ".gitignore"
+            - "docs/**"
+    pull_request:
+        branches: [main]
+    workflow_dispatch:
+        inputs:
+            skip_tests:
+                description: "Skip tests (build only)"
+                required: false
+                type: boolean
+                default: false
+            skip_docker:
+                description: "Skip Docker build (test only)"
+                required: false
+                type: boolean
+                default: false
+
+permissions:
+    contents: read
+    packages: write
+    checks: write
+
+env:
+    PYTHON_VERSION: "3.13"
+    REGISTRY: docker.io
+    IMAGE_NAME: nuniesmith/futures
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+defaults:
+    run:
+        shell: bash
+
+jobs:
+    # =========================================================================
+    # Stage 1: Lint & Format
+    # =========================================================================
+    lint:
+        name: ✨ Lint & Format
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        if: ${{ !inputs.skip_tests }}
+        steps:
+            - name: 📥 Checkout code
+              uses: actions/checkout@v4
+
+            - name: 📣 Notify build started
+              continue-on-error: true
+              uses: nuniesmith/actions/.github/actions/discord-notify@main
+              with:
+                  webhook-url: ${{ secrets.DISCORD_WEBHOOK_ACTIONS }}
+                  title: "🔨 Futures CI/CD Started"
+                  description: "Running lint and format checks"
+                  status: started
+                  include-repo-info: "true"
+
+            - name: 🐍 Setup Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: ${{ env.PYTHON_VERSION }}
+
+            - name: 📦 Install linting tools
+              run: |
+                  python -m pip install --upgrade pip
+                  pip install ruff mypy
+
+            - name: ✨ Run Ruff linting
+              run: |
+                  echo "🔍 Running Ruff linter..."
+                  ruff check . --output-format=github
+                  ruff format --check .
+
+            - name: 🔍 Run mypy type check
+              run: |
+                  echo "🔍 Running mypy type checker..."
+                  if [ -f pyproject.toml ]; then pip install -e ".[dev]" 2>/dev/null || pip install -e . 2>/dev/null || true; fi
+                  mypy . --ignore-missing-imports || true
+
+    # =========================================================================
+    # Stage 2: Test
+    # =========================================================================
+    test:
+        name: 🧪 Test
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        if: ${{ !inputs.skip_tests }}
+        needs: lint
+        steps:
+            - name: 📥 Checkout code
+              uses: actions/checkout@v4
+
+            - name: 🐍 Setup Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: ${{ env.PYTHON_VERSION }}
+                  cache: "pip"
+
+            - name: 📦 Install dependencies
+              run: |
+                  python -m pip install --upgrade pip
+                  pip install pytest pytest-cov pytest-asyncio pytest-timeout
+                  if [ -f pyproject.toml ]; then pip install -e ".[dev]" 2>/dev/null || pip install -e . 2>/dev/null || true; fi
+
+            - name: 🧪 Run tests
+              run: |
+                  pytest --cov=. --cov-report=xml --cov-report=term-missing -v
+
+            - name: ✅ Notify tests passed
+              if: success()
+              continue-on-error: true
+              uses: nuniesmith/actions/.github/actions/discord-notify@main
+              with:
+                  webhook-url: ${{ secrets.DISCORD_WEBHOOK_ACTIONS }}
+                  title: "✅ Futures Tests Passed"
+                  description: "All tests and lint checks passed"
+                  status: success
+
+            - name: ❌ Notify tests failed
+              if: failure()
+              continue-on-error: true
+              uses: nuniesmith/actions/.github/actions/discord-notify@main
+              with:
+                  webhook-url: ${{ secrets.DISCORD_WEBHOOK_ACTIONS }}
+                  title: "❌ Futures Tests Failed"
+                  description: "Tests or lint checks failed"
+                  status: failure
+                  fields: '[{"name": "Workflow", "value": "[View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}]'
+
+    # =========================================================================
+    # Stage 3: Build & Push Docker Images
+    # =========================================================================
+    #
+    # Single DockerHub repo (nuniesmith/futures) with tag-per-service.
+    # Each matrix entry produces two tags:
+    #   :engine           (rolling latest for that service)
+    #   :engine-abc1234   (pinned to commit SHA)
+    # The engine build also tags :latest as the default pull target.
+    #
+    # Builds run in parallel via matrix strategy:
+    #   engine  — Combined FastAPI data service + engine worker (arm64 + amd64)
+    #   web     — HTMX dashboard reverse-proxy (arm64 + amd64)
+    #   trainer — GPU CNN training server (amd64 only — CUDA base image)
+    # =========================================================================
+    docker:
+        name: "🐳 Build :${{ matrix.service }}"
+        needs: test
+        runs-on: ubuntu-latest
+        timeout-minutes: 60
+        if: |
+            github.event_name == 'push' && github.ref == 'refs/heads/main'
+            && (github.event_name != 'workflow_dispatch' || inputs.skip_docker != true)
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - service: engine
+                      dockerfile: docker/engine/Dockerfile
+                      platforms: linux/amd64,linux/arm64
+                      is_default: true
+                    - service: web
+                      dockerfile: docker/web/Dockerfile
+                      platforms: linux/amd64,linux/arm64
+                      is_default: false
+                    - service: trainer
+                      dockerfile: docker/trainer/Dockerfile
+                      platforms: linux/amd64
+                      is_default: false
+        steps:
+            - name: 📥 Checkout code
+              uses: actions/checkout@v4
+
+            - name: 🔢 Compute short SHA
+              id: vars
+              run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+            - name: 🐳 Build and Push — :${{ matrix.service }}
+              uses: nuniesmith/actions/.github/actions/docker-build-push@main
+              with:
+                  image-name: ${{ env.IMAGE_NAME }}
+                  username: ${{ secrets.DOCKER_USERNAME }}
+                  password: ${{ secrets.DOCKER_TOKEN }}
+                  dockerfile: ${{ matrix.dockerfile }}
+                  context: .
+                  platforms: ${{ matrix.platforms }}
+                  push: "true"
+                  tags: |
+                      type=raw,value=${{ matrix.service }}
+                      type=raw,value=${{ matrix.service }}-${{ steps.vars.outputs.sha_short }}
+                      type=raw,value=latest,enable=${{ matrix.is_default }}
+
+            - name: ✅ Notify :${{ matrix.service }} pushed
+              if: success()
+              continue-on-error: true
+              uses: nuniesmith/actions/.github/actions/discord-notify@main
+              with:
+                  webhook-url: ${{ secrets.DISCORD_WEBHOOK_ACTIONS }}
+                  title: "🐳 :${{ matrix.service }} Image Pushed"
+                  description: "Docker image pushed to Docker Hub"
+                  status: success
+                  fields: '[{"name": "Tags", "value": "`${{ env.IMAGE_NAME }}:${{ matrix.service }}`\n`${{ env.IMAGE_NAME }}:${{ matrix.service }}-${{ steps.vars.outputs.sha_short }}`", "inline": true}, {"name": "Platforms", "value": "`${{ matrix.platforms }}`", "inline": true}]'
+
+            - name: ❌ Notify :${{ matrix.service }} build failed
+              if: failure()
+              continue-on-error: true
+              uses: nuniesmith/actions/.github/actions/discord-notify@main
+              with:
+                  webhook-url: ${{ secrets.DISCORD_WEBHOOK_ACTIONS }}
+                  title: "❌ :${{ matrix.service }} Docker Build Failed"
+                  description: "Failed to build or push :${{ matrix.service }} image"
+                  status: failure
+                  fields: '[{"name": "Dockerfile", "value": "`${{ matrix.dockerfile }}`", "inline": true}, {"name": "Workflow", "value": "[View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}]'
+
+    # =========================================================================
+    # Pipeline Summary
+    # =========================================================================
+    summary:
+        name: 📊 Pipeline Summary
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        needs: [lint, test, docker]
+        if: always()
+        steps:
+            - name: 📊 Generate summary
+              run: |
+                  SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+
+                  echo "## 📊 Futures CI/CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+                  echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+                  echo "| ✨ Lint & Format | \`${{ needs.lint.result }}\` |" >> $GITHUB_STEP_SUMMARY
+                  echo "| 🧪 Test | \`${{ needs.test.result }}\` |" >> $GITHUB_STEP_SUMMARY
+                  echo "| 🐳 Docker Build & Push | \`${{ needs.docker.result }}\` |" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+
+                  if [ "${{ needs.lint.result }}" = "success" ] && \
+                     [ "${{ needs.test.result }}" = "success" ] && \
+                     [ "${{ needs.docker.result }}" = "success" ]; then
+                    echo "### ✅ All stages completed successfully!" >> $GITHUB_STEP_SUMMARY
+                  elif [ "${{ needs.lint.result }}" = "failure" ]; then
+                    echo "### ❌ Pipeline failed at lint stage" >> $GITHUB_STEP_SUMMARY
+                    echo "Fix linting/formatting errors before proceeding." >> $GITHUB_STEP_SUMMARY
+                  elif [ "${{ needs.test.result }}" = "failure" ]; then
+                    echo "### ❌ Pipeline failed at test stage" >> $GITHUB_STEP_SUMMARY
+                    echo "Fix failing tests before deployment can proceed." >> $GITHUB_STEP_SUMMARY
+                  elif [ "${{ needs.docker.result }}" = "failure" ]; then
+                    echo "### ❌ Pipeline failed at Docker build stage" >> $GITHUB_STEP_SUMMARY
+                    echo "Check Dockerfiles and build configuration." >> $GITHUB_STEP_SUMMARY
+                  elif [ "${{ needs.docker.result }}" = "skipped" ]; then
+                    echo "### ⏭️ Docker build skipped" >> $GITHUB_STEP_SUMMARY
+                    echo "Docker builds only run on push to main." >> $GITHUB_STEP_SUMMARY
+                  fi
+
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "### 🐳 Docker Tags" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "| Service | Tag | Pinned Tag | Platforms |" >> $GITHUB_STEP_SUMMARY
+                  echo "|---------|-----|------------|-----------|" >> $GITHUB_STEP_SUMMARY
+                  echo "| Engine | \`${{ env.IMAGE_NAME }}:engine\` | \`:engine-${SHA_SHORT}\` | amd64, arm64 |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Web | \`${{ env.IMAGE_NAME }}:web\` | \`:web-${SHA_SHORT}\` | amd64, arm64 |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Trainer | \`${{ env.IMAGE_NAME }}:trainer\` | \`:trainer-${SHA_SHORT}\` | amd64 |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Default | \`${{ env.IMAGE_NAME }}:latest\` | — | amd64, arm64 |" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+                  echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+                  echo "| 🐍 Python | \`${{ env.PYTHON_VERSION }}\` |" >> $GITHUB_STEP_SUMMARY
+                  echo "| 📦 Repo | \`${{ env.IMAGE_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+                  echo "| 🌿 Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+                  echo "| 🔗 Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+
+            - name: ❌ Fail on critical errors
+              if: needs.lint.result == 'failure' || needs.test.result == 'failure' || needs.docker.result == 'failure'
+              run: |
+                  echo "❌ Pipeline had failures"
+                  echo "  Lint:   ${{ needs.lint.result }}"
+                  echo "  Test:   ${{ needs.test.result }}"
+                  echo "  Docker: ${{ needs.docker.result }}"
+                  exit 1

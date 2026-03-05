@@ -10,7 +10,8 @@ Filters implemented:
   2. Pre-Market Range Break    — Globex high/low confluence
   3. Session Window            — only allow signals inside optimal ET windows
   4. Lunch / Dead-Zone         — reject 10:30–13:30 ET chop
-  5. Multi-TF EMA Bias         — higher-timeframe trend agreement
+  5. Multi-TF EMA Bias         — higher-timeframe trend agreement (simple)
+  6. MTF Analyzer              — full EMA alignment + MACD momentum + divergence
 
 Public API:
     from lib.analysis.orb_filters import (
@@ -19,6 +20,7 @@ Public API:
         check_session_window,
         check_lunch_filter,
         check_multi_tf_bias,
+        check_mtf_analyzer,
         apply_all_filters,
         ORBFilterResult,
     )
@@ -382,6 +384,99 @@ def _ema(values: np.ndarray, span: int) -> np.ndarray:
     return out
 
 
+# ---------------------------------------------------------------------------
+# 6. MTF Analyzer — Full EMA Alignment + MACD Momentum + Divergence
+# ---------------------------------------------------------------------------
+# Delegates to lib.analysis.mtf_analyzer for the full computation.
+# Exposed as a standalone filter so it can be toggled individually in
+# apply_all_filters() and used from any caller without pulling in the
+# heavier MTFAnalyzer class.
+
+
+def check_mtf_analyzer(
+    bars_htf: pd.DataFrame | None,
+    direction: str,
+    min_pass_score: float = 0.55,
+    ema_fast: int = 9,
+    ema_mid: int = 21,
+    ema_slow: int = 50,
+    macd_fast: int = 12,
+    macd_slow: int = 26,
+    macd_signal_period: int = 9,
+    divergence_lookback: int = 20,
+) -> FilterVerdict:
+    """Full MTF quality gate: EMA alignment/slope + MACD momentum + divergence.
+
+    This is a richer alternative (and complement) to ``check_multi_tf_bias``:
+      - ``check_multi_tf_bias`` checks only EMA slope direction.
+      - ``check_mtf_analyzer`` additionally evaluates MACD histogram polarity,
+        MACD histogram slope, and regular price/MACD divergence.
+
+    Hard rejection criteria:
+      1. Opposing MACD divergence detected (price diverges against breakout).
+      2. Overall MTF score < ``min_pass_score``.
+
+    Score composition (0.0–1.0):
+      0.30  EMA fast/mid/slow fully stacked in breakout direction
+      0.15  EMA slow slope trending in breakout direction
+      0.25  MACD histogram polarity agrees with direction
+      0.15  MACD histogram slope agrees with direction
+      0.15  No opposing divergence
+
+    Args:
+        bars_htf: Higher-timeframe OHLCV bars (e.g. 15m). Needs ≥ 60 bars
+                  for reliable MACD computation (macd_slow + macd_signal + slope).
+        direction: Breakout direction — "LONG" or "SHORT".
+        min_pass_score: Minimum score to pass (default 0.55).
+        ema_fast: Fast EMA period (default 9).
+        ema_mid: Mid EMA period (default 21).
+        ema_slow: Slow EMA period (default 50).
+        macd_fast: MACD fast EMA period (default 12).
+        macd_slow: MACD slow EMA period (default 26).
+        macd_signal_period: MACD signal line period (default 9).
+        divergence_lookback: Bars to scan for divergence (default 20).
+
+    Returns:
+        FilterVerdict — fails if score < min_pass_score or opposing divergence.
+    """
+    name = "MTF Analyzer"
+
+    try:
+        from lib.analysis.mtf_analyzer import MTFAnalyzer
+
+        analyzer = MTFAnalyzer(
+            ema_fast=ema_fast,
+            ema_mid=ema_mid,
+            ema_slow=ema_slow,
+            macd_fast=macd_fast,
+            macd_slow=macd_slow,
+            macd_signal=macd_signal_period,
+            divergence_lookback=divergence_lookback,
+            min_pass_score=min_pass_score,
+        )
+        _result, verdict = analyzer.evaluate(bars_htf, direction)
+        # Re-stamp the name in case the inner module uses a different string
+        return FilterVerdict(
+            name=name,
+            passed=verdict.passed,
+            reason=verdict.reason,
+            score_boost=verdict.score_boost,
+        )
+    except ImportError:
+        return FilterVerdict(
+            name=name,
+            passed=True,
+            reason="MTF analyzer module not available — skipped",
+        )
+    except Exception as exc:
+        logger.warning("check_mtf_analyzer error (non-fatal): %s", exc)
+        return FilterVerdict(
+            name=name,
+            passed=True,
+            reason=f"MTF analyzer error — skipped: {exc}",
+        )
+
+
 def check_multi_tf_bias(
     bars_htf: pd.DataFrame | None,
     direction: str,
@@ -597,9 +692,11 @@ def apply_all_filters(
     enable_lunch_filter: bool = True,
     enable_multi_tf: bool = True,
     enable_vwap: bool = True,
+    enable_mtf_analyzer: bool = True,
     allowed_windows: Sequence[tuple[dt_time, dt_time]] | None = None,
     nr7_lookback: int = 7,
     ema_period: int = 34,
+    mtf_min_pass_score: float = 0.55,
     # Gating mode: "all" requires every enabled hard filter to pass,
     # "majority" requires > 50% of hard filters to pass.
     gate_mode: str = "all",
@@ -607,10 +704,18 @@ def apply_all_filters(
     """Run all enabled ORB quality filters and return a composite result.
 
     Filters are split into two categories:
-      - **Hard filters** (session window, lunch, pre-market, multi-TF, VWAP):
-        these can reject a signal outright.
+      - **Hard filters** (session window, lunch, pre-market, multi-TF, VWAP,
+        MTF analyzer): these can reject a signal outright.
       - **Soft filters** (NR7): these only adjust the quality score boost;
         they never reject a signal.
+
+    The MTF Analyzer (``enable_mtf_analyzer``) is the richest hard filter —
+    it evaluates EMA alignment/slope, MACD histogram polarity/slope, and
+    regular divergence.  When both ``enable_multi_tf`` and
+    ``enable_mtf_analyzer`` are True, the simpler EMA-slope-only filter
+    (``check_multi_tf_bias``) still runs as a lightweight early gate while
+    the full analyzer adds momentum and divergence checks.  If you want only
+    the full analyzer, set ``enable_multi_tf=False``.
 
     Args:
         direction: "LONG" or "SHORT".
@@ -625,9 +730,11 @@ def apply_all_filters(
         orb_low: Opening range low (informational).
         vwap: Pre-computed VWAP (if None, computed from bars_1m).
         enable_*: Toggle individual filters on/off.
+        enable_mtf_analyzer: Enable the full EMA+MACD+divergence MTF gate.
         allowed_windows: Custom session windows for session filter.
         nr7_lookback: NR7 lookback period (default 7).
-        ema_period: EMA period for multi-TF bias (default 34).
+        ema_period: EMA period for the simple multi-TF bias check (default 34).
+        mtf_min_pass_score: Minimum MTF score for the full analyzer (default 0.55).
         gate_mode: "all" or "majority" — how to combine hard filter results.
 
     Returns:
@@ -677,10 +784,19 @@ def apply_all_filters(
             )
         )
 
+    if enable_mtf_analyzer:
+        verdicts.append(
+            check_mtf_analyzer(
+                bars_htf=bars_htf,
+                direction=direction,
+                min_pass_score=mtf_min_pass_score,
+            )
+        )
+
     # --- Compose result ---
 
     # Soft filters: NR7 is the only one — it always passes
-    soft_names = {"NR7"}
+    soft_names = {"NR7", "NR7 (Narrow Range 7)"}
     hard_verdicts = [v for v in verdicts if v.name not in soft_names]
     hard_passed = [v for v in hard_verdicts if v.passed]
 

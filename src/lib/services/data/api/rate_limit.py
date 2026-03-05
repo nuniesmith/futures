@@ -6,29 +6,51 @@ Configurable per-endpoint rate limiting using ``slowapi``.
 Limits:
   - Public endpoints (``/health``, ``/docs``): 60 req/min
   - API endpoints (default): 30 req/min per client
-  - SSE endpoint: 5 connections per client per minute
+  - SSE *connections*: 10 new connections per client per minute
+    (SSE streams are long-lived; we limit new connection attempts, not
+    the persistent stream itself.  The old "5/minute" was too aggressive
+    and caused spurious 429s when the browser reconnected after a
+    network blip.)
+  - Dashboard HTMX fragment endpoints: 120 req/min
+    (panels poll every 5–30s; the default 30/min cap fires too quickly
+    when many panels refresh simultaneously on page load.)
   - Trades / position mutations: 20 req/min per client
   - Force refresh / heavy actions: 5 req/min per client
+  - Kraken account (private API calls): 10 req/min
+    (Kraken private endpoints are rate-limited on Kraken's side too.)
 
 Configuration via environment variables:
-  - ``RATE_LIMIT_ENABLED``   — "1" to enable, "0" to disable (default: "1")
-  - ``RATE_LIMIT_DEFAULT``   — Default limit string (default: "30/minute")
-  - ``RATE_LIMIT_PUBLIC``    — Public endpoint limit (default: "60/minute")
-  - ``RATE_LIMIT_SSE``       — SSE connection limit (default: "5/minute")
-  - ``RATE_LIMIT_MUTATIONS`` — Trade/position mutation limit (default: "20/minute")
-  - ``RATE_LIMIT_HEAVY``     — Heavy actions limit (default: "5/minute")
-  - ``RATE_LIMIT_STORAGE``   — "memory" or "redis" (default: "memory")
+  - ``RATE_LIMIT_ENABLED``     — "1" to enable, "0" to disable (default: "1")
+  - ``RATE_LIMIT_DEFAULT``     — Default limit string (default: "30/minute")
+  - ``RATE_LIMIT_PUBLIC``      — Public endpoint limit (default: "60/minute")
+  - ``RATE_LIMIT_SSE``         — SSE new-connection limit (default: "10/minute")
+  - ``RATE_LIMIT_DASHBOARD``   — Dashboard fragment limit (default: "120/minute")
+  - ``RATE_LIMIT_MUTATIONS``   — Trade/position mutation limit (default: "20/minute")
+  - ``RATE_LIMIT_HEAVY``       — Heavy actions limit (default: "5/minute")
+  - ``RATE_LIMIT_KRAKEN_PRIV`` — Kraken private API limit (default: "10/minute")
+  - ``RATE_LIMIT_STORAGE``     — "memory" or "redis" (default: "memory")
 
-Usage in ``main.py``::
+Design notes
+~~~~~~~~~~~~
+SSE streams must not be subject to per-request rate limiting once
+established.  ``slowapi`` only intercepts the *initial HTTP request*
+(the SSE handshake), so limiting ``/sse/`` paths is safe — it gates
+*new* stream connections, not individual SSE events.
+
+Dashboard HTMX fragments (``/api/``, ``/kraken/``, ``/journal/``) are
+polled at 5-60 s intervals by multiple panels simultaneously.  On an
+initial page load, a browser can issue ~15 fragment requests in under a
+second.  A 120/minute window (= 2/second sustained) is generous enough
+for heavy dashboards while still protecting against runaway scripts.
+
+Usage in main.py::
 
     from lib.services.data.api.rate_limit import setup_rate_limiting
-
     setup_rate_limiting(app)
 
 To apply custom limits to specific endpoints::
 
     from lib.services.data.api.rate_limit import get_limiter
-
     limiter = get_limiter()
 
     @router.post("/some/endpoint")
@@ -36,7 +58,7 @@ To apply custom limits to specific endpoints::
     def some_endpoint(request: Request):
         ...
 
-Note: When ``RATE_LIMIT_ENABLED=0`` (or in test environments), the limiter
+Note: When RATE_LIMIT_ENABLED=0 (or in test environments), the limiter
 is installed but uses extremely permissive limits so it never blocks.
 """
 
@@ -58,9 +80,11 @@ logger = logging.getLogger("api.rate_limit")
 _ENABLED = os.getenv("RATE_LIMIT_ENABLED", "1").strip() in ("1", "true", "yes")
 _DEFAULT_LIMIT = os.getenv("RATE_LIMIT_DEFAULT", "30/minute")
 _PUBLIC_LIMIT = os.getenv("RATE_LIMIT_PUBLIC", "60/minute")
-_SSE_LIMIT = os.getenv("RATE_LIMIT_SSE", "5/minute")
+_SSE_LIMIT = os.getenv("RATE_LIMIT_SSE", "10/minute")
+_DASHBOARD_LIMIT = os.getenv("RATE_LIMIT_DASHBOARD", "120/minute")
 _MUTATIONS_LIMIT = os.getenv("RATE_LIMIT_MUTATIONS", "20/minute")
 _HEAVY_LIMIT = os.getenv("RATE_LIMIT_HEAVY", "5/minute")
+_KRAKEN_PRIV_LIMIT = os.getenv("RATE_LIMIT_KRAKEN_PRIV", "10/minute")
 _STORAGE_URI = os.getenv("RATE_LIMIT_STORAGE", "memory://")
 
 # When disabled, use an absurdly high limit so the middleware is present
@@ -218,8 +242,10 @@ def _rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
 
 PUBLIC_LIMIT = _get_effective_limit(_PUBLIC_LIMIT)
 SSE_LIMIT = _get_effective_limit(_SSE_LIMIT)
+DASHBOARD_LIMIT = _get_effective_limit(_DASHBOARD_LIMIT)
 MUTATIONS_LIMIT = _get_effective_limit(_MUTATIONS_LIMIT)
 HEAVY_LIMIT = _get_effective_limit(_HEAVY_LIMIT)
+KRAKEN_PRIV_LIMIT = _get_effective_limit(_KRAKEN_PRIV_LIMIT)
 DEFAULT_LIMIT = _get_effective_limit(_DEFAULT_LIMIT)
 
 
@@ -228,20 +254,49 @@ DEFAULT_LIMIT = _get_effective_limit(_DEFAULT_LIMIT)
 # ---------------------------------------------------------------------------
 
 # Maps path prefixes to their rate limit strings.
-# More specific prefixes should come first.
+# More specific prefixes MUST come before less-specific ones —
+# the first matching prefix wins.
 _PATH_LIMITS: list[tuple[str, str]] = [
-    # Heavy / admin actions
+    # ── Heavy / admin actions ─────────────────────────────────────────────
     ("/actions/force_refresh", HEAVY_LIMIT),
     ("/actions/optimize_now", HEAVY_LIMIT),
     ("/actions/run_backtest", HEAVY_LIMIT),
-    # SSE connections
+    # ── Kraken private API (Kraken has its own server-side limits) ────────
+    ("/kraken/account", KRAKEN_PRIV_LIMIT),
+    # ── SSE connections (gates new handshakes, not stream events) ─────────
+    # Allow up to 10 new SSE connections per minute.  Browser reconnect
+    # logic uses exponential back-off so bursts rarely exceed 3–4/min.
     ("/sse/", SSE_LIMIT),
-    # Mutation endpoints
+    # ── Mutation endpoints ────────────────────────────────────────────────
     ("/trades", MUTATIONS_LIMIT),
     ("/log_trade", MUTATIONS_LIMIT),
     ("/positions/update", MUTATIONS_LIMIT),
     ("/risk/check", MUTATIONS_LIMIT),
-    # Public / health
+    ("/journal/save", MUTATIONS_LIMIT),
+    # ── Dashboard HTMX fragment endpoints (high-frequency pollers) ────────
+    # These paths are called every 5–60s by HTMX panels.  A burst of ~15
+    # requests fires on initial page load (all panels loading at once).
+    # 120/min = 2/second sustained, which is plenty for legitimate use
+    # while blocking runaway clients.
+    ("/api/focus", DASHBOARD_LIMIT),
+    ("/api/orb", DASHBOARD_LIMIT),
+    ("/api/positions", DASHBOARD_LIMIT),
+    ("/api/risk", DASHBOARD_LIMIT),
+    ("/api/grok", DASHBOARD_LIMIT),
+    ("/api/alerts", DASHBOARD_LIMIT),
+    ("/api/regime", DASHBOARD_LIMIT),
+    ("/api/time", DASHBOARD_LIMIT),
+    ("/api/no-trade", DASHBOARD_LIMIT),
+    ("/api/volume-profile", DASHBOARD_LIMIT),
+    ("/api/performance", DASHBOARD_LIMIT),
+    ("/api/market-session", DASHBOARD_LIMIT),
+    ("/kraken/health/html", DASHBOARD_LIMIT),
+    ("/kraken/chart/html", DASHBOARD_LIMIT),
+    ("/kraken/correlation/html", DASHBOARD_LIMIT),
+    ("/kraken/tickers", DASHBOARD_LIMIT),
+    ("/journal/html", DASHBOARD_LIMIT),
+    ("/cnn/status", DASHBOARD_LIMIT),
+    # ── Public / health ───────────────────────────────────────────────────
     ("/health", PUBLIC_LIMIT),
     ("/docs", PUBLIC_LIMIT),
     ("/openapi.json", PUBLIC_LIMIT),
@@ -303,13 +358,17 @@ def setup_rate_limiting(app: FastAPI) -> Limiter:
     app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
     logger.info(
-        "Rate limiting configured: enabled=%s, default=%s, public=%s, sse=%s, mutations=%s, heavy=%s",
+        "Rate limiting configured: enabled=%s default=%s public=%s sse=%s dashboard=%s "
+        "mutations=%s heavy=%s kraken_priv=%s storage=%s",
         _ENABLED,
         DEFAULT_LIMIT,
         PUBLIC_LIMIT,
         SSE_LIMIT,
+        DASHBOARD_LIMIT,
         MUTATIONS_LIMIT,
         HEAVY_LIMIT,
+        KRAKEN_PRIV_LIMIT,
+        _get_storage_uri(),
     )
 
     return limiter

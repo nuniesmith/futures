@@ -236,23 +236,51 @@ def init_backfill_table() -> None:
 # ---------------------------------------------------------------------------
 
 
+# Whether to include KRAKEN:* crypto tickers in the backfill run.
+# Defaults to the same env var that controls the Kraken integration.
+_BACKFILL_KRAKEN = os.getenv("ENABLE_KRAKEN_CRYPTO", "1").strip().lower() in ("1", "true", "yes")
+
+# For crypto, Kraken allows up to 720 1-min candles per REST call, and the
+# public OHLC endpoint only returns data up to ~12 hours back for 1m.
+# We use a shorter chunk size for crypto so each chunk fits within one API
+# call, and a deeper lookback that makes sense for 24/7 markets.
+KRAKEN_CHUNK_HOURS = int(os.getenv("BACKFILL_KRAKEN_CHUNK_HOURS", "10"))  # < 720 min = 12h max
+KRAKEN_DAYS_BACK = int(os.getenv("BACKFILL_KRAKEN_DAYS_BACK", "7"))  # Kraken 1m history is limited
+
+
 def _get_backfill_symbols() -> list[str]:
     """Return the list of ticker symbols to backfill.
 
     Priority:
-      1. BACKFILL_SYMBOLS env var (comma-separated)
-      2. All data tickers from models.ASSETS
+      1. BACKFILL_SYMBOLS env var (comma-separated) — explicit list, no auto-append
+      2. All data tickers from models.ASSETS (futures) +
+         all KRAKEN:* crypto tickers when ENABLE_KRAKEN_CRYPTO is set
+
+    Kraken crypto tickers are always appended *after* the CME futures list so
+    they don't block the critical futures backfill if Kraken is unavailable.
     """
     if _SYMBOLS_OVERRIDE:
         return [s.strip() for s in _SYMBOLS_OVERRIDE.split(",") if s.strip()]
 
+    futures_symbols: list[str] = []
     try:
-        from lib.core.models import ASSETS
+        from lib.core.models import ASSETS, CRYPTO_TICKERS
 
-        return list(ASSETS.values())
+        # Only keep non-crypto tickers in the main futures list
+        futures_symbols = [t for t in ASSETS.values() if t not in CRYPTO_TICKERS]
     except ImportError:
-        # Hardcoded fallback
-        return ["MGC=F", "MNQ=F", "MES=F", "MCL=F", "SI=F", "HG=F"]
+        futures_symbols = ["MGC=F", "MNQ=F", "MES=F", "MCL=F", "SI=F", "HG=F"]
+
+    crypto_symbols: list[str] = []
+    if _BACKFILL_KRAKEN:
+        try:
+            from lib.core.models import KRAKEN_CONTRACT_SPECS
+
+            crypto_symbols = [str(spec["data_ticker"]) for spec in KRAKEN_CONTRACT_SPECS.values()]
+        except ImportError:
+            pass
+
+    return futures_symbols + crypto_symbols
 
 
 def _symbol_display_name(ticker: str) -> str:
@@ -380,12 +408,119 @@ def _fetch_chunk_yfinance(ticker: str, start_dt: datetime, end_dt: datetime) -> 
         return pd.DataFrame()
 
 
+def _fetch_chunk_kraken(ticker: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
+    """Fetch 1-min bars from Kraken REST API for a KRAKEN:* ticker and date range.
+
+    Kraken's public OHLC endpoint returns up to 720 candles per call.
+    For longer date ranges we make multiple calls, stitching results together.
+    Each call uses ``since_timestamp`` to page forward through the range.
+
+    Returns a DataFrame with [Open, High, Low, Close, Volume] and a UTC
+    DatetimeIndex, or empty DataFrame on failure / unavailability.
+    """
+    try:
+        from lib.integrations.kraken_client import get_kraken_provider
+
+        provider = get_kraken_provider()
+        if provider is None or not provider.is_available:
+            return pd.DataFrame()
+
+        # Convert datetimes to UNIX timestamps for the Kraken API
+        start_ts = (
+            int(start_dt.replace(tzinfo=UTC).timestamp()) if start_dt.tzinfo is None else int(start_dt.timestamp())
+        )
+        end_ts = int(end_dt.replace(tzinfo=UTC).timestamp()) if end_dt.tzinfo is None else int(end_dt.timestamp())
+
+        all_frames: list[pd.DataFrame] = []
+        current_since = start_ts
+        max_iterations = 50  # safety cap
+
+        for _ in range(max_iterations):
+            df = provider.get_ohlcv(ticker, interval="1m", since_timestamp=current_since)
+            if df.empty:
+                break
+
+            # Normalise index to UTC
+            try:
+                dti = pd.DatetimeIndex(df.index)
+                if dti.tzinfo is None:
+                    dti = dti.tz_localize("UTC")
+                else:
+                    dti = dti.tz_convert("UTC")
+                df.index = dti
+            except Exception:
+                pass
+
+            # Trim anything beyond end_dt
+            end_cutoff = pd.Timestamp(end_ts, unit="s", tz="UTC")
+            try:
+                df = df[df.index <= end_cutoff]
+            except Exception:
+                pass
+
+            if not df.empty:
+                all_frames.append(df)
+
+            # Determine the next ``since`` timestamp
+            last_idx_raw = df.index[-1] if not df.empty else None
+            if last_idx_raw is None:
+                break
+            try:
+                last_ts_obj = pd.Timestamp(last_idx_raw)
+                next_since = int(last_ts_obj.timestamp()) + 60  # +1 minute
+            except Exception:
+                break
+            if next_since >= end_ts:
+                break
+            if next_since <= current_since:
+                break  # no progress — stop
+            current_since = next_since
+
+        if not all_frames:
+            return pd.DataFrame()
+
+        result: pd.DataFrame = pd.concat(all_frames)
+        try:
+            result = result[~result.index.duplicated(keep="last")]  # type: ignore[assignment]
+            result = result.sort_index()  # type: ignore[assignment]
+        except Exception:
+            pass
+
+        logger.debug(
+            "Kraken: %d bars for %s (%s → %s)",
+            len(result),
+            ticker,
+            start_dt.date(),
+            end_dt.date(),
+        )
+        return result
+
+    except Exception as exc:
+        logger.debug("Kraken chunk fetch failed for %s: %s", ticker, exc)
+        return pd.DataFrame()
+
+
 def fetch_bars_chunk(ticker: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
     """Fetch 1-min bars for a ticker and date range.
 
-    Tries Massive first, then yfinance as fallback.
+    Routes KRAKEN:* tickers to the Kraken REST API.
+    For CME futures, tries Massive first, then yfinance as fallback.
+
     Returns DataFrame with [Open, High, Low, Close, Volume] + DatetimeIndex.
     """
+    # Kraken crypto pairs — bypass Massive/yfinance entirely
+    if ticker.startswith("KRAKEN:"):
+        df = _fetch_chunk_kraken(ticker, start_dt, end_dt)
+        if not df.empty:
+            logger.debug(
+                "Kraken: %d bars for %s (%s → %s)",
+                len(df),
+                ticker,
+                start_dt.date(),
+                end_dt.date(),
+            )
+        return df
+
     # Try Massive first
     df = _fetch_chunk_massive(ticker, start_dt, end_dt)
     if not df.empty:
@@ -570,16 +705,22 @@ def _compute_date_range(
 
 
 def _generate_chunks(
-    start_dt: datetime, end_dt: datetime, chunk_days: int = CHUNK_DAYS
+    start_dt: datetime,
+    end_dt: datetime,
+    chunk_days: int = CHUNK_DAYS,
+    chunk_hours: int | None = None,
 ) -> list[tuple[datetime, datetime]]:
-    """Split a date range into chunks of ``chunk_days`` calendar days.
+    """Split a date range into chunks of ``chunk_days`` calendar days (or
+    ``chunk_hours`` hours when specified — used for Kraken 1-min data which
+    is capped at 720 candles ≈ 12 hours per REST call).
 
     Returns a list of (chunk_start, chunk_end) tuples.
     """
+    delta = timedelta(hours=chunk_hours) if chunk_hours is not None else timedelta(days=chunk_days)
     chunks = []
     current = start_dt
     while current < end_dt:
-        chunk_end = min(current + timedelta(days=chunk_days), end_dt)
+        chunk_end = min(current + delta, end_dt)
         chunks.append((current, chunk_end))
         current = chunk_end
     return chunks
@@ -587,8 +728,8 @@ def _generate_chunks(
 
 def backfill_symbol(
     symbol: str,
-    days_back: int = DEFAULT_DAYS_BACK,
-    chunk_days: int = CHUNK_DAYS,
+    days_back: int | None = None,
+    chunk_days: int | None = None,
     interval: str = "1m",
 ) -> dict[str, Any]:
     """Backfill historical bars for a single symbol.
@@ -623,6 +764,16 @@ def backfill_symbol(
         "error": "",
     }
 
+    # Apply per-ticker defaults: crypto uses tighter lookback + smaller chunks
+    is_crypto = symbol.startswith("KRAKEN:")
+    if days_back is None:
+        days_back = KRAKEN_DAYS_BACK if is_crypto else DEFAULT_DAYS_BACK
+    if chunk_days is None:
+        chunk_days = CHUNK_DAYS
+    # For Kraken, we override chunk generation to use hours instead of days
+    # so each chunk fits within Kraken's 720-candle-per-call limit for 1m data.
+    kraken_chunk_hours: int | None = KRAKEN_CHUNK_HOURS if is_crypto else None
+
     conn = None
     try:
         conn = _get_conn()
@@ -645,8 +796,8 @@ def backfill_symbol(
             result["bars_after"] = result["bars_before"]
             return result
 
-        # Generate chunks
-        chunks = _generate_chunks(start_dt, end_dt, chunk_days)
+        # Generate chunks — use hour-based chunks for Kraken crypto
+        chunks = _generate_chunks(start_dt, end_dt, chunk_days, chunk_hours=kraken_chunk_hours)
         result["chunks_fetched"] = len(chunks)
 
         logger.info(
@@ -714,18 +865,24 @@ def backfill_symbol(
 
 def run_backfill(
     symbols: list[str] | None = None,
-    days_back: int = DEFAULT_DAYS_BACK,
-    chunk_days: int = CHUNK_DAYS,
+    days_back: int | None = None,
+    chunk_days: int | None = None,
     interval: str = "1m",
 ) -> dict[str, Any]:
     """Run a full historical backfill for all (or specified) symbols.
 
     This is the main entry point called by the engine scheduler.
 
+    Crypto (KRAKEN:*) and futures symbols are handled with different default
+    lookback windows and chunk sizes since Kraken's 1-min REST endpoint only
+    exposes a limited history window.  Per-symbol overrides are applied inside
+    ``backfill_symbol()`` when ``days_back`` / ``chunk_days`` are None.
+
     Args:
         symbols: List of tickers to backfill (None = all active assets).
-        days_back: Number of calendar days to look back.
-        chunk_days: Number of days per API chunk.
+        days_back: Number of calendar days to look back.  None = use
+                   per-ticker defaults (7 days for crypto, 30 for futures).
+        chunk_days: Number of days per API chunk.  None = per-ticker default.
         interval: Bar interval (default "1m").
 
     Returns:
@@ -758,15 +915,23 @@ def run_backfill(
         "=" * 60 + "\n"
         "  Historical Backfill Starting\n"
         "  Symbols: %s\n"
-        "  Days back: %d, Chunk size: %d days, Interval: %s\n" + "=" * 60,
+        "  Interval: %s (per-ticker defaults apply)\n" + "=" * 60,
         ", ".join(symbols),
-        days_back,
-        chunk_days,
         interval,
     )
 
     results: list[dict[str, Any]] = []
     errors: list[str] = []
+
+    # Log crypto symbols separately so it's clear the Kraken path will be used
+    crypto_syms = [s for s in symbols if s.startswith("KRAKEN:")]
+
+    if crypto_syms:
+        logger.info(
+            "  Crypto (Kraken): %d pairs — %s",
+            len(crypto_syms),
+            ", ".join(crypto_syms),
+        )
 
     for symbol in symbols:
         result = backfill_symbol(

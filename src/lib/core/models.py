@@ -132,11 +132,34 @@ CREATE TABLE IF NOT EXISTS orb_events (
     short_trigger   REAL    NOT NULL DEFAULT 0.0,
     bar_count       INTEGER NOT NULL DEFAULT 0,
     session         TEXT    NOT NULL DEFAULT '',
-    metadata_json   TEXT    NOT NULL DEFAULT '{}'
+    metadata_json   TEXT    NOT NULL DEFAULT '{}',
+    breakout_type   TEXT    NOT NULL DEFAULT 'ORB',
+    mtf_score       REAL,
+    macd_slope      REAL,
+    divergence      TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_orb_timestamp ON orb_events (timestamp);
 CREATE INDEX IF NOT EXISTS idx_orb_symbol ON orb_events (symbol, timestamp);
+CREATE INDEX IF NOT EXISTS idx_orb_breakout_type ON orb_events (breakout_type, timestamp);
 """
+
+# ---------------------------------------------------------------------------
+# Migration: add new columns to existing orb_events tables
+# ---------------------------------------------------------------------------
+_MIGRATE_ORB_EVENTS_ADD_COLS_SQLITE = """
+ALTER TABLE orb_events ADD COLUMN breakout_type TEXT NOT NULL DEFAULT 'ORB';
+ALTER TABLE orb_events ADD COLUMN mtf_score REAL;
+ALTER TABLE orb_events ADD COLUMN macd_slope REAL;
+ALTER TABLE orb_events ADD COLUMN divergence TEXT NOT NULL DEFAULT '';
+"""
+
+_MIGRATE_ORB_EVENTS_ADD_COLS_PG = [
+    "ALTER TABLE orb_events ADD COLUMN IF NOT EXISTS breakout_type TEXT NOT NULL DEFAULT 'ORB'",
+    "ALTER TABLE orb_events ADD COLUMN IF NOT EXISTS mtf_score DOUBLE PRECISION",
+    "ALTER TABLE orb_events ADD COLUMN IF NOT EXISTS macd_slope DOUBLE PRECISION",
+    "ALTER TABLE orb_events ADD COLUMN IF NOT EXISTS divergence TEXT NOT NULL DEFAULT ''",
+    "CREATE INDEX IF NOT EXISTS idx_orb_breakout_type ON orb_events (breakout_type, timestamp)",
+]
 
 _SCHEMA_ORB_EVENTS_PG = """
 CREATE TABLE IF NOT EXISTS orb_events (
@@ -154,10 +177,15 @@ CREATE TABLE IF NOT EXISTS orb_events (
     short_trigger   DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     bar_count       INTEGER NOT NULL DEFAULT 0,
     session         TEXT    NOT NULL DEFAULT '',
-    metadata_json   TEXT    NOT NULL DEFAULT '{}'
+    metadata_json   TEXT    NOT NULL DEFAULT '{}',
+    breakout_type   TEXT    NOT NULL DEFAULT 'ORB',
+    mtf_score       DOUBLE PRECISION,
+    macd_slope      DOUBLE PRECISION,
+    divergence      TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_orb_timestamp ON orb_events (timestamp);
 CREATE INDEX IF NOT EXISTS idx_orb_symbol ON orb_events (symbol, timestamp);
+CREATE INDEX IF NOT EXISTS idx_orb_breakout_type ON orb_events (breakout_type, timestamp);
 """
 
 
@@ -424,6 +452,105 @@ MICRO_CONTRACT_SPECS = {
 }
 
 # ---------------------------------------------------------------------------
+# Kraken Crypto Contract Specifications
+# ---------------------------------------------------------------------------
+# Spot crypto pairs sourced from Kraken exchange via REST + WebSocket.
+# These use a KRAKEN: prefix internally so the cache layer and engine can
+# distinguish them from CME futures tickers.
+#
+# "point" = value of a $1 move per 1 unit (spot crypto = 1.0).
+# "tick"  = minimum price increment on Kraken.
+# "margin"= notional margin to risk-size 1 unit (informal, for dashboard display).
+#
+# Enable/disable Kraken crypto in the pipeline via ENABLE_KRAKEN_CRYPTO env var.
+# ---------------------------------------------------------------------------
+ENABLE_KRAKEN_CRYPTO = os.getenv("ENABLE_KRAKEN_CRYPTO", "1").strip().lower() in ("1", "true", "yes")
+
+KRAKEN_CONTRACT_SPECS: dict[str, dict] = {
+    "BTC/USD": {
+        "ticker": "KRAKEN:XBTUSD",
+        "data_ticker": "KRAKEN:XBTUSD",
+        "point": 1.0,
+        "tick": 0.1,
+        "margin": 5_000,
+        "exchange": "kraken",
+        "asset_class": "crypto",
+    },
+    "ETH/USD": {
+        "ticker": "KRAKEN:ETHUSD",
+        "data_ticker": "KRAKEN:ETHUSD",
+        "point": 1.0,
+        "tick": 0.01,
+        "margin": 500,
+        "exchange": "kraken",
+        "asset_class": "crypto",
+    },
+    "SOL/USD": {
+        "ticker": "KRAKEN:SOLUSD",
+        "data_ticker": "KRAKEN:SOLUSD",
+        "point": 1.0,
+        "tick": 0.001,
+        "margin": 50,
+        "exchange": "kraken",
+        "asset_class": "crypto",
+    },
+    "LINK/USD": {
+        "ticker": "KRAKEN:LINKUSD",
+        "data_ticker": "KRAKEN:LINKUSD",
+        "point": 1.0,
+        "tick": 0.001,
+        "margin": 25,
+        "exchange": "kraken",
+        "asset_class": "crypto",
+    },
+    "AVAX/USD": {
+        "ticker": "KRAKEN:AVAXUSD",
+        "data_ticker": "KRAKEN:AVAXUSD",
+        "point": 1.0,
+        "tick": 0.001,
+        "margin": 30,
+        "exchange": "kraken",
+        "asset_class": "crypto",
+    },
+    "DOT/USD": {
+        "ticker": "KRAKEN:DOTUSD",
+        "data_ticker": "KRAKEN:DOTUSD",
+        "point": 1.0,
+        "tick": 0.0001,
+        "margin": 15,
+        "exchange": "kraken",
+        "asset_class": "crypto",
+    },
+    "ADA/USD": {
+        "ticker": "KRAKEN:ADAUSD",
+        "data_ticker": "KRAKEN:ADAUSD",
+        "point": 1.0,
+        "tick": 0.00001,
+        "margin": 10,
+        "exchange": "kraken",
+        "asset_class": "crypto",
+    },
+    "MATIC/USD": {
+        "ticker": "KRAKEN:MATICUSD",
+        "data_ticker": "KRAKEN:MATICUSD",
+        "point": 1.0,
+        "tick": 0.0001,
+        "margin": 10,
+        "exchange": "kraken",
+        "asset_class": "crypto",
+    },
+    "XRP/USD": {
+        "ticker": "KRAKEN:XRPUSD",
+        "data_ticker": "KRAKEN:XRPUSD",
+        "point": 1.0,
+        "tick": 0.0001,
+        "margin": 10,
+        "exchange": "kraken",
+        "asset_class": "crypto",
+    },
+}
+
+# ---------------------------------------------------------------------------
 # Active contract specs — selected by CONTRACT_MODE env var
 # ---------------------------------------------------------------------------
 CONTRACT_SPECS = MICRO_CONTRACT_SPECS if CONTRACT_MODE == "micro" else FULL_CONTRACT_SPECS
@@ -433,10 +560,16 @@ CONTRACT_SPECS = MICRO_CONTRACT_SPECS if CONTRACT_MODE == "micro" else FULL_CONT
 # Gold uses MGC=F directly to avoid front-month mismatch between GC and MGC.
 ASSETS: dict[str, str] = {name: str(spec.get("data_ticker", spec["ticker"])) for name, spec in CONTRACT_SPECS.items()}
 
+# Merge in Kraken crypto pairs when enabled
+if ENABLE_KRAKEN_CRYPTO:
+    ASSETS.update({name: str(spec["data_ticker"]) for name, spec in KRAKEN_CONTRACT_SPECS.items()})
+
 # Reverse lookup: data ticker → name
 TICKER_TO_NAME: dict[str, str] = {
     str(spec.get("data_ticker", spec["ticker"])): name for name, spec in CONTRACT_SPECS.items()
 }
+if ENABLE_KRAKEN_CRYPTO:
+    TICKER_TO_NAME.update({str(spec["data_ticker"]): name for name, spec in KRAKEN_CONTRACT_SPECS.items()})
 
 # ---------------------------------------------------------------------------
 # Flat ticker sets — useful for quick membership checks
@@ -455,6 +588,9 @@ RATES_TICKERS: frozenset[str] = frozenset({"ZN=F", "ZB=F"})
 # Agricultural futures tickers subset
 AG_TICKERS: frozenset[str] = frozenset({"ZC=F", "ZS=F", "ZW=F"})
 
+# Kraken crypto tickers subset (data tickers)
+CRYPTO_TICKERS: frozenset[str] = frozenset(str(spec["data_ticker"]) for spec in KRAKEN_CONTRACT_SPECS.values())
+
 # Overnight-session relevant tickers (traded when US equity markets are closed)
 OVERNIGHT_TICKERS: frozenset[str] = frozenset(
     {
@@ -472,9 +608,11 @@ OVERNIGHT_TICKERS: frozenset[str] = frozenset(
         "6A=F",
         "6C=F",
         "6S=F",
-        # Crypto
+        # CME Crypto futures
         "MBT=F",
         "MET=F",
+        # Kraken spot crypto (24/7 markets — always "overnight")
+        *(str(spec["data_ticker"]) for spec in KRAKEN_CONTRACT_SPECS.values()),
     }
 )
 
@@ -483,11 +621,17 @@ OVERNIGHT_TICKERS: frozenset[str] = frozenset(
 POINT_VALUE: dict[str, float] = {
     str(spec.get("data_ticker", spec["ticker"])): float(spec["point"]) for spec in MICRO_CONTRACT_SPECS.values()
 }
+# Add Kraken crypto point values
+if ENABLE_KRAKEN_CRYPTO:
+    POINT_VALUE.update({str(spec["data_ticker"]): float(spec["point"]) for spec in KRAKEN_CONTRACT_SPECS.values()})
 
 # Tick sizes keyed by data_ticker
 TICK_SIZE: dict[str, float] = {
     str(spec.get("data_ticker", spec["ticker"])): float(spec["tick"]) for spec in MICRO_CONTRACT_SPECS.values()
 }
+# Add Kraken crypto tick sizes
+if ENABLE_KRAKEN_CRYPTO:
+    TICK_SIZE.update({str(spec["data_ticker"]): float(spec["tick"]) for spec in KRAKEN_CONTRACT_SPECS.values()})
 
 
 def set_contract_mode(mode: str) -> dict:
@@ -798,6 +942,9 @@ def _init_audit_tables(conn, use_postgres: bool) -> None:
     """Create audit event tables (risk_events, orb_events) idempotently.
 
     Called from init_db() after the core tables are created.
+    Also runs non-destructive column migrations so existing deployments
+    pick up the new breakout_type / mtf_score / macd_slope / divergence
+    columns without requiring a manual ALTER TABLE.
     """
     if use_postgres:
         for schema in (_SCHEMA_RISK_EVENTS_PG, _SCHEMA_ORB_EVENTS_PG):
@@ -810,9 +957,33 @@ def _init_audit_tables(conn, use_postgres: bool) -> None:
                         # Index may already exist — not fatal
                         logger.debug("Audit table DDL (pg, non-fatal): %s", exc)
         conn.commit()
+        # Run column-level migrations (ADD COLUMN IF NOT EXISTS — idempotent)
+        for stmt in _MIGRATE_ORB_EVENTS_ADD_COLS_PG:
+            try:
+                conn.execute(stmt)
+            except Exception as exc:
+                logger.debug("ORB events column migration (pg, non-fatal): %s", exc)
+        try:
+            conn.commit()
+        except Exception:
+            pass
     else:
         conn.executescript(_SCHEMA_RISK_EVENTS_SQLITE)
         conn.executescript(_SCHEMA_ORB_EVENTS_SQLITE)
+        # SQLite: ALTER TABLE ADD COLUMN is idempotent only if we catch the error
+        for stmt in _MIGRATE_ORB_EVENTS_ADD_COLS_SQLITE.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                try:
+                    conn.execute(stmt)
+                except Exception as exc:
+                    # "duplicate column name" is expected on existing DBs — ignore
+                    if "duplicate column" not in str(exc).lower():
+                        logger.debug("ORB events column migration (sqlite, non-fatal): %s", exc)
+        try:
+            conn.commit()
+        except Exception:
+            pass
 
     logger.info("Audit tables initialised (risk_events, orb_events)")
 
@@ -1543,6 +1714,10 @@ def record_orb_event(
     bar_count: int = 0,
     session: str = "",
     metadata: dict | None = None,
+    breakout_type: str = "ORB",
+    mtf_score: float | None = None,
+    macd_slope: float | None = None,
+    divergence: str = "",
 ) -> int | None:
     """Persist an ORB evaluation result to the database.
 
@@ -1560,6 +1735,10 @@ def record_orb_event(
         bar_count: Number of bars in the opening range.
         session: Session mode.
         metadata: Optional extra data (serialised to JSON).
+        breakout_type: Breakout type string — "ORB", "PDR", "IB", or "CONS".
+        mtf_score: Aggregate multi-timeframe score (0.0–1.0), or None.
+        macd_slope: MACD histogram slope from MTF analysis, or None.
+        divergence: Divergence classification — "confirming", "opposing", or "".
 
     Returns:
         The inserted row ID, or None on failure.
@@ -1575,8 +1754,9 @@ def record_orb_event(
                 "INSERT INTO orb_events "
                 "(timestamp, symbol, or_high, or_low, or_range, atr_value, "
                 " breakout_detected, direction, trigger_price, long_trigger, "
-                " short_trigger, bar_count, session, metadata_json) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                " short_trigger, bar_count, session, metadata_json, "
+                " breakout_type, mtf_score, macd_slope, divergence) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "RETURNING id",
                 (
                     now_str,
@@ -1593,6 +1773,10 @@ def record_orb_event(
                     bar_count,
                     session,
                     meta_json,
+                    breakout_type,
+                    mtf_score,
+                    macd_slope,
+                    divergence,
                 ),
             )
             row = cur.fetchone()
@@ -1602,8 +1786,9 @@ def record_orb_event(
                 "INSERT INTO orb_events "
                 "(timestamp, symbol, or_high, or_low, or_range, atr_value, "
                 " breakout_detected, direction, trigger_price, long_trigger, "
-                " short_trigger, bar_count, session, metadata_json) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " short_trigger, bar_count, session, metadata_json, "
+                " breakout_type, mtf_score, macd_slope, divergence) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     now_str,
                     symbol,
@@ -1619,6 +1804,10 @@ def record_orb_event(
                     bar_count,
                     session,
                     meta_json,
+                    breakout_type,
+                    mtf_score,
+                    macd_slope,
+                    divergence,
                 ),
             )
             row_id = cur.lastrowid

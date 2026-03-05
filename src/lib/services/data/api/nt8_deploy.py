@@ -571,38 +571,26 @@ def _generate_bat_installer() -> str:
 def _render_health_dot(label: str, is_up: bool, title_up: str, title_down: str, pulse: bool = False) -> str:
     """Render a single health indicator dot with label."""
     if is_up:
-        color = "bg-green-500"
-        ring = "ring-green-500/30"
+        bg = "#22c55e"
         title = title_up
-        text_cls = "text-zinc-300"
+        text_color = "#d4d4d8"
     else:
-        color = "bg-red-500"
-        ring = "ring-red-500/30"
+        bg = "#ef4444"
         title = title_down
-        text_cls = "text-zinc-500"
-
-    ping_html = ""
-    if is_up and pulse:
-        ping_html = (
-            f"<span class='animate-ping absolute inline-flex h-full w-full rounded-full {color} opacity-40'></span>"
-        )
+        text_color = "#71717a"
 
     return f"""
-        <div class="flex items-center gap-1.5 cursor-default" title="{title}">
-            <span class="relative flex h-2.5 w-2.5">
-                {ping_html}
-                <span class="relative inline-flex rounded-full h-2.5 w-2.5 {color} ring-2 {ring}"></span>
-            </span>
-            <span class="text-[11px] {text_cls}">{label}</span>
-        </div>"""
+        <span style="display:inline-flex;align-items:center;gap:4px;cursor:default" title="{title}">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{bg}"></span>
+            <span style="font-size:11px;color:{text_color}">{label}</span>
+        </span>"""
 
 
 def _render_health_bar(health: dict[str, Any]) -> str:
     """Render health indicators as a compact HTML fragment.
 
-    Shows colored dots for Data, Engine, Redis, Postgres (service-level),
-    Bridge, Ruby (NT8-level), and a CNN badge (AI filter status).
-    Designed to sit in the header toolbar area.
+    Shows colored dots for Data, Engine, Redis, Postgres (service-level)
+    and a CNN badge.  Designed to sit in the dashboard header bar.
     """
     # --- Service-level indicators ---
     data_ok = health.get("data_service_up", True)
@@ -610,19 +598,8 @@ def _render_health_bar(health: dict[str, Any]) -> str:
     redis_ok = health.get("redis_up", False)
     postgres_ok = health.get("postgres_up", False)
 
-    # --- NT8 Bridge indicators ---
-    bridge_ok = health.get("bridge_connected", False)
-    ruby_ok = health.get("ruby_attached", False)
-    risk_blocked = health.get("risk_blocked", False)
-    age = health.get("bridge_age_seconds", -1)
-    state = health.get("bridge_state", "disconnected")
-    account = health.get("bridge_account", "")
-    version = health.get("bridge_version", "")
-    positions = health.get("positions_count", 0)
-
-    # --- CNN / BreakoutStrategy indicators ---
+    # --- CNN model ---
     cnn_on_disk = health.get("cnn_model_on_disk", False)
-    breakout_instruments = health.get("breakout_instruments", 0)
 
     # Service dots
     data_dot = _render_health_dot("Data", data_ok, "Data Service: Running", "Data Service: Down")
@@ -630,137 +607,50 @@ def _render_health_bar(health: dict[str, Any]) -> str:
     redis_dot = _render_health_dot("Redis", redis_ok, "Redis: Connected", "Redis: Disconnected")
     pg_dot = _render_health_dot("Postgres", postgres_ok, "Postgres: Connected", "Postgres: Disconnected")
 
-    # Bridge dot (with extra detail)
-    bridge_title_up = f"Bridge: Connected ({state})"
-    if account:
-        bridge_title_up += f" — {account}"
-    if age >= 0:
-        bridge_title_up += f" — {age:.0f}s ago"
-    bridge_title_down = "Bridge: Disconnected"
-    if age >= 0:
-        bridge_title_down += f" — last seen {age:.0f}s ago"
-    bridge_dot = _render_health_dot("Bridge", bridge_ok, bridge_title_up, bridge_title_down, pulse=bridge_ok)
-
-    # Ruby dot — yellow when Bridge is up but Ruby isn't attached
-    if ruby_ok:
-        ruby_title = "Ruby: Attached to Bridge"
-    elif bridge_ok:
-        ruby_title = "Ruby: Not attached (Bridge running without Ruby)"
-    else:
-        ruby_title = "Ruby: Unknown (Bridge not connected)"
-
-    if ruby_ok:
-        ruby_dot = _render_health_dot("Ruby", True, ruby_title, ruby_title, pulse=True)
-    elif bridge_ok:
-        ruby_dot = f"""
-        <div class="flex items-center gap-1.5 cursor-default" title="{ruby_title}">
-            <span class="relative flex h-2.5 w-2.5">
-                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-yellow-500 ring-2 ring-yellow-500/30"></span>
-            </span>
-            <span class="text-[11px] text-zinc-500">Ruby</span>
-        </div>"""
-    else:
-        ruby_dot = f"""
-        <div class="flex items-center gap-1.5 cursor-default" title="{ruby_title}">
-            <span class="relative flex h-2.5 w-2.5">
-                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-zinc-600 ring-2 ring-zinc-600/30"></span>
-            </span>
-            <span class="text-[11px] text-zinc-500">Ruby</span>
-        </div>"""
-
     # CNN badge — purple when model is on disk, grey when missing
     if cnn_on_disk:
-        cnn_title = "CNN model ready (orb_breakout_cnn.onnx on disk)"
-        cnn_badge = f"""
-            <span class="px-1.5 py-0.5 bg-purple-900/50 border border-purple-700/60 rounded
-                         text-[10px] text-purple-300 font-semibold tracking-wide cursor-default"
-                  title="{cnn_title}">
-                CNN ✓
-            </span>"""
+        cnn_title = "CNN model ready"
+        cnn_bg = "rgba(88,28,135,0.5)"
+        cnn_border = "rgba(126,34,206,0.6)"
+        cnn_color = "#d8b4fe"
+        cnn_label = "CNN ✓"
     else:
-        cnn_title = "CNN model not found — run: python scripts/export_onnx.py"
-        cnn_badge = f"""
-            <span class="px-1.5 py-0.5 bg-zinc-800/80 border border-zinc-700 rounded
-                         text-[10px] text-zinc-500 font-semibold tracking-wide cursor-default"
-                  title="{cnn_title}">
-                CNN –
-            </span>"""
+        cnn_title = "CNN model not found — run: bash scripts/sync_models.sh"
+        cnn_bg = "rgba(39,39,42,0.8)"
+        cnn_border = "#3f3f46"
+        cnn_color = "#71717a"
+        cnn_label = "CNN –"
 
-    # Breakout instruments badge (only when Bridge is up and tracking > 0)
-    instr_html = ""
-    if bridge_ok and breakout_instruments > 0:
-        instr_html = f"""
-            <span class="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded
-                         text-[10px] text-zinc-400 font-mono cursor-default"
-                  title="{breakout_instruments} instruments tracked by Bridge">
-                {breakout_instruments}i
-            </span>"""
-
-    # Risk badge
-    risk_html = ""
-    if risk_blocked:
-        risk_html = """
-            <span class="ml-1 px-1.5 py-0.5 bg-red-900/60 border border-red-700 rounded
-                         text-[10px] text-red-400 font-semibold uppercase tracking-wide"
-                  title="Risk enforcement is blocking new trades">
-                RISK BLOCK
-            </span>
-        """
-
-    # Positions badge (only if > 0)
-    pos_html = ""
-    if positions > 0 and bridge_ok:
-        pos_html = f"""
-            <span class="ml-1 px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded
-                         text-[10px] text-zinc-300 font-mono"
-                  title="{positions} open position(s)">
-                {positions} pos
-            </span>
-        """
-
-    # Version tag
-    ver_html = ""
-    if version and bridge_ok:
-        ver_html = f"""<span class="text-[10px] text-zinc-600 ml-0.5" title="Bridge v{version}">v{version}</span>"""
+    cnn_badge = f"""<span style="padding:2px 6px;background:{cnn_bg};border:1px solid {cnn_border};
+                     border-radius:4px;font-size:10px;color:{cnn_color};font-weight:600;
+                     letter-spacing:0.025em;cursor:default" title="{cnn_title}">{cnn_label}</span>"""
 
     return f"""
-    <div class="flex items-center gap-2">
-        <!-- Service Health -->
-        <div class="flex items-center gap-2 pr-2 border-r border-zinc-700">
-            {data_dot}
-            {engine_dot}
-            {redis_dot}
-            {pg_dot}
-        </div>
-
-        <!-- NT8 Bridge Health -->
-        <div class="flex items-center gap-2 pl-1 pr-2 border-r border-zinc-700">
-            {bridge_dot}
-            {ver_html}
-            {ruby_dot}
-            {instr_html}
-        </div>
-
-        <!-- CNN / AI Filter status -->
-        <div class="flex items-center gap-1.5 pl-1">
-            {cnn_badge}
-        </div>
-
-        {pos_html}
-        {risk_html}
-    </div>
+    <span style="display:inline-flex;align-items:center;gap:10px">
+        {data_dot}
+        {engine_dot}
+        {redis_dot}
+        {pg_dot}
+        <span style="margin-left:4px">{cnn_badge}</span>
+    </span>
     """
 
 
 def _render_toolbar_dropdown() -> str:
-    """Render the NT8 tools dropdown for the header area.
+    """Render an empty toolbar placeholder.
 
-    A small icon button that reveals deploy options on click.
-    Includes the full file manifest, a CNN export shortcut, and both
-    download-bat and WSL-deploy actions.
+    The NT8/Bridge-specific toolbar has been removed.  This function
+    returns an empty string so existing HTMX calls to
+    ``/api/nt8/panel/html`` don't break.
     """
-    # Build file manifest rows dynamically from _FILE_MAP so the HTML
-    # always stays in sync with what the bat actually deploys.
+    return ""
+
+
+def _render_toolbar_dropdown_legacy() -> str:
+    """(Legacy) Render the NT8 tools dropdown for the header area.
+
+    Kept for reference but no longer called.
+    """
     manifest_rows = ""
     for repo_path, nt8_rel_path in _FILE_MAP.items():
         filename = repo_path.split("/")[-1]
@@ -900,8 +790,8 @@ def download_nt8_installer():
 
 @router.get("/api/nt8/panel/html", response_class=HTMLResponse)
 def get_nt8_panel():
-    """Return the NT8 toolbar dropdown as an HTML fragment."""
-    return HTMLResponse(content=_render_toolbar_dropdown())
+    """Return the toolbar dropdown as an HTML fragment (NT8 removed)."""
+    return HTMLResponse(content="")
 
 
 @router.get("/api/nt8/health/html", response_class=HTMLResponse)

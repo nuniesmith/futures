@@ -518,6 +518,223 @@ SESSION_ASSETS: dict[str, list[str]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Crypto-specific ORB sessions
+# ---------------------------------------------------------------------------
+# Crypto markets are 24/7. The two highest-volume windows (by on-chain and
+# exchange data) are:
+#   • UTC 00:00–00:30 = 19:00–19:30 ET EST / 20:00–20:30 ET EDT
+#     → Coincides with the Asia open auction; BTC/ETH see a reliable
+#       volume surge as the new UTC calendar day begins.
+#   • UTC 12:00–12:30 = 07:00–07:30 ET EST / 08:00–08:30 ET EDT
+#     → London morning session for crypto; overlaps with European
+#       institutional flow and pre-US-open positioning.
+#
+# These sessions use wider ATR thresholds (breakout_multiplier=0.65) and a
+# looser OR-size cap (max_or_atr_ratio=2.5) to account for crypto's higher
+# intraday volatility relative to CME micro futures.
+# Both sessions are marked wraps_midnight=False because the ET window is
+# always on the same calendar day.
+# ---------------------------------------------------------------------------
+
+# UTC 00:00 ≡ 19:00 ET EST / 20:00 ET EDT
+# We store the ET wall-clock time. ZoneInfo handles the EST/EDT shift.
+CRYPTO_UTC_MIDNIGHT_SESSION = ORBSession(
+    name="Crypto UTC Midnight",
+    key="crypto_utc0",
+    or_start=dt_time(19, 0),  # 19:00 ET (EST=UTC-5: 00:00 UTC)
+    or_end=dt_time(19, 30),
+    scan_end=dt_time(21, 0),
+    atr_period=14,
+    breakout_multiplier=0.65,  # wider for crypto volatility
+    min_bars=3,
+    max_bars=35,
+    description=("Crypto UTC midnight session (19:00–19:30 ET EST / 20:00–20:30 ET EDT = 00:00–00:30 UTC)"),
+    min_depth_atr_pct=0.10,  # looser depth gate for crypto
+    min_body_ratio=0.45,  # looser body gate for crypto wicks
+    max_or_atr_ratio=2.5,  # crypto can gap wide
+    min_or_atr_ratio=0.03,
+    wraps_midnight=True,  # 19:00 ET is in the previous calendar day
+    include_in_dataset=True,
+)
+
+# UTC 12:00 ≡ 07:00 ET EST / 08:00 ET EDT
+CRYPTO_UTC_NOON_SESSION = ORBSession(
+    name="Crypto UTC Noon",
+    key="crypto_utc12",
+    or_start=dt_time(7, 0),  # 07:00 ET (EST=UTC-5: 12:00 UTC)
+    or_end=dt_time(7, 30),
+    scan_end=dt_time(9, 0),
+    atr_period=14,
+    breakout_multiplier=0.65,
+    min_bars=3,
+    max_bars=35,
+    description=("Crypto UTC noon session (07:00–07:30 ET EST / 08:00–08:30 ET EDT = 12:00–12:30 UTC)"),
+    min_depth_atr_pct=0.10,
+    min_body_ratio=0.45,
+    max_or_atr_ratio=2.5,
+    min_or_atr_ratio=0.03,
+    wraps_midnight=False,
+    include_in_dataset=True,
+)
+
+# ---------------------------------------------------------------------------
+# Per-symbol parameter overrides for crypto ORB detection
+# ---------------------------------------------------------------------------
+# Crypto assets have much larger ATR values (BTC ~$1000+/day) and wider
+# intraday ranges than CME micro futures.  These per-symbol multipliers
+# are applied inside detect_opening_range_breakout() when the caller
+# passes the symbol name.
+#
+# Structure: {ticker: {"breakout_multiplier": float, "max_or_atr_ratio": float,
+#                       "min_depth_atr_pct": float, "min_body_ratio": float}}
+# ---------------------------------------------------------------------------
+CRYPTO_SYMBOL_OVERRIDES: dict[str, dict[str, float]] = {
+    # Bitcoin — highest volatility; BTC ATR is typically 1-3% of price.
+    # Wider multiplier and OR-size cap to avoid false-positive rejections.
+    "KRAKEN:XBT/USD": {
+        "breakout_multiplier": 0.70,
+        "max_or_atr_ratio": 3.0,
+        "min_or_atr_ratio": 0.03,
+        "min_depth_atr_pct": 0.08,
+        "min_body_ratio": 0.40,
+    },
+    # Ethereum — slightly tighter than BTC
+    "KRAKEN:ETH/USD": {
+        "breakout_multiplier": 0.65,
+        "max_or_atr_ratio": 2.8,
+        "min_or_atr_ratio": 0.03,
+        "min_depth_atr_pct": 0.09,
+        "min_body_ratio": 0.42,
+    },
+    # Solana — highly volatile; wider range acceptable
+    "KRAKEN:SOL/USD": {
+        "breakout_multiplier": 0.68,
+        "max_or_atr_ratio": 3.0,
+        "min_or_atr_ratio": 0.03,
+        "min_depth_atr_pct": 0.08,
+        "min_body_ratio": 0.40,
+    },
+    # Mid-cap alts (LINK, AVAX, DOT, ADA, MATIC, XRP) — moderate volatility
+    "KRAKEN:LINK/USD": {
+        "breakout_multiplier": 0.65,
+        "max_or_atr_ratio": 2.8,
+        "min_or_atr_ratio": 0.03,
+        "min_depth_atr_pct": 0.09,
+        "min_body_ratio": 0.42,
+    },
+    "KRAKEN:AVAX/USD": {
+        "breakout_multiplier": 0.65,
+        "max_or_atr_ratio": 2.8,
+        "min_or_atr_ratio": 0.03,
+        "min_depth_atr_pct": 0.09,
+        "min_body_ratio": 0.42,
+    },
+    "KRAKEN:DOT/USD": {
+        "breakout_multiplier": 0.65,
+        "max_or_atr_ratio": 2.8,
+        "min_or_atr_ratio": 0.03,
+        "min_depth_atr_pct": 0.09,
+        "min_body_ratio": 0.42,
+    },
+    "KRAKEN:ADA/USD": {
+        "breakout_multiplier": 0.60,
+        "max_or_atr_ratio": 2.5,
+        "min_or_atr_ratio": 0.03,
+        "min_depth_atr_pct": 0.10,
+        "min_body_ratio": 0.43,
+    },
+    "KRAKEN:MATIC/USD": {
+        "breakout_multiplier": 0.62,
+        "max_or_atr_ratio": 2.6,
+        "min_or_atr_ratio": 0.03,
+        "min_depth_atr_pct": 0.10,
+        "min_body_ratio": 0.43,
+    },
+    "KRAKEN:XRP/USD": {
+        "breakout_multiplier": 0.60,
+        "max_or_atr_ratio": 2.5,
+        "min_or_atr_ratio": 0.03,
+        "min_depth_atr_pct": 0.10,
+        "min_body_ratio": 0.43,
+    },
+}
+
+
+def get_symbol_session_overrides(symbol: str, session: "ORBSession") -> dict[str, float]:
+    """Return per-symbol parameter overrides for a given session.
+
+    For Kraken crypto tickers the returned dict may contain
+    ``breakout_multiplier``, ``max_or_atr_ratio``, ``min_or_atr_ratio``,
+    ``min_depth_atr_pct``, and ``min_body_ratio`` keys that should
+    override the session defaults.
+
+    For non-crypto symbols (or when no override is registered) an empty
+    dict is returned so callers can use session defaults unchanged.
+
+    Args:
+        symbol: Instrument ticker (e.g. "KRAKEN:XBT/USD", "MGC=F").
+        session: The ORBSession being evaluated.
+
+    Returns:
+        Dict of parameter overrides, or {} if no overrides are defined.
+    """
+    # Direct match (exact ticker)
+    if symbol in CRYPTO_SYMBOL_OVERRIDES:
+        return dict(CRYPTO_SYMBOL_OVERRIDES[symbol])
+
+    # Prefix match for KRAKEN: tickers not in the table — use BTC defaults
+    # as a safe conservative fallback for any unknown crypto asset.
+    if symbol.startswith("KRAKEN:"):
+        return {
+            "breakout_multiplier": 0.65,
+            "max_or_atr_ratio": 2.8,
+            "min_or_atr_ratio": 0.03,
+            "min_depth_atr_pct": 0.09,
+            "min_body_ratio": 0.42,
+        }
+
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Kraken crypto tickers — injected into session asset lists when enabled.
+# Crypto markets are 24/7 so they're relevant in every session window.
+# Gated by ENABLE_KRAKEN_CRYPTO env var (same flag as models.py).
+# ---------------------------------------------------------------------------
+_KRAKEN_CRYPTO_TICKERS: list[str] = []
+
+try:
+    from lib.core.models import ENABLE_KRAKEN_CRYPTO
+
+    if ENABLE_KRAKEN_CRYPTO:
+        from lib.integrations.kraken_client import KRAKEN_PAIRS
+
+        _KRAKEN_CRYPTO_TICKERS.extend(p["internal_ticker"] for p in KRAKEN_PAIRS.values())
+except ImportError:
+    pass
+
+# Inject crypto tickers into every session that makes sense.
+# Crypto is 24/7, so all sessions benefit from scanning them.
+# We add them at the end of each list so CME futures remain first priority.
+if _KRAKEN_CRYPTO_TICKERS:
+    for _sk in SESSION_ASSETS:
+        SESSION_ASSETS[_sk] = SESSION_ASSETS[_sk] + _KRAKEN_CRYPTO_TICKERS
+
+    # Also populate the dedicated crypto session asset lists.
+    # These sessions only run when crypto is enabled.
+    SESSION_ASSETS["crypto_utc0"] = list(_KRAKEN_CRYPTO_TICKERS)
+    SESSION_ASSETS["crypto_utc12"] = list(_KRAKEN_CRYPTO_TICKERS)
+
+    # Register the crypto sessions so they are included in ORB_SESSIONS
+    # and SESSION_BY_KEY.  Append after the existing nine sessions so
+    # existing session ordering is unchanged.
+    ORB_SESSIONS.append(CRYPTO_UTC_MIDNIGHT_SESSION)
+    ORB_SESSIONS.append(CRYPTO_UTC_NOON_SESSION)
+    SESSION_BY_KEY["crypto_utc0"] = CRYPTO_UTC_MIDNIGHT_SESSION
+    SESSION_BY_KEY["crypto_utc12"] = CRYPTO_UTC_NOON_SESSION
+
+
 def get_session_assets(session: "ORBSession") -> list[str]:
     """Return the list of Yahoo tickers relevant for *session*.
 
@@ -1037,7 +1254,30 @@ def detect_opening_range_breakout(
         session = US_SESSION
 
     _atr_period = atr_period if atr_period is not None else session.atr_period
-    _breakout_mult = breakout_multiplier if breakout_multiplier is not None else session.breakout_multiplier
+
+    # Apply per-symbol overrides (crypto assets need wider thresholds).
+    # Caller-supplied breakout_multiplier always takes highest precedence;
+    # symbol overrides are second; session defaults are the fallback.
+    _sym_overrides = get_symbol_session_overrides(symbol, session)
+    _breakout_mult = (
+        breakout_multiplier
+        if breakout_multiplier is not None
+        else _sym_overrides.get("breakout_multiplier", session.breakout_multiplier)
+    )
+
+    # Build an effective session object that merges symbol-level overrides
+    # into the OR-size and quality-gate fields so _check_or_size() and
+    # _check_breakout_bar_quality() automatically use the right thresholds.
+    if _sym_overrides:
+        import dataclasses as _dc
+
+        session = _dc.replace(
+            session,
+            max_or_atr_ratio=_sym_overrides.get("max_or_atr_ratio", session.max_or_atr_ratio),
+            min_or_atr_ratio=_sym_overrides.get("min_or_atr_ratio", session.min_or_atr_ratio),
+            min_depth_atr_pct=_sym_overrides.get("min_depth_atr_pct", session.min_depth_atr_pct),
+            min_body_ratio=_sym_overrides.get("min_body_ratio", session.min_body_ratio),
+        )
 
     now = (now_fn or (lambda: datetime.now(tz=_EST)))()
     evaluated_at = now.isoformat()

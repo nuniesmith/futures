@@ -1,15 +1,15 @@
 # Futures Trading Co-Pilot
 
-> Live dashboard, market stats & web UI for futures trading — real-time ORB detection,
+> Live dashboard, market stats & web UI for futures trading — real-time range breakout detection,
 > session-aware scheduling, and a full HTMX dashboard powered by FastAPI.
 
 This repo is the **web UI and live engine** layer of a three-repo system:
 
 | Repo | Purpose |
 |---|---|
-| **[futures](https://github.com/nuniesmith/futures)** (this) | Live dashboard, web UI, market stats, engine |
-| **[orb](https://github.com/nuniesmith/orb)** | CNN model training, dataset generation, backtesting |
-| **[ninjatrader](https://github.com/nuniesmith/ninjatrader)** | NinjaTrader 8 C# strategies, indicators, Bridge |
+| **[futures](https://github.com/nuniesmith/futures)** (this) | Live dashboard, web UI, market stats, engine, shared `lib` |
+| **[rb](https://github.com/nuniesmith/rb)** | Service-only trainer (Docker Compose pulls `nuniesmith/futures:trainer`), hosts trained models (.pt, .onnx) |
+| **[ninjatrader](https://github.com/nuniesmith/ninjatrader)** | NinjaTrader 8 C# strategies, indicators, Bridge — pulls best ONNX from `rb` repo |
 
 ---
 
@@ -50,7 +50,7 @@ This repo is the **web UI and live engine** layer of a three-repo system:
 │  │  Wave Analysis · Volatility Clustering · Regime Detection (HMM)   │  │
 │  │  ICT/SMC (FVGs, OBs, Sweeps) · Volume Profile · CVD              │  │
 │  │  Multi-TF Confluence · Signal Quality · Pre-Market Scoring        │  │
-│  │  ORB Detection · 6 Deterministic Filters · CNN Inference          │  │
+│  │  Range Breakout Detection · 6 Deterministic Filters · CNN Inference │  │
 │  │                                                                   │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
@@ -60,8 +60,8 @@ This repo is the **web UI and live engine** layer of a three-repo system:
 └─────────────────────────────────────────────────────────────────────────┘
          │                                           │
          ▼                                           ▼
-   orb repo (training)                     ninjatrader repo (execution)
-   CNN model → models/                     Bridge.cs → CME orders
+   rb repo (training service + models)     ninjatrader repo (execution)
+   CNN .pt/.onnx → models/                Bridge.cs → CME orders
 ```
 
 **Docker services:**
@@ -72,7 +72,7 @@ This repo is the **web UI and live engine** layer of a three-repo system:
 | **Redis** | Hot cache — live bars, Ruby metrics, positions, focus, SSE pub/sub | 6380 |
 | **Data Service** | FastAPI REST API + HTMX dashboard + SSE live stream | 8100 |
 | **Web** | HTMX dashboard frontend (reverse-proxies to data service) | 8180 |
-| **Engine** | Background worker — analysis, ORB detection, scheduling | — |
+| **Engine** | Background worker — analysis, range breakout detection, scheduling | — |
 | **Prometheus** | Metrics collection *(monitoring profile)* | 9095 |
 | **Grafana** | Dashboards & visualization *(monitoring profile)* | 3010 |
 
@@ -101,7 +101,7 @@ cd futures
 This will:
 1. Create a Python virtualenv and install dependencies
 2. Generate a `.env` file with secure random secrets
-3. Pull the CNN model from the [orb repo](https://github.com/nuniesmith/orb) (if not present)
+3. Pull the CNN model from the [rb repo](https://github.com/nuniesmith/rb) (if not present)
 4. Run the test suite and linter
 5. Build and start all Docker services
 
@@ -182,12 +182,13 @@ ruff check src/                        # linting
 
 ## Model Sync
 
-The CNN model is trained in the [orb repo](https://github.com/nuniesmith/orb) and
-pulled into this repo for live inference. The model files live in `models/` and are
-downloaded from GitHub:
+The CNN model is trained via the [rb repo](https://github.com/nuniesmith/rb) (which
+pulls the `nuniesmith/futures:trainer` Docker image) and the resulting champion models
+are committed back to `rb`. This repo pulls those models for live inference.
+The model files live in `models/` and are downloaded from GitHub:
 
 ```bash
-# Download latest champion model from orb repo
+# Download latest champion model from rb repo
 bash scripts/sync_models.sh
 
 # Check if local models are current
@@ -211,7 +212,7 @@ futures/
 ├── src/
 │   ├── lib/
 │   │   ├── analysis/                 # Market analysis modules
-│   │   │   ├── breakout_cnn.py       #   CNN inference (model from orb repo)
+│   │   │   ├── breakout_cnn.py       #   CNN inference (model from rb repo)
 │   │   │   ├── confluence.py         #   Multi-timeframe confluence filter
 │   │   │   ├── cvd.py                #   Cumulative Volume Delta + divergences
 │   │   │   ├── ict.py                #   ICT/SMC: FVGs, order blocks, sweeps
@@ -247,9 +248,9 @@ futures/
 │   └── tests/                        # Pytest test suite
 │
 ├── scripts/
-│   ├── sync_models.sh                # Pull CNN model from orb repo
-│   ├── daily_report.py               # End-of-day ORB session summary
-│   ├── monitor_signals.py            # Live ORB signal terminal monitor
+│   ├── sync_models.sh                # Pull CNN model from rb repo
+│   ├── daily_report.py               # End-of-day breakout session summary
+│   ├── monitor_signals.py            # Live breakout signal terminal monitor
 │   └── session_signal_audit.py       # Per-session signal quality audit
 │
 ├── config/
@@ -262,7 +263,7 @@ futures/
 │   ├── web/Dockerfile                # Web frontend container
 │   └── monitoring/                   # Prometheus + Grafana Dockerfiles
 │
-├── models/                           # CNN model files (pulled from orb repo)
+├── models/                           # CNN model files (pulled from rb repo)
 │   └── .gitkeep
 │
 ├── docker-compose.yml                # Full service stack
@@ -339,7 +340,7 @@ ruff check src/
 ### Model Sync
 
 ```bash
-bash scripts/sync_models.sh              # pull latest model from orb repo
+bash scripts/sync_models.sh              # pull latest model from rb repo
 bash scripts/sync_models.sh --check      # check if models are current
 bash scripts/sync_models.sh --restart    # pull + restart engine
 ```
@@ -372,8 +373,8 @@ PYTHONPATH=src python scripts/session_signal_audit.py --export-json out.json
 
 ## Related Repos
 
-- **[orb](https://github.com/nuniesmith/orb)** — CNN model training, dataset generation, GPU trainer server, backtesting, walk-forward validation. Models are pulled from here via `scripts/sync_models.sh`.
-- **[ninjatrader](https://github.com/nuniesmith/ninjatrader)** — NinjaTrader 8 C# code: Ruby indicator, Bridge execution strategy, SignalBus, OrbCnnPredictor. The dashboard's NT8 Deploy panel pulls installer scripts from this repo.
+- **[rb](https://github.com/nuniesmith/rb)** — Service-only training repo. Uses Docker Compose to pull the `nuniesmith/futures:trainer` image from Docker Hub. Hosts trained champion models (.pt for Python engine, .onnx for NinjaTrader). Models are pulled from here via `scripts/sync_models.sh`. NinjaTrader uses PowerShell to pull the best ONNX model from this repo.
+- **[ninjatrader](https://github.com/nuniesmith/ninjatrader)** — NinjaTrader 8 C# code: Ruby indicator, Bridge execution strategy, SignalBus, OrbCnnPredictor. The dashboard's NT8 Deploy panel pulls installer scripts from this repo. Pulls best `.onnx` model from the `rb` repo.
 
 ---
 

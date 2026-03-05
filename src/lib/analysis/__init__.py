@@ -57,9 +57,45 @@ from lib.analysis.volume_profile import (
 )
 from lib.analysis.wave_analysis import calculate_wave_analysis
 
+# Optional import — chart renderers require mplfinance / Pillow which may
+# not be installed in all environments (e.g. slim web container).
+try:
+    from lib.analysis.chart_renderer import (
+        RenderConfig,
+        cleanup_inference_images,
+        render_batch_snapshots,
+        render_ruby_snapshot,
+        render_snapshot_for_inference,
+    )
+except ImportError:
+    render_ruby_snapshot = None  # type: ignore[assignment,misc]
+    render_batch_snapshots = None  # type: ignore[assignment,misc]
+    render_snapshot_for_inference = None  # type: ignore[assignment,misc]
+    cleanup_inference_images = None  # type: ignore[assignment,misc]
+    RenderConfig = None  # type: ignore[assignment,misc]
+
+try:
+    from lib.analysis.chart_renderer_parity import (
+        ParityBar,
+        compute_vwap_from_bars,
+        dataframe_to_parity_bars,
+        render_parity_batch,
+        render_parity_snapshot,
+        render_parity_to_file,
+        render_parity_to_temp,
+    )
+except ImportError:
+    render_parity_snapshot = None  # type: ignore[assignment,misc]
+    render_parity_to_file = None  # type: ignore[assignment,misc]
+    render_parity_to_temp = None  # type: ignore[assignment,misc]
+    render_parity_batch = None  # type: ignore[assignment,misc]
+    dataframe_to_parity_bars = None  # type: ignore[assignment,misc]
+    compute_vwap_from_bars = None  # type: ignore[assignment,misc]
+    ParityBar = None  # type: ignore[assignment,misc]
+
 # Optional import — breakout_cnn requires torch which may not be installed
 # in all environments.  Only inference functions are re-exported here;
-# training lives in the orb repo.
+# training lives in the lib.training package.
 _breakout_cnn_default_threshold: float = 0.82
 
 
@@ -78,6 +114,20 @@ except ImportError:
 DEFAULT_THRESHOLD: float = _breakout_cnn_default_threshold
 
 __all__ = [
+    # chart_renderer (optional)
+    "RenderConfig",
+    "render_ruby_snapshot",
+    "render_batch_snapshots",
+    "render_snapshot_for_inference",
+    "cleanup_inference_images",
+    # chart_renderer_parity (optional)
+    "ParityBar",
+    "render_parity_snapshot",
+    "render_parity_to_file",
+    "render_parity_to_temp",
+    "render_parity_batch",
+    "dataframe_to_parity_bars",
+    "compute_vwap_from_bars",
     # confluence
     "MultiTimeframeFilter",
     "check_confluence",

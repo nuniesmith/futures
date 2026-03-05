@@ -7,18 +7,20 @@
 #   redis      — hot cache (latest Ruby metrics, live positions, 1m bars)
 #   engine     — FastAPI REST + SSE (port 8100) + background computation worker
 #   web        — HTMX dashboard frontend; reverse-proxies to engine (port 8180)
-#   prometheus — metrics collection & alerting  [monitoring profile]
-#   grafana    — dashboards & visualization      [monitoring profile]
+#   trainer    — GPU CNN training server (port 8200)  [training profile]
+#   prometheus — metrics collection & alerting        [monitoring profile]
+#   grafana    — dashboards & visualization           [monitoring profile]
 #
-# CNN model files are pulled from the orb repo (github.com/nuniesmith/orb):
-#
-#   bash scripts/sync_models.sh            # download latest champion model
-#   bash scripts/sync_models.sh --restart  # download + restart engine
-#   bash scripts/sync_models.sh --check    # check if models are current
+# Docker Hub repo (built by CI/CD):
+#   nuniesmith/futures:engine   — engine + data API (arm64 + amd64)
+#   nuniesmith/futures:web      — HTMX dashboard (arm64 + amd64)
+#   nuniesmith/futures:trainer  — GPU training server (amd64 only)
+#   nuniesmith/futures:latest   — alias for :engine (default pull)
 #
 # Usage:
-#   docker compose up -d --build
-#   docker compose --profile monitoring up -d --build
+#   docker compose up -d --build                            # Pi services
+#   docker compose --profile training up -d --build         # + trainer (GPU rig)
+#   docker compose --profile monitoring up -d --build       # + Prometheus/Grafana
 #   docker compose logs -f engine
 #   docker compose logs -f web
 #   docker compose ps
@@ -82,16 +84,17 @@ services:
     #
     # Runs two processes via docker/engine/entrypoint.sh:
     #   1. uvicorn  — serves REST API and SSE (lib.services.data.main)
-    #   2. engine   — DashboardEngine, Ruby modules, optimization, backtesting,
+    #   2. engine   — DashboardEngine, optimization, backtesting,
     #                 daily focus computation, session-aware scheduling
     #
     # Both share the same src/ tree, Redis connection, and Postgres connection.
     # If either process exits, the container exits and Docker restarts it.
     #
-    # CNN training lives in the orb repo (github.com/nuniesmith/orb).
-    # Pull the latest trained model with:  bash scripts/sync_models.sh
+    # CNN training runs on a dedicated GPU machine via the trainer service.
+    # Trained models are stored in ./models/ and hot-reloaded by the engine.
     # -------------------------------------------------------------------------
     engine:
+        image: nuniesmith/futures:engine
         build:
             context: .
             dockerfile: docker/engine/Dockerfile
@@ -112,6 +115,9 @@ services:
             - ORB_CNN_GATE=${ORB_CNN_GATE:-0}
             - NT_BRIDGE_HOST=${NT_BRIDGE_HOST:-100.113.72.63}
             - NT_BRIDGE_PORT=${NT_BRIDGE_PORT:-5680}
+            - KRAKEN_API_KEY=${KRAKEN_API_KEY:-}
+            - KRAKEN_API_SECRET=${KRAKEN_API_SECRET:-}
+            - ENABLE_KRAKEN_CRYPTO=${ENABLE_KRAKEN_CRYPTO:-1}
             - LOG_LEVEL=info
             - PYTHONPATH=/app/src
             - PYTHONUNBUFFERED=1
@@ -144,6 +150,7 @@ services:
     # User-facing entry point at http://localhost:8180
     # -------------------------------------------------------------------------
     web:
+        image: nuniesmith/futures:web
         build:
             context: .
             dockerfile: docker/web/Dockerfile
@@ -171,6 +178,118 @@ services:
             interval: 15s
             timeout: 5s
             start_period: 15s
+            retries: 3
+
+    # -------------------------------------------------------------------------
+    # Trainer — GPU CNN retraining server (port 8200)       [training profile]
+    #
+    # Runs a FastAPI server that listens for POST /train requests. Each request
+    # triggers the full pipeline: dataset generation → model training →
+    # evaluation → champion promotion.
+    #
+    # Only started with:  docker compose --profile training up -d
+    # Requires NVIDIA GPU + nvidia-container-toolkit on the host.
+    # -------------------------------------------------------------------------
+    trainer:
+        image: nuniesmith/futures:trainer
+        profiles: [training]
+        build:
+            context: .
+            dockerfile: docker/trainer/Dockerfile
+        # Restart unless explicitly stopped — this is a persistent service,
+        # not a one-shot pipeline.  It stays alive between training runs.
+        restart: unless-stopped
+        shm_size: 4gb
+        ports:
+            - "8200:8200"
+        deploy:
+            resources:
+                reservations:
+                    devices:
+                        - driver: nvidia
+                          count: 1
+                          capabilities: [gpu]
+        environment:
+            # ----------------------------------------------------------------
+            # Trainer server config
+            # ----------------------------------------------------------------
+            - TRAINER_HOST=0.0.0.0
+            - TRAINER_PORT=8200
+            # Optional: set a bearer token to protect the /train endpoint.
+            # Leave unset (or empty) for no authentication.
+            - TRAINER_API_KEY=${TRAINER_API_KEY:-}
+
+            # ----------------------------------------------------------------
+            # Validation gate thresholds (pipeline defaults — can be
+            # overridden per-request in the POST /train body)
+            # ----------------------------------------------------------------
+            - CNN_RETRAIN_MIN_ACC=${CNN_RETRAIN_MIN_ACC:-80.0}
+            - CNN_RETRAIN_MIN_PRECISION=${CNN_RETRAIN_MIN_PRECISION:-75.0}
+            - CNN_RETRAIN_MIN_RECALL=${CNN_RETRAIN_MIN_RECALL:-70.0}
+            - CNN_RETRAIN_IMPROVEMENT=${CNN_RETRAIN_IMPROVEMENT:-0.0}
+
+            # ----------------------------------------------------------------
+            # Training hyperparameters (pipeline defaults)
+            # ----------------------------------------------------------------
+            - CNN_RETRAIN_EPOCHS=${CNN_RETRAIN_EPOCHS:-25}
+            - CNN_RETRAIN_BATCH_SIZE=${CNN_RETRAIN_BATCH_SIZE:-64}
+            - CNN_RETRAIN_LR=${CNN_RETRAIN_LR:-0.0002}
+            - CNN_RETRAIN_PATIENCE=${CNN_RETRAIN_PATIENCE:-8}
+
+            # ----------------------------------------------------------------
+            # Market data — Massive API (primary data source for dataset gen)
+            # ----------------------------------------------------------------
+            - MASSIVE_API_KEY=${MASSIVE_API_KEY}
+
+            # ----------------------------------------------------------------
+            # Dataset generation defaults
+            # ----------------------------------------------------------------
+            - CNN_RETRAIN_SYMBOLS=${CNN_RETRAIN_SYMBOLS:-MGC,SIL,MHG,MCL,MNG,MES,MNQ,M2K,MYM,6E,6B,6J,6A,6C,6S,ZN,ZB,ZC,ZS,ZW,MBT,MET}
+            - CNN_RETRAIN_DAYS_BACK=${CNN_RETRAIN_DAYS_BACK:-90}
+            - CNN_RETRAIN_BARS_SOURCE=${CNN_RETRAIN_BARS_SOURCE:-massive}
+            - CNN_RETRAIN_ORB_SESSION=${CNN_RETRAIN_ORB_SESSION:-all}
+            - CNN_ORB_SESSION=${CNN_ORB_SESSION:-all}
+
+            # ----------------------------------------------------------------
+            # Python / runtime
+            # ----------------------------------------------------------------
+            - PYTHONPATH=/app/src
+            - PYTHONUNBUFFERED=1
+
+            # NVIDIA container toolkit
+            - NVIDIA_VISIBLE_DEVICES=all
+            - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+        volumes:
+            # Bind-mounts — files land directly on the host so rsync can
+            # pull models/ without any docker cp / volume-export dance.
+            # The host directories are created automatically by Docker Compose
+            # if they don't already exist.
+            - ./models:/app/models
+            - ./dataset:/app/dataset
+            - ./data:/app/data
+            - ./scripts:/app/scripts
+            - ./src:/app/src
+
+        # Default command: run the persistent HTTP training server.
+        # The server starts up immediately and waits for POST /train.
+        #
+        # Override to run a one-shot training run directly:
+        #   docker compose --profile training run --rm trainer \
+        #       python -m lib.training.trainer_server
+        command: ["python", "-m", "lib.training.trainer_server"]
+
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "python",
+                    "-c",
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8200/health')",
+                ]
+            interval: 30s
+            timeout: 10s
+            start_period: 60s
             retries: 3
 
     # -------------------------------------------------------------------------
