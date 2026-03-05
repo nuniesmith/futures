@@ -30,7 +30,6 @@ build/
 .env.*
 
 # --- Documentation (not needed in images) ---
-docs/
 *.md
 LICENSE
 
@@ -39,13 +38,22 @@ src/tests/
 
 # --- Scripts (host-only) ---
 run.sh
+run.train.sh
+
+# --- Models (bind-mounted at runtime, not baked into image) ---
+models/
 
 # --- Data & logs ---
 *.db
 *.sqlite
 *.log
 data/
+dataset/
 
 # --- OS junk ---
 .DS_Store
 Thumbs.db
+
+# --- Ruff / pytest caches ---
+.ruff_cache/
+.pytest_cache/

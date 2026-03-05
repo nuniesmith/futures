@@ -37,29 +37,29 @@ _EST = ZoneInfo("America/New_York")
 # Constants
 # ---------------------------------------------------------------------------
 
-_GITHUB_REPO = "nuniesmith/futures"
+_GITHUB_REPO = "nuniesmith/ninjatrader"
 _GITHUB_BRANCH = "main"
 _GITHUB_RAW_BASE = f"https://raw.githubusercontent.com/{_GITHUB_REPO}/{_GITHUB_BRANCH}"
 
 # Mapping: source path in repo → destination relative to NT8 Custom dir
 #
-# Keys are paths relative to the repo root.
+# Keys are paths relative to the ninjatrader repo root.
 # Values are paths relative to the NT8 Custom directory.
 #
 # Files with _BINARY_FILES keys are fetched as raw bytes (curl --output)
 # rather than text so they are not corrupted by line-ending conversion.
 _FILE_MAP = {
     # ── Strategies ────────────────────────────────────────────────────────────
-    "src/ninjatrader/BreakoutStrategy.cs": "Strategies\\BreakoutStrategy.cs",
-    "src/ninjatrader/Bridge.cs": "Strategies\\Bridge.cs",
+    "src/BreakoutStrategy.cs": "Strategies\\BreakoutStrategy.cs",
+    "src/Bridge.cs": "Strategies\\Bridge.cs",
     # ── Indicators ────────────────────────────────────────────────────────────
-    "src/ninjatrader/Ruby.cs": "Indicators\\Ruby.cs",
+    "src/Ruby.cs": "Indicators\\Ruby.cs",
     # ── Shared C# files (sit directly in Custom root) ────────────────────────
-    "src/ninjatrader/BridgeOrderEngine.cs": "BridgeOrderEngine.cs",
-    "src/ninjatrader/OrbCnnPredictor.cs": "OrbCnnPredictor.cs",
-    "src/ninjatrader/SignalBus.cs": "SignalBus.cs",
+    "src/BridgeOrderEngine.cs": "BridgeOrderEngine.cs",
+    "src/OrbCnnPredictor.cs": "OrbCnnPredictor.cs",
+    "src/SignalBus.cs": "SignalBus.cs",
     # ── CNN model (binary — fetched to Models\ subfolder) ────────────────────
-    # Export from Python first:  python scripts/export_onnx.py
+    # Export from orb repo first:  python scripts/export_onnx.py
     "models/orb_breakout_cnn.onnx": "Models\\orb_breakout_cnn.onnx",
 }
 

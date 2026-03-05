@@ -1,16 +1,18 @@
 """
 CNN Model Management API Router
 =================================
-Provides endpoints for CNN model status, retraining triggers, and
-training log access from the web dashboard.
+Provides endpoints for CNN model status and per-session gate management
+for the web dashboard.
+
+CNN training has moved to the orb repo (github.com/nuniesmith/orb).
+Models are pulled into this repo via scripts/sync_models.sh.
 
 Endpoints:
-    GET  /cnn/status              — Current model info + last training results
-    POST /cnn/retrain             — Trigger CNN retraining pipeline (async)
-    GET  /cnn/retrain/status      — Poll status of a running retrain job
-    POST /cnn/retrain/cancel      — Cancel a running retrain job
-    GET  /cnn/history             — Recent retrain audit log entries
+    GET  /cnn/status              — Current model info + metadata
     GET  /cnn/status/html         — HTML fragment for dashboard panel
+    POST /cnn/retrain             — (deprecated) Returns redirect to orb repo
+    GET  /cnn/retrain/status      — Poll status of last retrain attempt
+    GET  /cnn/history             — Recent retrain audit log entries
 
 Per-session CNN gate endpoints:
     GET  /cnn/gate                — Return gate state for all 9 sessions
@@ -22,7 +24,6 @@ Per-session CNN gate endpoints:
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 from datetime import datetime
@@ -46,13 +47,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[5]  # futures/
 SRC_DIR = PROJECT_ROOT / "src"
 SCRIPT_DIR = PROJECT_ROOT / "scripts"
 MODEL_DIR = PROJECT_ROOT / "models"
-DATASET_DIR = PROJECT_ROOT / "dataset"
-AUDIT_LOG_PATH = MODEL_DIR / "retrain_audit.jsonl"
-TRAINING_HISTORY_PATH = MODEL_DIR / "training_history.csv"
-LABELS_CSV = DATASET_DIR / "labels.csv"
-TRAIN_CSV = DATASET_DIR / "train.csv"
-VAL_CSV = DATASET_DIR / "val.csv"
 CHAMPION_PATH = MODEL_DIR / "breakout_cnn_best.pt"
+META_PATH = MODEL_DIR / "breakout_cnn_best_meta.json"
 
 # ---------------------------------------------------------------------------
 # Redis keys for engine ↔ data-service communication
@@ -117,102 +113,40 @@ def _get_model_info() -> dict[str, Any]:
 
 
 def _get_dataset_info() -> dict[str, Any]:
-    """Gather dataset stats."""
-    info: dict[str, Any] = {
-        "labels_csv_exists": LABELS_CSV.is_file(),
-        "train_csv_exists": TRAIN_CSV.is_file(),
-        "val_csv_exists": VAL_CSV.is_file(),
+    """Dataset generation has moved to the orb repo."""
+    return {
+        "note": "Dataset generation has moved to the orb repo (github.com/nuniesmith/orb)",
         "total_samples": 0,
-        "train_samples": 0,
-        "val_samples": 0,
     }
 
-    try:
-        if LABELS_CSV.is_file():
-            # Count lines (minus header)
-            with open(LABELS_CSV) as f:
-                info["total_samples"] = max(0, sum(1 for _ in f) - 1)
-        if TRAIN_CSV.is_file():
-            with open(TRAIN_CSV) as f:
-                info["train_samples"] = max(0, sum(1 for _ in f) - 1)
-        if VAL_CSV.is_file():
-            with open(VAL_CSV) as f:
-                info["val_samples"] = max(0, sum(1 for _ in f) - 1)
-    except Exception as exc:
-        logger.warning("Error reading dataset CSVs: %s", exc)
 
-    # Dataset stats JSON
-    stats_path = DATASET_DIR / "dataset_stats.json"
-    if stats_path.is_file():
+def _get_meta_info() -> dict[str, Any]:
+    """Read champion model metadata from the sidecar JSON (synced from orb repo)."""
+    if META_PATH.is_file():
         try:
-            with open(stats_path) as f:
-                info["stats"] = json.load(f)
+            with open(META_PATH) as f:
+                return json.load(f)
         except Exception:
             pass
-
-    return info
+    return {}
 
 
 def _get_training_history_summary() -> dict[str, Any]:
-    """Read the last few rows of training_history.csv for a quick summary."""
+    """Training history lives in the orb repo — return metadata from sidecar JSON if available."""
     summary: dict[str, Any] = {"available": False}
-    if not TRAINING_HISTORY_PATH.is_file():
-        return summary
-
-    try:
-        import csv
-
-        rows: list[dict[str, str]] = []
-        with open(TRAINING_HISTORY_PATH) as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                rows.append(row)
-
-        if not rows:
-            return summary
-
+    meta = _get_meta_info()
+    if meta:
         summary["available"] = True
-        summary["total_epochs"] = len(rows)
-
-        # Best epoch by val_acc
-        best_row = max(rows, key=lambda r: float(r.get("val_acc", "0") or "0"))
-        summary["best_epoch"] = int(best_row.get("epoch", 0))
-        summary["best_val_acc"] = float(best_row.get("val_acc", 0) or 0)
-        summary["best_val_loss"] = float(best_row.get("val_loss", 0) or 0)
-
-        # Last epoch
-        last = rows[-1]
-        summary["last_epoch"] = int(last.get("epoch", 0))
-        summary["last_val_acc"] = float(last.get("val_acc", 0) or 0)
-        summary["last_train_acc"] = float(last.get("train_acc", 0) or 0)
-
-    except Exception as exc:
-        logger.warning("Error reading training history: %s", exc)
-
+        summary["note"] = "Training history lives in the orb repo. Metadata from last sync shown."
+        for key in ("val_accuracy", "val_precision", "val_recall", "epochs", "trained_at"):
+            if key in meta:
+                summary[key] = meta[key]
     return summary
 
 
 def _get_recent_audit_entries(limit: int = 10) -> list[dict[str, Any]]:
-    """Read recent entries from retrain_audit.jsonl."""
-    entries: list[dict[str, Any]] = []
-    if not AUDIT_LOG_PATH.is_file():
-        return entries
-
-    try:
-        with open(AUDIT_LOG_PATH) as f:
-            lines = f.readlines()
-
-        for line in lines[-limit:]:
-            line = line.strip()
-            if line:
-                with contextlib.suppress(json.JSONDecodeError):
-                    entries.append(json.loads(line))
-    except Exception as exc:
-        logger.warning("Error reading audit log: %s", exc)
-
-    # Reverse so newest first
-    entries.reverse()
-    return entries
+    """Audit log lives in the orb repo — return empty list."""
+    return []
 
 
 def _get_retrain_job_status() -> dict[str, Any] | None:
@@ -244,79 +178,18 @@ def _start_retrain(
     epochs: int | None = None,
     batch_size: int | None = None,
 ) -> dict[str, Any]:
-    """Publish a retrain command to Redis for the engine to pick up.
+    """CNN training has moved to the orb repo.
 
-    The engine service has PyTorch installed and checks for this command
-    key each scheduler loop iteration.  It runs the retrain pipeline in
-    a background thread and publishes status back to Redis.
+    Returns an informational response directing users to the orb repo's
+    GPU trainer instead.
     """
-    # Check if already running
-    existing = _get_retrain_job_status()
-    if existing and existing.get("status") == "running":
-        raise HTTPException(
-            status_code=409,
-            detail="A retrain job is already running. Wait for it to finish.",
-        )
-
-    try:
-        from lib.core.cache import REDIS_AVAILABLE, cache_set
-
-        if not REDIS_AVAILABLE:
-            raise HTTPException(
-                status_code=503,
-                detail="Redis unavailable — cannot send retrain command to engine.",
-            )
-
-        cmd_payload = json.dumps(
-            {
-                "command": "retrain_cnn",
-                "session": session,
-                "skip_dataset": skip_dataset,
-                "epochs": epochs,
-                "batch_size": batch_size,
-                "requested_at": _now_et().isoformat(),
-                "requested_by": "dashboard",
-            }
-        ).encode()
-
-        cache_set(_RETRAIN_CMD_KEY, cmd_payload, ttl=300)
-
-        # Write an initial "queued" status so the dashboard shows feedback
-        # immediately (before the engine picks it up on its next loop tick)
-        status_payload = json.dumps(
-            {
-                "status": "queued",
-                "message": "Retrain command sent to engine — waiting for pickup...",
-                "session": session,
-                "skip_dataset": skip_dataset,
-                "epochs": epochs,
-                "batch_size": batch_size,
-                "timestamp": _now_et().isoformat(),
-            }
-        ).encode()
-        cache_set(_RETRAIN_STATUS_KEY, status_payload, ttl=3600)
-
-        logger.info(
-            "CNN retrain command published to Redis: session=%s skip_dataset=%s epochs=%s",
-            session,
-            skip_dataset,
-            epochs,
-        )
-
-        return {
-            "status": "queued",
-            "message": "Retrain command sent to engine.",
-            "session": session,
-            "skip_dataset": skip_dataset,
-        }
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to publish retrain command: {exc}",
-        ) from exc
+    return {
+        "status": "moved",
+        "message": (
+            "CNN training has moved to the orb repo (github.com/nuniesmith/orb). "
+            "Use the GPU trainer there, then run: bash scripts/sync_models.sh"
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -326,17 +199,14 @@ def _start_retrain(
 
 @router.get("/cnn/status")
 def cnn_status():
-    """Return CNN model status, dataset info, and training history summary."""
+    """Return CNN model status and metadata."""
     model = _get_model_info()
-    dataset = _get_dataset_info()
-    history = _get_training_history_summary()
-    job = _get_retrain_job_status()
+    meta = _get_meta_info()
 
     return {
         "model": model,
-        "dataset": dataset,
-        "training_history": history,
-        "retrain_job": job,
+        "meta": meta,
+        "training_note": "CNN training lives in the orb repo (github.com/nuniesmith/orb). Pull latest model with: bash scripts/sync_models.sh",
         "timestamp": _now_et().isoformat(),
     }
 
@@ -344,34 +214,25 @@ def cnn_status():
 @router.post("/cnn/retrain")
 def trigger_retrain(
     request: Request,
-    session: str = Query("both", description="ORB session: us, london, or both"),
-    skip_dataset: bool = Query(False, description="Skip dataset generation stage"),
-    epochs: int | None = Query(None, description="Override training epochs (default from env/config)"),
-    batch_size: int | None = Query(None, description="Override batch size"),
+    session: str = Query("both", description="(deprecated)"),
+    skip_dataset: bool = Query(False, description="(deprecated)"),
+    epochs: int | None = Query(None, description="(deprecated)"),
+    batch_size: int | None = Query(None, description="(deprecated)"),
 ):
-    """Trigger a CNN retraining pipeline run via Redis command to the engine.
+    """(Deprecated) CNN training has moved to the orb repo.
 
-    The engine service (which has PyTorch) picks up the command and runs
-    the retrain_overnight.py pipeline in a background thread.
+    Use the GPU trainer in github.com/nuniesmith/orb instead, then pull
+    the trained model with: bash scripts/sync_models.sh
     """
-    logger.info("CNN retrain triggered: session=%s skip_dataset=%s epochs=%s", session, skip_dataset, epochs)
+    logger.info("CNN retrain request received — training has moved to orb repo")
 
-    job = _start_retrain(
-        session=session,
-        skip_dataset=skip_dataset,
-        epochs=epochs,
-        batch_size=batch_size,
-    )
+    result = _start_retrain()
 
     # If called from HTMX, return the updated CNN panel HTML
     if request.headers.get("HX-Request"):
         return cnn_status_html()
 
-    return {
-        "status": "queued",
-        "message": "CNN retrain command sent to engine.",
-        "job": job,
-    }
+    return result
 
 
 @router.get("/cnn/retrain/status")

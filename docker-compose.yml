@@ -1,5 +1,5 @@
 # =============================================================================
-# Futures Trading Co-Pilot — Docker Compose (CPU-only stack)
+# Futures Trading Co-Pilot — Docker Compose
 # =============================================================================
 #
 # Services:
@@ -11,14 +11,11 @@
 #   prometheus     — metrics collection & alerting  [monitoring profile]
 #   grafana        — dashboards & visualization      [monitoring profile]
 #
-# GPU training is intentionally NOT part of this stack.
-# Use docker-compose.train.yml on a dedicated GPU machine instead:
+# CNN model files are pulled from the orb repo (github.com/nuniesmith/orb):
 #
-#   docker compose -f docker-compose.train.yml up -d --build
-#
-# After training completes, copy the best models back with:
-#
-#   bash scripts/sync_models.sh <gpu-machine-host>
+#   bash scripts/sync_models.sh            # download latest champion model
+#   bash scripts/sync_models.sh --restart  # download + restart engine
+#   bash scripts/sync_models.sh --check    # check if models are current
 #
 # Usage:
 #   docker compose up -d --build
@@ -110,7 +107,6 @@ services:
         volumes:
             - app_data:/app/data
             - ./models:/app/models
-            - ./dataset:/app/dataset
             - ./scripts:/app/scripts
         depends_on:
             redis:
@@ -169,14 +165,12 @@ services:
     # -------------------------------------------------------------------------
     # Engine — Background computation worker (CPU-only)
     # Heavy: DashboardEngine, Ruby modules, optimization, backtesting,
-    # Massive WebSocket, wave analysis, volatility, signal quality, regime,
-    # CVD, ICT. Reads data from Massive/Redis, writes results to Redis.
+    # daily focus computation, session-aware scheduling.
+    # Reads market data from Redis (written by data-service), writes results back.
     #
-    # GPU training has been removed from this service. The engine will use
-    # the CPU-only inference path in breakout_cnn.py for any live predictions.
-    # Scheduled CNN training actions (TRAIN_BREAKOUT_CNN) are effectively
-    # no-ops here — run docker-compose.train.yml on the GPU machine instead,
-    # then sync the resulting models/ files back with scripts/sync_models.sh.
+    # CNN training lives in the orb repo (github.com/nuniesmith/orb).
+    # Pull the latest trained model with:  bash scripts/sync_models.sh
+    # The engine uses CPU-only inference from breakout_cnn.py.
     # -------------------------------------------------------------------------
     engine:
         build:
@@ -197,7 +191,6 @@ services:
         volumes:
             - app_data:/app/data
             - ./models:/app/models
-            - ./dataset:/app/dataset
             - ./scripts:/app/scripts
         depends_on:
             redis:

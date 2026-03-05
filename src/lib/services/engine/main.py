@@ -29,7 +29,6 @@ import contextlib
 import json
 import os
 import signal
-import threading
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -80,20 +79,14 @@ def _get_risk_manager(account_size: int = 50_000):
 # ---------------------------------------------------------------------------
 _RETRAIN_CMD_KEY = "engine:cmd:retrain_cnn"
 _RETRAIN_STATUS_KEY = "engine:retrain:status"
-_retrain_thread: threading.Thread | None = None
 
 
 def _check_redis_commands(action_handlers: dict) -> None:
     """Check Redis for commands published by the data service.
 
-    Currently supports:
-      - engine:cmd:retrain_cnn  — trigger CNN retraining with parameters
-
-    The command key is consumed (deleted) after being read so it only
-    fires once.
+    CNN retraining has moved to the orb repo — commands are acknowledged
+    but no longer executed here.
     """
-    global _retrain_thread
-
     try:
         from lib.core.cache import REDIS_AVAILABLE, cache_get
 
@@ -104,7 +97,7 @@ def _check_redis_commands(action_handlers: dict) -> None:
         if not raw:
             return
 
-        # Consume the command immediately so it doesn't re-fire
+        # Consume the command so it doesn't re-fire
         try:
             from lib.core.cache import _r
 
@@ -113,40 +106,14 @@ def _check_redis_commands(action_handlers: dict) -> None:
         except Exception:
             pass
 
-        # Parse the command
-        cmd = json.loads(raw if isinstance(raw, str) else raw.decode())
-        cmd_type = cmd.get("command", "")
-
-        if cmd_type != "retrain_cnn":
-            logger.warning("Unknown engine command: %s", cmd_type)
-            return
-
-        # Don't start if a retrain thread is already running
-        if _retrain_thread is not None and _retrain_thread.is_alive():
-            logger.warning("Retrain command received but a retrain job is already running — ignoring")
-            _publish_retrain_status("rejected", "A retrain job is already running")
-            return
-
-        session = cmd.get("session", "both")
-        skip_dataset = cmd.get("skip_dataset", False)
-        epochs = cmd.get("epochs")
-        batch_size = cmd.get("batch_size")
-
         logger.info(
-            "📩 Received retrain command from dashboard: session=%s skip_dataset=%s epochs=%s",
-            session,
-            skip_dataset,
-            epochs,
+            "📩 Received retrain command from dashboard — CNN training has moved to the orb repo. "
+            "Use the GPU trainer (docker-compose.train.yml) in the orb repo instead."
         )
-
-        # Run retraining in a background thread so it doesn't block the engine loop
-        _retrain_thread = threading.Thread(
-            target=_run_retrain_from_command,
-            args=(session, skip_dataset, epochs, batch_size),
-            daemon=True,
-            name="cnn-retrain-cmd",
+        _publish_retrain_status(
+            "rejected",
+            "CNN training has moved to the orb repo. Use the GPU trainer there instead.",
         )
-        _retrain_thread.start()
 
     except Exception as exc:
         logger.debug("Redis command check error (non-fatal): %s", exc)
@@ -176,76 +143,12 @@ def _run_retrain_from_command(
     epochs: int | None = None,
     batch_size: int | None = None,
 ) -> None:
-    """Execute CNN retraining in a background thread (triggered by dashboard command)."""
+    """No-op — CNN training has moved to the orb repo."""
+    logger.info("⏭️  CNN retrain command ignored — training has moved to the orb repo")
     _publish_retrain_status(
-        "running", "CNN retraining started via dashboard command", session=session, skip_dataset=skip_dataset
+        "rejected",
+        "CNN training has moved to the orb repo. Use the GPU trainer there instead.",
     )
-    try:
-        import sys as _sys
-        from pathlib import Path
-
-        # Locate scripts/ directory
-        _candidates = [
-            Path("/app/scripts"),
-            Path(__file__).resolve().parents[4] / "scripts",
-        ]
-        _scripts_dir = None
-        for _c in _candidates:
-            if (_c / "retrain_overnight.py").is_file():
-                _scripts_dir = _c
-                break
-
-        if _scripts_dir is None:
-            msg = "retrain_overnight.py not found in any scripts/ location"
-            logger.error(msg)
-            _publish_retrain_status("failed", msg)
-            return
-
-        _scripts_str = str(_scripts_dir)
-        if _scripts_str not in _sys.path:
-            _sys.path.insert(0, _scripts_str)
-
-        import importlib
-
-        import retrain_overnight  # noqa: E402
-
-        importlib.reload(retrain_overnight)  # pick up code changes without engine restart
-
-        # Build config
-        cfg = retrain_overnight.RetrainConfig.from_env()
-        cfg.immediate = True
-        cfg.force = True
-        cfg.skip_dataset = skip_dataset
-        cfg.orb_session = session
-        if epochs is not None:
-            cfg.epochs = epochs
-        if batch_size is not None:
-            cfg.batch_size = batch_size
-
-        logger.info(
-            "🚀 Starting CNN retrain pipeline: session=%s skip_dataset=%s epochs=%s", session, skip_dataset, cfg.epochs
-        )
-
-        result = retrain_overnight.run_pipeline(cfg)
-
-        if result.status == "success":
-            logger.info(
-                "✅ CNN retrain (dashboard-triggered) succeeded — model promoted (acc=%.1f%%)", result.best_val_accuracy
-            )
-            _publish_retrain_status(
-                "success", f"Model promoted (acc={result.best_val_accuracy:.1f}%)", accuracy=result.best_val_accuracy
-            )
-        elif result.status == "gate_rejected":
-            logger.warning("🚫 CNN retrain candidate rejected: %s", result.gate_reason)
-            _publish_retrain_status("gate_rejected", result.gate_reason)
-        else:
-            errors = ", ".join(result.errors[:3]) or "unknown error"
-            logger.error("❌ CNN retrain failed: %s", errors)
-            _publish_retrain_status("failed", errors)
-
-    except Exception as exc:
-        logger.error("CNN retrain (dashboard-triggered) error: %s", exc, exc_info=True)
-        _publish_retrain_status("failed", str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -1422,274 +1325,22 @@ def _handle_next_day_prep(engine) -> None:
 
 
 def _handle_generate_chart_dataset(engine) -> None:
-    """Generate labeled chart images for CNN training (off-hours).
+    """No-op — dataset generation has moved to the orb repo.
 
-    Uses the incremental dataset build pipeline which:
-      1. Ensures all enabled assets have fresh, gap-free 1-minute bars in
-         Postgres by calling the data service's /bars/fill/all endpoint
-         (or falling back to a direct in-process backfill if the service
-         is not reachable from inside the engine container).
-      2. Generates chart images only for trading sessions that don't
-         already have images on disk (incremental / resumable).
-      3. Re-splits labels.csv into train.csv / val.csv with stratified
-         sampling so the CNN always trains on the freshest data.
-
-    This replaces the old "full regeneration from cache" approach and
-    implements Priority 2: Incremental dataset build.
+    Use the orb repo's incremental_dataset_build.py or retrain_overnight.py
+    on the dedicated GPU training machine instead.
     """
-    logger.info("▶ Generating chart dataset (incremental build)...")
-
-    # Full symbol universe across all sessions and exchanges.
-    # Covers all CME micro contracts + FX futures active in the 9-session
-    # Globex-day cycle (18:00 ET start).  The incremental builder will skip
-    # symbols that have no historical bars yet — safe to list all here.
-    _ALL_SYMBOLS = [
-        # Micro metals
-        "MGC",
-        "SIL",
-        "MHG",
-        # Micro energy
-        "MCL",
-        "MNG",  # Micro Natural Gas (data via NG=F)
-        # Micro equity index
-        "MES",
-        "MNQ",
-        "M2K",
-        "MYM",
-        # Micro crypto
-        "MBT",
-        "MET",  # Micro Ether
-        # FX futures (CME standard + micro)
-        "6E",
-        "6B",
-        "6J",
-        "6A",
-        "6C",
-        "6S",  # Swiss Franc
-        # Interest rate futures (CBOT)
-        "ZN",  # 10-Year T-Note
-        "ZB",  # 30-Year T-Bond
-        # Agricultural futures (CBOT)
-        "ZC",  # Corn
-        "ZS",  # Soybeans
-        "ZW",  # Wheat
-    ]
-
-    # Prefer daily focus list as a priority override; fall back to full universe.
-    symbols = _ALL_SYMBOLS
-    try:
-        from lib.core.cache import cache_get
-
-        raw_focus = cache_get("engine:daily_focus")
-        if raw_focus:
-            focus_data = json.loads(raw_focus)
-            focus_symbols = [a.get("symbol", "") for a in focus_data.get("assets", [])]
-            # Merge: keep focus symbols first, then add any remaining universe symbols
-            # so the dataset always includes all tradeable instruments.
-            if focus_symbols:
-                merged = [s for s in focus_symbols if s]
-                for s in _ALL_SYMBOLS:
-                    if s not in merged:
-                        merged.append(s)
-                symbols = merged
-    except Exception:
-        pass
-
-    # ── Preferred path: use the incremental_dataset_build pipeline ────────
-    try:
-        import sys
-        from pathlib import Path
-
-        # Add scripts/ to path so the standalone script is importable.
-        scripts_dir = str(Path(__file__).resolve().parents[4] / "scripts")
-        if scripts_dir not in sys.path:
-            sys.path.insert(0, scripts_dir)
-
-        from incremental_dataset_build import BuildConfig
-        from incremental_dataset_build import run as run_incremental_build
-
-        # Resolve data service URL from environment (engine and data service
-        # are co-located in Docker under the service name "data").
-        data_service_url = f"http://{os.getenv('DATA_SERVICE_HOST', 'data')}:{os.getenv('DATA_SERVICE_PORT', '8000')}"
-
-        cfg = BuildConfig(
-            data_service_url=data_service_url,
-            api_key=os.getenv("DATA_SERVICE_API_KEY", os.getenv("API_KEY", "")),
-            fill_days_back=int(os.getenv("CNN_RETRAIN_DAYS_BACK", "90")),
-            symbols=symbols,
-            days_back=int(os.getenv("CNN_RETRAIN_DAYS_BACK", "90")),
-            chart_dpi=150,
-            # "all" runs all 9 Globex-day sessions (CME open, Sydney, Tokyo,
-            # Shanghai, Frankfurt, London, London-NY, US, CME settlement).
-            # This maximises dataset diversity across exchange opens.
-            orb_session=os.getenv("CNN_ORB_SESSION", "all"),
-            skip_existing=True,  # incremental — never regenerate what we have
-        )
-
-        result = run_incremental_build(cfg)
-
-        logger.info(
-            "✅ Incremental dataset build %s: +%d new images, %d total, "
-            "%d rows in labels.csv, +%d bars fetched (%.1f min total)",
-            result.status.upper(),
-            result.dataset_new_images,
-            result.dataset_total_images,
-            result.dataset_total_rows,
-            result.fill_bars_added,
-            (result.fill_duration_seconds + result.dataset_duration_seconds) / 60,
-        )
-
-        if result.errors:
-            for err in result.errors[:5]:
-                logger.warning("  ⚠ %s", err)
-
-        return
-
-    except ImportError as exc:
-        logger.warning(
-            "incremental_dataset_build not available (%s) — falling back to direct generation",
-            exc,
-        )
-    except Exception as exc:
-        logger.error(
-            "Incremental build pipeline failed (%s) — falling back to direct generation",
-            exc,
-        )
-
-    # ── Fallback: direct dataset generation from DB ───────────────────────
-    # Reached only if the incremental pipeline import or execution fails.
-    try:
-        from lib.analysis.dataset_generator import DatasetConfig, generate_dataset
-
-        config = DatasetConfig(
-            bars_source="db",  # use Postgres historical_bars table
-            skip_existing=True,
-            chart_dpi=150,
-            # Match the primary pipeline's session setting so the fallback
-            # produces the same multi-session dataset.
-            orb_session=os.getenv("CNN_ORB_SESSION", "all"),
-        )
-
-        stats = generate_dataset(
-            symbols=symbols,
-            days_back=90,
-            config=config,
-        )
-
-        logger.info(
-            "✅ Chart dataset generation (fallback) complete: %s",
-            stats.summary(),
-        )
-
-    except ImportError as exc:
-        logger.warning("Dataset generator not available: %s", exc)
-    except Exception as exc:
-        logger.error("Chart dataset generation error: %s", exc)
+    logger.info("⏭️  Chart dataset generation skipped — moved to orb repo")
 
 
 def _handle_train_breakout_cnn(engine) -> None:
-    """Train or retrain the EfficientNetV2 breakout CNN (off-hours).
+    """No-op — CNN training has moved to the orb repo.
 
-    Uses the overnight retraining pipeline which handles:
-      1. Train/val split of the latest dataset
-      2. GPU-accelerated training (mixed precision, class weighting, etc.)
-      3. Validation gate (accuracy, precision, recall thresholds)
-      4. Atomic model promotion (only if candidate beats champion)
-      5. Archival of previous champion + cleanup of old checkpoints
-
-    Falls back to the basic train_model() if the pipeline is unavailable.
+    Use the orb repo's trainer_server.py or retrain_overnight.py on
+    the dedicated GPU training machine (docker-compose.train.yml).
+    Sync trained models back with:  bash scripts/sync_models.sh
     """
-    global _retrain_thread
-
-    # If a dashboard-triggered retrain is already running, skip the scheduled one
-    if _retrain_thread is not None and _retrain_thread.is_alive():
-        logger.info(
-            "⏭️  Skipping scheduled CNN training — dashboard-triggered retrain is already running (thread=%s)",
-            _retrain_thread.name,
-        )
-        return
-
-    logger.info("▶ Training breakout CNN (overnight pipeline)...")
-
-    # --- Try the full overnight retraining pipeline first ---
-    try:
-        import sys as _sys
-        from pathlib import Path
-
-        # Locate the scripts/ directory (mounted at /app/scripts in Docker,
-        # or at <project_root>/scripts on bare metal).
-        _candidates = [
-            Path("/app/scripts"),
-            Path(__file__).resolve().parents[4] / "scripts",  # futures/scripts
-        ]
-        _scripts_dir = None
-        for _c in _candidates:
-            if (_c / "retrain_overnight.py").is_file():
-                _scripts_dir = _c
-                break
-
-        if _scripts_dir is None:
-            logger.info("retrain_overnight.py not found in any scripts/ location — falling back to basic trainer")
-        else:
-            # Add scripts/ to sys.path so we can import it directly
-            _scripts_str = str(_scripts_dir)
-            if _scripts_str not in _sys.path:
-                _sys.path.insert(0, _scripts_str)
-
-            # Use a direct import — much more reliable than importlib.util
-            import importlib
-
-            import retrain_overnight  # noqa: E402
-
-            importlib.reload(retrain_overnight)  # pick up code changes without engine restart
-
-            success = retrain_overnight.run_from_engine()
-            if success:
-                logger.info("✅ CNN retraining pipeline completed — model promoted")
-            else:
-                logger.warning("CNN retraining pipeline finished but model was NOT promoted (gate rejected or error)")
-            return
-
-    except Exception as exc:
-        logger.warning("Overnight pipeline failed (%s) — falling back to basic trainer", exc, exc_info=True)
-
-    # --- Fallback: use the in-module train_model() directly ---
-    try:
-        from lib.analysis.breakout_cnn import model_info, train_model
-
-        if train_model is None:
-            logger.warning("PyTorch not installed — CNN training skipped")
-            return
-
-        csv_path = "dataset/labels.csv"
-        if not os.path.isfile(csv_path):
-            logger.warning("No dataset CSV found at %s — skipping CNN training", csv_path)
-            return
-
-        model_path = train_model(
-            data_csv=csv_path,
-            epochs=8,
-            batch_size=32,
-            freeze_epochs=2,
-            model_dir="models",
-            num_workers=0,  # safe for Docker (no /dev/shm issues)
-        )
-
-        if model_path:
-            info = model_info(model_path)
-            logger.info(
-                "✅ CNN training complete (basic): %s (%.1f MB, device=%s)",
-                model_path,
-                info.get("size_mb", 0),
-                info.get("device", "unknown"),
-            )
-        else:
-            logger.warning("CNN training returned no model path")
-
-    except ImportError as exc:
-        logger.warning("Breakout CNN module not available: %s", exc)
-    except Exception as exc:
-        logger.error("CNN training error: %s", exc, exc_info=True)
+    logger.info("⏭️  CNN training skipped — moved to orb repo (use GPU trainer)")
 
 
 # ---------------------------------------------------------------------------

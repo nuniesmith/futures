@@ -19,12 +19,9 @@ All business logic modules live under organised sub-packages:
     from lib.analysis.scorer import PreMarketScorer
     from lib.analysis.signal_quality import compute_signal_quality
     from lib.analysis.volume_profile import compute_volume_profile
-    from lib.analysis.monte_carlo import run_monte_carlo
 
     # Trading modules
     from lib.trading.engine import get_engine, DashboardEngine
-    from lib.trading.strategies import STRATEGY_CLASSES, make_strategy
-    from lib.trading.costs import get_cost_model
 
     # External integrations
     from lib.integrations.grok_helper import GrokSession

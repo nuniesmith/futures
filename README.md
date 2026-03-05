@@ -1,28 +1,29 @@
 # Futures Trading Co-Pilot
 
-> Quality-first algorithmic futures trading system with GPU-accelerated CNN pattern
-> recognition, deterministic ORB filters, and session-aware automation.
+> Live dashboard, market stats & web UI for futures trading — real-time ORB detection,
+> session-aware scheduling, and a full HTMX dashboard powered by FastAPI.
 
-A Python + NinjaTrader system that detects Opening Range Breakouts on CME micro
-futures, gates them through six research-backed filters and a hybrid CNN, sizes
-risk via ATR-adaptive brackets, and routes execution through NinjaTrader's Bridge
-strategy — targeting 1–3 high-conviction trades per day.
+This repo is the **web UI and live engine** layer of a three-repo system:
+
+| Repo | Purpose |
+|---|---|
+| **[futures](https://github.com/nuniesmith/futures)** (this) | Live dashboard, web UI, market stats, engine |
+| **[orb](https://github.com/nuniesmith/orb)** | CNN model training, dataset generation, backtesting |
+| **[ninjatrader](https://github.com/nuniesmith/ninjatrader)** | NinjaTrader 8 C# strategies, indicators, Bridge |
 
 ---
 
 ## Table of Contents
 
 - [Architecture](#architecture)
-- [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
 - [Docker Deployment](#docker-deployment)
 - [Local Development](#local-development)
-- [CNN Breakout Model](#cnn-breakout-model)
+- [Model Sync](#model-sync)
 - [Project Structure](#project-structure)
 - [Configuration](#configuration)
 - [Testing](#testing)
 - [Scripts & Tools](#scripts--tools)
-- [Success Metrics](#success-metrics)
 - [Technologies](#technologies)
 - [License](#license)
 
@@ -34,97 +35,46 @@ strategy — targeting 1–3 high-conviction trades per day.
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        Futures Trading Co-Pilot                         │
 │                                                                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐   │
-│  │   Postgres   │  │    Redis     │  │ Data Service │  │   Engine   │   │
-│  │  (journal,   │  │  (hot cache, │  │  (FastAPI +  │  │ (scheduler,│   │
-│  │   history,   │  │   live bars, │  │   HTMX dash, │  │  analysis, │   │
-│  │   risk)      │  │   focus,     │  │   REST API)  │  │  training) │   │
-│  │              │  │   positions) │  │              │  │            │   │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └─────┬──────┘   │
-│         └─────────────────┴─────────────────┴────────────────┘          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐  │
+│  │   Postgres   │  │    Redis     │  │ Data Service │  │   Engine   │  │
+│  │  (journal,   │  │  (hot cache, │  │  (FastAPI +  │  │ (scheduler,│  │
+│  │   history,   │  │   live bars, │  │   HTMX dash, │  │  analysis, │  │
+│  │   risk)      │  │   focus,     │  │   REST API,  │  │  ORB, risk │  │
+│  │              │  │   positions) │  │   SSE)       │  │  scoring)  │  │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └─────┬──────┘  │
+│         └─────────────────┴─────────────────┴────────────────┘         │
 │                                    │                                    │
 │  ┌─────────────────────────────────┴─────────────────────────────────┐  │
-│  │                    Analysis & ML Pipeline                         │  │
+│  │                    Analysis Pipeline                               │  │
 │  │                                                                   │  │
-│  │  Wave Analysis ─ Volatility Clustering ─ Regime Detection (HMM)   │  │
-│  │  ICT/SMC (FVGs, OBs, Sweeps) ─ Volume Profile ─ CVD               │  │
-│  │  Monte Carlo ─ Multi-TF Confluence ─ Signal Quality               │  │
-│  │  ORB Detection ─ 6 Deterministic Filters ─ CNN Inference          │  │
-│  │                                                                   │  │
-│  └─────────────────────────────────┬─────────────────────────────────┘  │
-│                                    │                                    │
-│  ┌─────────────────────────────────┴─────────────────────────────────┐  │
-│  │                    Execution Layer                                │  │
-│  │                                                                   │  │
-│  │  Grok AI Analyst ─ Pre-Market Scorer ─ Risk Manager               │  │
-│  │  POST /execute_signal → Bridge.cs → ATR brackets → CME order      │  │
-│  │  Ruby.cs draws zones/arrows on NinjaTrader chart                  │  │
+│  │  Wave Analysis · Volatility Clustering · Regime Detection (HMM)   │  │
+│  │  ICT/SMC (FVGs, OBs, Sweeps) · Volume Profile · CVD              │  │
+│  │  Multi-TF Confluence · Signal Quality · Pre-Market Scoring        │  │
+│  │  ORB Detection · 6 Deterministic Filters · CNN Inference          │  │
 │  │                                                                   │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │  Monitoring: Prometheus · Grafana          (optional profile)     │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
+         │                                           │
+         ▼                                           ▼
+   orb repo (training)                     ninjatrader repo (execution)
+   CNN model → models/                     Bridge.cs → CME orders
 ```
 
-**Four-service Docker stack:**
+**Docker services:**
 
 | Service | Role | Port |
 |---|---|---|
-| **Postgres** | Durable storage — trade journal, historical optimizations, risk events | 5432 |
-| **Redis** | Hot cache — live bars, Ruby metrics, positions, focus updates, SSE pub/sub | 6379 |
-| **Data Service** | FastAPI API + HTMX dashboard — thin read layer over Redis | 8000 |
-| **Engine** | Background worker — all heavy computation, analysis, training, scheduling | — |
-| **Prometheus** | Metrics collection for monitoring | 9090 |
-| **Grafana** | Visualization of Prometheus metrics | 3000 |
-
----
-
-## How It Works
-
-### Session-Aware Scheduling
-
-The engine operates on three Eastern Time sessions, each with different responsibilities:
-
-| Session | Hours (ET) | What Happens |
-|---|---|---|
-| 🌙 **Pre-Market** | 
-| Compute daily focus, Grok morning briefing, prep alerts |
-| 🟢 **Active** | 03:00–12:00 | Live Ruby recompute (5 min), ORB detection (2 min), risk checks (1 min), Grok updates (15 min) |
-| ⚙️ **Off-Hours** | 12:00–00:00 | Historical backfill, strategy optimization, backtesting, CNN dataset generation + retraining |
-
-### The Trade Pipeline
-
-```
-1. Grok AI Morning Brief → Focus on 1–3 instruments (MGC, MES, MNQ)
-                │
-2. Live 1-min bars stream in via Massive WebSocket
-                │
-3. ORB Detection — identify the 09:30–10:00 Opening Range
-                │
-4. Breakout triggered — price crosses OR high/low
-                │
-5. Deterministic Filter Gate (majority mode):
-   ├── NR7 (Narrow Range 7)
-   ├── Pre-Market Range Break
-   ├── Session Window
-   ├── Lunch / Dead-Zone Filter
-   ├── Multi-TF EMA Bias
-   └── VWAP Confluence
-                │
-6. CNN Inference — EfficientNetV2-S scores chart image (0.0–1.0)
-   ├── Advisory mode (ORB_CNN_GATE=0): enriches alert with probability
-   └── Hard gate (ORB_CNN_GATE=1): blocks signals below threshold
-                │
-7. Risk Manager — position limits, daily loss, time rules
-                │
-8. POST /execute_signal → Bridge.cs → ATR-based brackets → CME order
-```
-
-### Backtest Results (Real Data, 5 Days × 3 Symbols)
-
-| Mode | Trades | Win Rate | Profit Factor | Avg R |
-|---|---|---|---|---|
-| Baseline (no filters) | 15 | 66.7% | 2.67 | +0.56 |
-| Majority filter gate | 11 | 72.7% | 3.56 | +0.70 |
-| Strict (all filters) | 3 | 100.0% | ∞ | +1.33 |
+| **Postgres** | Durable storage — trade journal, historical bars, risk events | 5433 |
+| **Redis** | Hot cache — live bars, Ruby metrics, positions, focus, SSE pub/sub | 6380 |
+| **Data Service** | FastAPI REST API + HTMX dashboard + SSE live stream | 8100 |
+| **Web** | HTMX dashboard frontend (reverse-proxies to data service) | 8180 |
+| **Engine** | Background worker — analysis, ORB detection, scheduling | — |
+| **Prometheus** | Metrics collection *(monitoring profile)* | 9095 |
+| **Grafana** | Dashboards & visualization *(monitoring profile)* | 3010 |
 
 ---
 
@@ -134,28 +84,26 @@ The engine operates on three Eastern Time sessions, each with different responsi
 
 - Python 3.11+
 - Docker & Docker Compose
-- Git LFS (`git lfs install`)
-- (For GPU training) NVIDIA GPU with CUDA 12.x drivers
 
 ### 1. Clone & Setup
 
 ```bash
 git clone https://github.com/nuniesmith/futures.git
 cd futures
-git lfs pull          # downloads the champion CNN model (~85 MB)
 ```
 
 ### 2. One-Command Docker Start
 
 ```bash
-./run.sh              # creates .env, runs tests, builds & starts all services
+./run.sh
 ```
 
 This will:
-- Create a Python virtualenv and install dependencies
-- Generate a `.env` file with secure random secrets (you'll need to add API keys)
-- Run the test suite and linter
-- Build and start all four Docker services
+1. Create a Python virtualenv and install dependencies
+2. Generate a `.env` file with secure random secrets
+3. Pull the CNN model from the [orb repo](https://github.com/nuniesmith/orb) (if not present)
+4. Run the test suite and linter
+5. Build and start all Docker services
 
 ### 3. Add Your API Keys
 
@@ -174,37 +122,24 @@ Without `XAI_API_KEY`, the Grok AI analyst tab is disabled (everything else work
 ```bash
 docker compose ps                 # all services should be "healthy"
 docker compose logs -f engine     # watch the engine schedule actions
-open http://localhost:8000        # dashboard
 ```
+
+Open the dashboard at `http://localhost:8180`.
 
 ---
 
 ## Docker Deployment
 
-### Standard (4 services)
+### Standard (5 services)
 
 ```bash
 docker compose up -d --build
-# Prometheus: http://localhost:9090
-# Grafana:    http://localhost:3000 (admin/admin)
 ```
 
-### GPU-Enabled Engine
-
-The engine container needs NVIDIA runtime for GPU-accelerated CNN training:
+### With Monitoring (+ Prometheus & Grafana)
 
 ```bash
-# Install NVIDIA Container Toolkit first:
-# https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
-
-# Then add to docker-compose.yml engine service:
-#   deploy:
-#     resources:
-#       reservations:
-#         devices:
-#           - driver: nvidia
-#             count: 1
-#             capabilities: [gpu]
+docker compose --profile monitoring up -d --build
 ```
 
 ### Useful Docker Commands
@@ -224,124 +159,48 @@ docker compose down -v                  # stop + remove volumes (⚠️ deletes 
 ### Setup
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate               # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"                 # install project + dev dependencies
-```
-
-### GPU Dependencies (Optional)
-
-```bash
-# CUDA 12.8 (RTX 20/30/40/50 series)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-
-# CPU only
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
 ### Run Locally
 
 ```bash
-# Start Postgres + Redis via Docker, run Python services locally
-docker compose up -d postgres redis
-
-# Data service (API + dashboard)
-PYTHONPATH=src uvicorn lib.services.data.main:app --host 0.0.0.0 --port 8000 --reload
-
-# Engine (background worker) — in another terminal
-PYTHONPATH=src python -m lib.services.engine.main
+./run.sh --local      # starts web service (requires Redis + Postgres running)
 ```
 
 ### Run Tests
 
 ```bash
-pytest src/tests/ -x -q --tb=short      # all tests
-pytest src/tests/test_orb_filters.py -v  # specific module
-ruff check src/                          # linting
+pytest src/tests/ -x -q --tb=short     # full suite
+ruff check src/                        # linting
+./run.sh --test                        # tests + lint together
 ```
 
 ---
 
-## CNN Breakout Model
+## Model Sync
 
-### Overview
-
-A hybrid **EfficientNetV2-S + tabular** model that classifies Ruby-style chart
-snapshots as "good breakout" (high follow-through) or "bad breakout" (likely chop).
-
-| Component | Details |
-|---|---|
-| **Image backbone** | EfficientNetV2-S (1280-dim features), pre-trained on ImageNet |
-| **Tabular head** | 6 features → 64 → 32-dim (quality %, volume ratio, ATR %, CVD delta, NR7, direction) |
-| **Classifier** | Merged 1312-dim → 256 → 2 classes (bad/good) |
-| **Parameters** | 20.5M total |
-| **Training hardware** | NVIDIA RTX 2070 SUPER (8 GB VRAM) |
-| **Best accuracy** | 84.7% on validation set |
-| **Inference latency** | < 50ms per chart on GPU |
-
-### Image Philosophy
-
-**Chart images are generated artifacts, not static assets.** They are rendered
-on-demand from historical bar data and should never be committed to git.
-
-- **Training images** — generated off-hours from 90 days of historical bars
-- **Validation images** — same pipeline, stratified 15% holdout
-- **Live images** — rendered in-memory from current bars during ORB detection
-- **All use the same renderer** — `render_snapshot_for_inference()` ensures zero train-serve skew
-
-### Overnight Retraining Pipeline
-
-The engine automatically retrains the CNN every evening:
-
-```
-Off-Hours (12:00–00:00 ET)
-  │
-  ├── Stage 1: Dataset Refresh — render charts from latest bars
-  ├── Stage 2: Train/Val Split — stratified 85/15
-  ├── Stage 3: GPU Training — mixed precision, class weighting, early stopping
-  ├── Stage 4: Validation Gate — must beat champion on accuracy/precision/recall
-  ├── Stage 5: Model Promotion — atomic swap of breakout_cnn_best.pt
-  └── Stage 6: Cleanup — archive old checkpoints, prune stale artifacts
-```
-
-The validation gate prevents regressions — a new model is only promoted if it
-meets absolute thresholds (accuracy ≥ 80%, precision ≥ 75%, recall ≥ 70%) AND
-beats the current champion.
-
-### Manual Training
+The CNN model is trained in the [orb repo](https://github.com/nuniesmith/orb) and
+pulled into this repo for live inference. The model files live in `models/` and are
+downloaded from GitHub:
 
 ```bash
-# Quick retrain on existing data
-PYTHONPATH=src .venv/bin/python scripts/retrain_overnight.py --skip-dataset --immediate
+# Download latest champion model from orb repo
+bash scripts/sync_models.sh
 
-# Full pipeline (generate + train + validate + promote)
-PYTHONPATH=src .venv/bin/python scripts/retrain_overnight.py --immediate
+# Check if local models are current
+bash scripts/sync_models.sh --check
 
-# Dry run (train + validate, no promotion)
-PYTHONPATH=src .venv/bin/python scripts/retrain_overnight.py --immediate --dry-run
+# Download + restart engine to pick up new model
+bash scripts/sync_models.sh --restart
 
-# Custom hyperparameters
-PYTHONPATH=src .venv/bin/python scripts/retrain_overnight.py --immediate \
-    --epochs 30 --batch-size 64 --lr 2e-4 --min-accuracy 82.0
+# Download only the .pt checkpoint (skip ONNX)
+bash scripts/sync_models.sh --pt-only
 ```
 
-### Git & Model Versioning
-
-Only the validated champion model is committed (via Git LFS). Everything else
-is `.gitignored` and regenerated locally:
-
-| Path | In Git? | Why |
-|---|---|---|
-| `models/breakout_cnn_best.pt` | ✅ (LFS) | Live champion — needed after clone |
-| `models/breakout_cnn_best_meta.json` | ✅ | Promotion metadata (accuracy, date) |
-| `models/*.pt` (others) | ❌ | Training checkpoints — ephemeral |
-| `models/archive/` | ❌ | Archived previous champions — local only |
-| `dataset/images/` | ❌ | Generated PNGs — regenerated from bars |
-| `dataset/*.csv` | ❌ | Labels + splits — regenerated each cycle |
-
-After cloning, run `git lfs pull` to download the champion model.
-
-See [docs/cnn-pipeline.md](docs/cnn-pipeline.md) for the full CNN pipeline reference.
+`run.sh` automatically pulls the model if `models/breakout_cnn_best.pt` is missing.
 
 ---
 
@@ -351,67 +210,47 @@ See [docs/cnn-pipeline.md](docs/cnn-pipeline.md) for the full CNN pipeline refer
 futures/
 ├── src/
 │   ├── lib/
-│   │   ├── analysis/                 # Market analysis & ML modules
-│   │   │   ├── breakout_cnn.py       #   Hybrid CNN: model, training, inference
-│   │   │   ├── chart_renderer.py     #   Ruby-style chart image rendering
+│   │   ├── analysis/                 # Market analysis modules
+│   │   │   ├── breakout_cnn.py       #   CNN inference (model from orb repo)
 │   │   │   ├── confluence.py         #   Multi-timeframe confluence filter
 │   │   │   ├── cvd.py                #   Cumulative Volume Delta + divergences
-│   │   │   ├── dataset_generator.py  #   Chart dataset generation from bars
 │   │   │   ├── ict.py                #   ICT/SMC: FVGs, order blocks, sweeps
-│   │   │   ├── monte_carlo.py        #   Bootstrap Monte Carlo + PBO
 │   │   │   ├── orb_filters.py        #   6 deterministic ORB quality filters
-│   │   │   ├── orb_simulator.py      #   ORB trade simulation + auto-labeling
 │   │   │   ├── regime.py             #   HMM market regime detection
 │   │   │   ├── scorer.py             #   Pre-market instrument scoring
-│   │   │   ├── signal_quality.py     #   Ruby signal quality score (Pine port)
+│   │   │   ├── signal_quality.py     #   Ruby signal quality score
 │   │   │   ├── volatility.py         #   K-Means adaptive vol clustering
 │   │   │   ├── volume_profile.py     #   POC, VAH/VAL, naked POCs
-│   │   │   └── wave_analysis.py      #   Wave dominance tracking (Pine port)
+│   │   │   └── wave_analysis.py      #   Wave dominance tracking
 │   │   │
 │   │   ├── core/                     # Infrastructure
 │   │   │   ├── alerts.py             #   Alert dispatch (email, webhook)
 │   │   │   ├── cache.py              #   Redis cache + data source abstraction
 │   │   │   ├── logging_config.py     #   Structured logging (structlog)
-│   │   │   └── models.py             #   Database models + Postgres/SQLite ORM
+│   │   │   ├── models.py             #   Database models + Postgres/SQLite ORM
+│   │   │   └── redis_helpers.py      #   Redis utility functions
 │   │   │
 │   │   ├── integrations/             # External services
-│   │   │   ├── grok_helper.py        #   xAI Grok AI analyst (briefing + live)
+│   │   │   ├── grok_helper.py        #   xAI Grok AI analyst
 │   │   │   └── massive_client.py     #   Massive.com REST + WebSocket client
 │   │   │
 │   │   ├── trading/                  # Trading engine
-│   │   │   ├── engine.py             #   DashboardEngine: Ruby, optimization, backtest
-│   │   │   ├── strategies.py         #   10 backtesting strategies (Optuna-tunable)
+│   │   │   ├── engine.py             #   DashboardEngine: optimization, backtest
+│   │   │   ├── strategies.py         #   Backtesting strategies (Optuna-tunable)
 │   │   │   └── costs.py              #   CME slippage + commission model
 │   │   │
 │   │   └── services/                 # Deployable services
-│   │       ├── data/                 #   FastAPI data service
-│   │       └── engine/               #   Background engine service
-│   │           ├── main.py           #     Action handlers + main loop
-│   │           ├── scheduler.py      #     Session-aware scheduling
-│   │           ├── orb.py            #     ORB detection logic
-│   │           ├── risk.py           #     Risk manager
-│   │           ├── focus.py          #     Daily focus computation
-│   │           ├── backfill.py       #     Historical bar backfill
-│   │           └── patterns.py       #     Pattern detection
+│   │       ├── data/                 #   FastAPI data service + API routers
+│   │       ├── engine/               #   Background engine service
+│   │       └── web/                  #   HTMX dashboard frontend
 │   │
-│   ├── ninjatrader/                  # NinjaTrader C# components
-│   │   ├── Ruby.cs                   #   Chart overlay (ORB box, zones, arrows)
-│   │   ├── Bridge.cs                 #   Execution strategy (brackets, risk)
-│   │   ├── SignalBus.cs              #   Signal routing between indicators
-│   │   └── BACKTEST_GUIDE.md         #   NinjaTrader backtesting guide
-│   │
-│   ├── pinescript/
-│   │   └── ruby.pine                 # TradingView Pine Script (original Ruby)
-│   │
-│   └── tests/                        # Pytest test suite (25 test modules)
+│   └── tests/                        # Pytest test suite
 │
 ├── scripts/
-│   ├── retrain_overnight.py          # CNN retraining pipeline orchestrator
-│   ├── train_gpu.py                  # GPU-optimized standalone trainer
-│   ├── backtest_filters.py           # ORB filter backtest comparison tool
-│   ├── generate_sample_bars.py       # Synthetic bar data generator
-│   ├── migrate_git_lfs.sh            # One-time Git LFS migration
-│   └── analyze.sh                    # Analysis helper
+│   ├── sync_models.sh                # Pull CNN model from orb repo
+│   ├── daily_report.py               # End-of-day ORB session summary
+│   ├── monitor_signals.py            # Live ORB signal terminal monitor
+│   └── session_signal_audit.py       # Per-session signal quality audit
 │
 ├── config/
 │   ├── grafana/                      # Grafana provisioning + dashboards
@@ -420,23 +259,16 @@ futures/
 ├── docker/
 │   ├── data/Dockerfile               # Data service container
 │   ├── engine/Dockerfile             # Engine container
+│   ├── web/Dockerfile                # Web frontend container
 │   └── monitoring/                   # Prometheus + Grafana Dockerfiles
 │
-├── models/                           # CNN model artifacts
-│   ├── breakout_cnn_best.pt          #   Champion model (Git LFS)
-│   └── breakout_cnn_best_meta.json   #   Promotion metadata
+├── models/                           # CNN model files (pulled from orb repo)
+│   └── .gitkeep
 │
-├── dataset/                          # Generated training data (gitignored)
-│   └── images/                       #   Chart PNGs (regenerated from bars)
-│
-├── docs/
-│   └── cnn-pipeline.md               # CNN pipeline deep-dive documentation
-│
-├── docker-compose.yml                # 4-service + monitoring stack
+├── docker-compose.yml                # Full service stack
 ├── pyproject.toml                    # Python project config (hatch + deps)
 ├── run.sh                            # One-command build + deploy script
-├── todo.md                           # Project status & phase tracking
-└── .env.example                      # Environment variable template
+└── todo.md                           # Project status & phase tracking
 ```
 
 ---
@@ -467,31 +299,11 @@ futures/
 | `ORB_FILTER_GATE` | `majority` | Filter mode: `all`, `majority`, or `none` |
 | `ORB_CNN_GATE` | `0` | `0` = CNN advisory, `1` = CNN hard gate |
 
-#### CNN Retraining
-
-| Variable | Default | Description |
-|---|---|---|
-| `CNN_RETRAIN_SYMBOLS` | `MGC,MES,MNQ` | Symbols for dataset generation |
-| `CNN_RETRAIN_DAYS_BACK` | `90` | Days of history to process |
-| `CNN_RETRAIN_EPOCHS` | `25` | Training epochs |
-| `CNN_RETRAIN_BATCH_SIZE` | `64` | Batch size (64 fits 8 GB VRAM) |
-| `CNN_RETRAIN_LR` | `2e-4` | Peak learning rate |
-| `CNN_RETRAIN_PATIENCE` | `8` | Early stopping patience |
-| `CNN_RETRAIN_MIN_ACC` | `80.0` | Minimum val accuracy to promote |
-| `CNN_RETRAIN_MIN_PRECISION` | `75.0` | Minimum precision to promote |
-| `CNN_RETRAIN_MIN_RECALL` | `70.0` | Minimum recall to promote |
-| `CNN_RETRAIN_IMPROVEMENT` | `0.0` | Required accuracy gain over champion |
-
 ### Key Defaults
 
 | Setting | Value | Location |
 |---|---|---|
 | CNN inference threshold | 0.82 | `breakout_cnn.py` |
-| Bracket stop-loss | 1.5 × ATR | `orb_simulator.py` |
-| Bracket take-profit 1 | 2.0 × ATR | `orb_simulator.py` |
-| Bracket take-profit 2 | 3.0 × ATR | `orb_simulator.py` |
-| Max hold time | 120 bars (2 hours) | `dataset_generator.py` |
-| Chart image size | 224 × 224 px | `breakout_cnn.py` |
 | Ruby recompute interval | 5 minutes | `scheduler.py` |
 | Grok update interval | 15 minutes | `scheduler.py` |
 | Risk check interval | 1 minute | `scheduler.py` |
@@ -499,8 +311,6 @@ futures/
 ---
 
 ## Testing
-
-The project has 25 test modules covering analysis, services, and integrations:
 
 ```bash
 # Full test suite
@@ -526,90 +336,44 @@ ruff check src/
 
 ## Scripts & Tools
 
-### Overnight CNN Retraining
+### Model Sync
 
 ```bash
-# Full pipeline (respects trading session windows)
-PYTHONPATH=src .venv/bin/python scripts/retrain_overnight.py
-
-# Immediate mode (run all stages now, ignore time windows)
-PYTHONPATH=src .venv/bin/python scripts/retrain_overnight.py --immediate
-
-# Retrain on existing data only
-PYTHONPATH=src .venv/bin/python scripts/retrain_overnight.py --skip-dataset --immediate
-
-# Validate a candidate without promoting
-PYTHONPATH=src .venv/bin/python scripts/retrain_overnight.py --dry-run --immediate
+bash scripts/sync_models.sh              # pull latest model from orb repo
+bash scripts/sync_models.sh --check      # check if models are current
+bash scripts/sync_models.sh --restart    # pull + restart engine
 ```
 
-### GPU Training (Standalone)
+### Daily Report
 
 ```bash
-PYTHONPATH=src .venv/bin/python scripts/train_gpu.py \
-    --epochs 25 --batch-size 64 --lr 2e-4 --freeze-epochs 3
+PYTHONPATH=src python scripts/daily_report.py              # today's report
+PYTHONPATH=src python scripts/daily_report.py --days 5     # last 5 days
+PYTHONPATH=src python scripts/daily_report.py --json       # JSON output
 ```
 
-### Filter Backtesting
+### Live Signal Monitor
 
 ```bash
-# Source API keys
-export $(grep -v '^#' .env | xargs)
-
-# Real data via Massive API (majority gate mode)
-PYTHONPATH=src .venv/bin/python scripts/backtest_filters.py \
-    --symbols MGC MES MNQ --source massive --days 30 \
-    --gate-mode majority -v --export data/backtest_results.csv
+PYTHONPATH=src python scripts/monitor_signals.py              # watch signals
+PYTHONPATH=src python scripts/monitor_signals.py --interval 2 # 2s polling
+PYTHONPATH=src python scripts/monitor_signals.py --json       # JSON output
 ```
 
-### Dataset Generation
+### Session Signal Audit
 
 ```bash
-# Generate chart images from historical bars
-PYTHONPATH=src .venv/bin/python -m lib.analysis.dataset_generator generate \
-    --symbols MGC MES MNQ --days 90 --source cache
-
-# Split into train/val
-PYTHONPATH=src .venv/bin/python -m lib.analysis.dataset_generator split \
-    --csv dataset/labels.csv --val-frac 0.15
-
-# Validate dataset integrity
-PYTHONPATH=src .venv/bin/python -m lib.analysis.dataset_generator validate \
-    --csv dataset/labels.csv
-```
-
-### Synthetic Data (No API Needed)
-
-```bash
-.venv/bin/python scripts/generate_sample_bars.py \
-    --symbols MGC MES MNQ --days 60 --seed 42
-```
-
-### CNN Model Info
-
-```bash
-PYTHONPATH=src .venv/bin/python -m lib.analysis.breakout_cnn info
-```
-
-### Git LFS Migration
-
-If your repo has images/checkpoints committed directly (pre-LFS setup):
-
-```bash
-bash scripts/migrate_git_lfs.sh
+PYTHONPATH=src python scripts/session_signal_audit.py                    # all sessions, 30 days
+PYTHONPATH=src python scripts/session_signal_audit.py --days 14          # last 14 days
+PYTHONPATH=src python scripts/session_signal_audit.py --export-json out.json
 ```
 
 ---
 
-## Success Metrics
+## Related Repos
 
-| Metric | Target | Current |
-|---|---|---|
-| Trade frequency | 1–3 per day on focus assets | — |
-| Win rate | 58–65% (with 1:2+ R:R) | 72.7% (backtest, majority gate) |
-| Max drawdown | < 8% on micro sizing | — |
-| CNN validation accuracy | > 82% | 84.7% ✅ |
-| CNN inference latency | < 50ms per chart (GPU) | ~30ms |
-| Daily retrain | Complete before 03:00 ET | ~23 min |
+- **[orb](https://github.com/nuniesmith/orb)** — CNN model training, dataset generation, GPU trainer server, backtesting, walk-forward validation. Models are pulled from here via `scripts/sync_models.sh`.
+- **[ninjatrader](https://github.com/nuniesmith/ninjatrader)** — NinjaTrader 8 C# code: Ruby indicator, Bridge execution strategy, SignalBus, OrbCnnPredictor. The dashboard's NT8 Deploy panel pulls installer scripts from this repo.
 
 ---
 
@@ -617,16 +381,14 @@ bash scripts/migrate_git_lfs.sh
 
 | Layer | Stack |
 |---|---|
-| **Language** | Python 3.11+, C# (NinjaTrader), Pine Script |
-| **ML** | PyTorch, EfficientNetV2-S, mixed precision (AMP) |
-| **Web** | FastAPI, HTMX, Jinja2 |
+| **Language** | Python 3.11+ |
+| **Web** | FastAPI, HTMX, Jinja2, SSE |
 | **Data** | Massive.com (real-time CME), yfinance (fallback), pandas |
 | **Storage** | PostgreSQL 16, Redis 7 |
 | **AI** | xAI Grok (morning briefing + live updates) |
-| **Backtesting** | backtesting.py, Optuna (Bayesian optimization) |
+| **Analysis** | scikit-learn, HMM (hmmlearn), backtesting.py, Optuna |
 | **Observability** | structlog, Prometheus, Grafana |
-| **Deployment** | Docker Compose, Git LFS |
-| **Execution** | NinjaTrader 8 (Ruby.cs + Bridge.cs) |
+| **Deployment** | Docker Compose |
 
 ---
 

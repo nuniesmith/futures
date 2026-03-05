@@ -4,10 +4,9 @@
 # Reads market data from Redis (written by data-service), writes results back.
 #
 # CPU-only image — no CUDA runtime. PyTorch is NOT installed here.
-# CNN inference in the engine uses the cpu-fallback path in breakout_cnn.py.
-# GPU training is handled by the separate `trainer` service defined in
-# docker-compose.train.yml, intended to run on a dedicated GPU machine.
-# Trained models are copied back via scripts/sync_models.sh.
+# CNN inference uses the cpu-fallback path in breakout_cnn.py.
+# CNN training lives in the orb repo (github.com/nuniesmith/orb).
+# Pull the latest model with:  bash scripts/sync_models.sh
 #
 # Python 3.13 via deadsnakes PPA on Ubuntu 24.04.
 
@@ -46,9 +45,7 @@ WORKDIR /app
 COPY pyproject.toml .
 RUN mkdir -p src/lib && touch src/lib/__init__.py
 
-# Install base deps only — no [gpu] extras, no CUDA torch wheels.
-# torch/torchvision are intentionally excluded; the engine uses the
-# cpu-safe fallback in breakout_cnn.py for any inference it needs to do.
+# Install base deps only (no torch/CUDA — engine uses cpu-safe fallback).
 RUN pip install --no-cache-dir "."
 
 # ---------------------------------------------------------------------------
@@ -85,7 +82,7 @@ COPY --from=deps /usr/local/bin /usr/local/bin
 # Copy the full src/ tree (services + shared modules)
 COPY src/ ./src/
 
-# Copy scripts/ tree (retrain_overnight.py, train_gpu.py, etc.)
+# Copy scripts/ tree (monitoring: daily_report, monitor_signals, etc.)
 COPY scripts/ ./scripts/
 
 # Create data directory

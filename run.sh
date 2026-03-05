@@ -140,6 +140,20 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# Model sync — pull CNN model from orb repo if missing
+# ---------------------------------------------------------------------------
+
+ensure_models() {
+    local model_file="models/breakout_cnn_best.pt"
+    if [ -f "$model_file" ]; then
+        ok "CNN model present ($(du -h "$model_file" | awk '{print $1}'))"
+    else
+        warn "CNN model not found — pulling from orb repo..."
+        bash scripts/sync_models.sh
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -191,6 +205,10 @@ get_tailscale_ip() {
 # ---------------------------------------------------------------------------
 
 run_docker() {
+    log "Ensuring CNN model files are present ..."
+    ensure_models
+    echo ""
+
     log "Building and starting Docker Compose services ..."
 
     # Resolve Tailscale IP (prefer live lookup, fall back to hardcoded)
@@ -277,6 +295,7 @@ ACTION="${POSITIONAL[0]:-docker}"
 
 case "$ACTION" in
     local)
+        ensure_models
         run_local
         ;;
     down)

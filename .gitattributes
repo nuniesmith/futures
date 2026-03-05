@@ -1,22 +1,9 @@
 # =============================================================================
-# Futures Trading Co-Pilot — Git LFS & Attributes
+# Futures Trading Co-Pilot — Git Attributes
 # =============================================================================
-# Binary model weights are tracked via Git LFS so they don't bloat the
-# repository's pack files.  Only the promoted champion model is committed
-# (all other checkpoints are .gitignored), but this pattern ensures any
-# .pt file that *does* get committed is handled correctly.
-
-# --- PyTorch model weights ---
-*.pt filter=lfs diff=lfs merge=lfs -text
-
-# --- Image assets (safety net) ---
-# Chart PNGs are .gitignored and should never be committed, but if one
-# slips through this keeps the repo healthy.
-dataset/images/*.png filter=lfs diff=lfs merge=lfs -text
-
-# --- Other large binaries ---
-*.onnx filter=lfs diff=lfs merge=lfs -text
-*.torchscript filter=lfs diff=lfs merge=lfs -text
+# Model files (.pt, .onnx) are no longer committed to this repo.
+# They are pulled from https://github.com/nuniesmith/orb via
+# scripts/sync_models.sh and gitignored locally.
 
 # --- Ensure consistent line endings for source files ---
 *.py text eol=lf
