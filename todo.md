@@ -19,10 +19,10 @@
 
 ## Active
 
-- [ ] Dashboard polish — improve mobile responsiveness of HTMX panels
-- [ ] SSE reconnect reliability — handle Redis connection drops gracefully in SSE stream
-- [ ] Health endpoint improvements — surface model staleness, last sync time
-- [ ] Add model sync status to dashboard CNN panel (last pull time, version from meta.json)
+- [x] Dashboard polish — improve mobile responsiveness of HTMX panels
+- [x] SSE reconnect reliability — handle Redis connection drops gracefully in SSE stream
+- [x] Health endpoint improvements — surface model staleness, last sync time
+- [x] Add model sync status to dashboard CNN panel (last pull time, version from meta.json)
 
 ## Backlog
 

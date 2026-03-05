@@ -661,6 +661,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                     # sent as an alert / signal.
                     filter_passed = True
                     filter_summary = ""
+                    bars_daily = None  # initialised here so CNN block can always read it
 
                     if _filters_available:
                         try:
@@ -888,7 +889,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
 
                         try:
                             from lib.analysis.breakout_cnn import _find_latest_model, predict_breakout
-                            from lib.analysis.chart_renderer import (
+                            from lib.analysis.chart_renderer import (  # type: ignore[import-unresolved]
                                 cleanup_inference_images,
                                 render_snapshot_for_inference,
                             )

@@ -120,6 +120,102 @@ def _get_dataset_info() -> dict[str, Any]:
     }
 
 
+def _get_sync_status() -> dict[str, Any]:
+    """Return sync metadata derived from the meta.json sidecar and model files.
+
+    Combines:
+      - promoted_at / val_accuracy / precision / recall from meta.json
+      - last_sync_ago from meta.json file mtime (when sync_models.sh last ran)
+      - onnx_available flag
+      - stale flag (> 26 h since promotion)
+    """
+    result: dict[str, Any] = {
+        "meta_available": False,
+        "promoted_at": None,
+        "promoted_ago": None,
+        "last_sync_ago": None,
+        "val_accuracy": None,
+        "precision": None,
+        "recall": None,
+        "epochs": None,
+        "stale": False,
+        "onnx_available": False,
+        "version": None,
+    }
+
+    result["onnx_available"] = (MODEL_DIR / "breakout_cnn_best.onnx").is_file()
+
+    if not META_PATH.is_file():
+        return result
+
+    # last_sync_ago — file mtime reflects when sync_models.sh last wrote it
+    try:
+        sync_dt = datetime.fromtimestamp(META_PATH.stat().st_mtime, tz=_EST)
+        now_et = _now_et()
+        sync_delta = now_et - sync_dt
+        sync_hours = sync_delta.total_seconds() / 3600
+        if sync_hours < 1:
+            result["last_sync_ago"] = f"{int(sync_delta.total_seconds() / 60)}m ago"
+        elif sync_hours < 24:
+            result["last_sync_ago"] = f"{sync_hours:.1f}h ago"
+        else:
+            result["last_sync_ago"] = f"{sync_delta.days}d ago"
+    except Exception:
+        pass
+
+    try:
+        meta = _get_meta_info()
+        if not meta:
+            return result
+
+        result["meta_available"] = True
+
+        # Version string — try common field names from the orb trainer
+        for vkey in ("version", "model_version", "run_id", "run"):
+            if vkey in meta:
+                result["version"] = str(meta[vkey])
+                break
+
+        # Accuracy metrics
+        for src, dst in (
+            ("val_accuracy", "val_accuracy"),
+            ("accuracy", "val_accuracy"),
+            ("val_precision", "precision"),
+            ("precision", "precision"),
+            ("val_recall", "recall"),
+            ("recall", "recall"),
+            ("epochs", "epochs"),
+        ):
+            if src in meta and result[dst] is None:
+                result[dst] = meta[src]
+
+        # promoted_at — when the model was promoted in the orb repo
+        promoted_str = meta.get("promoted_at") or meta.get("trained_at")
+        if promoted_str:
+            try:
+                promoted_at = datetime.fromisoformat(str(promoted_str))
+                if promoted_at.tzinfo is None:
+                    promoted_at = promoted_at.replace(tzinfo=_EST)
+                result["promoted_at"] = promoted_at.isoformat()
+                now_et = _now_et()
+                delta = now_et - promoted_at
+                hours = delta.total_seconds() / 3600
+                if hours < 1:
+                    result["promoted_ago"] = f"{int(delta.total_seconds() / 60)}m ago"
+                elif hours < 24:
+                    result["promoted_ago"] = f"{hours:.1f}h ago"
+                else:
+                    result["promoted_ago"] = f"{delta.days}d ago"
+                result["stale"] = hours > 26
+            except Exception:
+                pass
+
+    except Exception as exc:
+        logger.debug("_get_sync_status: %s", exc)
+
+    return result
+
+
 def _get_meta_info() -> dict[str, Any]:
     """Read champion model metadata from the sidecar JSON (synced from orb repo)."""
     if META_PATH.is_file():
@@ -593,48 +689,126 @@ def retrain_log():
 def cnn_status_html():
     """Return a dashboard-ready HTML fragment for the CNN model panel."""
     model = _get_model_info()
-    dataset = _get_dataset_info()
-    history = _get_training_history_summary()
+    sync = _get_sync_status()
     job = _get_retrain_job_status()
 
-    # Model status indicator
+    # ── Model availability dot + headline ────────────────────────────
     if model["available"]:
-        model_dot = '<span class="text-green-500">●</span>'
+        if sync["stale"]:
+            model_dot = '<span class="text-yellow-500">●</span>'
+            stale_badge = '<span class="text-[9px] text-yellow-500 bg-yellow-900/30 border border-yellow-700/40 rounded px-1 ml-1">stale</span>'
+        else:
+            model_dot = '<span class="text-green-500">●</span>'
+            stale_badge = ""
         model_text = f"Model ready ({model['size_mb']} MB)"
         model_age = model.get("modified_ago", "")
         if model_age:
             model_text += f" · {model_age}"
     else:
         model_dot = '<span class="text-red-500">●</span>'
-        model_text = "No model found — retrain to create one"
+        stale_badge = ""
+        model_text = "No model found — run: bash scripts/sync_models.sh"
 
-    # Training history
-    history_html = ""
-    if history.get("available"):
-        best_acc = history.get("best_val_acc", 0)
-        acc_color = "text-green-400" if best_acc >= 80 else "text-yellow-400" if best_acc >= 65 else "text-red-400"
-        history_html = f"""
-            <div class="text-[10px] text-zinc-500 mt-1 space-y-0.5">
-                <div>Best val acc: <span class="{acc_color} font-mono">{best_acc:.1f}%</span>
-                     (epoch {history.get("best_epoch", "?")})</div>
-                <div>Epochs trained: <span class="text-zinc-300 font-mono">{history.get("total_epochs", 0)}</span></div>
+    # ── Accuracy / metrics row (from meta.json) ───────────────────────
+    metrics_html = ""
+    if sync["meta_available"]:
+        acc = sync.get("val_accuracy")
+        prec = sync.get("precision")
+        rec = sync.get("recall")
+        epochs = sync.get("epochs")
+
+        acc_str = "—"
+        acc_color = "text-zinc-500"
+        if acc is not None:
+            try:
+                acc_f = float(acc)
+                # orb trainer stores accuracy as a fraction (0–1) or percentage (0–100)
+                if acc_f <= 1.0:
+                    acc_f *= 100
+                acc_str = f"{acc_f:.1f}%"
+                acc_color = "text-green-400" if acc_f >= 75 else "text-yellow-400" if acc_f >= 60 else "text-red-400"
+            except (TypeError, ValueError):
+                acc_str = str(acc)
+
+        prec_str = "—"
+        if prec is not None:
+            try:
+                p = float(prec)
+                prec_str = f"{p * 100:.1f}%" if p <= 1.0 else f"{p:.1f}%"
+            except (TypeError, ValueError):
+                prec_str = str(prec)
+
+        rec_str = "—"
+        if rec is not None:
+            try:
+                r = float(rec)
+                rec_str = f"{r * 100:.1f}%" if r <= 1.0 else f"{r:.1f}%"
+            except (TypeError, ValueError):
+                rec_str = str(rec)
+
+        epoch_line = f'<div class="text-[9px] text-zinc-600 mt-1 text-right">{epochs} epochs</div>' if epochs else ""
+
+        metrics_html = f"""
+            <div class="grid grid-cols-3 gap-1 mt-1.5 text-center">
+                <div class="bg-zinc-800/60 rounded px-1 py-1">
+                    <div class="text-[9px] text-zinc-600 uppercase tracking-wide">Acc</div>
+                    <div class="text-[11px] font-mono font-semibold {acc_color}">{acc_str}</div>
+                </div>
+                <div class="bg-zinc-800/60 rounded px-1 py-1">
+                    <div class="text-[9px] text-zinc-600 uppercase tracking-wide">Prec</div>
+                    <div class="text-[11px] font-mono font-semibold text-zinc-300">{prec_str}</div>
+                </div>
+                <div class="bg-zinc-800/60 rounded px-1 py-1">
+                    <div class="text-[9px] text-zinc-600 uppercase tracking-wide">Recall</div>
+                    <div class="text-[11px] font-mono font-semibold text-zinc-300">{rec_str}</div>
+                </div>
+            </div>
+            {epoch_line}
+        """
+
+    # ── Sync / version row ────────────────────────────────────────────
+    sync_html = ""
+    sync_parts: list[str] = []
+
+    promoted_ago = sync.get("promoted_ago")
+    last_sync_ago = sync.get("last_sync_ago")
+    version = sync.get("version")
+    onnx_available = sync.get("onnx_available", False)
+
+    if promoted_ago:
+        sync_parts.append(
+            f'<span class="text-zinc-500">Trained:</span> <span class="text-zinc-300">{promoted_ago}</span>'
+        )
+    if last_sync_ago:
+        sync_parts.append(
+            f'<span class="text-zinc-500">Synced:</span> <span class="text-zinc-300">{last_sync_ago}</span>'
+        )
+    if version:
+        sync_parts.append(
+            f'<span class="text-zinc-500">Ver:</span> <span class="font-mono text-zinc-400">{str(version)[:12]}</span>'
+        )
+
+    onnx_badge = (
+        '<span class="text-[9px] text-cyan-500 bg-cyan-900/30 border border-cyan-700/40 rounded px-1">ONNX ✓</span>'
+        if onnx_available
+        else '<span class="text-[9px] text-zinc-700 border border-zinc-800 rounded px-1">ONNX —</span>'
+    )
+
+    if sync_parts or onnx_available:
+        sync_html = f"""
+            <div class="flex items-center justify-between mt-1.5 text-[10px] flex-wrap gap-x-2 gap-y-0.5">
+                <div class="space-x-2">{" · ".join(sync_parts)}</div>
+                {onnx_badge}
+            </div>
+        """
+    elif model["available"] and not sync["meta_available"]:
+        sync_html = """
+            <div class="text-[10px] text-zinc-600 mt-1">
+                No meta.json — run <span class="font-mono text-zinc-500">sync_models.sh</span> to pull metadata
             </div>
         """
 
-    # Dataset info
-    dataset_html = ""
-    total = dataset.get("total_samples", 0)
-    train = dataset.get("train_samples", 0)
-    val = dataset.get("val_samples", 0)
-    if total > 0:
-        dataset_html = f"""
-            <div class="text-[10px] text-zinc-500">
-                Dataset: <span class="text-zinc-300 font-mono">{total:,}</span> samples
-                (train {train:,} / val {val:,})
-            </div>
-        """
-
-    # Retrain job status
+    # ── Retrain job status ────────────────────────────────────────────
     retrain_html = ""
     job_status: str | None = job.get("status") if job else None
 
@@ -774,12 +948,13 @@ def cnn_status_html():
             <span class="text-zinc-600 text-[10px]">{model.get("total_models", 0)} checkpoints</span>
         </div>
         <div class="text-xs">
-            <div class="flex items-center gap-1.5">
+            <div class="flex items-center gap-1.5 flex-wrap">
                 {model_dot}
                 <span class="text-zinc-300">{model_text}</span>
+                {stale_badge}
             </div>
-            {history_html}
-            {dataset_html}
+            {metrics_html}
+            {sync_html}
         </div>
         {retrain_html}
         {retrain_btn}

@@ -53,12 +53,18 @@ def _check_model_health() -> dict[str, Any]:
         "recall": None,
         "stale": False,
         "total_checkpoints": 0,
+        # When was sync_models.sh last run? (mtime of meta.json sidecar)
+        "last_sync_time": None,
+        "last_sync_ago": None,
+        # Is the ONNX export present alongside the champion?
+        "onnx_available": False,
     }
 
     # Locate models/ directory — works both in Docker (/app/models) and bare-metal
     _model_dir_candidates = [
         Path("/app/models"),
         Path(__file__).resolve().parents[5] / "models",
+        Path(__file__).resolve().parents[4] / "models",
     ]
     model_dir: Path | None = None
     for _c in _model_dir_candidates:
@@ -72,6 +78,10 @@ def _check_model_health() -> dict[str, Any]:
     # Count all checkpoints
     all_pt = list(model_dir.glob("breakout_cnn_*.pt"))
     result["total_checkpoints"] = len(all_pt)
+
+    # Check for the ONNX export
+    onnx_path = model_dir / "breakout_cnn_best.onnx"
+    result["onnx_available"] = onnx_path.is_file()
 
     # Check for the champion model
     champion = model_dir / "breakout_cnn_best.pt"
@@ -89,8 +99,23 @@ def _check_model_health() -> dict[str, Any]:
 
     now_et = datetime.now(tz=_EST)
 
-    # Load promotion metadata for accurate retrain timestamp + accuracy
+    # last_sync_time — mtime of the meta.json sidecar written by sync_models.sh.
+    # This tells us when the operator last pulled from the orb repo, which may
+    # be more recent than the model's own promoted_at training timestamp.
     meta_path = model_dir / "breakout_cnn_best_meta.json"
+    if meta_path.is_file():
+        sync_dt = datetime.fromtimestamp(meta_path.stat().st_mtime, tz=_EST)
+        result["last_sync_time"] = sync_dt.isoformat()
+        sync_delta = now_et - sync_dt
+        sync_hours = sync_delta.total_seconds() / 3600
+        if sync_hours < 1:
+            result["last_sync_ago"] = f"{int(sync_delta.total_seconds() / 60)}m ago"
+        elif sync_hours < 24:
+            result["last_sync_ago"] = f"{sync_hours:.1f}h ago"
+        else:
+            result["last_sync_ago"] = f"{sync_delta.days}d ago"
+
+    # Load promotion metadata for accurate retrain timestamp + accuracy
     promoted_at: datetime | None = None
 
     if meta_path.is_file():

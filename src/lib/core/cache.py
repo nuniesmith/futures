@@ -17,6 +17,7 @@ import os
 import re
 from datetime import UTC, date, datetime, timedelta
 from io import StringIO
+from typing import Any
 
 import pandas as pd
 import yfinance as yf
@@ -45,19 +46,23 @@ def _flatten_columns(df: "pd.DataFrame | None") -> pd.DataFrame:
     return result
 
 
-try:
-    import redis  # type: ignore[import-unresolved]
+def _init_redis() -> "tuple[Any, bool]":
+    """Attempt to connect to Redis and return (client, available) tuple."""
+    try:
+        import redis  # type: ignore[import-unresolved]
 
-    _redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    _r: "redis.Redis | None" = redis.from_url(_redis_url, decode_responses=False)
-    _r.ping()  # type: ignore[union-attr]
-    REDIS_AVAILABLE = True
-except Exception:
-    _r = None
-    REDIS_AVAILABLE = False
+        _redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        client = redis.from_url(_redis_url, decode_responses=False)
+        client.ping()  # type: ignore[union-attr]
+        return client, True
+    except Exception:
+        return None, False
+
+
+_r, REDIS_AVAILABLE = _init_redis()
 
 # Fallback in-memory cache when Redis is not available
-_mem_cache: dict = {}
+_mem_cache: dict[str, Any] = {}
 
 # Default TTLs in seconds
 TTL_MINUTE = 30  # 1-min OHLCV — short TTL for live freshness
@@ -393,7 +398,7 @@ def get_daily(ticker: str, period: str = "10d") -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def get_cached_indicator(name: str, ticker: str, interval: str, period: str) -> dict | None:
+def get_cached_indicator(name: str, ticker: str, interval: str, period: str) -> dict[str, Any] | None:
     """Return cached indicator dict or None."""
     key = _cache_key("ind", name, ticker, interval, period)
     cached = cache_get(key)
@@ -402,7 +407,7 @@ def get_cached_indicator(name: str, ticker: str, interval: str, period: str) -> 
     return None
 
 
-def set_cached_indicator(name: str, ticker: str, interval: str, period: str, payload: dict) -> None:
+def set_cached_indicator(name: str, ticker: str, interval: str, period: str, payload: dict[str, Any]) -> None:
     key = _cache_key("ind", name, ticker, interval, period)
     cache_set(key, json.dumps(payload).encode(), TTL_INDICATOR)
 
@@ -412,7 +417,7 @@ def set_cached_indicator(name: str, ticker: str, interval: str, period: str, pay
 # ---------------------------------------------------------------------------
 
 
-def get_cached_optimization(ticker: str, interval: str, period: str) -> dict | None:
+def get_cached_optimization(ticker: str, interval: str, period: str) -> dict[str, Any] | None:
     key = _cache_key("opt", ticker, interval, period)
     cached = cache_get(key)
     if cached is not None:
@@ -420,7 +425,7 @@ def get_cached_optimization(ticker: str, interval: str, period: str) -> dict | N
     return None
 
 
-def set_cached_optimization(ticker: str, interval: str, period: str, result: dict) -> None:
+def set_cached_optimization(ticker: str, interval: str, period: str, result: dict[str, Any]) -> None:
     key = _cache_key("opt", ticker, interval, period)
     cache_set(key, json.dumps(result).encode(), TTL_OPTIMIZATION)
 

@@ -1,98 +1,74 @@
-# Dockerfile.engine — Background Engine Service (CPU-only)
-# Runs DashboardEngine: Ruby modules, optimization, backtesting,
-# daily focus computation, session-aware scheduling.
-# Reads market data from Redis (written by data-service), writes results back.
+# Dockerfile.engine — Combined Backend Service
+# Runs both the Data Service (FastAPI REST + SSE) and the Engine worker
+# (DashboardEngine: Ruby modules, optimization, backtesting, scheduling).
 #
-# CPU-only image — no CUDA runtime. PyTorch is NOT installed here.
-# CNN inference uses the cpu-fallback path in breakout_cnn.py.
-# CNN training lives in the orb repo (github.com/nuniesmith/orb).
-# Pull the latest model with:  bash scripts/sync_models.sh
+# Both processes share the same src/ tree, Redis, and Postgres connections.
+# The entrypoint starts uvicorn (data API) and the engine worker in parallel;
+# if either exits, the container exits so Docker can restart it.
 #
-# Python 3.13 via deadsnakes PPA on Ubuntu 24.04.
+# CPU-only image — no CUDA/PyTorch. CNN inference uses the cpu-fallback path.
+# Pull the latest trained model with:  bash scripts/sync_models.sh
 
 # ---------------------------------------------------------------------------
 # Stage 1: Install dependencies
 # ---------------------------------------------------------------------------
-FROM ubuntu:24.04 AS deps
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Install deadsnakes PPA for Python 3.13 + build essentials
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        software-properties-common \
-        gpg-agent \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
-        python3.13 \
-        python3.13-dev \
-        python3.13-venv \
-        build-essential \
-        libpq-dev \
-        curl \
-        ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Make python3.13 the default
-RUN update-alternatives --install /usr/bin/python  python  /usr/bin/python3.13 1 \
-    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.13 1
-
-# Bootstrap pip for 3.13
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.13
+FROM python:3.13-slim AS deps
 
 WORKDIR /app
 
-# Copy dependency metadata + minimal package stub so hatchling can resolve
+# Copy only dependency metadata first (cache-friendly layer).
+# Hatchling needs the package dir to exist for the build to succeed.
 COPY pyproject.toml .
-RUN mkdir -p src/lib && touch src/lib/__init__.py
+COPY src/lib/__init__.py src/lib/__init__.py
 
-# Install base deps only (no torch/CUDA — engine uses cpu-safe fallback).
-RUN pip install --no-cache-dir "."
+RUN pip install --no-cache-dir .
 
 # ---------------------------------------------------------------------------
-# Stage 2: Copy app code and run
+# Stage 2: Runtime image
 # ---------------------------------------------------------------------------
-FROM ubuntu:24.04 AS runtime
+FROM python:3.13-slim AS runtime
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Install Python 3.13 runtime only (no dev/build packages)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        software-properties-common \
-        gpg-agent \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
-        python3.13 \
-        python3.13-venv \
+# libpq5 — psycopg binary needs the Postgres client lib at runtime
+# libgomp1 — needed by numpy/scipy compiled extensions
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
         libpq5 \
         libgomp1 \
-    && apt-get purge -y --auto-remove software-properties-common gpg-agent \
     && rm -rf /var/lib/apt/lists/*
-
-RUN update-alternatives --install /usr/bin/python  python  /usr/bin/python3.13 1 \
-    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.13 1
 
 WORKDIR /app
 
-# Copy installed packages + pip/scripts from deps stage
-COPY --from=deps /usr/local/lib/python3.13 /usr/local/lib/python3.13
-COPY --from=deps /usr/lib/python3/dist-packages /usr/lib/python3/dist-packages
-COPY --from=deps /usr/lib/python3.13 /usr/lib/python3.13
+# Copy installed packages + console scripts from the deps stage
+COPY --from=deps /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 COPY --from=deps /usr/local/bin /usr/local/bin
 
-# Copy the full src/ tree (services + shared modules)
+# Copy the full src/ tree (both services + shared modules)
 COPY src/ ./src/
 
-# Copy scripts/ tree (monitoring: daily_report, monitor_signals, etc.)
+# Copy the entrypoint that fans out both processes
+COPY docker/engine/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Copy scripts/ tree (sync_models, monitoring helpers, etc.)
 COPY scripts/ ./scripts/
 
-# Create data directory
+# Persistent data directory (journal, model cache)
 RUN mkdir -p /app/data
 
-# PYTHONPATH: bare imports resolve from /app/src
 ENV PYTHONPATH="/app/src"
 ENV PYTHONUNBUFFERED=1
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
-    CMD python -c "import os, json; f=open('/tmp/engine_health.json'); d=json.load(f); assert d.get('healthy')" || exit 1
+# Defaults — override via compose environment
+ENV DATA_SERVICE_HOST=0.0.0.0
+ENV DATA_SERVICE_PORT=8000
+ENV LOG_LEVEL=info
 
-CMD ["python", "-m", "lib.services.engine.main"]
+EXPOSE 8000
+
+# Health check targets the data API — if the API is up, the container is healthy.
+# The engine worker writes /tmp/engine_health.json; compose can add a second
+# check there if needed, but a single HTTP probe is enough for depends_on.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
+ENTRYPOINT ["/entrypoint.sh"]

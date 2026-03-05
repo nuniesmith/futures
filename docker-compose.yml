@@ -3,13 +3,12 @@
 # =============================================================================
 #
 # Services:
-#   postgres       — durable storage (journal, historical opts, alerts)
-#   redis          — hot cache (latest Ruby metrics, live positions, 1m bars)
-#   data           — FastAPI API layer (reads from Redis, serves REST + SSE)
-#   web            — HTMX dashboard frontend (reverse-proxies to data service)
-#   engine         — background computation (Ruby, optimization, backtesting)
-#   prometheus     — metrics collection & alerting  [monitoring profile]
-#   grafana        — dashboards & visualization      [monitoring profile]
+#   postgres   — durable storage (journal, historical opts, alerts)
+#   redis      — hot cache (latest Ruby metrics, live positions, 1m bars)
+#   engine     — FastAPI REST + SSE (port 8100) + background computation worker
+#   web        — HTMX dashboard frontend; reverse-proxies to engine (port 8180)
+#   prometheus — metrics collection & alerting  [monitoring profile]
+#   grafana    — dashboards & visualization      [monitoring profile]
 #
 # CNN model files are pulled from the orb repo (github.com/nuniesmith/orb):
 #
@@ -79,16 +78,25 @@ services:
             retries: 3
 
     # -------------------------------------------------------------------------
-    # Data Service — FastAPI API layer (thin)
-    # Serves REST API + SSE, reads computed results from Redis cache.
-    # ENGINE_MODE=remote means it does NOT run heavy computation itself.
-    # The web service proxies to this — not exposed to users directly.
+    # Engine — FastAPI REST + SSE API (port 8100) + background computation worker
+    #
+    # Runs two processes via docker/engine/entrypoint.sh:
+    #   1. uvicorn  — serves REST API and SSE (lib.services.data.main)
+    #   2. engine   — DashboardEngine, Ruby modules, optimization, backtesting,
+    #                 daily focus computation, session-aware scheduling
+    #
+    # Both share the same src/ tree, Redis connection, and Postgres connection.
+    # If either process exits, the container exits and Docker restarts it.
+    #
+    # CNN training lives in the orb repo (github.com/nuniesmith/orb).
+    # Pull the latest trained model with:  bash scripts/sync_models.sh
     # -------------------------------------------------------------------------
-    data:
+    engine:
         build:
             context: .
-            dockerfile: docker/data/Dockerfile
+            dockerfile: docker/engine/Dockerfile
         restart: unless-stopped
+        shm_size: 2gb
         ports:
             - "8100:8000"
         env_file:
@@ -99,9 +107,12 @@ services:
             - DB_PATH=/app/data/futures_journal.db
             - DATA_SERVICE_HOST=0.0.0.0
             - DATA_SERVICE_PORT=8000
-            - ENGINE_MODE=remote
+            - ENGINE_MODE=local
+            - ORB_FILTER_GATE=${ORB_FILTER_GATE:-majority}
+            - ORB_CNN_GATE=${ORB_CNN_GATE:-0}
             - NT_BRIDGE_HOST=${NT_BRIDGE_HOST:-100.113.72.63}
             - NT_BRIDGE_PORT=${NT_BRIDGE_PORT:-5680}
+            - LOG_LEVEL=info
             - PYTHONPATH=/app/src
             - PYTHONUNBUFFERED=1
         volumes:
@@ -123,14 +134,14 @@ services:
                 ]
             interval: 15s
             timeout: 5s
-            start_period: 30s
+            start_period: 45s
             retries: 3
 
     # -------------------------------------------------------------------------
-    # Web Service — HTMX Dashboard Frontend
-    # Stateless reverse-proxy that serves the dashboard HTML and proxies
-    # all API/SSE requests to the data service. No Redis or Postgres access.
-    # This is the user-facing entry point (port 8080).
+    # Web — HTMX Dashboard Frontend
+    # Stateless reverse-proxy that serves the dashboard HTML and proxies all
+    # API/SSE requests to the engine service. No Redis or Postgres access.
+    # User-facing entry point at http://localhost:8180
     # -------------------------------------------------------------------------
     web:
         build:
@@ -140,14 +151,14 @@ services:
         ports:
             - "8180:8080"
         environment:
-            - DATA_SERVICE_URL=http://data:8000
+            - DATA_SERVICE_URL=http://engine:8000
             - WEB_HOST=0.0.0.0
             - WEB_PORT=8080
             - LOG_LEVEL=info
             - PYTHONPATH=/app/src
             - PYTHONUNBUFFERED=1
         depends_on:
-            data:
+            engine:
                 condition: service_healthy
         healthcheck:
             test:
@@ -163,45 +174,8 @@ services:
             retries: 3
 
     # -------------------------------------------------------------------------
-    # Engine — Background computation worker (CPU-only)
-    # Heavy: DashboardEngine, Ruby modules, optimization, backtesting,
-    # daily focus computation, session-aware scheduling.
-    # Reads market data from Redis (written by data-service), writes results back.
-    #
-    # CNN training lives in the orb repo (github.com/nuniesmith/orb).
-    # Pull the latest trained model with:  bash scripts/sync_models.sh
-    # The engine uses CPU-only inference from breakout_cnn.py.
-    # -------------------------------------------------------------------------
-    engine:
-        build:
-            context: .
-            dockerfile: docker/engine/Dockerfile
-        restart: unless-stopped
-        shm_size: 2gb
-        env_file:
-            - .env
-        environment:
-            - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
-            - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-futures_db}
-            - DB_PATH=/app/data/futures_journal.db
-            - ORB_FILTER_GATE=${ORB_FILTER_GATE:-majority}
-            - ORB_CNN_GATE=${ORB_CNN_GATE:-0}
-            - PYTHONPATH=/app/src
-            - PYTHONUNBUFFERED=1
-        volumes:
-            - app_data:/app/data
-            - ./models:/app/models
-            - ./scripts:/app/scripts
-        depends_on:
-            redis:
-                condition: service_healthy
-            postgres:
-                condition: service_healthy
-
-    # -------------------------------------------------------------------------
     # Prometheus — Metrics collection & alerting     [monitoring profile]
     # Config is baked into the image via docker/monitoring/prometheus/Dockerfile.
-    # No host volume mounts for config files.
     # UI at http://localhost:9095
     # -------------------------------------------------------------------------
     prometheus:
@@ -221,14 +195,15 @@ services:
             - "--web.console.libraries=/etc/prometheus/console_libraries"
             - "--web.console.templates=/etc/prometheus/consoles"
             - "--web.enable-lifecycle"
+
         depends_on:
-            data:
+            engine:
                 condition: service_healthy
 
     # -------------------------------------------------------------------------
     # Grafana — Dashboards & visualization           [monitoring profile]
     # Provisioning configs and dashboards are baked into the image via
-    # docker/monitoring/grafana/Dockerfile. No host volume mounts for config.
+    # docker/monitoring/grafana/Dockerfile.
     # UI at http://localhost:3010  (admin / admin on first login)
     # -------------------------------------------------------------------------
     grafana:

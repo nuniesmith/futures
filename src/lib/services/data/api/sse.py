@@ -27,6 +27,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import time
 from collections.abc import AsyncGenerator
 from datetime import datetime
@@ -48,6 +49,15 @@ router = APIRouter(tags=["SSE"])
 _THROTTLE_SECONDS = 7.0
 _HEARTBEAT_INTERVAL = 30.0
 _CATCHUP_COUNT = 1
+
+# ---------------------------------------------------------------------------
+# Reconnect / backoff settings for the pub/sub Redis connection
+# ---------------------------------------------------------------------------
+# How many consecutive pubsub errors before we give up and close the stream
+# (closing lets the browser's EventSource retry directive reconnect cleanly).
+_PUBSUB_MAX_ERRORS = 8
+# Backoff sequence (seconds) used when a reconnect attempt fails.
+_PUBSUB_BACKOFF = [0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 30.0]
 
 # Track last send time per event type for throttling
 _last_sent: dict[str, float] = {}
@@ -126,7 +136,7 @@ def _make_session_event(session_mode: str) -> str:
 
 
 def _get_redis():
-    """Get the Redis client from cache module, or None."""
+    """Get the shared Redis client from the cache module, or None."""
     try:
         from lib.core.cache import REDIS_AVAILABLE, _r
 
@@ -135,6 +145,42 @@ def _get_redis():
     except ImportError:
         pass
     return None
+
+
+def _make_redis_connection():
+    """Create a *fresh* dedicated Redis connection for SSE pub/sub.
+
+    SSE pub/sub must never share the application-wide ``_r`` connection
+    because ``pubsub.get_message()`` alters connection state in a way that
+    is not safe to share with cache reads/writes.  A dedicated connection
+    also means we can close and re-open it on error without affecting the
+    rest of the app.
+
+    Returns a ``redis.Redis`` instance on success, or ``None`` if Redis is
+    not configured / the connection attempt fails.
+    """
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    try:
+        import redis as redis_lib  # type: ignore[import-unresolved]
+
+        client = redis_lib.from_url(redis_url, decode_responses=False)
+        client.ping()
+        return client
+    except Exception as exc:
+        logger.debug("SSE: could not create dedicated Redis connection: %s", exc)
+        return None
+
+
+def _teardown_pubsub(pubsub, client) -> None:
+    """Cleanly unsubscribe and close a pubsub handle and its connection."""
+    if pubsub is not None:
+        with contextlib.suppress(Exception):
+            pubsub.punsubscribe("dashboard:*")
+        with contextlib.suppress(Exception):
+            pubsub.close()
+    if client is not None:
+        with contextlib.suppress(Exception):
+            client.close()
 
 
 def _get_catchup_messages(count: int = _CATCHUP_COUNT) -> list[dict[str, str]]:
@@ -326,6 +372,10 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
     1. Send retry directive (auto-reconnect after 3s)
     2. Send catch-up messages from Redis Stream
     3. If Redis pub/sub available, subscribe and forward live events
+       - Maintains a *dedicated* Redis connection (not the shared cache _r)
+       - On connection error, attempts reconnect with exponential backoff
+       - After _PUBSUB_MAX_ERRORS consecutive failures, closes the stream so
+         the browser's EventSource retry fires a clean reconnect
     4. Otherwise, fall back to polling Redis every 5 seconds
     5. Send heartbeat every 30 seconds
     """
@@ -410,20 +460,25 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
     # doesn't interact with test patches that raise CancelledError.
     yield ": flush\n\n"
 
-    # 3. Try Redis pub/sub for live events, fall back to polling
-    r = _get_redis()
+    # 3. Set up pub/sub on a *dedicated* Redis connection.
+    #    Using a dedicated connection (not the shared cache._r) means:
+    #      - pubsub state never contaminates cache reads/writes
+    #      - we can close + reopen the connection on error without side-effects
+    sse_client = _make_redis_connection()
     pubsub = None
     use_pubsub = False
 
-    if r is not None:
+    if sse_client is not None:
         try:
-            pubsub = r.pubsub()
-            # Subscribe to all dashboard channels using pattern
+            pubsub = sse_client.pubsub()
             pubsub.psubscribe("dashboard:*")
             use_pubsub = True
             logger.info("SSE client connected (pub/sub mode)")
         except Exception as exc:
-            logger.debug("Pub/sub subscribe failed, falling back to polling: %s", exc)
+            logger.warning("SSE: initial pub/sub subscribe failed, falling back to polling: %s", exc)
+            _teardown_pubsub(pubsub, sse_client)
+            pubsub = None
+            sse_client = None
             use_pubsub = False
 
     if not use_pubsub:
@@ -436,6 +491,9 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
     last_risk_hash = ""
     last_orb_hash = ""
     last_session = ""
+
+    # Consecutive pubsub error counter — reset to 0 on any successful read.
+    pubsub_errors = 0
 
     try:
         while True:
@@ -455,6 +513,9 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                 # ---- Pub/sub mode: check for messages ----
                 try:
                     message = pubsub.get_message(ignore_subscribe_messages=True, timeout=0.1)
+                    # Successful read (even if no message) — reset error counter
+                    pubsub_errors = 0
+
                     if message and message["type"] in ("message", "pmessage"):
                         raw_channel = message.get("channel", b"")
                         channel: str = (
@@ -521,8 +582,49 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                                 yield _format_sse(data=data, event="orb-update")
 
                 except Exception as exc:
-                    logger.debug("Pub/sub read error: %s", exc)
-                    # Don't break — keep trying
+                    pubsub_errors += 1
+                    backoff = _PUBSUB_BACKOFF[min(pubsub_errors - 1, len(_PUBSUB_BACKOFF) - 1)]
+                    logger.warning(
+                        "SSE: pub/sub read error #%d/%d (backoff %.1fs): %s",
+                        pubsub_errors,
+                        _PUBSUB_MAX_ERRORS,
+                        backoff,
+                        exc,
+                    )
+
+                    # Tear down the broken connection before sleeping
+                    _teardown_pubsub(pubsub, sse_client)
+                    pubsub = None
+                    sse_client = None
+
+                    if pubsub_errors >= _PUBSUB_MAX_ERRORS:
+                        # Too many consecutive failures — close the stream so the
+                        # browser's EventSource retry fires a fresh HTTP request.
+                        logger.error(
+                            "SSE: exceeded %d consecutive pub/sub errors, closing stream for client reconnect",
+                            _PUBSUB_MAX_ERRORS,
+                        )
+                        return
+
+                    # Wait before attempting reconnect (runs in the event loop
+                    # so other coroutines / disconnect checks are not blocked)
+                    await asyncio.sleep(backoff)
+
+                    # Attempt to re-establish the dedicated connection + subscription
+                    sse_client = _make_redis_connection()
+                    if sse_client is not None:
+                        try:
+                            pubsub = sse_client.pubsub()
+                            pubsub.psubscribe("dashboard:*")
+                            pubsub_errors = 0  # reconnect succeeded — reset counter
+                            logger.info("SSE: pub/sub reconnected successfully")
+                        except Exception as reconnect_exc:
+                            logger.warning("SSE: pub/sub resubscribe failed: %s", reconnect_exc)
+                            _teardown_pubsub(pubsub, sse_client)
+                            pubsub = None
+                            sse_client = None
+                    else:
+                        logger.warning("SSE: Redis unavailable after reconnect attempt, staying in backoff loop")
 
                 # Also check for session changes via engine status (pubsub might miss it)
                 try:
@@ -632,13 +734,8 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
     except Exception as exc:
         logger.error("SSE generator error: %s", exc, exc_info=True)
     finally:
-        # Clean up pub/sub subscription
-        if pubsub is not None:
-            try:
-                pubsub.punsubscribe("dashboard:*")
-                pubsub.close()
-            except Exception:
-                pass
+        # Clean up the dedicated pub/sub connection (not the shared cache._r)
+        _teardown_pubsub(pubsub, sse_client)
         logger.debug("SSE connection closed")
 
 

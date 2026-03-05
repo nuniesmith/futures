@@ -208,14 +208,16 @@ def _render_session_strip() -> str:
         </div>
         """
 
-    # Hour tick marks (every 3h)
+    # Hour tick marks — every 3h on desktop, label only every 6h on mobile
     ticks = ""
     for h in range(0, 25, 3):
         label_h = h % 24
+        # On small screens only render the 00/06/12/18 labels to avoid crowding
+        label_mobile_class = "" if label_h % 6 == 0 else "hidden sm:block"
         ticks += f"""
         <div class="absolute top-0 bottom-0 border-l border-zinc-700/50"
              style="left:{_pct(h)}">
-            <span class="absolute -bottom-4 text-[9px] text-zinc-600 -translate-x-1/2">{label_h:02d}</span>
+            <span class="absolute -bottom-4 text-[9px] text-zinc-600 -translate-x-1/2 {label_mobile_class}">{label_h:02d}</span>
         </div>
         """
 
@@ -252,21 +254,21 @@ def _render_session_strip() -> str:
 
     return f"""
     <div id="session-strip"
-         class="bg-zinc-900/80 border border-zinc-800 rounded-lg px-4 pt-3 pb-6 mb-4 relative overflow-hidden"
+         class="bg-zinc-900/80 border border-zinc-800 rounded-lg px-2 sm:px-4 pt-3 pb-5 sm:pb-6 mb-3 sm:mb-4 relative"
          hx-get="/api/market-session/html"
          hx-trigger="every 60s"
          hx-swap="outerHTML">
         <div class="flex items-center justify-between mb-2">
             <span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Market Sessions (ET)</span>
-            <div class="flex items-center gap-3 text-[9px] text-zinc-600">
+            <div class="hidden sm:flex items-center gap-3 text-[9px] text-zinc-600">
                 <span><span class="inline-block w-2 h-2 rounded-sm bg-blue-700 mr-1"></span>London</span>
                 <span><span class="inline-block w-2 h-2 rounded-sm bg-emerald-700 mr-1"></span>US Equity</span>
                 <span><span class="inline-block w-2 h-2 rounded-sm bg-yellow-400/30 border border-yellow-400/40 mr-1"></span>Overlap</span>
                 <span><span class="inline-block w-1 h-2 border-l-2 border-blue-400 mr-1"></span>ORB Window</span>
             </div>
         </div>
-        <!-- Timeline bar -->
-        <div class="relative h-6 w-full" id="session-bar-inner">
+        <!-- Timeline bar — min-width keeps it readable on narrow screens -->
+        <div class="relative h-6 w-full min-w-[320px]" id="session-bar-inner">
             <!-- Background -->
             <div class="absolute inset-0 bg-zinc-800/60 rounded"></div>
             {overlap_highlights}
@@ -281,7 +283,7 @@ def _render_session_strip() -> str:
             </div>
         </div>
         <!-- Open/closed badges — updated by JS -->
-        <div id="session-badges" class="flex flex-wrap gap-1.5 mt-3">
+        <div id="session-badges" class="flex flex-wrap gap-1 sm:gap-1.5 mt-2 sm:mt-3">
             <span class="text-[9px] text-zinc-600 self-center">Loading sessions...</span>
         </div>
     </div>
@@ -478,7 +480,7 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
 
     return f"""
     <div id="asset-card-{symbol_lower}"
-         class="border {border_color} rounded-lg p-4 {bias_bg} {opacity} transition-all duration-300"
+         class="border {border_color} rounded-lg p-3 sm:p-4 {bias_bg} {opacity} transition-all duration-300"
          data-quality="{quality_pct}"
          data-wave="{wave_ratio}"
          data-bias="{bias}"
@@ -488,19 +490,19 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
               else remove .opacity-50 from me end">
 
         <!-- Header -->
-        <div class="flex items-center justify-between mb-3">
-            <div class="flex items-center gap-2">
-                <span class="text-2xl">{bias_emoji}</span>
-                <h3 class="text-lg font-bold text-white">{symbol}</h3>
+        <div class="flex items-center justify-between mb-2 sm:mb-3">
+            <div class="flex items-center gap-2 min-w-0">
+                <span class="text-xl sm:text-2xl shrink-0">{bias_emoji}</span>
+                <h3 class="text-base sm:text-lg font-bold text-white truncate">{symbol}</h3>
             </div>
-            <div class="text-right">
-                <div class="text-xl font-mono font-bold text-white">{last_price:,.2f}</div>
+            <div class="text-right shrink-0 ml-2">
+                <div class="text-lg sm:text-xl font-mono font-bold text-white">{last_price:,.2f}</div>
                 <div class="text-xs {bias_text} font-semibold">{bias}</div>
             </div>
         </div>
 
         <!-- Quality & Wave -->
-        <div class="grid grid-cols-2 gap-2 mb-3">
+        <div class="grid grid-cols-2 gap-2 mb-2 sm:mb-3">
             <div>
                 <div class="text-xs text-zinc-400 mb-1">Quality</div>
                 <div class="w-full bg-zinc-700 rounded-full h-2">
@@ -516,25 +518,25 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
         </div>
 
         <!-- Levels -->
-        <div class="grid grid-cols-3 gap-1 mb-3 text-xs">
-            <div class="bg-zinc-800/60 rounded p-1.5 text-center">
-                <div class="text-zinc-500">Entry</div>
-                <div class="text-zinc-200 font-mono">{entry_low:,.2f}</div>
-                <div class="text-zinc-400 font-mono">– {entry_high:,.2f}</div>
+        <div class="grid grid-cols-3 gap-1 mb-2 sm:mb-3 text-xs">
+            <div class="bg-zinc-800/60 rounded p-1 sm:p-1.5 text-center">
+                <div class="text-zinc-500 text-[10px] sm:text-xs">Entry</div>
+                <div class="text-zinc-200 font-mono text-[10px] sm:text-xs">{entry_low:,.2f}</div>
+                <div class="text-zinc-400 font-mono text-[10px] sm:text-xs">– {entry_high:,.2f}</div>
             </div>
-            <div class="bg-zinc-800/60 rounded p-1.5 text-center">
-                <div class="text-zinc-500">Stop</div>
-                <div class="text-red-400 font-mono">{stop:,.2f}</div>
+            <div class="bg-zinc-800/60 rounded p-1 sm:p-1.5 text-center">
+                <div class="text-zinc-500 text-[10px] sm:text-xs">Stop</div>
+                <div class="text-red-400 font-mono text-[10px] sm:text-xs">{stop:,.2f}</div>
             </div>
-            <div class="bg-zinc-800/60 rounded p-1.5 text-center">
-                <div class="text-zinc-500">TP1 / TP2</div>
-                <div class="text-green-400 font-mono">{tp1:,.2f}</div>
-                <div class="text-green-300 font-mono">{tp2:,.2f}</div>
+            <div class="bg-zinc-800/60 rounded p-1 sm:p-1.5 text-center">
+                <div class="text-zinc-500 text-[10px] sm:text-xs">TP1 / TP2</div>
+                <div class="text-green-400 font-mono text-[10px] sm:text-xs">{tp1:,.2f}</div>
+                <div class="text-green-300 font-mono text-[10px] sm:text-xs">{tp2:,.2f}</div>
             </div>
         </div>
 
-        <!-- Meta row -->
-        <div class="flex items-center justify-between text-xs text-zinc-400">
+        <!-- Meta row — wraps gracefully on mobile -->
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] sm:text-xs text-zinc-400">
             <span>{trend_dir}</span>
             <span>Vol: {vol_cluster} ({vol_pct:.0%})</span>
             <span>{position_size} micros / ${risk_dollars:,.0f} risk</span>
@@ -596,7 +598,7 @@ def _render_positions_panel(
 
     # Stats row
     stats_html = f"""
-    <div class="grid grid-cols-4 gap-1 mb-2 text-center">
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-1 mb-2 text-center">
         <div class="bg-zinc-800/60 rounded py-1">
             <div class="text-[9px] text-zinc-500">Daily P&L</div>
             <div class="{daily_color} font-mono text-xs font-bold">{pnl_sign}${daily_pnl:,.0f}</div>
@@ -644,7 +646,7 @@ def _render_positions_panel(
             <td class="py-0.5 text-white font-mono text-xs">{sym}</td>
             <td class="py-0.5 {side_color} text-xs font-semibold">{side}</td>
             <td class="py-0.5 text-zinc-300 text-xs text-center">{qty}</td>
-            <td class="py-0.5 text-zinc-400 font-mono text-xs text-right">{avg_price:,.2f}</td>
+            <td class="py-0.5 text-zinc-400 font-mono text-xs text-right hidden sm:table-cell">{avg_price:,.2f}</td>
             <td class="py-0.5 {pnl_color} font-mono text-xs text-right font-bold">${unrealized:,.2f}</td>
         </tr>
         """
@@ -658,18 +660,20 @@ def _render_positions_panel(
             <span class="{total_color} font-mono text-xs font-bold">Open: ${total_pnl:,.2f}</span>
         </div>
         {block_html}{stats_html}
-        <table class="w-full">
+        <div class="overflow-x-auto -mx-1 px-1">
+        <table class="w-full min-w-[200px]">
             <thead>
                 <tr class="text-[9px] text-zinc-600 border-b border-zinc-700">
                     <th class="text-left pb-0.5">Sym</th>
                     <th class="text-left pb-0.5">Side</th>
                     <th class="text-center pb-0.5">Qty</th>
-                    <th class="text-right pb-0.5">Avg</th>
+                    <th class="text-right pb-0.5 hidden sm:table-cell">Avg</th>
                     <th class="text-right pb-0.5">P&amp;L</th>
                 </tr>
             </thead>
             <tbody>{rows}</tbody>
         </table>
+        </div>
     </div>
     """
 
@@ -878,7 +882,7 @@ def _render_orb_session_card(session_data: dict[str, Any] | None, session_label:
             <span class="{s_color} text-[10px] font-bold">{s_emoji} {status_text}</span>
         </div>
         {breakout_html}
-        <div class="grid grid-cols-3 gap-x-2 gap-y-0.5 text-[10px]">
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-x-2 gap-y-0.5 text-[10px]">
             <div class="text-zinc-500">High: <span class="text-green-300 font-mono">{or_high:,.2f}</span></div>
             <div class="text-zinc-500">Low: <span class="text-red-300 font-mono">{or_low:,.2f}</span></div>
             <div class="text-zinc-500">Range: <span class="text-zinc-300 font-mono">{or_range:,.2f}</span></div>
@@ -1035,7 +1039,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>ORB Co-Pilot</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
     <script>
@@ -1051,7 +1055,13 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/hyperscript.org@0.9.14"></script>
     <style>
-        body {{ font-family: 'Inter', system-ui, -apple-system, sans-serif; }}
+        body {{ font-family: 'Inter', system-ui, -apple-system, sans-serif; -webkit-text-size-adjust: 100%; }}
+        * {{ box-sizing: border-box; }}
+        @media (max-width: 640px) {{
+            .mobile-scroll {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
+            .mobile-hide {{ display: none !important; }}
+            .mobile-full {{ width: 100% !important; }}
+        }}
         .glow-green {{ box-shadow: 0 0 12px rgba(34,197,94,0.25); }}
         .glow-red   {{ box-shadow: 0 0 12px rgba(239,68,68,0.25); }}
         .glow-blue  {{ box-shadow: 0 0 12px rgba(59,130,246,0.25); }}
@@ -1079,54 +1089,54 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 </head>
 <body class="bg-zinc-950 text-white min-h-screen">
 <div id="sse-container">
-<div class="max-w-screen-2xl mx-auto px-3 py-3">
+<div class="max-w-screen-2xl mx-auto px-2 sm:px-3 py-2 sm:py-3">
 
     <!-- ═══════════════════════════════════════════════════════════════
          HEADER: compact single row — logo | health bar | clock | tools
     ═══════════════════════════════════════════════════════════════════ -->
-    <header class="flex items-center justify-between mb-3 border-b border-zinc-800 pb-2.5">
+    <header class="mb-2 sm:mb-3 border-b border-zinc-800 pb-2 sm:pb-2.5">
+        <!-- Top row: title | clock -->
+        <div class="flex items-center justify-between">
+            <!-- Left: title + SSE dot -->
+            <div class="flex items-center gap-2 min-w-0">
+                <div>
+                    <span class="text-base sm:text-lg font-bold text-white leading-none">ORB Co-Pilot</span>
+                    <div class="text-[10px] text-zinc-600 mt-0.5">
+                        <span class="hidden sm:inline">{session["date"]} · </span>
+                        <span id="sse-status-dot" class="connecting" title="SSE">●</span>
+                        <span id="sse-status-text" class="text-zinc-700">connecting</span>
+                    </div>
+                </div>
+            </div>
 
-        <!-- Left: title + SSE dot -->
-        <div class="flex items-center gap-3 min-w-0">
-            <div>
-                <span class="text-lg font-bold text-white leading-none">ORB Co-Pilot</span>
-                <div class="text-[10px] text-zinc-600 mt-0.5 whitespace-nowrap">
-                    {session["date"]}
-                    <span id="sse-status-dot" class="connecting ml-1.5" title="SSE">●</span>
-                    <span id="sse-status-text" class="text-zinc-700">connecting</span>
+            <!-- Right: clock + session + NT8 tools -->
+            <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                <div class="text-right">
+                    <div id="clock" class="text-lg sm:text-xl font-mono font-bold {session["css_class"]} leading-none">
+                        {session["time_et"]}
+                    </div>
+                    <div id="session-badge" class="text-[10px] sm:text-[11px] font-semibold {session["css_class"]} mt-0.5 text-right">
+                        {session["emoji"]} {session["label"]}
+                    </div>
+                </div>
+                <div id="nt8-toolbar-container"
+                     hx-get="/api/nt8/panel/html"
+                     hx-trigger="load"
+                     hx-swap="innerHTML">
                 </div>
             </div>
         </div>
 
-        <!-- Centre: health indicators -->
+        <!-- Bottom row (tablet+): health indicators -->
         <div id="nt8-health-bar"
-             class="hidden md:flex items-center gap-1 flex-1 justify-center"
+             class="hidden md:flex items-center gap-1 flex-wrap mt-2"
              hx-get="/api/nt8/health/html"
              hx-trigger="load, every 10s"
              hx-swap="innerHTML">
             <!-- skeleton dots shown until HTMX loads real content -->
-            {{% for lbl in ["Data","Engine","Redis","DB","Bridge","Ruby","NT8"] %}}
             <div class="flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800">
                 <span class="w-1.5 h-1.5 rounded-full bg-zinc-600"></span>
-                <span class="text-[10px] text-zinc-600">{{{{ lbl }}}}</span>
-            </div>
-            {{% endfor %}}
-        </div>
-
-        <!-- Right: clock + session + NT8 tools -->
-        <div class="flex items-center gap-2 shrink-0">
-            <div class="text-right">
-                <div id="clock" class="text-xl font-mono font-bold {session["css_class"]} leading-none">
-                    {session["time_et"]}
-                </div>
-                <div id="session-badge" class="text-[11px] font-semibold {session["css_class"]} mt-0.5 text-right">
-                    {session["emoji"]} {session["label"]}
-                </div>
-            </div>
-            <div id="nt8-toolbar-container"
-                 hx-get="/api/nt8/panel/html"
-                 hx-trigger="load"
-                 hx-swap="innerHTML">
+                <span class="text-[10px] text-zinc-600">Loading...</span>
             </div>
         </div>
     </header>
@@ -1134,7 +1144,9 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     <!-- ═══════════════════════════════════════════════════════════════
          SESSION TIMELINE STRIP
     ═══════════════════════════════════════════════════════════════════ -->
-    {session_strip_html}
+    <div class="mobile-scroll">
+        {session_strip_html}
+    </div>
 
     <!-- No-trade banner -->
     <div id="no-trade-container"
@@ -1144,11 +1156,11 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 
     <!-- Focus summary bar -->
     <div id="focus-summary"
-         class="flex items-center justify-between bg-zinc-900/60 border border-zinc-800 rounded-lg px-3 py-1.5 mb-3">
-        <div class="flex items-center gap-3 text-xs">
+         class="flex flex-wrap items-center justify-between gap-y-1 bg-zinc-900/60 border border-zinc-800 rounded-lg px-3 py-1.5 mb-2 sm:mb-3">
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
             <span class="text-zinc-500 uppercase tracking-wide font-semibold">Today's Focus</span>
             <span id="focus-count" class="text-zinc-300 font-mono">{tradeable}/{total} tradeable</span>
-            <span id="focus-updated" class="text-zinc-600">Updated: {computed}</span>
+            <span id="focus-updated" class="text-zinc-600 hidden sm:inline">Updated: {computed}</span>
         </div>
         <div class="flex items-center gap-2">
             <button hx-get="/api/focus/html"
@@ -1164,10 +1176,10 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     <!-- ═══════════════════════════════════════════════════════════════
          MAIN GRID  — 3 cols: ORB signals (2) | Sidebar (1)
     ═══════════════════════════════════════════════════════════════════ -->
-    <div class="grid grid-cols-1 xl:grid-cols-3 gap-3">
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-2 sm:gap-3">
 
         <!-- ── LEFT/CENTRE: ORB detection + asset cards ─────────────── -->
-        <div class="xl:col-span-2 space-y-3">
+        <div class="xl:col-span-2 space-y-2 sm:space-y-3">
 
             <!-- ORB Panel — primary focus, full width, always visible -->
             <div id="orb-container"
@@ -1194,10 +1206,10 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 
             <!-- Asset Focus Cards -->
             <div>
-                <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center justify-between mb-1.5">
                     <h3 class="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Asset Focus</h3>
                 </div>
-                <div id="focus-grid" class="grid grid-cols-1 md:grid-cols-2 gap-3"
+                <div id="focus-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3"
                      hx-get="/api/focus/html"
                      hx-trigger="every 30s"
                      hx-swap="innerHTML">
@@ -1207,7 +1219,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         </div>
 
         <!-- ── SIDEBAR ───────────────────────────────────────────────── -->
-        <div class="space-y-2.5">
+        <div class="space-y-2 sm:space-y-2.5">
 
             <!-- Positions & P&L -->
             <div id="positions-container"
@@ -1278,9 +1290,10 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     </div>
 
     <!-- Footer -->
-    <footer class="mt-4 pt-2 border-t border-zinc-800/60 text-center text-[10px] text-zinc-700">
-        ORB Co-Pilot — Pre-market 00–03 ET | London 03–08 ET | US 08–12 ET | Off-hours 12–00 ET
-        &nbsp;·&nbsp;<a href="/sse/health" class="underline hover:text-zinc-500">SSE</a>
+    <footer class="mt-4 pt-2 border-t border-zinc-800/60 text-center text-[10px] text-zinc-700 px-2">
+        <span class="hidden sm:inline">ORB Co-Pilot — Pre-market 00–03 ET | London 03–08 ET | US 08–12 ET | Off-hours 12–00 ET
+        &nbsp;·&nbsp;</span>
+        <a href="/sse/health" class="underline hover:text-zinc-500">SSE</a>
         &nbsp;·&nbsp;<a href="/api/info" class="underline hover:text-zinc-500">API</a>
     </footer>
 </div>
