@@ -19,11 +19,12 @@ Repos:
 - **Breakout Pipeline**: Detection → 6 deterministic filters (majority gate) → optional CNN inference → Redis publish.
 - **Breakout Types**: 13 types — ORB, PrevDay, InitialBalance, Consolidation + 9 researched (Weekly, Monthly, Asian, BollingerSqueeze, ValueArea, InsideDay, GapRejection, PivotPoints, Fibonacci). All implemented in engine detection + training simulators.
 - **TP3 + EMA9 Trailing**: 3-phase bracket walk-forward (SL/TP1 → TP2 → EMA9 trail toward TP3) on all 13 types.
-- **CNN Model**: EfficientNetV2-S + tabular head, 15 features (v5 contract), ONNX export for NT8.
-- **Feature Contract**: v5 → v6 ready — 15 tabular features, 13 breakout types (ordinals 0–12), TP3 + EMA9 trailing, sessions, Kraken pairs.
+- **CNN Model**: EfficientNetV2-S + tabular head. ONNX model on NT8 expects 8 features (v3). C# auto-adapts via runtime dimension detection.
+- **NT8 Live Trading**: 5 core instruments (`MGC, MES, MNQ, MYM, 6E`), max 5 concurrent positions, 10-min cooldown. Crash-resilient with `OnOrderUpdate` rejection handling, OCO GUID uniqueness, SL price validation, signal name truncation, and try/catch around all order submissions.
+- **Feature Contract**: v5 current (8 tabular features). v6 planned (12 features: add `breakout_type_ord`, `asset_volatility_class`, `range_atr_ratio`, `hour_of_day`).
 - **Multi-Session**: All 9 sessions with bracket params matching futures + NT8.
 - **Parity Renderer**: Default for training — pixel-perfect match with NT8 `OrbChartRenderer`.
-- **CNN Inference**: CPU-only fallback in engine, watchdog-based hot-reload.
+- **CNN Inference**: CPU-only fallback in engine, watchdog-based hot-reload. NT8 auto-adapts tabular vector to model dimension.
 - **Kraken Crypto**: REST + WebSocket v2 integration for 9 spot pairs (BTC, ETH, SOL, LINK, AVAX, DOT, ADA, MATIC, XRP).
 - **NT8 Deploy**: Dashboard panel generates installer .bat that pulls C# from ninjatrader repo.
 - **Monitoring**: Prometheus + Grafana dashboards (optional profile).
@@ -38,6 +39,7 @@ Repos:
 - [x] **Position Manager — Stop-and-Reverse strategy** — New `position_manager.py` module: persistent 1-lot micro positions, 3-phase bracket walk (SL/TP1 → breakeven → EMA9 trail to TP3), reversal gates (CNN, MTF, cooldown, winning-position protection), limit/market entry decision, session-end closure for intraday types, Redis state persistence, 105 tests
 - [x] **Asset watchlists** — Added `CORE_WATCHLIST` (5 assets: MGC, MCL, MES, MNQ, M6E), `EXTENDED_WATCHLIST` (5: SIL, M2K, M6B, MBT, ZN), `ACTIVE_WATCHLIST`, and ticker frozensets to `models.py` + exported from `core/__init__.py`
 - [x] **Strategy plan document** — Comprehensive `docs/STRATEGY_PLAN.md` covering asset review (22→10 active, 12 dropped), model versatility architecture, stop-and-reverse design, order management, EMA9 trailing rules, MTF integration, and phased implementation plan
+- [ ] **Wire `PositionManager` into engine main loop** — call `process_signal()` on breakout detections, `update_all()` on every 1m bar close
 - [ ] **Add session-level performance stats** to daily report
 - [ ] **Backfill gap detection** — alert when historical bars have gaps > N minutes
 
@@ -73,7 +75,7 @@ Repos:
 
 ### Trainer Service
 - [x] **End-to-end trainer smoke test** — Smoke test passes: 257 images generated, 2-epoch training on RTX 2070 SUPER, 63.8% accuracy (expected for quick test), model promoted, champion .pt (83.1 MB) written to disk, full pipeline in 20s
-- [ ] **Full retrain smoke test** — `docker compose up` on GPU rig, `POST /train` with `--symbols MGC MCL MES MNQ M6E SIL M2K M6B MBT ZN --session all --breakout-type all --days 90 --epochs 25`
+- [ ] **Full retrain** — `docker compose up` on GPU rig, generate dataset for 5 core assets (`MGC, MES, MNQ, MYM, 6E`) + all 13 types + all 9 sessions + 90 days, train 25+ epochs, export ONNX v6, commit champion
 - [ ] **Verify compose pulls `nuniesmith/futures:trainer`** correctly and trainer server starts
 
 ### Training & Model Export
@@ -94,6 +96,18 @@ Repos:
 
 ---
 ## Active — `ninjatrader` repo (`~/github/ninjatrader`)
+
+### Crash Resilience (Done — deployed 2026-03-05)
+- [x] **OnOrderUpdate handler** — absorbs rejected orders instead of letting NT8 terminate the strategy
+- [x] **OCO GUID uniqueness** — every OCO ID gets a 6-char GUID suffix, can never be reused
+- [x] **SL price validation** — corrects stop price to correct side of market before submission
+- [x] **Signal name truncation** — capped at 49 chars (NT8 limit is 50)
+- [x] **Try/catch on SubmitOrderUnmanaged** — prevents unhandled exceptions from killing strategy
+- [x] **Max concurrent positions** — `MaxConcurrentPositions = 5` with `OnOrderUpdate` fill/flat tracking
+- [x] **Reduced to 5 core instruments** — `MGC, MES, MNQ, MYM, 6E` (from 15)
+- [x] **Increased cooldown** — 10 min between entries per instrument (from 5)
+- [x] **CNN auto-adapt** — `OrbCnnPredictor` reads model's expected tabular dimension at load time, truncates/pads automatically
+- [x] **Startup diagnostics** — logs CNN tabular dimension, position count in entry logs
 
 ### C# BreakoutType Expansion
 - [ ] **Update C# `BreakoutType` enum** to match 13-value IntEnum:
@@ -272,12 +286,28 @@ Repos:
 
 ---
 ## Next Steps (Priority Order)
-1. **`ninjatrader`**: Deploy patched `BreakoutStrategy.cs` to NT8 machine, compile, and verify 5-instrument startup with CNN dimension logging
-2. **`futures`**: Expand CNN tabular features v5→v6 (8→12) — add `breakout_type_ord`, `asset_volatility_class`, `range_atr_ratio`, `hour_of_day`
-3. **`rb`**: Full retrain with all 13 types + 5 core assets + all 9 sessions + 90 days → export ONNX v6 → commit champion
-4. **`futures`**: Wire `PositionManager` into engine main loop — call `process_signal()` on breakout detections, `update_all()` on every 1m bar
-5. **`futures`**: Verify `sync_models.sh` pulls new .pt from `rb` repo
-6. **`ninjatrader`**: Update C# `BreakoutType` enum (13 values), `OrbCnnPredictor` (12 features), `OrbChartRenderer` (9 new box styles)
+
+### Immediate — Validate & Retrain
+1. **`ninjatrader`**: Deploy patched `BreakoutStrategy.cs` to NT8 machine, compile, and verify:
+   - Only 5 instruments load (`MGC, MES, MNQ, MYM, 6E`)
+   - CNN startup log shows `CNN tabular dim: model expects 8, C# builds 14`
+   - Entry logs show `[positions: N/5]`
+   - No `OCO ID cannot be reused` or `signal name longer than 50` errors
+   - Run for a full session and review output logs
+2. **`rb`**: Full retrain on GPU rig — 5 core assets, all 13 breakout types, all 9 sessions, 90 days, 25+ epochs → export ONNX → commit champion to `rb/models/`
+3. **`futures`**: Verify `sync_models.sh` pulls new `.pt` champion from `rb` repo
+
+### Short-term — Feature Expansion & Integration
+4. **`futures`**: Expand CNN tabular features v5→v6 (8→12) — add `breakout_type_ord`, `asset_volatility_class`, `range_atr_ratio`, `hour_of_day`; update `TABULAR_FEATURES`, `NUM_TABULAR`, dataset, normalisation, and inference
+5. **`futures`**: Wire `PositionManager` into engine main loop — `process_signal()` on breakout detections, `update_all()` on every 1m bar close, persist to Redis
+6. **`ninjatrader`**: Update C# `BreakoutType` enum (13 values), `OrbCnnPredictor` (v6 features), `OrbChartRenderer` (9 new box styles)
+
+### Medium-term — Advanced Strategy
 7. **`ninjatrader`**: Implement C# TP3 + EMA9 trailing + stop-and-reverse in `BreakoutStrategy.cs` (match `position_manager.py`)
-8. **`ninjatrader`**: Update PowerShell to pull `.onnx` + `feature_contract.json` v6 from `rb` repo
+8. **`ninjatrader`**: Update PowerShell model pull to fetch `.onnx` + `feature_contract.json` v6 from `rb` repo
 9. **`futures`**: Add Pi deployment stage back to CI/CD when ready
+
+### Ongoing
+10. **Monitoring**: Add Prometheus metrics for training data health, per-type/session win rates, model promotion events
+11. **Dashboard**: Breakout type filter + MTF score column in signal history, trade journal improvements
+12. **Model iteration**: Per-type model heads, session-specific thresholds, automated label balancing, synthetic augmentation
