@@ -780,14 +780,15 @@ _TRAINER_UI_HTML = """\
           <label>ORB Session</label>
           <select id="cfg-session">
             <option value="all" selected>all</option>
-            <option value="us">us</option>
-            <option value="london">london</option>
-            <option value="london_ny">london_ny</option>
-            <option value="frankfurt">frankfurt</option>
+            <option value="cme">cme</option>
+            <option value="sydney">sydney</option>
             <option value="tokyo">tokyo</option>
             <option value="shanghai">shanghai</option>
-            <option value="sydney">sydney</option>
-            <option value="cme">cme</option>
+            <option value="frankfurt">frankfurt</option>
+            <option value="london">london</option>
+            <option value="london_ny">london_ny</option>
+            <option value="us">us</option>
+            <option value="cme_settle">cme_settle</option>
           </select>
         </div>
         <div>
@@ -795,9 +796,18 @@ _TRAINER_UI_HTML = """\
           <select id="cfg-btype">
             <option value="all" selected>all</option>
             <option value="ORB">ORB</option>
-            <option value="PDR">PDR (Prev Day)</option>
-            <option value="IB">IB (Init Balance)</option>
-            <option value="CONS">CONS (Consolidation)</option>
+            <option value="PrevDay">PrevDay</option>
+            <option value="InitialBalance">InitialBalance</option>
+            <option value="Consolidation">Consolidation</option>
+            <option value="Weekly">Weekly</option>
+            <option value="Monthly">Monthly</option>
+            <option value="Asian">Asian</option>
+            <option value="BollingerSqueeze">BollingerSqueeze</option>
+            <option value="ValueArea">ValueArea</option>
+            <option value="InsideDay">InsideDay</option>
+            <option value="GapRejection">GapRejection</option>
+            <option value="PivotPoints">PivotPoints</option>
+            <option value="Fibonacci">Fibonacci</option>
           </select>
         </div>
       </div>
@@ -870,6 +880,18 @@ _TRAINER_UI_HTML = """\
 
 <script>
 // ============================================================
+// Base path — auto-detect whether we're served directly (/) or
+// behind the web proxy (/trainer/).  All fetch() calls use this
+// so the UI works in both contexts without hardcoding.
+// ============================================================
+const BASE = (() => {
+  const p = window.location.pathname;
+  // If served under /trainer/ or /trainer, strip to get the prefix
+  const m = p.match(/^(\\/trainer)\\/?/);
+  return m ? m[1] : '';
+})();
+
+// ============================================================
 // State
 // ============================================================
 let _lastStatus = null;
@@ -892,7 +914,7 @@ function startPolling() {
 
 async function pollStatus() {
   try {
-    const r = await fetch('/status');
+    const r = await fetch(BASE + '/status');
     if (!r.ok) return;
     const s = await r.json();
     renderStatus(s);
@@ -901,7 +923,7 @@ async function pollStatus() {
 
 async function pollLogs() {
   try {
-    const r = await fetch('/logs?offset=' + _logOffset);
+    const r = await fetch(BASE + '/logs?offset=' + _logOffset);
     if (!r.ok) return;
     const d = await r.json();
     if (d.lines && d.lines.length > 0) {
@@ -913,7 +935,7 @@ async function pollLogs() {
 
 async function loadModels() {
   try {
-    const r = await fetch('/models');
+    const r = await fetch(BASE + '/models');
     if (!r.ok) return;
     const d = await r.json();
     renderArchive(d);
@@ -1167,7 +1189,7 @@ async function startTrain() {
   document.getElementById('results-panel').style.display = 'none';
 
   try {
-    const r = await fetch('/train', {
+    const r = await fetch(BASE + '/train', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify(payload),
@@ -1189,7 +1211,7 @@ async function startTrain() {
 async function cancelTrain() {
   if (!confirm('Cancel the current training run?')) return;
   try {
-    const r = await fetch('/train/cancel', {method:'POST'});
+    const r = await fetch(BASE + '/train/cancel', {method:'POST'});
     const d = await r.json();
     appendLog({level:'WARNING', ts: nowTs(), name:'ui', msg: d.message || 'Cancellation requested'});
   } catch(e) {}
@@ -1200,7 +1222,7 @@ async function exportOnnx() {
   document.getElementById('onnx-status').innerHTML = '<span class="spinner"></span> Exporting ONNX...';
   document.getElementById('btn-onnx').disabled = true;
   try {
-    const r = await fetch('/export_onnx', {method:'POST'});
+    const r = await fetch(BASE + '/export_onnx', {method:'POST'});
     const d = await r.json();
     if (r.ok) {
       document.getElementById('onnx-status').innerHTML =
@@ -1349,7 +1371,11 @@ async def metrics_prometheus() -> HTMLResponse:
     _gauge("trainer_last_run_accuracy", "Last training run validation accuracy pct", metrics.get("val_accuracy", 0))
     _gauge("trainer_last_run_precision", "Last training run validation precision pct", metrics.get("val_precision", 0))
     _gauge("trainer_last_run_recall", "Last training run validation recall pct", metrics.get("val_recall", 0))
-    _gauge("trainer_last_run_promoted", "Whether last run was promoted to champion", 1.0 if last_result.get("promoted") else 0.0)
+    _gauge(
+        "trainer_last_run_promoted",
+        "Whether last run was promoted to champion",
+        1.0 if last_result.get("promoted") else 0.0,
+    )
 
     dataset_info = last_result.get("dataset") or {}
     _gauge("trainer_last_run_images", "Total images in last dataset generation", dataset_info.get("total_images", 0))
@@ -1368,32 +1394,6 @@ async def health() -> JSONResponse:
             "uptime_seconds": round((datetime.now(UTC) - _boot_time).total_seconds(), 1),
         }
     )
-
-
-@app.get("/metrics/prometheus")
-async def metrics_prometheus() -> HTMLResponse:
-    """Prometheus text-format metrics endpoint.
-
-    Exposes the following gauges:
-
-    * ``trainer_up``                      — 1 if healthy
-    * ``trainer_uptime_seconds``          — seconds since boot
-    * ``trainer_gpu_available``           — 1 if CUDA is available
-    * ``trainer_gpu_memory_total_bytes``  — total VRAM in bytes (0 if no GPU)
-    * ``trainer_status``                  — labelled gauge: status=idle|training|...
-    * ``trainer_champion_exists``         — 1 if breakout_cnn_best.pt is on disk
-    * ``trainer_champion_accuracy``       — last champion val accuracy (0–100)
-    * ``trainer_champion_precision``      — last champion val precision (0–100)
-    * ``trainer_champion_recall``         — last champion val recall (0–100)
-    * ``trainer_runs_total``              — monotonic count of completed training runs
-    * ``trainer_last_run_duration_seconds`` — wall-clock seconds of the last run
-    * ``trainer_last_run_promoted``       — 1 if the last run was promoted
-    * ``trainer_images_generated``        — images generated in last dataset build
-    """
-    lines: list[str] = []
-
-    def _gauge(name: str, help_text: str, value: float, labels: str = "") -> None:
-        lines.append(f"# HELP
 
 
 @app.get("/status")

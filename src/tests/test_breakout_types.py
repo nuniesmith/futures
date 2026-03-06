@@ -1204,22 +1204,24 @@ class TestFeatureContractGeneration:
 
         contract = generate_feature_contract()
         assert contract["num_tabular"] == NUM_TABULAR
-        assert contract["num_tabular"] == 12
+        assert contract["num_tabular"] == 18
 
     def test_tabular_features_list(self):
         from lib.analysis.breakout_cnn import TABULAR_FEATURES, generate_feature_contract
 
         contract = generate_feature_contract()
         assert contract["tabular_features"] == TABULAR_FEATURES
-        assert len(contract["tabular_features"]) == 12
-        # Spot-check v5 originals
-        assert "quality_pct" in contract["tabular_features"]
+        assert len(contract["tabular_features"]) == 18
+        # Spot-check v4 core features
+        assert "quality_pct_norm" in contract["tabular_features"]
         assert "direction_flag" in contract["tabular_features"]
+        assert "or_range_atr_ratio" in contract["tabular_features"]
+        assert "asset_class_id" in contract["tabular_features"]
         # v6 additions
         assert "breakout_type_ord" in contract["tabular_features"]
         assert "asset_volatility_class" in contract["tabular_features"]
-        assert "range_atr_ratio" in contract["tabular_features"]
         assert "hour_of_day" in contract["tabular_features"]
+        assert "tp3_atr_mult_norm" in contract["tabular_features"]
 
     def test_all_13_breakout_types_present(self):
         from lib.analysis.breakout_cnn import generate_feature_contract
@@ -1260,25 +1262,27 @@ class TestFeatureContractGeneration:
         from lib.analysis.breakout_cnn import generate_feature_contract
 
         contract = generate_feature_contract()
-        sess = contract["sessions"]
+        sess = contract["session_thresholds"]
         assert len(sess) == 9
 
     def test_sessions_have_required_fields(self):
         from lib.analysis.breakout_cnn import generate_feature_contract
 
         contract = generate_feature_contract()
-        for key, info in contract["sessions"].items():
-            assert "session_ordinal" in info, f"Missing 'session_ordinal' for {key}"
-            assert "cnn_threshold" in info, f"Missing 'cnn_threshold' for {key}"
-            assert 0.0 <= info["session_ordinal"] <= 1.0, (
-                f"session_ordinal out of range for {key}: {info['session_ordinal']}"
-            )
+        # session_thresholds maps session key → float threshold
+        # session_ordinals maps session key → float ordinal
+        thresholds = contract["session_thresholds"]
+        ordinals = contract["session_ordinals"]
+        for key in thresholds:
+            assert key in ordinals, f"Missing ordinal for session {key}"
+            assert 0.0 <= ordinals[key] <= 1.0, f"session_ordinal out of range for {key}: {ordinals[key]}"
+            assert 0.0 <= thresholds[key] <= 1.0, f"session_threshold out of range for {key}: {thresholds[key]}"
 
     def test_asset_volatility_section(self):
         from lib.analysis.breakout_cnn import ASSET_VOLATILITY_CLASS, generate_feature_contract
 
         contract = generate_feature_contract()
-        av = contract["asset_volatility"]
+        av = contract["asset_volatility_classes"]
         assert av == ASSET_VOLATILITY_CLASS
         # All values must be 0.0, 0.5, or 1.0
         for ticker, val in av.items():
@@ -1331,7 +1335,7 @@ class TestFeatureContractGeneration:
         assert loaded["num_tabular"] == contract["num_tabular"]
         assert loaded["tabular_features"] == contract["tabular_features"]
         assert len(loaded["breakout_types"]) == 13
-        assert len(loaded["sessions"]) == 9
+        assert len(loaded["session_thresholds"]) == 9
 
     def test_write_creates_parent_directories(self, tmp_path):
         import os

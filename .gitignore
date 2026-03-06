@@ -76,3 +76,5 @@ codebase_summary.md
 # after a fresh clone, but all model artifacts are gitignored.
 models/*
 !models/.gitkeep
+
+*.png
