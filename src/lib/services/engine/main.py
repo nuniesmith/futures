@@ -1747,17 +1747,13 @@ def _dispatch_to_position_manager(
 
         # Attach session_key if missing
         if not getattr(signal, "session_key", ""):
-            try:
+            with contextlib.suppress(AttributeError):
                 signal.session_key = session_key
-            except AttributeError:
-                pass
 
         # Attach filter_passed as True (signal already passed the filter gate)
         if getattr(signal, "filter_passed", None) is None:
-            try:
+            with contextlib.suppress(AttributeError):
                 signal.filter_passed = True
-            except AttributeError:
-                pass
 
         orders = pm.process_signal(signal, bars_1m=bars_1m, range_config=range_config)
         if orders:
@@ -2582,7 +2578,7 @@ def _handle_daily_report(engine) -> None:
                         if p.realized_pnl > 0:
                             bucket["wins"] += 1
                         bucket["total_pnl"] = round(bucket["total_pnl"] + p.realized_pnl, 4)
-                    for btype, b in type_breakdown.items():
+                    for _btype, b in type_breakdown.items():
                         b["win_rate"] = round(b["wins"] / b["trades"] * 100, 1) if b["trades"] else 0.0
 
                     report["position_manager"] = {

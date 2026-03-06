@@ -954,20 +954,14 @@ def _build_asian_range(
     idx_time = pd.DatetimeIndex(bars_et.index).time
 
     # Wraps midnight: time >= 19:00 OR time < 02:00
-    if start > end:
-        mask = (idx_time >= start) | (idx_time < end)
-    else:
-        mask = (idx_time >= start) & (idx_time < end)
+    mask = (idx_time >= start) | (idx_time < end) if start > end else (idx_time >= start) & (idx_time < end)
 
     asian_bars = bars_et.loc[mask]
     bar_count = len(asian_bars)
 
     # Complete once we're past the end time and NOT in the start window
     # (i.e. we're in the 02:00–19:00 window of the next day)
-    if start > end:
-        complete = end <= now_time < start
-    else:
-        complete = now_time >= end
+    complete = end <= now_time < start if start > end else now_time >= end
 
     if bar_count < config.min_bars:
         return 0.0, 0.0, bar_count, complete
@@ -1288,21 +1282,21 @@ def _build_pivot_range(
         return 0.0, 0.0, len(prev_bars), False, 0.0, 0.0, 0.0, 0.0
 
     h = float(prev_bars["High"].max())
-    l = float(prev_bars["Low"].min())
+    prev_low = float(prev_bars["Low"].min())
     c = float(prev_bars["Close"].iloc[-1])
 
     formula = config.pivot_formula.lower()
     if formula == "woodie":
-        pivot = (h + l + 2 * c) / 4.0
-        r1 = 2.0 * pivot - l
+        pivot = (h + prev_low + 2 * c) / 4.0
+        r1 = 2.0 * pivot - prev_low
         s1 = 2.0 * pivot - h
     elif formula == "camarilla":
-        pivot = (h + l + c) / 3.0
-        r1 = c + 1.1 * (h - l) / 12.0
-        s1 = c - 1.1 * (h - l) / 12.0
+        pivot = (h + prev_low + c) / 3.0
+        r1 = c + 1.1 * (h - prev_low) / 12.0
+        s1 = c - 1.1 * (h - prev_low) / 12.0
     else:  # classic
-        pivot = (h + l + c) / 3.0
-        r1 = 2.0 * pivot - l
+        pivot = (h + prev_low + c) / 3.0
+        r1 = 2.0 * pivot - prev_low
         s1 = 2.0 * pivot - h
 
     if r1 <= s1 or r1 <= 0 or s1 <= 0:

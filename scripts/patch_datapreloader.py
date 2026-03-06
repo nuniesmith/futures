@@ -25,7 +25,7 @@ BACKUP_EXT = ".bak." + datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def read_file(path):
-    with open(path, "r", encoding="utf-8-sig") as f:
+    with open(path, encoding="utf-8-sig") as f:
         return f.read()
 
 

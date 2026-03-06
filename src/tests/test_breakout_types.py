@@ -19,8 +19,7 @@ Covers:
 """
 
 import os
-import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
@@ -29,6 +28,25 @@ import pandas as pd
 import pytest
 
 os.environ.setdefault("DISABLE_REDIS", "1")
+
+from lib.services.engine.breakout import (  # noqa: E402
+    DEFAULT_CONFIGS,
+    BreakoutResult,
+    BreakoutType,
+    RangeConfig,
+    _build_asian_range,
+    _build_bbsqueeze_range,
+    _build_fibonacci_range,
+    _build_gap_rejection_range,
+    _build_inside_day_range,
+    _build_monthly_range,
+    _build_pivot_range,
+    _build_va_range,
+    _build_weekly_range,
+    _compute_atr,
+    detect_all_breakout_types,
+    detect_range_breakout,
+)
 
 _EST = ZoneInfo("America/New_York")
 
@@ -265,7 +283,7 @@ def _make_squeeze_bars(
     Next `squeeze_bars` bars: very tight range (squeeze)
     Remaining bars: expansion
     """
-    rng = np.random.default_rng(seed)
+    np.random.default_rng(seed)
     parts = []
 
     # Normal volatility phase
@@ -305,33 +323,6 @@ def _make_squeeze_bars(
 
     return pd.concat(parts)
 
-
-# ===========================================================================
-# Imports — engine breakout module
-# ===========================================================================
-
-from lib.services.engine.breakout import (
-    DEFAULT_CONFIGS,
-    BreakoutResult,
-    BreakoutType,
-    RangeConfig,
-    _build_asian_range,
-    _build_bbsqueeze_range,
-    _build_consolidation_range,
-    _build_fibonacci_range,
-    _build_gap_rejection_range,
-    _build_ib_range,
-    _build_inside_day_range,
-    _build_monthly_range,
-    _build_orb_range,
-    _build_pdr_range,
-    _build_pivot_range,
-    _build_va_range,
-    _build_weekly_range,
-    _compute_atr,
-    detect_all_breakout_types,
-    detect_range_breakout,
-)
 
 # ===========================================================================
 # Test: DEFAULT_CONFIGS completeness
@@ -755,7 +746,6 @@ class TestBuildFibonacciRange:
         config = DEFAULT_CONFIGS[BreakoutType.FIB]
         r_high, r_low, count, valid, swing_high, swing_low, fib_382, fib_618 = _build_fibonacci_range(bars, config, atr)
         if valid:
-            swing_size = swing_high - swing_low
             # For an upswing: fib_382 = swing_high - 0.382 * swing_size
             #                 fib_618 = swing_high - 0.618 * swing_size
             # The fib zone (r_low to r_high) should span [fib_618, fib_382]
@@ -940,7 +930,7 @@ class TestDetectAllBreakoutTypes:
         results = detect_all_breakout_types(bad_bars, "MES=F")
         # Should still return results for all 13 types, but with errors
         assert len(results) == 13
-        for btype, result in results.items():
+        for _btype, result in results.items():
             assert isinstance(result, BreakoutResult)
 
 
@@ -1110,7 +1100,6 @@ class TestSchedulerNewActionTypes:
         # Simulate 09:45 ET on a weekday — peak US active window
         now = datetime(2026, 2, 27, 9, 45, 0, tzinfo=_EST)
         actions = mgr.get_pending_actions(now=now)
-        action_types = {a.action for a in actions}
 
         # CHECK_BREAKOUT_MULTI should be scheduled with all types in payload
         multi_actions = [a for a in actions if a.action == ActionType.CHECK_BREAKOUT_MULTI]

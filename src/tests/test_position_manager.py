@@ -17,11 +17,10 @@ Tests cover:
 from __future__ import annotations
 
 import json
-import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -480,7 +479,7 @@ class TestBracketPhases:
 
         # Price reaches TP2
         bars = _make_bars_with_price(20, pos.entry_price, tp2 + 1.0)
-        orders = pm.update_all({"MGC=F": bars})
+        pm.update_all({"MGC=F": bars})
 
         pos = pm.get_position("MGC=F")
         assert pos is not None
@@ -515,7 +514,7 @@ class TestBracketPhases:
 
         # Price reaches TP3
         bars = _make_bars_with_price(20, pos.entry_price, tp3 + 2.0)
-        orders = pm.update_all({"MGC=F": bars})
+        pm.update_all({"MGC=F": bars})
 
         # Position should be closed
         assert pm.get_position("MGC=F") is None
@@ -606,7 +605,7 @@ class TestEMA9Trailing:
 
         # Bars trending up — EMA9 should increase, stop ratchets up
         bars = _make_bars_with_price(30, 104.0, 108.0)
-        orders = pm.update_all({"MGC=F": bars})
+        pm.update_all({"MGC=F": bars})
 
         pos = pm.get_position("MGC=F")
         if pos is not None:
@@ -629,7 +628,7 @@ class TestEMA9Trailing:
 
         # Bars trending down — EMA9 may decrease, but trail should NOT go below 106
         bars = _make_bars_with_price(30, 107.0, 106.5)  # still above trail
-        orders = pm.update_all({"MGC=F": bars})
+        pm.update_all({"MGC=F": bars})
 
         pos = pm.get_position("MGC=F")
         if pos is not None:
@@ -1023,7 +1022,7 @@ class TestStatePersistence:
         signal = MockSignal(direction="LONG", trigger_price=2400.0, atr_value=5.0)
         pm.process_signal(signal)
 
-        with patch("lib.services.engine.position_manager.PositionManager.save_state") as mock_save:
+        with patch("lib.services.engine.position_manager.PositionManager.save_state"):
             # Just verify it's called during open_position
             pass
 
@@ -1242,7 +1241,7 @@ class TestEdgeCases:
     def test_process_signal_with_zero_atr_fallback(self):
         pm = _make_pm()
         signal = MockSignal(atr_value=0.0, trigger_price=100.0)
-        orders = pm.process_signal(signal)
+        pm.process_signal(signal)
         pos = pm.get_position("MGC=F")
         # Should use fallback ATR (0.5% of price)
         assert pos is not None
@@ -1302,7 +1301,7 @@ class TestEdgeCases:
             "MGC=F": _make_bars_with_price(20, 100.0, 101.0),
             # MCL=F has no bars
         }
-        orders = pm.update_all(bars_dict)
+        pm.update_all(bars_dict)
 
         # MGC should have been updated
         pos_mgc = pm.get_position("MGC=F")
@@ -1341,7 +1340,7 @@ class TestBracketWalkIntegration:
 
         # --- Phase 1: INITIAL → price moves toward TP1 ---
         bars_phase1 = _make_bars_with_price(20, 100.0, tp1 + 0.5)
-        orders_p1 = pm.update_all({"MGC=F": bars_phase1})
+        pm.update_all({"MGC=F": bars_phase1})
 
         pos = pm.get_position("MGC=F")
         assert pos is not None
@@ -1350,7 +1349,7 @@ class TestBracketWalkIntegration:
 
         # --- Phase 2: BREAKEVEN → price moves toward TP2 ---
         bars_phase2 = _make_bars_with_price(30, tp1 + 0.5, tp2 + 0.5)
-        orders_p2 = pm.update_all({"MGC=F": bars_phase2})
+        pm.update_all({"MGC=F": bars_phase2})
 
         pos = pm.get_position("MGC=F")
         assert pos is not None
@@ -1371,10 +1370,10 @@ class TestBracketWalkIntegration:
             bars_drop = _make_bars_with_price(15, tp2 + 1.0, trail - 2.0)
             # Manually set Low to trigger stop
             bars_drop["Low"] = bars_drop["Close"] - 0.5
-            orders_p3 = pm.update_all({"MGC=F": bars_drop})
+            pm.update_all({"MGC=F": bars_drop})
 
             # Position should be closed (either by stop or EMA9 trail)
-            final_pos = pm.get_position("MGC=F")
+            pm.get_position("MGC=F")
             # It's possible the stop hasn't triggered depending on exact EMA9 math,
             # but the test validates the phase progression was correct
             assert pos.phase == BracketPhase.TRAILING  # Was in trailing before exit check
@@ -1524,7 +1523,6 @@ class TestWatchlistConstants:
         from lib.core.models import CORE_WATCHLIST
 
         # All core tickers should be micro contract data tickers
-        expected_tickers = {"MGC=F", "MCL=F", "MES=F", "MNQ=F", "M6E=F"}
         # Note: MCL data_ticker is CL=F, MES data_ticker is ES=F, etc.
         # The CORE_WATCHLIST uses data_tickers for consistency with ASSETS dict
         actual_tickers = set(CORE_WATCHLIST.values())

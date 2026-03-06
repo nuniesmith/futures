@@ -47,14 +47,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import time
-from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime, timedelta
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
 
 logger = logging.getLogger("engine.position_manager")
 
@@ -533,7 +532,6 @@ class PositionManager:
         cnn_prob = getattr(signal, "cnn_prob", None) or 0.0
         mtf_score = getattr(signal, "mtf_score", None) or 0.0
         session_key = getattr(signal, "session_key", "") or ""
-        filter_passed = getattr(signal, "filter_passed", None)
         btype = str(getattr(signal, "breakout_type", ""))
 
         # Extract bracket multipliers from range_config or use defaults
@@ -882,11 +880,9 @@ class PositionManager:
                 pos.ema9_last_value = ema9
 
                 # Only move the trail in the favorable direction (ratchet)
-                should_update = False
-                if pos.is_long and ema9 > pos.ema9_trail_price:
-                    should_update = True
-                elif pos.is_short and ema9 < pos.ema9_trail_price:
-                    should_update = True
+                should_update = (pos.is_long and ema9 > pos.ema9_trail_price) or (
+                    pos.is_short and ema9 < pos.ema9_trail_price
+                )
 
                 if should_update:
                     pos.ema9_trail_price = ema9
@@ -1025,16 +1021,15 @@ class PositionManager:
             return False
 
         # Gate 6: If current position is winning, be very selective
-        if existing.is_winning and existing.r_multiple > 1.0:
+        if existing.is_winning and existing.r_multiple > 1.0 and cnn_prob < 0.95:
             # Don't flip a position that's already at 1R+ profit unless
             # the new signal is exceptional
-            if cnn_prob < 0.95:
-                logger.debug(
-                    "Reversal gate: won't flip +%.2fR winner without CNN ≥ 0.95 (got %.3f)",
-                    existing.r_multiple,
-                    cnn_prob,
-                )
-                return False
+            logger.debug(
+                "Reversal gate: won't flip +%.2fR winner without CNN ≥ 0.95 (got %.3f)",
+                existing.r_multiple,
+                cnn_prob,
+            )
+            return False
 
         logger.info(
             "Reversal gate PASSED for %s: %s → %s (CNN=%.3f, MTF=%.2f, R=%.2f)",
@@ -1069,10 +1064,7 @@ class PositionManager:
             return OrderType.MARKET, trigger_price
 
         # How far has price already moved past the trigger?
-        if direction == "LONG":
-            overshoot = current_price - trigger_price
-        else:
-            overshoot = trigger_price - current_price
+        overshoot = current_price - trigger_price if direction == "LONG" else trigger_price - current_price
 
         max_chase = CHASE_MAX_ATR_FRACTION * atr
 

@@ -570,10 +570,7 @@ if _TORCH_AVAILABLE:
             # range_atr_ratio: range_size / ATR, clamped to [0, 3] then /3 → [0, 1]
             _range_size = float(row.get("range_size", row.get("or_range", 0.0)))
             _atr_raw = float(row.get("atr_value", row.get("atr_pct", 0.0)))
-            if _atr_raw > 0:
-                _range_atr = min(_range_size / _atr_raw, 3.0) / 3.0
-            else:
-                _range_atr = 0.5  # neutral fallback
+            _range_atr = min(_range_size / _atr_raw, 3.0) / 3.0 if _atr_raw > 0 else 0.5
 
             # hour_of_day: ET hour / 23
             _hour_norm = min(_hour, 23) / 23.0
@@ -1478,10 +1475,7 @@ def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[floa
     # f[10] = range_atr_ratio — caller passes raw ratio; clamp to [0, 3] then /3
     # If caller already normalised to [0, 1], the clamp is a no-op.
     raw_range_atr = f[10]
-    if raw_range_atr > 1.0:
-        range_atr = min(raw_range_atr / 3.0, 1.0)
-    else:
-        range_atr = max(min(raw_range_atr, 1.0), 0.0)
+    range_atr = min(raw_range_atr / 3.0, 1.0) if raw_range_atr > 1.0 else max(min(raw_range_atr, 1.0), 0.0)
 
     # f[11] = hour_of_day — caller passes ET hour / 23; clamp to [0, 1]
     hour_norm = max(min(f[11], 1.0), 0.0)

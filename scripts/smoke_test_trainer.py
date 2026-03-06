@@ -47,7 +47,7 @@ import subprocess
 import sys
 import textwrap
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -283,8 +283,8 @@ def run_smoke_test(args: argparse.Namespace) -> int:
     print()
     _info(f"Symbols:        {', '.join(symbols)}")
     _info(f"Days back:      {days}")
-    _info(f"Breakout type:  all (13 types)")
-    _info(f"Session:        all (9 sessions)")
+    _info("Breakout type:  all (13 types)")
+    _info("Session:        all (9 sessions)")
     _info(f"Epochs:         {epochs}")
     _info(f"Batch size:     {batch_size}")
     _info(f"Patience:       {patience}")
@@ -458,9 +458,7 @@ def run_smoke_test(args: argparse.Namespace) -> int:
                         training_logged = True
                 elif current_status == "evaluating":
                     color = CYAN
-                elif current_status == "promoting":
-                    color = GREEN
-                elif current_status == "done":
+                elif current_status in ("promoting", "done"):
                     color = GREEN
                 elif current_status == "failed":
                     color = RED

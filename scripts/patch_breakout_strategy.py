@@ -61,7 +61,7 @@ BACKUP_EXT = f".bak.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 
 def read_file(path: str) -> str:
-    with open(path, "r", encoding="utf-8-sig") as f:
+    with open(path, encoding="utf-8-sig") as f:
         return f.read()
 
 
@@ -620,16 +620,16 @@ def main():
     else:
         print("\n⚠ Some patches may not have applied correctly — review the output above.")
 
-    print(f"\n📝 Next steps:")
-    print(f"   1. Copy the patched file to your NinjaTrader machine:")
-    print(f"      Documents\\NinjaTrader 8\\bin\\Custom\\Strategies\\BreakoutStrategy.cs")
-    print(f"   2. In NinjaTrader, go to Tools > NinjaScript Editor and compile (F5)")
-    print(f"   3. Restart the strategy on a 1-minute chart")
-    print(f"   4. Verify in the output window:")
-    print(f"      - Only 5 instruments are loaded (MGC, MES, MNQ, MYM, 6E)")
-    print(f"      - CNN tabular dim line shows the model's expected dimension")
-    print(f"      - No more 'OCO ID cannot be reused' errors")
-    print(f"      - Position count shows in entry logs")
+    print("\n📝 Next steps:")
+    print("   1. Copy the patched file to your NinjaTrader machine:")
+    print("      Documents\\NinjaTrader 8\\bin\\Custom\\Strategies\\BreakoutStrategy.cs")
+    print("   2. In NinjaTrader, go to Tools > NinjaScript Editor and compile (F5)")
+    print("   3. Restart the strategy on a 1-minute chart")
+    print("   4. Verify in the output window:")
+    print("      - Only 5 instruments are loaded (MGC, MES, MNQ, MYM, 6E)")
+    print("      - CNN tabular dim line shows the model's expected dimension")
+    print("      - No more 'OCO ID cannot be reused' errors")
+    print("      - Position count shows in entry logs")
 
 
 if __name__ == "__main__":

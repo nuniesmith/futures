@@ -895,7 +895,6 @@ def cnn_dataset_preview(
     Designed for HTMX swap into ``#cnn-dataset-preview-container``.
     """
     import base64
-    import os as _os
     import random
 
     now_str = datetime.now(tz=_EST).strftime("%H:%M ET")
@@ -918,7 +917,7 @@ def cnn_dataset_preview(
 
     if not _csv or not Path(_csv).is_file():
         return HTMLResponse(
-            content=f"""
+            content="""
 <div id="cnn-dataset-preview-inner">
     <div style="padding:16px;text-align:center;color:#52525b;font-size:11px">
         No dataset CSV found. Generate a dataset first:<br>
