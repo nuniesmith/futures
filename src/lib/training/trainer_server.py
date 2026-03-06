@@ -5,9 +5,6 @@ FastAPI server that accepts ``POST /train`` requests, runs the full CNN
 training pipeline (dataset generation → model training → evaluation →
 champion promotion), and exposes health/status endpoints.
 
-Model contract: **v6** — 18 tabular features (EfficientNetV2-S hybrid).
-Trains all 13 breakout types across 9 sessions.  Exports ONNX for NT8.
-
 Designed to run as a long-lived Docker service on a GPU machine:
 
     docker compose up trainer
@@ -20,15 +17,16 @@ The server is intentionally simple — one training job at a time, no queue.
 If a training run is already in progress, ``POST /train`` returns 409.
 
 Endpoints:
-    GET  /                — Full-featured HTML trainer dashboard (Web UI)
-    GET  /health          — Liveness probe (always 200)
-    GET  /status          — Current server state + last training result
-    GET  /logs            — Recent in-memory log lines (JSON)
-    POST /train           — Kick off a training run (async background task)
-    POST /train/cancel    — Request cancellation of the current run
-    POST /export_onnx     — Re-export the champion .pt to ONNX (best-effort)
-    GET  /models          — List all model files in models/ + archive/
-    GET  /models/archive  — List archived model checkpoints
+    GET  /                     — Full-featured HTML trainer dashboard (Web UI)
+    GET  /health               — Liveness probe (always 200)
+    GET  /status               — Current server state + last training result
+    GET  /logs                 — Recent in-memory log lines (JSON)
+    GET  /metrics/prometheus   — Prometheus text-format metrics endpoint
+    POST /train                — Kick off a training run (async background task)
+    POST /train/cancel         — Request cancellation of the current run
+    POST /export_onnx          — Re-export the champion .pt to ONNX (best-effort)
+    GET  /models               — List all model files in models/ + archive/
+    GET  /models/archive       — List archived model checkpoints
 
 Environment variables:
     TRAINER_HOST                  — Bind address (default 0.0.0.0)
@@ -1291,6 +1289,75 @@ async def trainer_ui() -> HTMLResponse:
     return HTMLResponse(content=_TRAINER_UI_HTML)
 
 
+@app.get("/metrics/prometheus")
+async def metrics_prometheus() -> HTMLResponse:
+    """Prometheus text-format metrics endpoint for scraping.
+
+    Exposes:
+      - ``trainer_up`` — always 1 (liveness)
+      - ``trainer_uptime_seconds`` — seconds since boot
+      - ``trainer_status`` — labelled gauge (1 for current status, 0 otherwise)
+      - ``trainer_gpu_available`` — 1 if CUDA is available, 0 otherwise
+      - ``trainer_gpu_memory_total_bytes`` — total GPU VRAM in bytes
+      - ``trainer_champion_exists`` — 1 if champion .pt exists on disk
+      - ``trainer_last_run_accuracy`` — last run val accuracy (0–100)
+      - ``trainer_last_run_precision`` — last run val precision (0–100)
+      - ``trainer_last_run_recall`` — last run val recall (0–100)
+      - ``trainer_last_run_promoted`` — 1 if last run was promoted, 0 otherwise
+      - ``trainer_last_run_images`` — total images in last dataset generation
+      - ``trainer_runs_total`` — total training runs completed since boot
+    """
+    lines: list[str] = []
+
+    def _gauge(name: str, help_text: str, value: float, labels: str = "") -> None:
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} gauge")
+        lbl = f"{{{labels}}}" if labels else ""
+        lines.append(f"{name}{lbl} {value}")
+
+    uptime = round((datetime.now(UTC) - _boot_time).total_seconds(), 1)
+    _gauge("trainer_up", "Trainer server is up", 1)
+    _gauge("trainer_uptime_seconds", "Seconds since trainer server boot", uptime)
+
+    # Status as labelled gauge (one label per possible status, 1 for active)
+    state = _state.to_dict()
+    current_status = state.get("status", "idle")
+    for s in ("idle", "generating_dataset", "training", "evaluating", "promoting", "done", "failed", "cancelled"):
+        val = 1.0 if s == current_status else 0.0
+        _gauge("trainer_status", "Current trainer status", val, labels=f'status="{s}"')
+
+    # GPU info
+    gpu_available = 0.0
+    gpu_mem_bytes = 0.0
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            gpu_available = 1.0
+            gpu_mem_bytes = float(torch.cuda.get_device_properties(0).total_memory)
+    except Exception:
+        pass
+    _gauge("trainer_gpu_available", "CUDA GPU available for training", gpu_available)
+    _gauge("trainer_gpu_memory_total_bytes", "Total GPU VRAM in bytes", gpu_mem_bytes)
+
+    # Champion model
+    _gauge("trainer_champion_exists", "Champion model .pt exists on disk", 1.0 if CHAMPION_PT.exists() else 0.0)
+
+    # Last run metrics
+    last_result = state.get("last_result") or {}
+    metrics = last_result.get("metrics") or {}
+    _gauge("trainer_last_run_accuracy", "Last training run validation accuracy pct", metrics.get("val_accuracy", 0))
+    _gauge("trainer_last_run_precision", "Last training run validation precision pct", metrics.get("val_precision", 0))
+    _gauge("trainer_last_run_recall", "Last training run validation recall pct", metrics.get("val_recall", 0))
+    _gauge("trainer_last_run_promoted", "Whether last run was promoted to champion", 1.0 if last_result.get("promoted") else 0.0)
+
+    dataset_info = last_result.get("dataset") or {}
+    _gauge("trainer_last_run_images", "Total images in last dataset generation", dataset_info.get("total_images", 0))
+
+    body = "\n".join(lines) + "\n"
+    return HTMLResponse(content=body, media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
 @app.get("/health")
 async def health() -> JSONResponse:
     """Liveness probe — always returns 200."""
@@ -1301,6 +1368,32 @@ async def health() -> JSONResponse:
             "uptime_seconds": round((datetime.now(UTC) - _boot_time).total_seconds(), 1),
         }
     )
+
+
+@app.get("/metrics/prometheus")
+async def metrics_prometheus() -> HTMLResponse:
+    """Prometheus text-format metrics endpoint.
+
+    Exposes the following gauges:
+
+    * ``trainer_up``                      — 1 if healthy
+    * ``trainer_uptime_seconds``          — seconds since boot
+    * ``trainer_gpu_available``           — 1 if CUDA is available
+    * ``trainer_gpu_memory_total_bytes``  — total VRAM in bytes (0 if no GPU)
+    * ``trainer_status``                  — labelled gauge: status=idle|training|...
+    * ``trainer_champion_exists``         — 1 if breakout_cnn_best.pt is on disk
+    * ``trainer_champion_accuracy``       — last champion val accuracy (0–100)
+    * ``trainer_champion_precision``      — last champion val precision (0–100)
+    * ``trainer_champion_recall``         — last champion val recall (0–100)
+    * ``trainer_runs_total``              — monotonic count of completed training runs
+    * ``trainer_last_run_duration_seconds`` — wall-clock seconds of the last run
+    * ``trainer_last_run_promoted``       — 1 if the last run was promoted
+    * ``trainer_images_generated``        — images generated in last dataset build
+    """
+    lines: list[str] = []
+
+    def _gauge(name: str, help_text: str, value: float, labels: str = "") -> None:
+        lines.append(f"# HELP
 
 
 @app.get("/status")

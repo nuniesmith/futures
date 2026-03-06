@@ -59,6 +59,8 @@ import numpy as np
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from lib.training.orb_simulator import ORBSimResult
 import pandas as pd
 
 logger = logging.getLogger("analysis.dataset_generator")
@@ -990,8 +992,8 @@ def _run_simulators_for_breakout_type(
                     min_window_bars=cfg.min_window_bars,
                 )
                 for r in results:
-                    r._session_key = session_key  # type: ignore[attr-defined]
-                    r._breakout_type = BreakoutType.ORB  # type: ignore[attr-defined]
+                    r._session_key = session_key
+                    r._breakout_type = BreakoutType.ORB
                 combined.extend(results)
                 logger.info(
                     "%s: %d windows → %d trades",
@@ -1013,7 +1015,8 @@ def _run_simulators_for_breakout_type(
                 bars_daily=bars_daily,
             )
             for r in results:
-                r._session_key = getattr(r, "_session_key", "us")  # type: ignore[attr-defined]
+                r._session_key = r._session_key or "us"
+                r._breakout_type = BreakoutType.PrevDay
             combined.extend(results)
             logger.info(
                 "PrevDay %s: %d days → %d trades",
@@ -1035,7 +1038,8 @@ def _run_simulators_for_breakout_type(
                 bars_daily=bars_daily,
             )
             for r in results:
-                r._session_key = getattr(r, "_session_key", "us")  # type: ignore[attr-defined]
+                r._session_key = r._session_key or "us"
+                r._breakout_type = BreakoutType.InitialBalance
             combined.extend(results)
             logger.info(
                 "IB %s: %d days → %d trades",
@@ -1057,7 +1061,8 @@ def _run_simulators_for_breakout_type(
                 bars_daily=bars_daily,
             )
             for r in results:
-                r._session_key = getattr(r, "_session_key", "us")  # type: ignore[attr-defined]
+                r._session_key = r._session_key or "us"
+                r._breakout_type = BreakoutType.Consolidation
             combined.extend(results)
             logger.info(
                 "Consolidation %s: %d boxes → %d trades",
@@ -1079,7 +1084,8 @@ def _run_simulators_for_breakout_type(
                 bars_daily=bars_daily,
             )
             for r in results:
-                r._session_key = getattr(r, "_session_key", "us")  # type: ignore[attr-defined]
+                r._session_key = r._session_key or "us"
+                r._breakout_type = BreakoutType.Weekly
             combined.extend(results)
             logger.info(
                 "Weekly %s: %d weeks → %d trades",
@@ -1101,7 +1107,8 @@ def _run_simulators_for_breakout_type(
                 bars_daily=bars_daily,
             )
             for r in results:
-                r._session_key = getattr(r, "_session_key", "us")  # type: ignore[attr-defined]
+                r._session_key = r._session_key or "us"
+                r._breakout_type = BreakoutType.Monthly
             combined.extend(results)
             logger.info(
                 "Monthly %s: %d months → %d trades",
@@ -1123,7 +1130,8 @@ def _run_simulators_for_breakout_type(
                 bars_daily=bars_daily,
             )
             for r in results:
-                r._session_key = getattr(r, "_session_key", "london")  # type: ignore[attr-defined]
+                r._session_key = r._session_key or "london"
+                r._breakout_type = BreakoutType.Asian
             combined.extend(results)
             logger.info(
                 "Asian %s: %d days → %d trades",
@@ -1145,7 +1153,8 @@ def _run_simulators_for_breakout_type(
                 bars_daily=bars_daily,
             )
             for r in results:
-                r._session_key = getattr(r, "_session_key", "us")  # type: ignore[attr-defined]
+                r._session_key = r._session_key or "us"
+                r._breakout_type = BreakoutType.BollingerSqueeze
             combined.extend(results)
             logger.info(
                 "BollingerSqueeze %s: %d squeezes → %d trades",
@@ -1167,7 +1176,8 @@ def _run_simulators_for_breakout_type(
                 bars_daily=bars_daily,
             )
             for r in results:
-                r._session_key = getattr(r, "_session_key", "us")  # type: ignore[attr-defined]
+                r._session_key = r._session_key or "us"
+                r._breakout_type = BreakoutType.ValueArea
             combined.extend(results)
             logger.info(
                 "ValueArea %s: %d days → %d trades",
@@ -1189,7 +1199,8 @@ def _run_simulators_for_breakout_type(
                 bars_daily=bars_daily,
             )
             for r in results:
-                r._session_key = getattr(r, "_session_key", "us")  # type: ignore[attr-defined]
+                r._session_key = r._session_key or "us"
+                r._breakout_type = BreakoutType.InsideDay
             combined.extend(results)
             logger.info(
                 "InsideDay %s: %d days → %d trades",
@@ -1211,7 +1222,8 @@ def _run_simulators_for_breakout_type(
                 bars_daily=bars_daily,
             )
             for r in results:
-                r._session_key = getattr(r, "_session_key", "us")  # type: ignore[attr-defined]
+                r._session_key = r._session_key or "us"
+                r._breakout_type = BreakoutType.GapRejection
             combined.extend(results)
             logger.info(
                 "GapRejection %s: %d days → %d trades",
@@ -1233,7 +1245,8 @@ def _run_simulators_for_breakout_type(
                 bars_daily=bars_daily,
             )
             for r in results:
-                r._session_key = getattr(r, "_session_key", "us")  # type: ignore[attr-defined]
+                r._session_key = r._session_key or "us"
+                r._breakout_type = BreakoutType.PivotPoints
             combined.extend(results)
             logger.info(
                 "PivotPoints %s: %d days → %d trades",
@@ -1255,7 +1268,8 @@ def _run_simulators_for_breakout_type(
                 bars_daily=bars_daily,
             )
             for r in results:
-                r._session_key = getattr(r, "_session_key", "us")  # type: ignore[attr-defined]
+                r._session_key = r._session_key or "us"
+                r._breakout_type = BreakoutType.Fibonacci
             combined.extend(results)
             logger.info(
                 "Fibonacci %s: %d days → %d trades",
@@ -1321,11 +1335,11 @@ def generate_dataset_for_symbol(
     _use_parity = cfg.use_parity_renderer
     _can_render = False
     _can_render_parity = False
-    render_ruby_snapshot = None  # type: ignore[assignment]
-    RenderConfig = None  # type: ignore[assignment,misc]  # noqa: N806
-    render_parity_to_file = None  # type: ignore[assignment]
-    dataframe_to_parity_bars = None  # type: ignore[assignment]
-    compute_vwap_from_bars = None  # type: ignore[assignment]
+    render_ruby_snapshot: Any = None
+    RenderConfig: Any = None  # noqa: N806
+    render_parity_to_file: Any = None
+    dataframe_to_parity_bars: Any = None
+    compute_vwap_from_bars: Any = None
 
     if _use_parity:
         try:
@@ -1461,9 +1475,12 @@ def generate_dataset_for_symbol(
                 elif _use_parity and _can_render_parity:
                     # ── Parity renderer path ──────────────────────────
                     try:
-                        parity_bars = dataframe_to_parity_bars(window_bars)  # type: ignore[misc]
-                        vwap_values = compute_vwap_from_bars(parity_bars)  # type: ignore[misc]
-                        rendered_path = render_parity_to_file(  # type: ignore[misc]
+                        assert dataframe_to_parity_bars is not None
+                        assert compute_vwap_from_bars is not None
+                        assert render_parity_to_file is not None
+                        parity_bars = dataframe_to_parity_bars(window_bars)
+                        vwap_values = compute_vwap_from_bars(parity_bars)
+                        rendered_path = render_parity_to_file(
                             bars=parity_bars,
                             orb_high=result.or_high if result.or_high > 0 else 0.0,
                             orb_low=result.or_low if result.or_low > 0 else 0.0,
@@ -1487,7 +1504,8 @@ def generate_dataset_for_symbol(
                         rendered_path = None
                 else:
                     # ── Original mplfinance renderer path ─────────────
-                    rendered_path = render_ruby_snapshot(  # type: ignore[misc]
+                    assert render_ruby_snapshot is not None
+                    rendered_path = render_ruby_snapshot(
                         bars=window_bars,
                         symbol=symbol,
                         orb_high=result.or_high if result.or_high > 0 else None,
@@ -1555,7 +1573,7 @@ def generate_dataset_for_symbol(
     return rows, stats
 
 
-def _build_row(result, image_path: str) -> dict[str, Any]:
+def _build_row(result: "ORBSimResult", image_path: str) -> dict[str, Any]:
     """Build a single CSV row from an ORBSimResult.
 
     The row includes all columns needed by BreakoutDataset.__getitem__ to

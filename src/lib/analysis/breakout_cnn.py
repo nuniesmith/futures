@@ -498,7 +498,7 @@ def get_device() -> str:
 
 if _TORCH_AVAILABLE:
 
-    class BreakoutDataset(Dataset):  # type: ignore[no-redef]
+    class BreakoutDataset(Dataset[Any]):  # type: ignore[no-redef]
         """PyTorch Dataset for breakout chart images + tabular features.
 
         Expects a CSV with columns:

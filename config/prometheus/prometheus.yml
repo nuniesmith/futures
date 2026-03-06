@@ -45,7 +45,7 @@ scrape_configs:
       metrics_path: /metrics/prometheus
       scrape_interval: 10s
       static_configs:
-          - targets: ["data:8000"]
+          - targets: ["engine:8000"]
             labels:
                 service: "data-service"
                 component: "api"
@@ -55,6 +55,25 @@ scrape_configs:
       #   type: "ApiKey"
       #   credentials: "${API_KEY}"
       # Or use headers via a relabel/proxy approach.
+
+    # ---------------------------------------------------------------------------
+    # Trainer — GPU CNN training server metrics
+    # ---------------------------------------------------------------------------
+    # The trainer exposes Prometheus text-format metrics at /metrics/prometheus
+    # including: trainer_up, trainer_uptime_seconds, trainer_status (labelled),
+    # trainer_gpu_available, trainer_gpu_memory_total_bytes,
+    # trainer_champion_exists, trainer_last_run_accuracy/precision/recall,
+    # trainer_last_run_promoted, trainer_last_run_images.
+    # ---------------------------------------------------------------------------
+    - job_name: "trainer"
+      metrics_path: /metrics/prometheus
+      scrape_interval: 30s
+      scrape_timeout: 10s
+      static_configs:
+          - targets: ["trainer:8200"]
+            labels:
+                service: "trainer"
+                component: "training"
 
     # ---------------------------------------------------------------------------
     # Prometheus self-monitoring

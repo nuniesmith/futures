@@ -18,3 +18,6 @@ COPY config/grafana/grafana-dashboard.json \
 
 COPY config/grafana/orb-trading-dashboard.json \
      /var/lib/grafana/dashboards/orb-cnn-paper-trading.json
+
+COPY config/grafana/training-data-health-dashboard.json \
+     /var/lib/grafana/dashboards/training-data-health.json

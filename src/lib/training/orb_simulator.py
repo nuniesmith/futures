@@ -184,6 +184,11 @@ class ORBSimResult:
     cvd_delta: float = 0.0  # cumulative volume delta from OR to breakout (-1 to 1)
     london_overlap_flag: float = 0.0  # 1.0 if breakout in 08:00–09:00 ET overlap
 
+    # Dataset generation metadata — set by the dataset generator after
+    # simulation so _build_row() can read breakout type and session context.
+    _session_key: str = ""  # e.g. "london", "us", "cme" — set by dataset_generator
+    _breakout_type: int = 0  # BreakoutType ordinal — set by dataset_generator
+
     # Window provenance — set by simulate_batch() so the dataset generator
     # can recover the exact slice of bars_1m used for this simulation.
     _window_offset: int = -1  # start index into the original bars_1m
