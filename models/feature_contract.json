@@ -1,0 +1,472 @@
+{
+  "version": 6,
+  "num_tabular": 18,
+  "tabular_features": [
+    "quality_pct_norm",
+    "volume_ratio",
+    "atr_pct",
+    "cvd_delta",
+    "nr7_flag",
+    "direction_flag",
+    "session_ordinal",
+    "london_overlap_flag",
+    "or_range_atr_ratio",
+    "premarket_range_ratio",
+    "bar_of_day",
+    "day_of_week",
+    "vwap_distance",
+    "asset_class_id",
+    "breakout_type_ord",
+    "asset_volatility_class",
+    "hour_of_day",
+    "tp3_atr_mult_norm"
+  ],
+  "default_threshold": 0.82,
+  "image_size": 224,
+  "imagenet_mean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "imagenet_std": [
+    0.229,
+    0.224,
+    0.225
+  ],
+  "session_thresholds": {
+    "cme": 0.75,
+    "sydney": 0.72,
+    "tokyo": 0.74,
+    "shanghai": 0.74,
+    "frankfurt": 0.8,
+    "london": 0.82,
+    "london_ny": 0.82,
+    "us": 0.82,
+    "cme_settle": 0.78
+  },
+  "session_ordinals": {
+    "cme": 0.0,
+    "sydney": 0.125,
+    "tokyo": 0.25,
+    "shanghai": 0.375,
+    "frankfurt": 0.5,
+    "london": 0.625,
+    "london_ny": 0.75,
+    "us": 0.875,
+    "cme_settle": 1.0
+  },
+  "asset_class_map": {
+    "MES": 0.0,
+    "MNQ": 0.0,
+    "M2K": 0.0,
+    "MYM": 0.0,
+    "6E": 0.25,
+    "6B": 0.25,
+    "6J": 0.25,
+    "6A": 0.25,
+    "6C": 0.25,
+    "6S": 0.25,
+    "M6E": 0.25,
+    "M6B": 0.25,
+    "MGC": 0.5,
+    "SIL": 0.5,
+    "MHG": 0.5,
+    "MCL": 0.5,
+    "MNG": 0.5,
+    "ZN": 0.75,
+    "ZB": 0.75,
+    "ZC": 0.75,
+    "ZS": 0.75,
+    "ZW": 0.75,
+    "MBT": 1.0,
+    "MET": 1.0,
+    "BTC": 1.0,
+    "ETH": 1.0,
+    "SOL": 1.0,
+    "LINK": 1.0,
+    "AVAX": 1.0,
+    "DOT": 1.0,
+    "ADA": 1.0,
+    "MATIC": 1.0,
+    "XRP": 1.0
+  },
+  "breakout_type_ordinals": {
+    "ORB": 0.0,
+    "PDR": 0.08333333333333333,
+    "IB": 0.16666666666666666,
+    "CONS": 0.25,
+    "WEEKLY": 0.3333333333333333,
+    "MONTHLY": 0.4166666666666667,
+    "ASIAN": 0.5,
+    "BBSQUEEZE": 0.5833333333333334,
+    "VA": 0.6666666666666666,
+    "INSIDE": 0.75,
+    "GAP": 0.8333333333333334,
+    "PIVOT": 0.9166666666666666,
+    "FIB": 1.0
+  },
+  "asset_volatility_classes": {
+    "ZN": 0.0,
+    "M6B": 0.0,
+    "M6E": 0.0,
+    "MES": 0.5,
+    "MYM": 0.5,
+    "MGC": 0.5,
+    "MCL": 0.5,
+    "SIL": 0.5,
+    "M2K": 0.5,
+    "MNQ": 1.0,
+    "MBT": 1.0,
+    "MHG": 1.0,
+    "BTC": 1.0,
+    "ETH": 1.0,
+    "SOL": 1.0,
+    "LINK": 1.0,
+    "AVAX": 1.0,
+    "DOT": 1.0,
+    "ADA": 1.0,
+    "MATIC": 1.0,
+    "XRP": 1.0
+  },
+  "breakout_types": {
+    "ORB": {
+      "ordinal": 0,
+      "breakout_type_ord": 0.0,
+      "or_duration_minutes": 30,
+      "lookback_days": 0,
+      "tp1_atr_mult": 2.0,
+      "tp2_atr_mult": 3.0,
+      "tp3_atr_mult": 4.5,
+      "sl_atr_mult": 1.5,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "gold_dashed",
+      "box_border_rgba": [
+        255,
+        215,
+        0,
+        100
+      ],
+      "box_fill_rgba": [
+        255,
+        215,
+        0,
+        30
+      ],
+      "description": "Opening Range Breakout \u2014 30-min OR at session open"
+    },
+    "PrevDay": {
+      "ordinal": 1,
+      "breakout_type_ord": 0.083333,
+      "or_duration_minutes": 0,
+      "lookback_days": 1,
+      "tp1_atr_mult": 1.5,
+      "tp2_atr_mult": 2.5,
+      "tp3_atr_mult": 4.0,
+      "sl_atr_mult": 1.5,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "silver_solid",
+      "box_border_rgba": [
+        192,
+        192,
+        192,
+        120
+      ],
+      "box_fill_rgba": [
+        192,
+        192,
+        192,
+        20
+      ],
+      "description": "Previous Day High/Low \u2014 prior session range as support/resistance"
+    },
+    "InitialBalance": {
+      "ordinal": 2,
+      "breakout_type_ord": 0.166667,
+      "or_duration_minutes": 60,
+      "lookback_days": 0,
+      "tp1_atr_mult": 1.5,
+      "tp2_atr_mult": 2.5,
+      "tp3_atr_mult": 4.0,
+      "sl_atr_mult": 1.0,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "blue_dashed",
+      "box_border_rgba": [
+        0,
+        229,
+        255,
+        110
+      ],
+      "box_fill_rgba": [
+        0,
+        229,
+        255,
+        18
+      ],
+      "description": "Initial Balance \u2014 first 60 min of the primary session (auction theory IB)"
+    },
+    "Consolidation": {
+      "ordinal": 3,
+      "breakout_type_ord": 0.25,
+      "or_duration_minutes": 0,
+      "lookback_days": 0,
+      "tp1_atr_mult": 2.0,
+      "tp2_atr_mult": 3.5,
+      "tp3_atr_mult": 5.0,
+      "sl_atr_mult": 1.0,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "purple_solid",
+      "box_border_rgba": [
+        147,
+        0,
+        211,
+        130
+      ],
+      "box_fill_rgba": [
+        147,
+        0,
+        211,
+        22
+      ],
+      "description": "Detected Consolidation \u2014 auto-identified tight range / inside-bar cluster"
+    },
+    "Weekly": {
+      "ordinal": 4,
+      "breakout_type_ord": 0.333333,
+      "or_duration_minutes": 0,
+      "lookback_days": 5,
+      "tp1_atr_mult": 2.0,
+      "tp2_atr_mult": 3.5,
+      "tp3_atr_mult": 5.0,
+      "sl_atr_mult": 1.5,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "teal_solid",
+      "box_border_rgba": [
+        0,
+        128,
+        128,
+        120
+      ],
+      "box_fill_rgba": [
+        0,
+        128,
+        128,
+        15
+      ],
+      "description": "Weekly Range \u2014 prior week's high/low as support/resistance"
+    },
+    "Monthly": {
+      "ordinal": 5,
+      "breakout_type_ord": 0.416667,
+      "or_duration_minutes": 0,
+      "lookback_days": 20,
+      "tp1_atr_mult": 2.5,
+      "tp2_atr_mult": 4.0,
+      "tp3_atr_mult": 6.0,
+      "sl_atr_mult": 2.0,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "orange_solid",
+      "box_border_rgba": [
+        255,
+        140,
+        0,
+        100
+      ],
+      "box_fill_rgba": [
+        255,
+        140,
+        0,
+        12
+      ],
+      "description": "Monthly Range \u2014 prior month's high/low as macro support/resistance"
+    },
+    "Asian": {
+      "ordinal": 6,
+      "breakout_type_ord": 0.5,
+      "or_duration_minutes": 420,
+      "lookback_days": 0,
+      "tp1_atr_mult": 1.5,
+      "tp2_atr_mult": 2.5,
+      "tp3_atr_mult": 4.0,
+      "sl_atr_mult": 1.0,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "red_dashed",
+      "box_border_rgba": [
+        220,
+        20,
+        60,
+        110
+      ],
+      "box_fill_rgba": [
+        220,
+        20,
+        60,
+        18
+      ],
+      "description": "Asian Session Range \u2014 19:00\u201302:00 ET high/low (Tokyo/Sydney overnight)"
+    },
+    "BollingerSqueeze": {
+      "ordinal": 7,
+      "breakout_type_ord": 0.583333,
+      "or_duration_minutes": 0,
+      "lookback_days": 0,
+      "tp1_atr_mult": 2.0,
+      "tp2_atr_mult": 3.5,
+      "tp3_atr_mult": 5.0,
+      "sl_atr_mult": 1.0,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "magenta_dashed",
+      "box_border_rgba": [
+        255,
+        0,
+        255,
+        110
+      ],
+      "box_fill_rgba": [
+        255,
+        0,
+        255,
+        15
+      ],
+      "description": "Bollinger Squeeze \u2014 BB compression + Keltner inside \u2192 expansion breakout"
+    },
+    "ValueArea": {
+      "ordinal": 8,
+      "breakout_type_ord": 0.666667,
+      "or_duration_minutes": 0,
+      "lookback_days": 1,
+      "tp1_atr_mult": 1.5,
+      "tp2_atr_mult": 2.5,
+      "tp3_atr_mult": 4.0,
+      "sl_atr_mult": 1.0,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "olive_solid",
+      "box_border_rgba": [
+        128,
+        128,
+        0,
+        120
+      ],
+      "box_fill_rgba": [
+        128,
+        128,
+        0,
+        18
+      ],
+      "description": "Value Area \u2014 prior session VAH/VAL from volume profile (70% rule)"
+    },
+    "InsideDay": {
+      "ordinal": 9,
+      "breakout_type_ord": 0.75,
+      "or_duration_minutes": 0,
+      "lookback_days": 1,
+      "tp1_atr_mult": 2.0,
+      "tp2_atr_mult": 3.0,
+      "tp3_atr_mult": 4.5,
+      "sl_atr_mult": 1.0,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "lime_dashed",
+      "box_border_rgba": [
+        50,
+        205,
+        50,
+        120
+      ],
+      "box_fill_rgba": [
+        50,
+        205,
+        50,
+        18
+      ],
+      "description": "Inside Day \u2014 today's range inside yesterday's \u2192 coiled energy breakout"
+    },
+    "GapRejection": {
+      "ordinal": 10,
+      "breakout_type_ord": 0.833333,
+      "or_duration_minutes": 0,
+      "lookback_days": 1,
+      "tp1_atr_mult": 1.5,
+      "tp2_atr_mult": 2.5,
+      "tp3_atr_mult": 3.5,
+      "sl_atr_mult": 1.0,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "coral_solid",
+      "box_border_rgba": [
+        255,
+        127,
+        80,
+        120
+      ],
+      "box_fill_rgba": [
+        255,
+        127,
+        80,
+        18
+      ],
+      "description": "Gap Rejection \u2014 overnight gap fill or rejection at gap edge"
+    },
+    "PivotPoints": {
+      "ordinal": 11,
+      "breakout_type_ord": 0.916667,
+      "or_duration_minutes": 0,
+      "lookback_days": 1,
+      "tp1_atr_mult": 1.5,
+      "tp2_atr_mult": 2.5,
+      "tp3_atr_mult": 4.0,
+      "sl_atr_mult": 1.0,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "steel_dashed",
+      "box_border_rgba": [
+        70,
+        130,
+        180,
+        120
+      ],
+      "box_fill_rgba": [
+        70,
+        130,
+        180,
+        18
+      ],
+      "description": "Pivot Points \u2014 classic floor pivot R1/S1 as the breakout range"
+    },
+    "Fibonacci": {
+      "ordinal": 12,
+      "breakout_type_ord": 1.0,
+      "or_duration_minutes": 0,
+      "lookback_days": 1,
+      "tp1_atr_mult": 1.5,
+      "tp2_atr_mult": 2.5,
+      "tp3_atr_mult": 4.0,
+      "sl_atr_mult": 1.0,
+      "enable_ema_trail_after_tp2": true,
+      "ema_trail_period": 9,
+      "box_style": "amber_solid",
+      "box_border_rgba": [
+        255,
+        191,
+        0,
+        120
+      ],
+      "box_fill_rgba": [
+        255,
+        191,
+        0,
+        18
+      ],
+      "description": "Fibonacci \u2014 38.2%\u201361.8% retracement zone of prior swing as breakout range"
+    }
+  },
+  "generated_at": "2026-03-06T20:59:05.579574+00:00"
+}
