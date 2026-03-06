@@ -2,9 +2,9 @@
 CNN Model Management API Router
 =================================
 Provides endpoints for CNN model status, per-session gate management,
-model sync from the orb repo, and a dashboard HTML panel for the web frontend.
+model sync from the rb repo, and a dashboard HTML panel for the web frontend.
 
-CNN training lives in the orb repo (github.com/nuniesmith/orb).
+CNN training lives in the rb repo (github.com/nuniesmith/orb).
 Models are pulled into this repo via scripts/sync_models.sh.
 This service only runs inference on CPU from the synced .pt checkpoint.
 
@@ -12,7 +12,7 @@ Endpoints:
     GET  /cnn/status              — Current model info + metadata (JSON)
     GET  /cnn/status/html         — HTML fragment for dashboard panel
     GET  /cnn/history             — Recent ORB audit log entries with CNN data
-    POST /cnn/sync                — Trigger model sync from orb repo
+    POST /cnn/sync                — Trigger model sync from rb repo
     GET  /cnn/watcher/status      — Model file-watcher health
 
 Per-session CNN gate endpoints:
@@ -247,7 +247,7 @@ def cnn_status():
             "stale": sync["stale"],
             "meta_available": sync["meta_available"],
         },
-        "note": "CNN training lives in the orb repo (github.com/nuniesmith/orb). Sync model with: bash scripts/sync_models.sh",
+        "note": "CNN training lives in the rb repo (github.com/nuniesmith/orb). Sync model with: bash scripts/sync_models.sh",
         "timestamp": _now_et().isoformat(),
     }
 
@@ -394,7 +394,7 @@ async def cnn_sync(
     """Trigger a model sync from the orb GitHub repo.
 
     Runs ``scripts/sync_models.sh`` in a background task.  The script
-    downloads the latest champion model files from the orb repo via
+    downloads the latest champion model files from the rb repo via
     the Git LFS batch API.
 
     If a sync is already running, returns 409 Conflict.
@@ -731,7 +731,7 @@ def cnn_status_html():
     """Return a dashboard-ready HTML fragment for the CNN model panel.
 
     Shows model availability, accuracy metrics from meta.json, sync info,
-    and a button to sync the latest model from the orb repo.
+    and a button to sync the latest model from the rb repo.
     """
     model = _get_model_info()
     sync = _get_sync_status()
@@ -847,7 +847,7 @@ def cnn_status_html():
         <div style="margin-top:8px">
             <div style="font-size:9px;color:#52525b;margin-bottom:4px">
                 Training runs on the <a href="https://github.com/nuniesmith/orb" target="_blank"
-                style="color:#60a5fa;text-decoration:underline">orb repo</a> (GPU).
+                style="color:#60a5fa;text-decoration:underline">rb repo</a> (GPU).
                 Sync the latest champion model here for CPU inference.
             </div>
         </div>

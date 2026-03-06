@@ -10,7 +10,7 @@ set -euo pipefail
 #   ./run.sh --local      Run locally with a Python virtual environment
 #   ./run.sh --down       Stop Docker Compose services
 #   ./run.sh --test       Run tests + lint only (no compose)
-#   ./run.sh --sync-models Force re-pull CNN models from orb repo
+#   ./run.sh --sync-models Force re-pull CNN models from rb repo
 #   ./run.sh --monitoring Include Prometheus + Grafana
 #   ./run.sh --help       Show this help message
 #
@@ -48,7 +48,7 @@ usage() {
     echo "  --local         Run locally with a Python virtual environment"
     echo "  --down          Stop Docker Compose services"
     echo "  --test          Run tests + lint only (skip Docker build)"
-    echo "  --sync-models   Force re-pull CNN models from orb repo (even if present)"
+    echo "  --sync-models   Force re-pull CNN models from rb repo (even if present)"
     echo "  --monitoring    Include Prometheus + Grafana (monitoring profile)"
     echo "  --help          Show this help message"
 }
@@ -142,7 +142,7 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# Model sync — pull CNN model from orb repo if missing
+# Model sync — pull CNN model from rb repo if missing
 # ---------------------------------------------------------------------------
 
 ensure_models() {
@@ -150,13 +150,13 @@ ensure_models() {
     if [ -f "$model_file" ]; then
         ok "CNN model present ($(du -h "$model_file" | awk '{print $1}'))"
     else
-        warn "CNN model not found — pulling from orb repo..."
+        warn "CNN model not found — pulling from rb repo..."
         bash scripts/sync_models.sh
     fi
 }
 
 force_sync_models() {
-    log "Force re-pulling CNN models from orb repo..."
+    log "Force re-pulling CNN models from rb repo..."
     bash scripts/sync_models.sh
     local exit_code=$?
     if [ $exit_code -eq 0 ]; then

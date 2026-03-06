@@ -174,7 +174,7 @@ groups:
           description: >
             model_stale is 1 on {{ $labels.instance }}.  The champion CNN model
             was last promoted more than 26 hours ago.  Run scripts/sync_models.sh
-            or trigger a training run in the orb repo.
+            or trigger a training run in the rb repo.
           runbook_url: "https://wiki.internal/runbooks/cnn-model-stale"
 
       - alert: CNNModelLowAccuracy
@@ -188,7 +188,7 @@ groups:
           summary: "CNN model validation accuracy dropped below 60%"
           description: >
             model_val_accuracy on {{ $labels.instance }} is {{ $value | printf "%.1f" }}%.
-            A retrain may be needed.  Review the orb repo training logs and consider
+            A retrain may be needed.  Review the rb repo training logs and consider
             re-running on a larger or more recent dataset.
           runbook_url: "https://wiki.internal/runbooks/cnn-low-accuracy"
 

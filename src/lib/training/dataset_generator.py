@@ -1559,25 +1559,38 @@ def _build_row(result, image_path: str) -> dict[str, Any]:
     """Build a single CSV row from an ORBSimResult.
 
     The row includes all columns needed by BreakoutDataset.__getitem__ to
-    compute the 14-feature tabular vector per feature_contract.json v4:
-      - quality_pct, volume_ratio, atr_pct, cvd_delta, nr7_flag (direct)
-      - direction (→ direction_flag)
-      - breakout_time (→ session_ordinal, london_overlap_flag, bar_of_day, day_of_week)
-      - or_range, atr (→ or_range_atr_ratio)
-      - pm_high, pm_low, or_range (→ premarket_range_ratio)
-      - entry, or_high, or_low, atr (→ vwap_distance proxy)
-      - symbol (→ asset_class_id)
-      - session_key (informational; also used for stratified splits)
+    compute the 18-feature tabular vector per feature_contract.json v6,
+    mirroring C# PrepareCnnTabular() exactly:
+
+      [0]  quality_pct_norm       ← quality_pct / 100
+      [1]  volume_ratio           ← breakout_volume_ratio (log-scaled in dataset)
+      [2]  atr_pct                ← atr / entry  (×100 + clamp in dataset)
+      [3]  cvd_delta              ← cvd_delta [-1, 1]
+      [4]  nr7_flag               ← nr7
+      [5]  direction_flag         ← direction
+      [6]  session_ordinal        ← derived from breakout_time in dataset
+      [7]  london_overlap_flag    ← london_overlap_flag
+      [8]  or_range_atr_ratio     ← range_size / atr_value  (clamp+norm in dataset)
+      [9]  premarket_range_ratio  ← premarket_range / range_size (clamp+norm in dataset)
+      [10] bar_of_day             ← bar_of_day_minutes / 1380  (in dataset)
+      [11] day_of_week            ← day_of_week_norm  (Mon=0..Fri=4)/4
+      [12] vwap_distance          ← (entry - vwap) / atr  (clamp+norm in dataset)
+      [13] asset_class_id         ← get_asset_class_id(symbol)
+      ── v6 additions ──
+      [14] breakout_type_ord      ← BreakoutType ordinal / 12  [0, 1]
+      [15] asset_volatility_class ← low=0.0 / med=0.5 / high=1.0
+      [16] hour_of_day            ← ET hour / 23  [0, 1]
+      [17] tp3_atr_mult_norm      ← tp3_atr_mult / 5.0  [0, 1]
     """
-    # Compute atr_pct (ATR as fraction of entry price)
+    import math
+    from datetime import timezone as _tz
+
+    # ── [2] atr_pct — ATR as fraction of entry price ──────────────────────
     atr_pct = 0.0
     if result.entry > 0 and result.atr > 0:
         atr_pct = result.atr / result.entry
 
-    # Resolve breakout_type and its normalised ordinal CNN feature.
-    # Results produced by simulate_batch() are always ORB (value=0).
-    # Future breakout types (PrevDay, IB, Consolidation) tag results with
-    # _breakout_type before passing them to _build_row.
+    # ── Breakout type metadata ─────────────────────────────────────────────
     try:
         from lib.core.breakout_types import BreakoutType
         from lib.core.breakout_types import breakout_type_ord as _bt_ord
@@ -1591,17 +1604,165 @@ def _build_row(result, image_path: str) -> dict[str, Any]:
         _bt_name = "ORB"
         _bt_ord_val = 0.0
 
+    # ── [8] or_range_atr_ratio — raw ORB range / ATR ──────────────────────
+    # Stored raw; BreakoutDataset normalises with clamp(0,3)/3.
+    range_size = result.or_range  # ORB range in price units
+    atr_value = result.atr  # ATR in price units (period 14)
+    or_range_atr_raw = (range_size / atr_value) if atr_value > 0 else 0.0
+
+    # ── [9] premarket_range_ratio — PM range / ORB range ──────────────────
+    # Stored raw; BreakoutDataset normalises with clamp(0,5)/5.
+    pm_high = result.pm_high
+    pm_low = result.pm_low
+    premarket_range = 0.0
+    if (
+        pm_high is not None
+        and pm_low is not None
+        and not math.isnan(pm_high)
+        and not math.isnan(pm_low)
+        and pm_high > pm_low
+    ):
+        premarket_range = pm_high - pm_low
+    pm_range_ratio_raw = (premarket_range / range_size) if range_size > 0 else 0.0
+
+    # ── [10] bar_of_day_minutes — minutes since Globex open (18:00 ET) ────
+    # BreakoutDataset divides by 1380 to normalise to [0, 1].
+    bar_of_day_minutes = 0
+    try:
+        bt = result.breakout_time
+        if bt is not None:
+            # breakout_time may be a datetime or an ISO string
+            if isinstance(bt, str):
+                from datetime import datetime as _dt
+
+                bt = _dt.fromisoformat(bt)
+            # Normalise to a naive ET-local time if tz-aware
+            if bt.tzinfo is not None:
+                from zoneinfo import ZoneInfo as _ZI
+
+                bt = bt.astimezone(_ZI("America/New_York")).replace(tzinfo=None)
+            h, m = bt.hour, bt.minute
+            # Minutes since Globex open at 18:00 ET
+            if h >= 18:
+                bar_of_day_minutes = (h - 18) * 60 + m
+            else:
+                bar_of_day_minutes = (h + 6) * 60 + m  # +6 = 24-18
+    except Exception:
+        bar_of_day_minutes = 0
+
+    # ── [11] day_of_week_norm — Mon=0..Fri=4 scaled to [0, 1] ────────────
+    day_of_week_norm = 0.5  # default midweek
+    try:
+        bt = result.breakout_time
+        if bt is not None:
+            if isinstance(bt, str):
+                from datetime import datetime as _dt
+
+                bt = _dt.fromisoformat(bt)
+            # weekday(): Mon=0 .. Sun=6; clamp to trading days Mon-Fri
+            dow = bt.weekday()  # 0=Mon, 4=Fri, 5/6=weekend
+            if 0 <= dow <= 4:
+                day_of_week_norm = dow / 4.0
+            else:
+                day_of_week_norm = 0.5  # fallback for weekend bars (rare)
+    except Exception:
+        day_of_week_norm = 0.5
+
+    # ── [12] vwap_distance — (entry − vwap) / ATR ─────────────────────────
+    # VWAP is not always available from the simulator; use the ORB midpoint
+    # as a proxy when missing.  The proxy is a reasonable estimate because
+    # the ORB midpoint approximates the session VWAP at the breakout bar.
+    # Stored raw; BreakoutDataset normalises with clamp(-3,3)/3.
+    vwap = getattr(result, "vwap", None)
+    if vwap is None or (isinstance(vwap, float) and math.isnan(vwap)):
+        # Proxy: ORB midpoint
+        vwap = (result.or_high + result.or_low) / 2.0 if result.or_range > 0 else result.entry
+    vwap_distance_raw = ((result.entry - vwap) / atr_value) if atr_value > 0 else 0.0
+
+    # ── [13] asset_class_id — ordinal / 4 matching C# GetAssetClassNorm() ─
+    try:
+        from lib.analysis.breakout_cnn import get_asset_class_id as _get_cls
+
+        asset_class_id = _get_cls(result.symbol)
+    except Exception:
+        asset_class_id = 0.0
+
+    # ── [15] asset_volatility_class — low=0.0, med=0.5, high=1.0 ─────────
+    try:
+        from lib.analysis.breakout_cnn import get_asset_volatility_class as _get_vol
+
+        asset_vol_class = _get_vol(result.symbol)
+    except Exception:
+        asset_vol_class = 0.5
+
+    # ── [16] hour_of_day — ET hour / 23 → [0, 1] ─────────────────────────
+    hour_of_day_norm = 0.5
+    try:
+        bt = result.breakout_time
+        if bt is not None:
+            if isinstance(bt, str):
+                from datetime import datetime as _dt
+
+                bt = _dt.fromisoformat(bt)
+            if bt.tzinfo is not None:
+                from zoneinfo import ZoneInfo as _ZI
+
+                bt = bt.astimezone(_ZI("America/New_York")).replace(tzinfo=None)
+            hour_of_day_norm = max(0.0, min(1.0, bt.hour / 23.0))
+    except Exception:
+        hour_of_day_norm = 0.5
+
+    # ── [17] tp3_atr_mult_norm — TP3 multiplier / 5.0 → [0, 1] ──────────
+    tp3_atr_mult_raw = 0.0
+    try:
+        _cfg = getattr(result, "_range_config", None)
+        if _cfg is not None and hasattr(_cfg, "tp3_atr_mult"):
+            tp3_atr_mult_raw = float(_cfg.tp3_atr_mult)
+        elif hasattr(result, "tp3_atr_mult"):
+            tp3_atr_mult_raw = float(result.tp3_atr_mult)
+        else:
+            # Fall back to looking up the canonical config by breakout type
+            try:
+                from lib.core.breakout_types import get_range_config as _get_rc
+
+                _bt = getattr(result, "_breakout_type", None)
+                if _bt is not None:
+                    from lib.core.breakout_types import BreakoutType as _BT
+
+                    if not isinstance(_bt, _BT):
+                        _bt = _BT(int(_bt))
+                    _rc = _get_rc(_bt)
+                    tp3_atr_mult_raw = float(_rc.tp3_atr_mult)
+            except Exception:
+                pass
+    except Exception:
+        tp3_atr_mult_raw = 0.0
+
     return {
+        # ── Identity / label ──────────────────────────────────────────────
         "image_path": image_path,
         "label": result.label,
         "symbol": result.symbol,
         "direction": result.direction,
-        "quality_pct": result.quality_pct,
-        "volume_ratio": round(result.breakout_volume_ratio, 4),
-        "atr_pct": round(atr_pct, 6),
-        "cvd_delta": round(getattr(result, "cvd_delta", 0.0), 4),
-        "nr7_flag": 1 if result.nr7 else 0,
-        "london_overlap_flag": getattr(result, "london_overlap_flag", 0.0),
+        # ── v4 tabular features (raw — normalisation applied in BreakoutDataset) ──
+        "quality_pct": result.quality_pct,  # [0] → /100
+        "volume_ratio": round(result.breakout_volume_ratio, 4),  # [1] → log-norm
+        "atr_pct": round(atr_pct, 6),  # [2] → ×100 clamp
+        "cvd_delta": round(getattr(result, "cvd_delta", 0.0), 4),  # [3]
+        "nr7_flag": 1 if result.nr7 else 0,  # [4]
+        # direction_flag [5] derived from "direction" column in dataset
+        # session_ordinal [6] derived from "breakout_time" column in dataset
+        "london_overlap_flag": getattr(result, "london_overlap_flag", 0.0),  # [7]
+        "range_size": round(range_size, 6),  # [8] raw ORB range
+        "atr_value": round(atr_value, 6),  # [8] ATR (price units)
+        "or_range_atr_ratio": round(or_range_atr_raw, 4),  # [8] raw ratio → stored for debug
+        "premarket_range": round(premarket_range, 6),  # [9] raw PM range
+        "pm_range_ratio": round(pm_range_ratio_raw, 4),  # [9] raw ratio → stored for debug
+        "bar_of_day_minutes": bar_of_day_minutes,  # [10] raw minutes → /1380 in dataset
+        "day_of_week_norm": round(day_of_week_norm, 4),  # [11] already [0,1]
+        "vwap_distance": round(vwap_distance_raw, 4),  # [12] raw → clamp+norm in dataset
+        "asset_class_id": round(asset_class_id, 4),  # [13] already [0,1]
+        # ── Trade geometry ────────────────────────────────────────────────
         "entry": round(result.entry, 6),
         "sl": round(result.sl, 6),
         "tp1": round(result.tp1, 6),
@@ -1613,16 +1774,16 @@ def _build_row(result, image_path: str) -> dict[str, Any]:
         "hold_bars": result.hold_bars,
         "outcome": result.outcome,
         "breakout_time": result.breakout_time,
-        "pm_high": round(result.pm_high, 6),
-        "pm_low": round(result.pm_low, 6),
-        # session_key: tagged by generate_dataset_for_symbol for session-aware
-        # stratification and threshold tuning.  Falls back to "us" if missing.
+        "pm_high": round(pm_high if (pm_high is not None and not math.isnan(pm_high)) else 0.0, 6),
+        "pm_low": round(pm_low if (pm_low is not None and not math.isnan(pm_low)) else 0.0, 6),
+        # ── Session / breakout-type metadata (informational + stratification) ──
         "session_key": getattr(result, "_session_key", "us"),
-        # breakout_type: name of the BreakoutType enum member (e.g. "ORB").
         "breakout_type": _bt_name,
-        # breakout_type_ord: normalised CNN tabular feature [0, 1].
-        # ORB=0.0, PrevDay≈0.333, InitialBalance≈0.667, Consolidation=1.0.
         "breakout_type_ord": round(_bt_ord_val, 6),
+        # ── v6 tabular feature columns ────────────────────────────────────
+        "asset_volatility_class": round(asset_vol_class, 4),  # [15]
+        "hour_of_day": round(hour_of_day_norm, 4),  # [16]
+        "tp3_atr_mult": round(tp3_atr_mult_raw, 4),  # [17] raw value; dataset normalises /5.0
     }
 
 

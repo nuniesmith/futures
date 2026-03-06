@@ -59,7 +59,7 @@ _FILE_MAP = {
     "src/OrbCnnPredictor.cs": "OrbCnnPredictor.cs",
     "src/SignalBus.cs": "SignalBus.cs",
     # ── CNN model (binary — fetched to Models\ subfolder) ────────────────────
-    # Export from orb repo first:  python scripts/export_onnx.py
+    # Export from rb repo first:  python scripts/export_onnx.py
     "models/orb_breakout_cnn.onnx": "Models\\orb_breakout_cnn.onnx",
 }
 

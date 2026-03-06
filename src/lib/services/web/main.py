@@ -51,6 +51,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 # ---------------------------------------------------------------------------
 
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data:8000").rstrip("/")
+TRAINER_SERVICE_URL = os.getenv("TRAINER_SERVICE_URL", "http://trainer:8200").rstrip("/")
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
@@ -82,6 +83,11 @@ _http_client: httpx.AsyncClient | None = None
 # that connection-pool keepalive/expiry settings for short-lived API
 # requests don't accidentally kill the long-lived SSE stream.
 _sse_client: httpx.AsyncClient | None = None
+
+# Trainer client — proxies requests to the trainer service (port 8200).
+# Kept separate from the data-service client so trainer slowness (long
+# training runs, ONNX export) never starves the main dashboard.
+_trainer_client: httpx.AsyncClient | None = None
 
 
 def _get_client() -> httpx.AsyncClient:
@@ -135,28 +141,53 @@ def _get_sse_client() -> httpx.AsyncClient:
 # ---------------------------------------------------------------------------
 
 
+def _get_trainer_client() -> httpx.AsyncClient:
+    """Return the shared async HTTP client for proxying to the trainer service."""
+    global _trainer_client
+    if _trainer_client is None or _trainer_client.is_closed:
+        _trainer_client = httpx.AsyncClient(
+            base_url=TRAINER_SERVICE_URL,
+            # Use a generous timeout: ONNX export can take ~30s, status polls
+            # are fast.  The connect timeout stays tight to fail fast when the
+            # trainer container is not running.
+            timeout=httpx.Timeout(120.0, connect=5.0),
+            follow_redirects=True,
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+    return _trainer_client
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle for the web service."""
     logger.info("=" * 60)
     logger.info("  Web Service starting up")
     logger.info("  Data service backend: %s", DATA_SERVICE_URL)
+    logger.info("  Trainer backend:      %s", TRAINER_SERVICE_URL)
     logger.info("=" * 60)
 
-    # Pre-warm the HTTP client
+    # Pre-warm the HTTP clients
     _get_client()
+    # Trainer client is pre-warmed best-effort — trainer may not be running
+    try:
+        _get_trainer_client()
+    except Exception:
+        pass
 
     yield
 
     # Shutdown
     logger.info("Web Service shutting down...")
-    global _http_client, _sse_client
+    global _http_client, _sse_client, _trainer_client
     if _http_client is not None and not _http_client.is_closed:
         await _http_client.aclose()
         _http_client = None
     if _sse_client is not None and not _sse_client.is_closed:
         await _sse_client.aclose()
         _sse_client = None
+    if _trainer_client is not None and not _trainer_client.is_closed:
+        await _trainer_client.aclose()
+        _trainer_client = None
     logger.info("Web Service stopped")
 
 
@@ -583,6 +614,123 @@ async def proxy_docs(request: Request):
 async def proxy_openapi(request: Request):
     """Proxy /openapi.json to the data service."""
     return await _proxy_request(request, "/openapi.json")
+
+
+# ---------------------------------------------------------------------------
+# Trainer proxy — forwards /trainer/* to the trainer service (port 8200)
+#
+# The trainer runs on the same machine under the "training" compose profile.
+# All requests to /trainer/ on the web service are forwarded to the trainer
+# service so users can access the full trainer dashboard and API from the
+# same host/port as the main web UI without CORS issues.
+#
+# Route map:
+#   GET  /trainer/          → trainer GET /       (HTML dashboard)
+#   GET  /trainer/health    → trainer GET /health
+#   GET  /trainer/status    → trainer GET /status
+#   GET  /trainer/logs      → trainer GET /logs
+#   GET  /trainer/models    → trainer GET /models
+#   POST /trainer/train     → trainer POST /train
+#   POST /trainer/train/cancel → trainer POST /train/cancel
+#   POST /trainer/export_onnx  → trainer POST /export_onnx
+# ---------------------------------------------------------------------------
+
+
+async def _proxy_trainer_request(request: Request, trainer_path: str) -> Response:
+    """Forward an HTTP request to the trainer service and return the response.
+
+    Returns a friendly 503 HTML page when the trainer is not running so
+    the user sees a clear error rather than an ugly stack trace.
+    """
+    client = _get_trainer_client()
+
+    # Build the full URL on the trainer service
+    url = trainer_path
+    if request.url.query:
+        url = f"{url}?{request.url.query}"
+
+    try:
+        body = await request.body()
+        resp = await client.request(
+            method=request.method,
+            url=url,
+            headers=_proxy_headers(request),
+            content=body if body else None,
+        )
+
+        # Pass response straight through — preserve content-type so the
+        # trainer's own HTML dashboard renders correctly in the browser.
+        excluded_headers = {"transfer-encoding", "content-encoding", "content-length"}
+        headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded_headers}
+
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=headers,
+            media_type=resp.headers.get("content-type"),
+        )
+
+    except httpx.ConnectError:
+        if request.headers.get("accept", "").startswith("text/html"):
+            return HTMLResponse(
+                content=_render_error_page(
+                    "Trainer Service Unavailable",
+                    f"Cannot connect to the trainer service at {TRAINER_SERVICE_URL}. "
+                    "Start it with: <code>docker compose --profile training up -d trainer</code>",
+                ),
+                status_code=503,
+            )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Trainer service unavailable",
+                "trainer_url": TRAINER_SERVICE_URL,
+                "hint": "Start with: docker compose --profile training up -d trainer",
+            },
+        )
+    except httpx.TimeoutException:
+        return JSONResponse(
+            status_code=504,
+            content={"error": "Trainer service timed out"},
+        )
+    except Exception as exc:
+        logger.error("Trainer proxy error: %s", exc, exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(exc)},
+        )
+
+
+@app.get("/trainer", response_class=HTMLResponse)
+async def trainer_redirect(request: Request):
+    """Redirect bare /trainer to /trainer/ so relative URLs in the UI work."""
+    from fastapi.responses import RedirectResponse
+
+    return RedirectResponse(url="/trainer/", status_code=301)
+
+
+@app.api_route(
+    "/trainer/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+async def proxy_trainer(request: Request, path: str):
+    """Proxy all /trainer/* requests to the trainer service.
+
+    The path segment after /trainer/ is forwarded verbatim so the trainer's
+    own HTML dashboard, status API, log stream, model list, and train/cancel
+    endpoints are all reachable from the web UI host.
+
+    Examples:
+        GET  /trainer/          → trainer /       (HTML dashboard)
+        GET  /trainer/status    → trainer /status (JSON)
+        GET  /trainer/logs      → trainer /logs   (JSON log stream)
+        POST /trainer/train     → trainer /train  (start training)
+        POST /trainer/export_onnx → trainer /export_onnx
+    """
+    # Forward to the trainer with the leading slash so the trainer's router
+    # matches correctly (e.g. path="status" → "/status").
+    trainer_path = f"/{path}" if path else "/"
+    return await _proxy_trainer_request(request, trainer_path)
 
 
 # ---------------------------------------------------------------------------

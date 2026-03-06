@@ -15,13 +15,13 @@ Repos:
 ---
 ## Current State
 - **Dashboard**: HTMX + FastAPI serving live market stats, multi-type breakout signals, risk status, Grok AI analyst.
-- **Engine**: Session-aware scheduler covering full 24h Globex day (9 sessions, 18:00 ET start).
+- **Engine**: Session-aware scheduler covering full 24h Globex day (9 sessions, 18:00 ET start). CNN inference builds full 18-feature v6 tabular vector.
 - **Breakout Pipeline**: Detection → 6 deterministic filters (majority gate) → optional CNN inference → Redis publish.
 - **Breakout Types**: 13 types — ORB, PrevDay, InitialBalance, Consolidation + 9 researched (Weekly, Monthly, Asian, BollingerSqueeze, ValueArea, InsideDay, GapRejection, PivotPoints, Fibonacci). All implemented in engine detection + training simulators.
 - **TP3 + EMA9 Trailing**: 3-phase bracket walk-forward (SL/TP1 → TP2 → EMA9 trail toward TP3) on all 13 types.
-- **CNN Model**: EfficientNetV2-S + tabular head. ONNX model on NT8 expects 8 features (v3). C# auto-adapts via runtime dimension detection.
+- **CNN Model**: EfficientNetV2-S + tabular head. v6 contract with 18 tabular features. ONNX export for NT8. C# auto-adapts via runtime dimension detection.
 - **NT8 Live Trading**: 5 core instruments (`MGC, MES, MNQ, MYM, 6E`), max 5 concurrent positions, 10-min cooldown. Crash-resilient with `OnOrderUpdate` rejection handling, OCO GUID uniqueness, SL price validation, signal name truncation, and try/catch around all order submissions.
-- **Feature Contract**: v5 current (8 tabular features). v6 planned (12 features: add `breakout_type_ord`, `asset_volatility_class`, `range_atr_ratio`, `hour_of_day`).
+- **Feature Contract**: **v6 current (18 tabular features)** — v4's 14 core features + 4 new: `breakout_type_ord`, `asset_volatility_class`, `hour_of_day`, `tp3_atr_mult_norm`. Backward compat for v4 (14) and v5 (8) vectors via zero-padding.
 - **Multi-Session**: All 9 sessions with bracket params matching futures + NT8.
 - **Parity Renderer**: Default for training — pixel-perfect match with NT8 `OrbChartRenderer`.
 - **CNN Inference**: CPU-only fallback in engine, watchdog-based hot-reload. NT8 auto-adapts tabular vector to model dimension.
@@ -30,6 +30,7 @@ Repos:
 - **Monitoring**: Prometheus + Grafana dashboards (optional profile).
 - **CI/CD**: Lint → Test → Build & push 3 tagged images to `nuniesmith/futures` on DockerHub.
 - **rb Repo**: Renamed from `orb` → `rb`. Service-only compose pulling trainer image. Hosts trained champion models (.pt for engine, .onnx for NT8). NinjaTrader pulls best ONNX via PowerShell.
+- **All Source in `futures` repo**: Training code (`lib/training`), analysis (`lib/analysis`), engine, web, trainer server — all in one monorepo. `rb` repo is service-only (compose + model hosting).
 
 ---
 ## Active — `futures` repo (`~/github/futures`)
@@ -52,8 +53,8 @@ Repos:
 ### Training & Dataset (shared `lib`)
 - [x] **Fix trainer_server.py ↔ breakout_cnn.py signature mismatch** — Corrected `_run_training_pipeline` to call `train_model(data_csv=..., val_csv=..., model_dir=..., image_root=...)` with correct kwargs, added new `evaluate_model()` function for post-training metrics (accuracy/precision/recall via sklearn), fixed ONNX export to use `importlib.getattr` for missing function, smoke test passes end-to-end on GPU
 - [x] **Add `evaluate_model()` to breakout_cnn.py** — Loads checkpoint, runs inference on validation CSV, returns `{val_accuracy, val_precision, val_recall}` dict; used by trainer pipeline for gate checks
-- [x] **Expand tabular features v5→v6** (8→12 features) — Added `breakout_type_ord`, `asset_volatility_class`, `range_atr_ratio`, `hour_of_day`; updated `TABULAR_FEATURES` (12 items), `NUM_TABULAR=12`, `FEATURE_CONTRACT_VERSION=6`, `BreakoutDataset.__getitem__`, `_normalise_tabular_for_inference` (v5 backward-compat zero-padding), and engine ORB inference callsite (all 12 features computed inline)
-- [x] **Export `feature_contract.json` v6** — Added `generate_feature_contract()` to `breakout_cnn.py` (returns dict + optionally writes file); `contract` CLI subcommand (`python -m lib.analysis.breakout_cnn contract --output models/feature_contract.json`); written to `models/feature_contract.json` with 12 features, 13 breakout types, 9 sessions, asset volatility classes; 15 tests
+- [x] **Upgrade feature contract v4→v6** (14→18 features) — Added 4 new slots: `breakout_type_ord` [14], `asset_volatility_class` [15], `hour_of_day` [16], `tp3_atr_mult_norm` [17]; updated `TABULAR_FEATURES` (18 items), `NUM_TABULAR=18`, `FEATURE_CONTRACT_VERSION=6`; updated `BreakoutDataset.__getitem__` (builds all 18 features), `_normalise_tabular_for_inference` (backward compat for 8-feature v5 and 14-feature v4 via zero-padding), engine inference callsite (full 18 features computed inline), dataset_generator `_build_row` (emits v6 columns); `generate_feature_contract()` includes `breakout_type_ordinals`, `asset_volatility_classes`, and full `breakout_types` config section
+- [x] **Export `feature_contract.json` v6** — Added `generate_feature_contract()` to `breakout_cnn.py` (returns dict + optionally writes file); `contract` CLI subcommand (`python -m lib.analysis.breakout_cnn contract --output models/feature_contract.json`); written to `models/feature_contract.json` with 18 features, 13 breakout types, 9 sessions, asset volatility classes, breakout type configs; 15 tests
 - [x] **BreakoutType embedding in CNN** — Added `use_type_embedding` flag to `HybridBreakoutCNN`; learned `Embedding(13, 8)` table replaces scalar `breakout_type_ord` slot; `type_fusion` layer merges 32-dim scalar encoding + 8-dim embedding; `forward()` accepts optional `type_ids` tensor (falls back to ordinal derivation); `_build_model_from_checkpoint()` auto-detects embedding architecture from state dict; `get_type_embedding_weights()` utility; `--type-embedding` CLI flag; `CNN_TYPE_EMBEDDING=1` env var; `embedding` CLI subcommand to inspect learned weights; backward-compat: existing checkpoints without embedding key load normally
 - [x] **Session-specific training thresholds** — `SESSION_THRESHOLDS` dict in `breakout_cnn.py` with 9 keys (cme=0.75, sydney=0.72, tokyo=0.74, shanghai=0.74, frankfurt=0.80, london=0.82, london_ny=0.82, us=0.82, cme_settle=0.78); `get_session_threshold()` lookup used by `predict_breakout()` and `predict_breakout_batch()`
 - [x] **Automated good/bad balancing across all 13 types + 9 sessions** — `DatasetConfig` gains `max_samples_per_type_label` (caps per (label, breakout_type) bucket) and `max_samples_per_session_label` (caps per (label, session) bucket); both enforced in `generate_dataset_for_symbol()` with rolling counters; `--max-per-type` and `--max-per-session` CLI flags added to `dataset_generator generate`
@@ -82,13 +83,13 @@ Repos:
 ### Training & Model Export
 - [ ] **Retrain with all 13 breakout types + TP3**
   - Generate dataset for ALL 13 breakout types + ALL 9 sessions + Kraken
-  - Validate ONNX export matches PyTorch predictions
-  - Export `feature_contract.json` v6 with 13 types + TP3 fields
+  - Validate ONNX export matches PyTorch predictions (18-feature v6 tabular input)
+  - Export `feature_contract.json` v6 with 18 features, 13 types + TP3 fields
 - [ ] **Commit champion models to `rb` repo**
   - `models/breakout_cnn_best.pt` — PyTorch checkpoint (engine pulls this)
-  - `models/breakout_cnn_best.onnx` — ONNX export (NT8 pulls this via PowerShell)
-  - `models/breakout_cnn_best_meta.json` — metadata
-  - `models/feature_contract.json` — v6 contract
+  - `models/breakout_cnn_best.onnx` — ONNX export (NT8 pulls this via PowerShell, 18 tabular features)
+  - `models/breakout_cnn_best_meta.json` — metadata (version: v6)
+  - `models/feature_contract.json` — v6 contract (18 features, 13 types, 9 sessions)
 
 ### Model Hosting
 - [ ] **Verify `futures` engine can pull best `.pt`** from `rb` repo via `scripts/sync_models.sh`
@@ -117,7 +118,12 @@ Repos:
   Weekly=4, Monthly=5, Asian=6, BollingerSqueeze=7,
   ValueArea=8, InsideDay=9, GapRejection=10, PivotPoints=11, Fibonacci=12
   ```
-- [ ] **Update C# `OrbCnnPredictor`** to pass `breakout_type_ord` for all 13 types (ordinals 0–12, normalised /12)
+- [ ] **Update C# `OrbCnnPredictor`** to build 18-feature v6 tabular vector:
+  - [0..13] existing v4 features (quality_pct_norm through asset_class_id)
+  - [14] breakout_type_ord — BreakoutType ordinal / 12
+  - [15] asset_volatility_class — GetVolatilityClass(ticker)
+  - [16] hour_of_day — ET hour / 23
+  - [17] tp3_atr_mult_norm — TP3 ATR mult / 5.0
 
 ### Chart Rendering
 - [ ] **Update C# `OrbChartRenderer`** to draw 9 new box styles:
@@ -140,7 +146,7 @@ Repos:
   - Sync position state with Python engine via Bridge WebSocket
 
 ### Model Pull
-- [ ] **Update PowerShell model pull script** to fetch `.onnx` + `feature_contract.json` v6 from `rb` repo
+- [ ] **Update PowerShell model pull script** to fetch `.onnx` + `feature_contract.json` v6 (18 features) from `rb` repo
 
 ---
 ## Completed
@@ -289,23 +295,23 @@ Repos:
 ## Next Steps (Priority Order)
 
 ### Immediate — Validate & Retrain
-1. **`ninjatrader`**: Deploy patched `BreakoutStrategy.cs` to NT8 machine, compile, and verify:
+1. **`futures`**: ~~Expand CNN tabular features to v6~~ ✅ Done — 18 features (v4's 14 + 4 new: `breakout_type_ord`, `asset_volatility_class`, `hour_of_day`, `tp3_atr_mult_norm`). `FEATURE_CONTRACT_VERSION=6`, backward compat for v4 (14) and v5 (8).
+2. **`rb`**: Full retrain on GPU rig — all 22 symbols, all 13 breakout types, all 9 sessions, 90 days, 25+ epochs → export ONNX v6 (18 features) → commit champion to `rb/models/`
+3. **`futures`**: Verify `sync_models.sh` pulls new `.pt` + `.onnx` champion from `rb` repo
+4. **`ninjatrader`**: Deploy patched `BreakoutStrategy.cs` to NT8 machine, compile, and verify:
    - Only 5 instruments load (`MGC, MES, MNQ, MYM, 6E`)
-   - CNN startup log shows `CNN tabular dim: model expects 8, C# builds 14`
+   - CNN startup log shows `CNN tabular dim: model expects 18, C# builds 18`
    - Entry logs show `[positions: N/5]`
    - No `OCO ID cannot be reused` or `signal name longer than 50` errors
    - Run for a full session and review output logs
-2. **`rb`**: Full retrain on GPU rig — 5 core assets, all 13 breakout types, all 9 sessions, 90 days, 25+ epochs → export ONNX → commit champion to `rb/models/`
-3. **`futures`**: Verify `sync_models.sh` pulls new `.pt` champion from `rb` repo
 
-### Short-term — Feature Expansion & Integration
-4. **`futures`**: Expand CNN tabular features v5→v6 (8→12) — add `breakout_type_ord`, `asset_volatility_class`, `range_atr_ratio`, `hour_of_day`; update `TABULAR_FEATURES`, `NUM_TABULAR`, dataset, normalisation, and inference
-5. **`futures`**: Wire `PositionManager` into engine main loop — `process_signal()` on breakout detections, `update_all()` on every 1m bar close, persist to Redis
-6. **`ninjatrader`**: Update C# `BreakoutType` enum (13 values), `OrbCnnPredictor` (v6 features), `OrbChartRenderer` (9 new box styles)
+### Short-term — NT8 Integration & Strategy
+5. **`ninjatrader`**: Update C# `BreakoutType` enum (13 values), `OrbCnnPredictor` (v6 18-feature vector), `OrbChartRenderer` (9 new box styles)
+6. **`ninjatrader`**: Implement C# TP3 + EMA9 trailing + stop-and-reverse in `BreakoutStrategy.cs` (match `position_manager.py`)
+7. **`ninjatrader`**: Update PowerShell model pull to fetch `.onnx` + `feature_contract.json` v6 from `rb` repo
 
 ### Medium-term — Advanced Strategy
-7. **`ninjatrader`**: Implement C# TP3 + EMA9 trailing + stop-and-reverse in `BreakoutStrategy.cs` (match `position_manager.py`)
-8. **`ninjatrader`**: Update PowerShell model pull to fetch `.onnx` + `feature_contract.json` v6 from `rb` repo
+8. **`futures`**: Wire `PositionManager` into engine main loop — `process_signal()` on breakout detections, `update_all()` on every 1m bar close, persist to Redis
 9. **`futures`**: Add Pi deployment stage back to CI/CD when ready
 
 ### Ongoing

@@ -100,7 +100,7 @@ def _check_model_health() -> dict[str, Any]:
     now_et = datetime.now(tz=_EST)
 
     # last_sync_time — mtime of the meta.json sidecar written by sync_models.sh.
-    # This tells us when the operator last pulled from the orb repo, which may
+    # This tells us when the operator last pulled from the rb repo, which may
     # be more recent than the model's own promoted_at training timestamp.
     meta_path = model_dir / "breakout_cnn_best_meta.json"
     if meta_path.is_file():

@@ -84,7 +84,7 @@ usage() {
     echo "Usage: bash scripts/sync_models.sh [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  (no args)     Download all model files from orb repo"
+    echo "  (no args)     Download all model files from rb repo"
     echo "  --check       Check if local models are current (no download)"
     echo "  --pt-only     Download only the .pt checkpoint"
     echo "  --onnx-only   Download only the .onnx export"
@@ -468,7 +468,7 @@ cmd_download() {
         if [ -f "$pt" ] && is_lfs_pointer "$pt"; then
             err "WARNING: .pt file is still an LFS pointer — model not usable"
             echo ""
-            echo -e "  ${DIM}The repo uses Git LFS. Try cloning the orb repo directly:${NC}"
+            echo -e "  ${DIM}The repo uses Git LFS. Try cloning the rb repo directly:${NC}"
             echo "    git clone https://github.com/${GITHUB_REPO}.git /tmp/orb"
             echo "    cp /tmp/orb/models/breakout_cnn_best.pt ${MODEL_DIR}/"
             return 1

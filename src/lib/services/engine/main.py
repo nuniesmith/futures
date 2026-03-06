@@ -125,7 +125,7 @@ _RETRAIN_STATUS_KEY = "engine:retrain:status"
 def _check_redis_commands(action_handlers: dict) -> None:
     """Check Redis for commands published by the data service.
 
-    CNN retraining has moved to the orb repo — commands are acknowledged
+    CNN retraining has moved to the rb repo — commands are acknowledged
     but no longer executed here.
     """
     try:
@@ -148,12 +148,12 @@ def _check_redis_commands(action_handlers: dict) -> None:
             pass
 
         logger.info(
-            "📩 Received retrain command from dashboard — CNN training has moved to the orb repo. "
-            "Use the GPU trainer (docker-compose.train.yml) in the orb repo instead."
+            "📩 Received retrain command from dashboard — CNN training has moved to the rb repo. "
+            "Use the GPU trainer (docker-compose.train.yml) in the rb repo instead."
         )
         _publish_retrain_status(
             "rejected",
-            "CNN training has moved to the orb repo. Use the GPU trainer there instead.",
+            "CNN training has moved to the rb repo. Use the GPU trainer there instead.",
         )
 
     except Exception as exc:
@@ -184,11 +184,11 @@ def _run_retrain_from_command(
     epochs: int | None = None,
     batch_size: int | None = None,
 ) -> None:
-    """No-op — CNN training has moved to the orb repo."""
-    logger.info("⏭️  CNN retrain command ignored — training has moved to the orb repo")
+    """No-op — CNN training has moved to the rb repo."""
+    logger.info("⏭️  CNN retrain command ignored — training has moved to the rb repo")
     _publish_retrain_status(
         "rejected",
-        "CNN training has moved to the orb repo. Use the GPU trainer there instead.",
+        "CNN training has moved to the rb repo. Use the GPU trainer there instead.",
     )
 
 
@@ -1144,7 +1144,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                 )
 
                                 if snap_path:
-                                    # Build tabular features (8 features — must match TABULAR_FEATURES order)
+                                    # Build tabular features (18 features v6 — must match TABULAR_FEATURES order)
                                     _vol_ratio = 1.0
                                     _atr_pct = 0.0
                                     _quality_norm = 0.0
@@ -1198,6 +1198,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
 
                                     # London/NY overlap: 08:00–09:00 ET is historically strongest
                                     _london_overlap = 0.0
+                                    _now_hour = 10  # default US open hour
                                     try:
                                         from datetime import datetime as _dt
                                         from zoneinfo import ZoneInfo as _ZI
@@ -1210,6 +1211,9 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                     # Encode session as a normalised ordinal using the
                                     # canonical get_session_ordinal() from breakout_cnn.
                                     try:
+                                        from lib.analysis.breakout_cnn import (
+                                            get_asset_class_id as _get_asset_cls,
+                                        )
                                         from lib.analysis.breakout_cnn import (
                                             get_asset_volatility_class as _get_vol_class,
                                         )
@@ -1224,46 +1228,117 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                     except ImportError:
                                         _get_btype_ord = lambda t: 0.0  # noqa: E731
                                         _get_vol_class = lambda t: 0.5  # noqa: E731
+                                        _get_asset_cls = lambda t: 0.0  # noqa: E731
                                         _session_enc = 0.875
 
-                                    # v6 features — breakout_type_ord, asset_volatility_class,
-                                    # range_atr_ratio, hour_of_day
+                                    # ── v4 features [8..13] ──────────────────────────────
+
+                                    # [8] or_range_atr_ratio — raw ORB range / ATR
+                                    _or_range = getattr(result, "or_range", 0.0) or getattr(result, "range_size", 0.0)
+                                    _or_range_atr = 0.0
+                                    if result.atr_value > 0 and _or_range > 0:
+                                        _or_range_atr = _or_range / result.atr_value
+
+                                    # [9] premarket_range_ratio — raw PM range / ORB range
+                                    _pm_range_ratio = 0.0
+                                    try:
+                                        _pm_high = getattr(result, "pm_high", None)
+                                        _pm_low = getattr(result, "pm_low", None)
+                                        if _pm_high is not None and _pm_low is not None and _or_range > 0:
+                                            _pm_range = float(_pm_high) - float(_pm_low)
+                                            if _pm_range > 0:
+                                                _pm_range_ratio = _pm_range / _or_range
+                                    except Exception:
+                                        pass
+
+                                    # [10] bar_of_day — minutes since Globex open (18:00 ET) / 1380
+                                    if _now_hour >= 18:
+                                        _bar_of_day_min = (_now_hour - 18) * 60
+                                    else:
+                                        _bar_of_day_min = (_now_hour + 6) * 60
+                                    _bar_of_day = max(0.0, min(1.0, _bar_of_day_min / 1380.0))
+
+                                    # [11] day_of_week — Mon=0..Fri=4 / 4
+                                    _dow = 0.5
+                                    try:
+                                        from datetime import datetime as _dt3
+
+                                        _dow_raw = _dt3.now().weekday()
+                                        if 0 <= _dow_raw <= 4:
+                                            _dow = _dow_raw / 4.0
+                                    except Exception:
+                                        pass
+
+                                    # [12] vwap_distance — (price - vwap) / ATR (raw)
+                                    _vwap_dist = 0.0
+                                    try:
+                                        _vwap = getattr(result, "vwap", None)
+                                        if _vwap is None and _or_range > 0:
+                                            _vwap = (result.or_high + result.or_low) / 2.0
+                                        if _vwap is not None and result.atr_value > 0:
+                                            _vwap_dist = (result.trigger_price - float(_vwap)) / result.atr_value
+                                    except Exception:
+                                        pass
+
+                                    # [13] asset_class_id — ordinal / 4
+                                    _asset_cls = _get_asset_cls(ticker or symbol)
+
+                                    # ── v6 features [14..17] ─────────────────────────────
+
+                                    # [14] breakout_type_ord — BreakoutType ordinal / 12
                                     _btype_raw = getattr(result, "breakout_type", "ORB")
                                     _btype_name = _btype_raw.value if hasattr(_btype_raw, "value") else str(_btype_raw)
                                     _btype_ord_val = _get_btype_ord(_btype_name)
+
+                                    # [15] asset_volatility_class — low=0.0 / med=0.5 / high=1.0
                                     _vol_class_val = _get_vol_class(ticker or symbol)
 
-                                    # range_atr_ratio: or_range / atr_value, clamped [0, 3] → /3
-                                    _or_range = getattr(result, "or_range", 0.0) or getattr(result, "range_size", 0.0)
-                                    _range_atr_ratio = 0.5
-                                    if result.atr_value > 0 and _or_range > 0:
-                                        _range_atr_ratio = min(_or_range / result.atr_value / 3.0, 1.0)
+                                    # [16] hour_of_day — current ET hour / 23
+                                    _hour_of_day = max(0.0, min(1.0, _now_hour / 23.0))
 
-                                    # hour_of_day: current ET hour / 23
-                                    _hour_of_day = 0.5
+                                    # [17] tp3_atr_mult_norm — TP3 multiplier / 5.0
+                                    _tp3_norm = 0.0
                                     try:
-                                        from datetime import datetime as _dt2
-                                        from zoneinfo import ZoneInfo as _ZI2
+                                        from lib.core.breakout_types import (
+                                            BreakoutType as _BT,
+                                        )
+                                        from lib.core.breakout_types import (
+                                            breakout_type_from_name as _bt_from_name,
+                                        )
+                                        from lib.core.breakout_types import (
+                                            get_range_config as _get_rc,
+                                        )
 
-                                        _hour_of_day = _dt2.now(tz=_ZI2("America/New_York")).hour / 23.0
+                                        try:
+                                            _bt_enum = _bt_from_name(_btype_name)
+                                        except ValueError:
+                                            _bt_enum = _BT.ORB
+                                        _rc = _get_rc(_bt_enum)
+                                        _tp3_norm = max(0.0, min(1.0, _rc.tp3_atr_mult / 5.0))
                                     except Exception:
                                         pass
 
                                     tab_features = [
-                                        # ── v5 (8 features) ──────────────────────────────────
-                                        _quality_norm,  # quality_pct normalised
-                                        _vol_ratio,  # volume_ratio
-                                        _atr_pct,  # atr_pct
-                                        _cvd_delta,  # cvd_delta (real from bars)
-                                        _nr7_flag,  # nr7_flag (from daily bars)
-                                        1.0 if result.direction == "LONG" else 0.0,
-                                        _session_enc,  # session ordinal [0–1]
-                                        _london_overlap,  # london_overlap_flag
+                                        # ── v4 core (14 features) ────────────────────────────
+                                        _quality_norm,  # [0]  quality_pct_norm
+                                        _vol_ratio,  # [1]  volume_ratio
+                                        _atr_pct,  # [2]  atr_pct
+                                        _cvd_delta,  # [3]  cvd_delta
+                                        _nr7_flag,  # [4]  nr7_flag
+                                        1.0 if result.direction == "LONG" else 0.0,  # [5] direction_flag
+                                        _session_enc,  # [6]  session_ordinal
+                                        _london_overlap,  # [7]  london_overlap_flag
+                                        _or_range_atr,  # [8]  or_range_atr_ratio (raw)
+                                        _pm_range_ratio,  # [9]  premarket_range_ratio (raw)
+                                        _bar_of_day,  # [10] bar_of_day
+                                        _dow,  # [11] day_of_week
+                                        _vwap_dist,  # [12] vwap_distance (raw)
+                                        _asset_cls,  # [13] asset_class_id
                                         # ── v6 additions (4 new features) ────────────────────
-                                        _btype_ord_val,  # breakout_type_ord [0–1]
-                                        _vol_class_val,  # asset_volatility_class
-                                        _range_atr_ratio,  # range_atr_ratio [0–1]
-                                        _hour_of_day,  # hour_of_day [0–1]
+                                        _btype_ord_val,  # [14] breakout_type_ord
+                                        _vol_class_val,  # [15] asset_volatility_class
+                                        _hour_of_day,  # [16] hour_of_day
+                                        _tp3_norm,  # [17] tp3_atr_mult_norm
                                     ]
 
                                     cnn_result = predict_breakout(

@@ -101,40 +101,105 @@ except ImportError:
 # Ordered list of tabular feature names expected by the model.
 # The dataset and inference code must provide them in exactly this order.
 #
-# v6 contract (12 features) — adds:
-#   breakout_type_ord    — ordinal of BreakoutType enum (0–12) / 12, normalised
-#   asset_volatility_class — 0=low, 0.5=medium, 1.0=high (based on ATR vs peer group)
-#   range_atr_ratio      — range_size / ATR — how "wide" the setup range is
-#   hour_of_day          — ET hour normalised to [0, 1] (0h=0.0 … 23h≈0.96)
+# v6 contract (18 features) — extends v4's 14 features with 4 new slots.
+# Aligns with NinjaTrader BreakoutStrategy PrepareCnnTabular() and
+# OrbCnnPredictor.NormaliseTabular() in C#.
+# This is the canonical contract for Python training and NT8 inference.
 #
-# v5 → v6 is a BREAKING change for the model weights.  Old 8-feature models
-# will be auto-padded to 12 by NT8's OrbCnnPredictor (runtime dim detection).
-# Retrain required to benefit from the new features.
+# Index  Feature                  Raw source / notes
+# ─────  ───────────────────────  ──────────────────────────────────────────
+#  [0]   quality_pct_norm        quality_pct / 100  →  [0, 1]
+#  [1]   volume_ratio            breakout bar vol / rolling avg vol
+#  [2]   atr_pct                 ATR / close price  (fraction, not %)
+#  [3]   cvd_delta               cumulative signed vol / total vol  [-1, 1]
+#  [4]   nr7_flag                1 if session range is narrowest of 7
+#  [5]   direction_flag          1 = LONG, 0 = SHORT
+#  [6]   session_ordinal         Globex day cycle ordinal  [0, 1]
+#  [7]   london_overlap_flag     1 if bar hour 08:00–09:00 ET
+#  [8]   or_range_atr_ratio      ORB range / ATR  (raw, normalised later)
+#  [9]   premarket_range_ratio   premarket range / ORB range  (raw)
+#  [10]  bar_of_day              minutes since Globex open / 1380  [0, 1]
+#  [11]  day_of_week             weekday Mon=0..Fri=4  / 4  →  [0, 1]
+#  [12]  vwap_distance           (price − vwap) / ATR  (raw, normalised later)
+#  [13]  asset_class_id          asset class ordinal / 4  →  [0, 1]
+#  ── v6 additions (slots 14–17) ──────────────────────────────────────────
+#  [14]  breakout_type_ord       BreakoutType.value / 12  →  [0, 1]
+#  [15]  asset_volatility_class  low=0.0 / med=0.5 / high=1.0
+#  [16]  hour_of_day             ET hour / 23  →  [0, 1]
+#  [17]  tp3_atr_mult_norm       TP3 ATR multiplier / 5.0  →  [0, 1]
 TABULAR_FEATURES: list[str] = [
-    # ── v5 features (original 8) ──────────────────────────────────────────
-    "quality_pct",  # 0–100, normalised to 0–1
-    "volume_ratio",  # breakout bar vol / 20-bar avg vol
-    "atr_pct",  # ATR as % of price
-    "cvd_delta",  # cumulative volume delta (normalised, −1 to +1)
-    "nr7_flag",  # 1.0 if NR7 day, else 0.0
-    "direction_flag",  # 1.0 = LONG, 0.0 = SHORT
-    "session_flag",  # ordinal position in Globex day cycle [0, 1]
-    "london_overlap_flag",  # 1.0 if breakout in 08:00–09:00 ET overlap
-    # ── v6 additions ──────────────────────────────────────────────────────
-    "breakout_type_ord",  # BreakoutType ordinal / 12  → [0.0, 1.0]
-    "asset_volatility_class",  # 0.0=low  0.5=medium  1.0=high
-    "range_atr_ratio",  # range_size / ATR  (clamped to [0, 3], /3 → [0,1])
-    "hour_of_day",  # ET hour / 23  → [0, 1]
+    "quality_pct_norm",  # [0]  quality / 100
+    "volume_ratio",  # [1]  breakout bar vol / avg vol
+    "atr_pct",  # [2]  ATR / price
+    "cvd_delta",  # [3]  CVD signed ratio [-1, 1]
+    "nr7_flag",  # [4]  1 if NR7 session
+    "direction_flag",  # [5]  1=LONG 0=SHORT
+    "session_ordinal",  # [6]  Globex day position [0, 1]
+    "london_overlap_flag",  # [7]  1 if 08:00–09:00 ET overlap
+    "or_range_atr_ratio",  # [8]  ORB range / ATR
+    "premarket_range_ratio",  # [9]  premarket range / ORB range
+    "bar_of_day",  # [10] minutes-since-open / 1380
+    "day_of_week",  # [11] Mon=0..Fri=4  / 4
+    "vwap_distance",  # [12] (price-vwap) / ATR
+    "asset_class_id",  # [13] asset class ordinal / 4
+    # ── v6 additions ─────────────────────────────────────────────────────
+    "breakout_type_ord",  # [14] BreakoutType ordinal / 12
+    "asset_volatility_class",  # [15] low=0 / med=0.5 / high=1
+    "hour_of_day",  # [16] ET hour / 23
+    "tp3_atr_mult_norm",  # [17] TP3 multiplier / 5
 ]
 
 NUM_TABULAR = len(TABULAR_FEATURES)
 
-# Feature contract version — bump whenever TABULAR_FEATURES changes.
+# Feature contract version — must match NinjaTrader BreakoutStrategy.
 FEATURE_CONTRACT_VERSION = 6
 
-# BreakoutType ordinal map — mirrors lib.services.engine.breakout.BreakoutType
-# and the C# enum in OrbCnnPredictor.  Using a local mapping avoids a circular
-# import between analysis and services layers.
+# Asset class ordinal map — mirrors GetAssetClassNorm() in BreakoutStrategy.cs.
+# 0=equity_index, 1=fx, 2=metals_energy, 3=treasuries_ags, 4=crypto
+# Normalised as ordinal / 4.0 so the value sits in [0, 1].
+ASSET_CLASS_ORDINALS: dict[str, float] = {
+    # Equity index micros
+    "MES": 0.0 / 4,
+    "MNQ": 0.0 / 4,
+    "M2K": 0.0 / 4,
+    "MYM": 0.0 / 4,
+    # FX
+    "6E": 1.0 / 4,
+    "6B": 1.0 / 4,
+    "6J": 1.0 / 4,
+    "6A": 1.0 / 4,
+    "6C": 1.0 / 4,
+    "6S": 1.0 / 4,
+    "M6E": 1.0 / 4,
+    "M6B": 1.0 / 4,
+    # Metals / Energy
+    "MGC": 2.0 / 4,
+    "SIL": 2.0 / 4,
+    "MHG": 2.0 / 4,
+    "MCL": 2.0 / 4,
+    "MNG": 2.0 / 4,
+    # Treasuries / Ags
+    "ZN": 3.0 / 4,
+    "ZB": 3.0 / 4,
+    "ZC": 3.0 / 4,
+    "ZS": 3.0 / 4,
+    "ZW": 3.0 / 4,
+    # Crypto
+    "MBT": 4.0 / 4,
+    "MET": 4.0 / 4,
+    "BTC": 4.0 / 4,
+    "ETH": 4.0 / 4,
+    "SOL": 4.0 / 4,
+    "LINK": 4.0 / 4,
+    "AVAX": 4.0 / 4,
+    "DOT": 4.0 / 4,
+    "ADA": 4.0 / 4,
+    "MATIC": 4.0 / 4,
+    "XRP": 4.0 / 4,
+}
+
+# Keep BREAKOUT_TYPE_ORDINALS for generate_feature_contract / model_info consumers
+# that still reference it by name.  These are not used in the v4 tabular vector.
 BREAKOUT_TYPE_ORDINALS: dict[str, float] = {
     "ORB": 0.0 / 12,
     "PDR": 1.0 / 12,
@@ -151,27 +216,21 @@ BREAKOUT_TYPE_ORDINALS: dict[str, float] = {
     "FIB": 12.0 / 12,
 }
 
-# Asset volatility classes — maps ticker → class float.
-# Low (0.0): stable, narrow daily ranges (ZN, 6E, M6B)
-# Medium (0.5): moderate volatility (MES, MYM, MGC, MCL)
-# High (1.0): wide intraday ranges (MNQ, M2K, MBT, BTC/ETH crypto)
+# Keep ASSET_VOLATILITY_CLASS for any callers that still reference it by name.
+# Not used in the v4 tabular vector (replaced by asset_class_id).
 ASSET_VOLATILITY_CLASS: dict[str, float] = {
-    # Low
     "ZN": 0.0,
     "M6B": 0.0,
     "M6E": 0.0,
-    # Medium
     "MES": 0.5,
     "MYM": 0.5,
     "MGC": 0.5,
     "MCL": 0.5,
     "SIL": 0.5,
     "M2K": 0.5,
-    # High
     "MNQ": 1.0,
     "MBT": 1.0,
     "MHG": 1.0,
-    # Kraken crypto — treat as high vol
     "BTC": 1.0,
     "ETH": 1.0,
     "SOL": 1.0,
@@ -193,10 +252,25 @@ def get_breakout_type_ordinal(breakout_type: str) -> float:
     return BREAKOUT_TYPE_ORDINALS.get(str(breakout_type).upper().strip(), 0.0)
 
 
-def get_asset_volatility_class(ticker: str) -> float:
-    """Return the volatility class [0.0 low, 0.5 medium, 1.0 high] for *ticker*.
+def get_asset_class_id(ticker: str) -> float:
+    """Return the asset class ordinal / 4 for *ticker*, matching C# GetAssetClassNorm().
 
-    Falls back to 0.5 (medium) for unknown tickers.
+    Classes:
+        0.00 — equity index (MES, MNQ, M2K, MYM)
+        0.25 — FX          (6E, 6B, 6J, 6A, 6C, 6S)
+        0.50 — metals/energy (MGC, SIL, MHG, MCL, MNG)
+        0.75 — treasuries/ags (ZN, ZB, ZC, ZS, ZW)
+        1.00 — crypto      (MBT, MET, BTC, ETH, …)
+
+    Falls back to 0.0 (equity index) for unknown tickers, matching C#.
+    """
+    return ASSET_CLASS_ORDINALS.get(str(ticker).upper().strip(), 0.0)
+
+
+def get_asset_volatility_class(ticker: str) -> float:
+    """Return the legacy volatility class [0.0/0.5/1.0] for *ticker*.
+
+    Kept for backward compatibility.  New code should use get_asset_class_id().
     """
     return ASSET_VOLATILITY_CLASS.get(str(ticker).upper().strip(), 0.5)
 
@@ -521,82 +595,139 @@ if _TORCH_AVAILABLE:
             if self.transform:
                 img = self.transform(img)
 
-            # --- Tabular features v6 (normalised to ~0–1 range) ---
-            # volume_ratio: raw can be 0–30+; log-scale then clamp to [0, 1]
-            _vol_raw = max(float(row.get("volume_ratio", 1.0)), 0.01)
-            _vol_norm = min(np.log1p(_vol_raw) / np.log1p(10.0), 1.0)  # log1p(10)≈2.4
+            # ── Tabular features v6 — 18 features matching C# PrepareCnnTabular ──
+            #
+            # Raw values are normalised here using the same transforms as
+            # OrbCnnPredictor.NormaliseTabular() in BreakoutStrategy.cs so that
+            # Python training and NT8 inference are byte-for-byte identical.
 
-            # atr_pct: raw is typically 0.0001–0.01; scale ×100 then clamp
+            # [0] quality_pct_norm — quality / 100, clamp [0, 1]
+            _qual = max(0.0, min(1.0, float(row.get("quality_pct", 50)) / 100.0))
+
+            # [1] volume_ratio — log-scale: min(log1p(raw) / log1p(10), 1.0)
+            _vol_raw = max(float(row.get("volume_ratio", 1.0)), 0.01)
+            _vol_norm = min(np.log1p(_vol_raw) / np.log1p(10.0), 1.0)
+
+            # [2] atr_pct — ×100 then clamp [0, 1]
             _atr_norm = min(float(row.get("atr_pct", 0.0)) * 100.0, 1.0)
 
-            # cvd_delta: clamp to [-1, 1]
-            _cvd_raw = float(row.get("cvd_delta", 0.0))
-            _cvd_norm = max(min(_cvd_raw, 1.0), -1.0)
+            # [3] cvd_delta — clamp [-1, 1]
+            _cvd_norm = max(-1.0, min(1.0, float(row.get("cvd_delta", 0.0))))
 
-            # Determine session ordinal + hour from breakout_time
-            _session = SESSION_ORDINAL["us"]  # default
-            _bt = ""
-            _hour = 10  # default to US-session hour
+            # [4] nr7_flag — passthrough 0 or 1
+            _nr7 = float(row.get("nr7_flag", 0))
+
+            # [5] direction_flag — 1=LONG 0=SHORT
+            _dir = 1.0 if str(row.get("direction", "")).upper().startswith("L") else 0.0
+
+            # [6] session_ordinal — Globex day position [0, 1]; infer from breakout_time
+            _hour = 10  # default to US open hour
+            _session_ord = SESSION_ORDINAL["us"]
             try:
                 _bt = str(row.get("breakout_time", ""))
                 if _bt and " " in _bt:
-                    # Parse hour from timestamp like "2026-01-29 03:30:00-05:00"
                     _hour = int(_bt.split(" ")[1].split(":")[0])
-                    # Map hour to approximate session ordinal
                     if _hour < 3:
-                        _session = SESSION_ORDINAL["shanghai"]
+                        _session_ord = SESSION_ORDINAL["shanghai"]
                     elif _hour < 8:
-                        _session = SESSION_ORDINAL["london"]
+                        _session_ord = SESSION_ORDINAL["london"]
                     elif _hour < 9:
-                        _session = SESSION_ORDINAL["london_ny"]
+                        _session_ord = SESSION_ORDINAL["london_ny"]
                     else:
-                        _session = SESSION_ORDINAL["us"]
+                        _session_ord = SESSION_ORDINAL["us"]
             except Exception:
-                _session = SESSION_ORDINAL["us"]
+                pass
 
-            # London/NY overlap flag: 08:00–09:00 ET is historically the
-            # strongest breakout window when both sessions are active.
+            # [7] london_overlap_flag — 08:00–09:00 ET
             _london_overlap = 1.0 if 8 <= _hour <= 9 else 0.0
 
-            # ── v6 features ───────────────────────────────────────────────
-            # breakout_type_ord: BreakoutType ordinal / 12
-            _btype_str = str(row.get("breakout_type", "ORB")).upper().strip()
-            _btype_ord = BREAKOUT_TYPE_ORDINALS.get(_btype_str, 0.0)
+            # [8] or_range_atr_ratio — ORB range / ATR; clamp(raw, 0, 3) / 3
+            _orb_range = float(row.get("range_size", row.get("or_range", 0.0)))
+            _atr_val = float(row.get("atr_value", 0.0))
+            if _atr_val <= 0:
+                # Derive atr_value from atr_pct × a proxy price (1.0 → atr_pct already fractional)
+                _atr_val = float(row.get("atr_pct", 0.0))
+            _or_range_atr = min(max(_orb_range / _atr_val, 0.0), 3.0) / 3.0 if _atr_val > 0 else 0.0
 
-            # asset_volatility_class: 0.0=low, 0.5=medium, 1.0=high
+            # [9] premarket_range_ratio — premarket range / ORB range; clamp(raw, 0, 5) / 5
+            _pm_range = float(row.get("premarket_range", 0.0))
+            _pm_ratio = min(max(_pm_range / _orb_range, 0.0), 5.0) / 5.0 if _orb_range > 0 else 0.0
+
+            # [10] bar_of_day — minutes since Globex open (18:00 ET) / 1380; clamp [0, 1]
+            _bar_min = int(row.get("bar_of_day_minutes", -1))
+            if _bar_min < 0:
+                # Derive from _hour: minutes since 18:00 ET
+                _bar_min = (_hour + 6) * 60 if _hour < 18 else (_hour - 18) * 60
+            _bar_of_day = max(0.0, min(1.0, _bar_min / 1380.0))
+
+            # [11] day_of_week — Mon=0..Fri=4 / 4; already normalised in CSV or default 0.5
+            _dow = float(row.get("day_of_week_norm", 0.5))
+
+            # [12] vwap_distance — (price − vwap) / ATR; clamp(raw, -3, 3) / 3
+            _vwap_dist_raw = float(row.get("vwap_distance", 0.0))
+            _vwap_dist = max(-3.0, min(3.0, _vwap_dist_raw)) / 3.0
+
+            # [13] asset_class_id — ordinal / 4 matching C# GetAssetClassNorm()
             _ticker = str(row.get("ticker", row.get("symbol", ""))).upper().strip()
-            _vol_class = ASSET_VOLATILITY_CLASS.get(_ticker, 0.5)
+            _asset_cls = get_asset_class_id(_ticker)
 
-            # range_atr_ratio: range_size / ATR, clamped to [0, 3] then /3 → [0, 1]
-            _range_size = float(row.get("range_size", row.get("or_range", 0.0)))
-            _atr_raw = float(row.get("atr_value", row.get("atr_pct", 0.0)))
-            _range_atr = min(_range_size / _atr_raw, 3.0) / 3.0 if _atr_raw > 0 else 0.5
+            # ── v6 additions ──────────────────────────────────────────────
 
-            # hour_of_day: ET hour / 23
-            _hour_norm = min(_hour, 23) / 23.0
+            # [14] breakout_type_ord — BreakoutType ordinal / 12 → [0, 1]
+            _bt_ord_val = 0.0
+            try:
+                _bt_raw = str(row.get("breakout_type", row.get("breakout_type_ord", "ORB")))
+                # Try numeric ordinal first (from CSV)
+                try:
+                    _bt_ord_val = max(0.0, min(1.0, float(row.get("breakout_type_ord", -1))))
+                    if _bt_ord_val < 0:
+                        raise ValueError
+                except (ValueError, TypeError):
+                    _bt_ord_val = get_breakout_type_ordinal(_bt_raw)
+            except Exception:
+                _bt_ord_val = 0.0
+
+            # [15] asset_volatility_class — low=0.0, med=0.5, high=1.0
+            _vol_cls = get_asset_volatility_class(_ticker)
+
+            # [16] hour_of_day — ET hour / 23 → [0, 1]
+            _hour_of_day = max(0.0, min(1.0, _hour / 23.0))
+
+            # [17] tp3_atr_mult_norm — TP3 multiplier / 5.0 → [0, 1]
+            _tp3_mult = 0.0
+            try:
+                _tp3_raw = float(row.get("tp3_atr_mult", 0.0))
+                _tp3_mult = max(0.0, min(1.0, _tp3_raw / 5.0))
+            except (ValueError, TypeError):
+                pass
 
             tabular = torch.tensor(
                 [
-                    float(row.get("quality_pct", 0)) / 100.0,  # already 0–1
-                    _vol_norm,
-                    _atr_norm,
-                    _cvd_norm,
-                    float(row.get("nr7_flag", 0)),  # 0 or 1
-                    1.0 if str(row.get("direction", "")).upper().startswith("L") else 0.0,
-                    _session,  # session ordinal [0, 1]
-                    _london_overlap,  # 1.0 if 08:00–09:00 ET
-                    # v6
-                    _btype_ord,  # breakout_type / 12
-                    _vol_class,  # 0.0/0.5/1.0
-                    _range_atr,  # range/ATR clamped [0,1]
-                    _hour_norm,  # ET hour / 23
+                    _qual,  # [0]  quality_pct_norm
+                    _vol_norm,  # [1]  volume_ratio (log-scaled)
+                    _atr_norm,  # [2]  atr_pct (×100, clamped)
+                    _cvd_norm,  # [3]  cvd_delta
+                    _nr7,  # [4]  nr7_flag
+                    _dir,  # [5]  direction_flag
+                    _session_ord,  # [6]  session_ordinal
+                    _london_overlap,  # [7]  london_overlap_flag
+                    _or_range_atr,  # [8]  or_range_atr_ratio
+                    _pm_ratio,  # [9]  premarket_range_ratio
+                    _bar_of_day,  # [10] bar_of_day
+                    _dow,  # [11] day_of_week
+                    _vwap_dist,  # [12] vwap_distance
+                    _asset_cls,  # [13] asset_class_id
+                    _bt_ord_val,  # [14] breakout_type_ord
+                    _vol_cls,  # [15] asset_volatility_class
+                    _hour_of_day,  # [16] hour_of_day
+                    _tp3_mult,  # [17] tp3_atr_mult_norm
                 ],
                 dtype=torch.float32,
             )
 
             # Guard against NaN / Inf from corrupt data
             if torch.isnan(tabular).any() or torch.isinf(tabular).any():
-                logger.warning("NaN/Inf in tabular features for row %d — zeroing", idx)
+                logger.warning("NaN/Inf in tabular features at row %d — zeroing", idx)
                 tabular = torch.zeros(NUM_TABULAR, dtype=torch.float32)
 
             # --- Label ---
@@ -656,8 +787,8 @@ NUM_BREAKOUT_TYPES = 13
 # Learned embedding dimension for breakout type.
 # Replaces the single scalar ``breakout_type_ord`` feature with a richer
 # NUM_BREAKOUT_TYPES × BREAKOUT_EMBED_DIM lookup table that the model
-# trains end-to-end.  The tabular vector's ``breakout_type_ord`` slot is
-# still consumed (so the input dimension stays at NUM_TABULAR = 12) but
+# trains end-to-end.  The tabular vector's ``breakout_type_ord`` slot [14]
+# is still consumed (so the input dimension stays at NUM_TABULAR = 18) but
 # when ``use_type_embedding=True`` that slot is ignored and the embedding
 # replaces it in the combined representation.
 BREAKOUT_EMBED_DIM = 8
@@ -666,164 +797,93 @@ BREAKOUT_EMBED_DIM = 8
 if _TORCH_AVAILABLE:
 
     class HybridBreakoutCNN(nn.Module):  # type: ignore[no-redef]
-        """Hybrid image + tabular model for breakout classification.
+        """Hybrid image + tabular model for breakout classification (v6 contract).
 
-        Architecture (use_type_embedding=False, default v5 compat):
-          Image branch:   EfficientNetV2-S (pre-trained) → 1280-dim features
-          Tabular branch: Linear(NUM_TABULAR→64) → ReLU → Dropout → Linear(64→32)
-          Classifier:     Linear(1280+32→256) → ReLU → Dropout → Linear(256→2)
+        Architecture:
+          Image branch:   EfficientNetV2-S (pre-trained ImageNet) → 1280-dim
+          Tabular branch: Linear(NUM_TABULAR→128) → BN → ReLU → Dropout →
+                          Linear(128→64) → BN → ReLU → Linear(64→32)
+          Classifier:     Linear(1280+32→512) → BN → ReLU → Dropout →
+                          Linear(512→128) → ReLU → Dropout → Linear(128→2)
 
-        Architecture (use_type_embedding=True, v6 recommended):
-          Image branch:   EfficientNetV2-S (pre-trained) → 1280-dim features
-          Type embedding: Embedding(13, 8) — learned per-type representation
-                          The scalar ``breakout_type_ord`` slot in the tabular
-                          vector is excluded; the embedding is concatenated
-                          instead, keeping the combined width the same.
-          Tabular branch: Linear(NUM_TABULAR-1→64) → ReLU → Dropout →
-                          Linear(64→32) → concat(embed_8) → Linear(40→32)
-          Classifier:     Linear(1280+32→256) → ReLU → Dropout → Linear(256→2)
+        NUM_TABULAR = 18 (v6 contract, identical to C# PrepareCnnTabular).
 
         The model outputs raw logits for 2 classes:
           - Class 0: bad breakout (fail / chop)
           - Class 1: good breakout (clean follow-through)
 
-        Use ``torch.softmax(output, dim=1)[:, 1]`` to get P(good breakout).
-
-        Args:
-            num_tabular: Number of tabular features (default NUM_TABULAR=12).
-            dropout: Dropout rate for the classifier head (default 0.4).
-            pretrained: Load ImageNet pre-trained backbone weights (default True).
-            freeze_backbone_epochs: Epochs to freeze backbone at start of training.
-            use_type_embedding: If True, replace the scalar ``breakout_type_ord``
-                feature at position 8 (index 8 in TABULAR_FEATURES) with a
-                learned Embedding(NUM_BREAKOUT_TYPES, BREAKOUT_EMBED_DIM).
-                Requires the caller to pass integer breakout type IDs separately
-                via the ``type_ids`` argument in forward().  Default False for
-                backward compatibility with existing checkpoints.
+        Apply ``torch.softmax(output, dim=1)[:, 1]`` to get P(good breakout).
         """
-
-        # Index of the ``breakout_type_ord`` feature in TABULAR_FEATURES.
-        # When use_type_embedding=True this slot is dropped from the tabular
-        # input and replaced by the embedding lookup.
-        BREAKOUT_TYPE_ORD_IDX: int = 8  # position in v6 TABULAR_FEATURES list
 
         def __init__(
             self,
             num_tabular: int = NUM_TABULAR,
             dropout: float = 0.4,
             pretrained: bool = True,
-            freeze_backbone_epochs: int = 0,
-            use_type_embedding: bool = False,
         ):
             super().__init__()
             self.num_tabular = num_tabular
-            self._freeze_backbone_epochs = freeze_backbone_epochs
-            self.use_type_embedding = use_type_embedding
 
             # --- Image backbone: EfficientNetV2-S ---
             weights = models.EfficientNet_V2_S_Weights.DEFAULT if pretrained else None
             backbone = models.efficientnet_v2_s(weights=weights)
-
-            # Remove the original classifier head → get 1280-dim features
-            # EfficientNetV2-S: features → avgpool → classifier
-            # We keep features + avgpool, replace classifier with Identity
             backbone.classifier = nn.Identity()  # type: ignore[assignment]
             self.cnn = backbone
-            self._cnn_out_dim = 1280  # EfficientNetV2-S feature dim
+            self._cnn_out_dim = 1280
 
-            # --- Breakout type embedding (optional) ---
-            if use_type_embedding:
-                self.type_embedding: nn.Embedding | None = nn.Embedding(
-                    NUM_BREAKOUT_TYPES, BREAKOUT_EMBED_DIM, padding_idx=None
-                )
-                # Tabular head receives (num_tabular - 1) scalar features
-                # (breakout_type_ord slot excluded) plus BREAKOUT_EMBED_DIM
-                # embedding dims, fused before the final projection.
-                _tab_scalar_dim = num_tabular - 1
-                self.tabular_head = nn.Sequential(
-                    nn.Linear(_tab_scalar_dim, 64),
-                    nn.ReLU(inplace=True),
-                    nn.Dropout(0.3),
-                    nn.Linear(64, 32),
-                    nn.ReLU(inplace=True),
-                )
-                # Fusion: merge 32-dim scalar encoding + 8-dim type embedding
-                self.type_fusion = nn.Sequential(
-                    nn.Linear(32 + BREAKOUT_EMBED_DIM, 32),
-                    nn.ReLU(inplace=True),
-                )
-            else:
-                self.type_embedding = None
-                self.type_fusion = None  # type: ignore[assignment]
-                # --- Tabular branch (scalar-only, v5 compat) ---
-                self.tabular_head = nn.Sequential(
-                    nn.Linear(num_tabular, 64),
-                    nn.ReLU(inplace=True),
-                    nn.Dropout(0.3),
-                    nn.Linear(64, 32),
-                    nn.ReLU(inplace=True),
-                )
+            # --- Tabular branch (deeper than v5/v6, BatchNorm for stability) ---
+            self.tabular_head = nn.Sequential(
+                nn.Linear(num_tabular, 128),
+                nn.BatchNorm1d(128),
+                nn.ReLU(inplace=True),
+                nn.Dropout(0.25),
+                nn.Linear(128, 64),
+                nn.BatchNorm1d(64),
+                nn.ReLU(inplace=True),
+                nn.Linear(64, 32),
+            )
 
-            # --- Classifier (merges image + tabular) ---
+            # --- Classifier ---
             combined_dim = self._cnn_out_dim + 32
             self.classifier = nn.Sequential(
-                nn.Linear(combined_dim, 256),
+                nn.Linear(combined_dim, 512),
+                nn.BatchNorm1d(512),
                 nn.ReLU(inplace=True),
                 nn.Dropout(dropout),
-                nn.Linear(256, 64),
+                nn.Linear(512, 128),
                 nn.ReLU(inplace=True),
                 nn.Dropout(dropout * 0.5),
-                nn.Linear(64, 2),
+                nn.Linear(128, 2),
             )
 
         def forward(
             self,
             image: torch.Tensor,
             tabular: torch.Tensor,
-            type_ids: torch.Tensor | None = None,
+            type_ids: torch.Tensor | None = None,  # kept for API compat, unused
         ) -> torch.Tensor:
             """Forward pass.
 
             Args:
-                image: (B, 3, 224, 224) normalised image tensor.
-                tabular: (B, NUM_TABULAR) float tensor.
-                type_ids: (B,) long tensor of breakout type ordinals (0–12).
-                          Required when ``use_type_embedding=True``.
-                          Ignored when ``use_type_embedding=False``.
+                image:   (B, 3, 224, 224) normalised image tensor.
+                tabular: (B, NUM_TABULAR) float tensor — v6 18-feature vector.
+                type_ids: ignored (kept for backward API compatibility).
 
             Returns:
                 (B, 2) logits tensor.
             """
             img_features = self.cnn(image)  # (B, 1280)
-
-            if self.use_type_embedding and self.type_embedding is not None:
-                # Drop the scalar breakout_type_ord slot from tabular
-                idx = self.BREAKOUT_TYPE_ORD_IDX
-                tab_scalar = torch.cat([tabular[:, :idx], tabular[:, idx + 1 :]], dim=1)  # (B, NUM_TABULAR-1)
-                scalar_enc = self.tabular_head(tab_scalar)  # (B, 32)
-
-                # Breakout type embedding
-                if type_ids is None:
-                    # Fallback: treat ordinal at idx as integer index
-                    type_ids = (tabular[:, idx] * (NUM_BREAKOUT_TYPES - 1)).long().clamp(0, NUM_BREAKOUT_TYPES - 1)
-                type_emb = self.type_embedding(type_ids)  # (B, BREAKOUT_EMBED_DIM)
-
-                # Fuse scalar encoding + type embedding → 32-dim
-                assert self.type_fusion is not None, "type_fusion must be set when use_type_embedding=True"
-                tab_features = self.type_fusion(torch.cat([scalar_enc, type_emb], dim=1))  # (B, 32)
-            else:
-                tab_features = self.tabular_head(tabular)  # (B, 32)
-
+            tab_features = self.tabular_head(tabular)  # (B, 32)
             combined = torch.cat([img_features, tab_features], dim=1)  # (B, 1312)
             return self.classifier(combined)  # (B, 2)
 
-        def freeze_backbone(self):
-            """Freeze the CNN backbone (useful for first N epochs of fine-tuning)."""
+        def freeze_backbone(self) -> None:
+            """Freeze the CNN backbone (first N epochs of fine-tuning)."""
             for param in self.cnn.parameters():
                 param.requires_grad = False
             logger.info("CNN backbone frozen")
 
-        def unfreeze_backbone(self):
+        def unfreeze_backbone(self) -> None:
             """Unfreeze the CNN backbone for full fine-tuning."""
             for param in self.cnn.parameters():
                 param.requires_grad = True
@@ -833,8 +893,6 @@ else:
 
     class HybridBreakoutCNN:  # type: ignore[no-redef,misc]
         """Stub for environments without PyTorch."""
-
-        BREAKOUT_TYPE_ORD_IDX: int = 8
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             raise RuntimeError("PyTorch is not installed — cannot create HybridBreakoutCNN")
@@ -980,10 +1038,8 @@ def train_model(
     )
 
     # --- Model ---
-    use_type_emb = os.getenv("CNN_TYPE_EMBEDDING", "0").strip() in ("1", "true", "yes")
-    model = HybridBreakoutCNN(pretrained=True, use_type_embedding=use_type_emb)
-    if use_type_emb:
-        logger.info("HybridBreakoutCNN: using learned BreakoutType embedding (dim=%d)", BREAKOUT_EMBED_DIM)
+    model = HybridBreakoutCNN(pretrained=True)
+    logger.info("HybridBreakoutCNN v6: %d tabular features", NUM_TABULAR)
     model = model.to(device)
 
     # --- Optimizer ---
@@ -1028,12 +1084,7 @@ def train_model(
             labels = labels.to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
-            # Derive type_ids from breakout_type_ord slot for embedding models
-            type_ids = None
-            if use_type_emb and tabs.shape[1] > HybridBreakoutCNN.BREAKOUT_TYPE_ORD_IDX:
-                idx = HybridBreakoutCNN.BREAKOUT_TYPE_ORD_IDX
-                type_ids = (tabs[:, idx] * (NUM_BREAKOUT_TYPES - 1)).long().clamp(0, NUM_BREAKOUT_TYPES - 1)
-            outputs = model(imgs, tabs, type_ids=type_ids)
+            outputs = model(imgs, tabs)
             loss = criterion(outputs, labels)
 
             # NaN guard — skip batch if loss explodes
@@ -1073,11 +1124,7 @@ def train_model(
                 tabs = tabs.to(device, non_blocking=True)
                 labels = labels.to(device, non_blocking=True)
 
-                val_type_ids = None
-                if use_type_emb and tabs.shape[1] > HybridBreakoutCNN.BREAKOUT_TYPE_ORD_IDX:
-                    idx = HybridBreakoutCNN.BREAKOUT_TYPE_ORD_IDX
-                    val_type_ids = (tabs[:, idx] * (NUM_BREAKOUT_TYPES - 1)).long().clamp(0, NUM_BREAKOUT_TYPES - 1)
-                outputs = model(imgs, tabs, type_ids=val_type_ids)
+                outputs = model(imgs, tabs)
                 loss = criterion(outputs, labels)
 
                 val_loss += loss.item() * imgs.size(0)
@@ -1166,10 +1213,15 @@ def evaluate_model(
         device = torch.device(get_device())
         num_workers = _safe_num_workers(num_workers)
 
-        # Load model
-        model = HybridBreakoutCNN(pretrained=False)
-        state_dict = torch.load(model_path, map_location=device, weights_only=True)
-        model.load_state_dict(state_dict)
+        # Load model — auto-detect num_tabular from checkpoint
+        try:
+            state_dict = torch.load(model_path, map_location=device, weights_only=True)
+        except TypeError:
+            state_dict = torch.load(model_path, map_location=device)  # type: ignore[call-overload]
+        tab_key = "tabular_head.0.weight"
+        num_tab = state_dict[tab_key].shape[1] if tab_key in state_dict else NUM_TABULAR
+        model = HybridBreakoutCNN(pretrained=False, num_tabular=num_tab)
+        model.load_state_dict(state_dict, strict=False)
         model = model.to(device)
         model.eval()
 
@@ -1394,9 +1446,14 @@ def _load_model(
         dev = torch.device(device or get_device())
 
         try:
-            model = HybridBreakoutCNN(pretrained=False)
-            state_dict = torch.load(model_path, map_location=dev, weights_only=True)
-            model.load_state_dict(state_dict)
+            try:
+                state_dict = torch.load(model_path, map_location=dev, weights_only=True)
+            except TypeError:
+                state_dict = torch.load(model_path, map_location=dev)  # type: ignore[call-overload]
+            tab_key = "tabular_head.0.weight"
+            num_tab = state_dict[tab_key].shape[1] if tab_key in state_dict else NUM_TABULAR
+            model = HybridBreakoutCNN(pretrained=False, num_tabular=num_tab)
+            model.load_state_dict(state_dict, strict=False)
             model.eval()
             model = model.to(dev)
 
@@ -1417,82 +1474,120 @@ def _load_model(
 
 
 def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[float]:
-    """Apply the same normalisation used in BreakoutDataset to raw inference features.
+    """Normalise a raw v6 tabular feature vector for inference.
 
-    v6 input order (12 features):
-        [0]  quality_pct_norm      — quality_pct / 100 (caller pre-divides)
-        [1]  volume_ratio          — raw ratio, will be log-normalised here
-        [2]  atr_pct               — ATR / price (will be ×100 clamped)
-        [3]  cvd_delta             — cumulative volume delta (clamped ±1)
-        [4]  nr7_flag              — 0 or 1
-        [5]  direction_flag        — 1.0 LONG / 0.0 SHORT
-        [6]  session_flag          — ordinal [0, 1] via get_session_ordinal()
-        [7]  london_overlap_flag   — 0 or 1
-        [8]  breakout_type_ord     — BreakoutType ordinal / 12  [0, 1]
-        [9]  asset_volatility_class — 0.0 / 0.5 / 1.0
-        [10] range_atr_ratio       — range/ATR clamped to [0, 1]  (/3 applied here)
-        [11] hour_of_day           — ET hour / 23  [0, 1]
+    Applies the same transforms as OrbCnnPredictor.NormaliseTabular() in C#
+    so that Python inference and NT8 inference are identical.
 
-    For backward compatibility, vectors of length 8 (v5) are zero-padded to 12.
-    The caller is expected to pass quality_pct already divided by 100.
+    v6 input order (18 features — must match TABULAR_FEATURES exactly):
+        [0]  quality_pct_norm      — quality / 100, already in [0, 1]
+        [1]  volume_ratio          — raw ratio (log-normalised here)
+        [2]  atr_pct               — ATR / price fraction (×100 here)
+        [3]  cvd_delta             — signed vol ratio, clamped [-1, 1]
+        [4]  nr7_flag              — 0 or 1 passthrough
+        [5]  direction_flag        — 1=LONG 0=SHORT passthrough
+        [6]  session_ordinal       — Globex day position [0, 1] passthrough
+        [7]  london_overlap_flag   — 0 or 1 passthrough
+        [8]  or_range_atr_ratio    — raw ORB/ATR  (clamp(0,3)/3 applied here)
+        [9]  premarket_range_ratio — raw PM/ORB  (clamp(0,5)/5 applied here)
+        [10] bar_of_day            — already normalised [0, 1] passthrough
+        [11] day_of_week           — already normalised [0, 1] passthrough
+        [12] vwap_distance         — raw (price-vwap)/ATR (clamp(-3,3)/3 here)
+        [13] asset_class_id        — ordinal/4 already [0, 1] passthrough
+        [14] breakout_type_ord     — BreakoutType ordinal/12 [0, 1] passthrough
+        [15] asset_volatility_class — low=0/med=0.5/high=1.0 passthrough
+        [16] hour_of_day           — ET hour/23 [0, 1] passthrough
+        [17] tp3_atr_mult_norm     — TP3 mult/5.0 [0, 1] passthrough
 
-    Returns a list of 12 floats in normalised form.
+    For backward compat, 8-feature (v5) and 14-feature (v4) vectors are
+    zero-padded to 18 with sensible defaults before normalisation.
+
+    Returns a list of 18 floats ready for the model tabular input tensor.
     """
     f = list(raw_features)
 
-    # v5 → v6 backward compat: zero-pad the 4 new features
+    # Backward compat padding
     if len(f) == 8:
-        f.extend([0.0, 0.5, 0.5, 0.5])  # sensible defaults for new fields
+        # v5 (8 features) → pad to 18 with sensible defaults
+        # [8..13] = v4 extras with defaults, [14..17] = v6 extras with defaults
+        f.extend([1.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0])
+    elif len(f) == 14:
+        # v4 (14 features) → pad [14..17] with v6 defaults
+        f.extend([0.0, 0.5, 0.5, 0.0])
 
     if len(f) != NUM_TABULAR:
         raise ValueError(
-            f"Expected {NUM_TABULAR} tabular features (v6) or 8 (v5 compat), "
+            f"Expected {NUM_TABULAR} tabular features (v6), 14 (v4 compat), or 8 (v5 compat); "
             f"got {len(f)}. Required order: {TABULAR_FEATURES}"
         )
 
-    quality_norm = max(min(f[0], 1.0), 0.0)
+    # [0] quality_pct_norm — clamp [0, 1]
+    quality_norm = max(0.0, min(1.0, f[0]))
 
-    # volume_ratio: log-scale, same as dataset
+    # [1] volume_ratio — log-scale: min(log1p(raw) / log1p(10), 1.0)
     vol_raw = max(f[1], 0.01)
     vol_norm = min(float(np.log1p(vol_raw) / np.log1p(10.0)), 1.0)
 
-    # atr_pct: ×100 then clamp
-    atr_norm = min(f[2] * 100.0, 1.0)
+    # [2] atr_pct — ×100 then clamp [0, 1]
+    atr_norm = max(0.0, min(1.0, f[2] * 100.0))
 
-    # cvd_delta: clamp [-1, 1]
-    cvd_norm = max(min(f[3], 1.0), -1.0)
+    # [3] cvd_delta — clamp [-1, 1]
+    cvd_norm = max(-1.0, min(1.0, f[3]))
 
-    # f[4] = nr7_flag (0 or 1), f[5] = direction_flag (0 or 1),
-    # f[6] = session ordinal [0, 1], f[7] = london_overlap_flag (0 or 1)
-    # All pass through unchanged.
+    # [4] nr7_flag       — passthrough
+    # [5] direction_flag — passthrough
+    # [6] session_ord    — passthrough [0, 1]
+    # [7] london_overlap — passthrough
 
-    # f[8] = breakout_type_ord [0, 1] — pass through
-    btype_ord = max(min(f[8], 1.0), 0.0)
+    # [8] or_range_atr_ratio — clamp(raw, 0, 3) / 3
+    or_range_atr = max(0.0, min(3.0, f[8])) / 3.0
 
-    # f[9] = asset_volatility_class — 0.0 / 0.5 / 1.0 — pass through
-    vol_class = max(min(f[9], 1.0), 0.0)
+    # [9] premarket_range_ratio — clamp(raw, 0, 5) / 5
+    pm_ratio = max(0.0, min(5.0, f[9])) / 5.0
 
-    # f[10] = range_atr_ratio — caller passes raw ratio; clamp to [0, 3] then /3
-    # If caller already normalised to [0, 1], the clamp is a no-op.
-    raw_range_atr = f[10]
-    range_atr = min(raw_range_atr / 3.0, 1.0) if raw_range_atr > 1.0 else max(min(raw_range_atr, 1.0), 0.0)
+    # [10] bar_of_day  — already [0, 1], passthrough with clamp
+    bar_of_day = max(0.0, min(1.0, f[10]))
 
-    # f[11] = hour_of_day — caller passes ET hour / 23; clamp to [0, 1]
-    hour_norm = max(min(f[11], 1.0), 0.0)
+    # [11] day_of_week — already [0, 1], passthrough with clamp
+    dow = max(0.0, min(1.0, f[11]))
+
+    # [12] vwap_distance — clamp(raw, -3, 3) / 3  → [-1, 1]
+    vwap_dist = max(-3.0, min(3.0, f[12])) / 3.0
+
+    # [13] asset_class_id — already [0, 1], passthrough with clamp
+    asset_cls = max(0.0, min(1.0, f[13]))
+
+    # [14] breakout_type_ord — already [0, 1], passthrough with clamp
+    bt_ord = max(0.0, min(1.0, f[14]))
+
+    # [15] asset_volatility_class — already [0, 1], passthrough with clamp
+    vol_class = max(0.0, min(1.0, f[15]))
+
+    # [16] hour_of_day — already [0, 1], passthrough with clamp
+    hour_of_day = max(0.0, min(1.0, f[16]))
+
+    # [17] tp3_atr_mult_norm — already [0, 1], passthrough with clamp
+    tp3_norm = max(0.0, min(1.0, f[17]))
 
     return [
-        quality_norm,
-        vol_norm,
-        atr_norm,
-        cvd_norm,
-        f[4],
-        f[5],
-        f[6],
-        f[7],
-        btype_ord,
-        vol_class,
-        range_atr,
-        hour_norm,
+        quality_norm,  # [0]
+        vol_norm,  # [1]
+        atr_norm,  # [2]
+        cvd_norm,  # [3]
+        f[4],  # [4] nr7_flag
+        f[5],  # [5] direction_flag
+        f[6],  # [6] session_ordinal
+        f[7],  # [7] london_overlap_flag
+        or_range_atr,  # [8]
+        pm_ratio,  # [9]
+        bar_of_day,  # [10]
+        dow,  # [11]
+        vwap_dist,  # [12]
+        asset_cls,  # [13]
+        bt_ord,  # [14] breakout_type_ord
+        vol_class,  # [15] asset_volatility_class
+        hour_of_day,  # [16] hour_of_day
+        tp3_norm,  # [17] tp3_atr_mult_norm
     ]
 
 
@@ -1507,20 +1602,30 @@ def predict_breakout(
 
     Args:
         image_path: Path to the PNG chart snapshot.
-        tabular_features: List/tuple of 8 floats in TABULAR_FEATURES order:
-            [quality_pct_norm, volume_ratio, atr_pct, cvd_delta, nr7_flag,
-             direction_flag, session_ordinal, london_overlap_flag]
-            - quality_pct_norm: quality_pct / 100 (0.0–1.0)
-            - volume_ratio: breakout bar volume / 20-bar average
-            - atr_pct: ATR as fraction of price
-            - cvd_delta: normalised CVD delta (-1 to 1)
-            - nr7_flag: 1.0 if NR7 day, 0.0 otherwise
-            - direction_flag: 1.0 for LONG, 0.0 for SHORT
-            - session_ordinal: ordinal position in Globex day via
-              ``get_session_ordinal(session_key)`` — replaces old binary
-              session_flag (1.0=US / 0.0=London).  Old binary values are
-              accepted for backward compatibility.
-            - london_overlap_flag: 1.0 if 08:00–09:00 ET, 0.0 otherwise
+        tabular_features: List/tuple of 18 floats in TABULAR_FEATURES order
+            (v6 contract).  8-feature (v5) and 14-feature (v4) vectors are
+            accepted for backward compatibility and zero-padded automatically.
+
+            v6 features:
+              [0]  quality_pct_norm      — quality_pct / 100 (0.0–1.0)
+              [1]  volume_ratio          — breakout bar vol / 20-bar avg
+              [2]  atr_pct               — ATR as fraction of price
+              [3]  cvd_delta             — normalised CVD delta (-1 to 1)
+              [4]  nr7_flag              — 1.0 if NR7 day, 0.0 otherwise
+              [5]  direction_flag        — 1.0 for LONG, 0.0 for SHORT
+              [6]  session_ordinal       — Globex day position [0, 1]
+              [7]  london_overlap_flag   — 1.0 if 08:00–09:00 ET
+              [8]  or_range_atr_ratio    — ORB range / ATR (raw)
+              [9]  premarket_range_ratio — premarket range / ORB range (raw)
+              [10] bar_of_day            — minutes since Globex open / 1380
+              [11] day_of_week           — Mon=0..Fri=4 / 4
+              [12] vwap_distance         — (price-vwap) / ATR (raw)
+              [13] asset_class_id        — asset class ordinal / 4
+              [14] breakout_type_ord     — BreakoutType ordinal / 12
+              [15] asset_volatility_class — low=0 / med=0.5 / high=1.0
+              [16] hour_of_day           — ET hour / 23
+              [17] tp3_atr_mult_norm     — TP3 ATR mult / 5.0
+
         model_path: Explicit model path (default: latest in models/).
         threshold: Probability threshold for "signal" verdict.
                    When None (default), the per-session threshold from
@@ -1714,19 +1819,25 @@ def generate_feature_contract(output_path: str | None = None) -> dict[str, Any]:
 
     The contract encodes every parameter needed by consumers (engine, NT8
     C# OrbCnnPredictor, rb trainer) to correctly prepare the tabular feature
-    vector and interpret model outputs.
+    vector and interpret model outputs.  The v6 schema matches the 18-feature
+    vector built by BreakoutStrategy.PrepareCnnTabular() in C#.
 
     Structure::
 
         {
           "version":          6,
-          "num_tabular":      12,
+          "num_tabular":      18,
           "tabular_features": [...],
           "default_threshold": 0.82,
           "image_size":       224,
-          "breakout_types":   {<BreakoutType.name>: {ordinal, box_style, tp1_atr_mult, ...}},
-          "sessions":         {<session_key>: {ordinal, session_ordinal, cnn_threshold, ...}},
-          "asset_volatility": {<ticker>: 0.0|0.5|1.0},
+          "imagenet_mean":    [...],
+          "imagenet_std":     [...],
+          "session_thresholds":   {...},
+          "session_ordinals":     {...},
+          "asset_class_map":      {...},
+          "breakout_type_ordinals": {...},
+          "asset_volatility_classes": {...},
+          "breakout_types":       {...},
           "generated_at":     "<ISO timestamp>",
         }
 
@@ -1741,25 +1852,13 @@ def generate_feature_contract(output_path: str | None = None) -> dict[str, Any]:
     import json as _json
     from datetime import datetime as _dt
 
-    # ── breakout_types section ─────────────────────────────────────────────
+    # Import breakout type helpers for the full contract
     try:
-        from lib.core.breakout_types import to_feature_contract_dict as _bt_contract
+        from lib.core.breakout_types import to_feature_contract_dict as _bt_dict
 
-        bt_section = _bt_contract()
-    except Exception:
-        # Fallback: use the local ordinal map
-        bt_section = {
-            name: {"ordinal": round(ord_val * 12), "breakout_type_ord": round(ord_val, 6)}
-            for name, ord_val in BREAKOUT_TYPE_ORDINALS.items()
-        }
-
-    # ── sessions section ───────────────────────────────────────────────────
-    try:
-        from lib.core.multi_session import to_feature_contract_dict as _sess_contract
-
-        sess_section = _sess_contract()
-    except Exception:
-        sess_section = {}
+        _breakout_types_section = _bt_dict()
+    except ImportError:
+        _breakout_types_section = {}
 
     contract: dict[str, Any] = {
         "version": FEATURE_CONTRACT_VERSION,
@@ -1769,9 +1868,18 @@ def generate_feature_contract(output_path: str | None = None) -> dict[str, Any]:
         "image_size": IMAGE_SIZE,
         "imagenet_mean": IMAGENET_MEAN,
         "imagenet_std": IMAGENET_STD,
-        "breakout_types": bt_section,
-        "sessions": sess_section,
-        "asset_volatility": ASSET_VOLATILITY_CLASS,
+        # Per-session CNN thresholds — must match C# CnnSessionThresholds
+        "session_thresholds": SESSION_THRESHOLDS,
+        # Per-session ordinals — must match C# CnnSessionThresholds._ordinals
+        "session_ordinals": SESSION_ORDINAL,
+        # Asset class map — must match C# GetAssetClassNorm()
+        "asset_class_map": ASSET_CLASS_ORDINALS,
+        # v6: breakout type ordinals — must match C# BreakoutType enum
+        "breakout_type_ordinals": BREAKOUT_TYPE_ORDINALS,
+        # v6: asset volatility classes — must match C# GetVolatilityClass()
+        "asset_volatility_classes": ASSET_VOLATILITY_CLASS,
+        # v6: full breakout type configs (ordinals, bracket params, box styles)
+        "breakout_types": _breakout_types_section,
         "generated_at": _dt.now(tz=__import__("datetime").timezone.utc).isoformat(),
     }
 
@@ -1785,15 +1893,144 @@ def generate_feature_contract(output_path: str | None = None) -> dict[str, Any]:
     return contract
 
 
+def export_onnx_model(
+    pt_path: str,
+    onnx_path: str,
+    opset: int = 17,
+    image_size: int = IMAGE_SIZE,
+    num_tabular: int = NUM_TABULAR,
+) -> str:
+    """Export a trained HybridBreakoutCNN ``.pt`` checkpoint to ONNX format.
+
+    The exported graph accepts two named inputs:
+
+    * ``image``   — float32 (1, 3, 224, 224) pre-processed with ImageNet stats.
+    * ``tabular`` — float32 (1, NUM_TABULAR) v6 normalised feature vector (18 features).
+
+    Output:
+
+    * ``logits``  — float32 (1, 2).  Apply softmax(axis=1)[0,1] → P(good).
+
+    The output ONNX file is validated with onnx.checker before returning.
+    Dynamic batch axes are exported so NT8's OrbCnnPredictor (batch_size=1)
+    and any batch-inference caller both work without re-export.
+
+    Args:
+        pt_path:     Path to the ``.pt`` state-dict checkpoint.
+        onnx_path:   Destination ``.onnx`` file (parent dirs created).
+        opset:       ONNX opset version (default 17).
+        image_size:  Spatial input size (default 224).
+        num_tabular: Tabular feature count (default NUM_TABULAR=14).
+
+    Returns:
+        Absolute path to the written ``.onnx`` file.
+
+    Raises:
+        RuntimeError: torch or onnx not installed, or checkpoint load failed.
+    """
+    if not _TORCH_AVAILABLE:
+        raise RuntimeError(
+            "PyTorch is not installed — cannot export ONNX model.  Install with: pip install torch torchvision"
+        )
+
+    try:
+        import onnx  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError("The 'onnx' package is required.  Install with: pip install onnx onnxruntime") from exc
+
+    import os as _os
+
+    _os.makedirs(_os.path.dirname(_os.path.abspath(onnx_path)), exist_ok=True)
+
+    device = torch.device("cpu")  # always export on CPU for portability
+
+    # ── Load checkpoint ────────────────────────────────────────────────────
+    logger.info("ONNX export: loading checkpoint %s", pt_path)
+    try:
+        state_dict = torch.load(pt_path, map_location=device, weights_only=True)
+    except TypeError:
+        state_dict = torch.load(pt_path, map_location=device)  # type: ignore[call-overload]
+
+    # ── Detect num_tabular from checkpoint ────────────────────────────────
+    tab_key = "tabular_head.0.weight"
+    if tab_key in state_dict:
+        detected = int(state_dict[tab_key].shape[1])
+        if detected != num_tabular:
+            logger.warning(
+                "ONNX export: checkpoint tabular dim=%d, expected %d — using %d",
+                detected,
+                num_tabular,
+                detected,
+            )
+            num_tabular = detected
+
+    # ── Instantiate & load model ──────────────────────────────────────────
+    model = HybridBreakoutCNN(num_tabular=num_tabular, pretrained=False)
+    model.load_state_dict(state_dict, strict=False)
+    model = model.to(device)
+    model.eval()
+
+    logger.info("ONNX export: model loaded  num_tabular=%d", num_tabular)
+
+    # ── Thin export wrapper (clean two-input graph) ────────────────────────
+    class _ExportWrapper(nn.Module):
+        def __init__(self, inner: HybridBreakoutCNN) -> None:
+            super().__init__()
+            self.inner = inner
+
+        def forward(self, image: torch.Tensor, tabular: torch.Tensor) -> torch.Tensor:
+            return self.inner(image, tabular)
+
+    export_model: nn.Module = _ExportWrapper(model)
+    export_model.eval()
+
+    # ── Dummy inputs ──────────────────────────────────────────────────────
+    dummy_image = torch.zeros(1, 3, image_size, image_size, dtype=torch.float32)
+    dummy_tabular = torch.zeros(1, num_tabular, dtype=torch.float32)
+
+    # ── Export ────────────────────────────────────────────────────────────
+    logger.info("ONNX export: tracing → %s  (opset=%d)", onnx_path, opset)
+
+    with torch.no_grad():
+        torch.onnx.export(
+            export_model,
+            (dummy_image, dummy_tabular),
+            onnx_path,
+            opset_version=opset,
+            input_names=["image", "tabular"],
+            output_names=["logits"],
+            dynamic_axes={
+                "image": {0: "batch_size"},
+                "tabular": {0: "batch_size"},
+                "logits": {0: "batch_size"},
+            },
+            do_constant_folding=True,
+        )
+
+    # ── Validate ──────────────────────────────────────────────────────────
+    import onnx as _onnx
+
+    onnx_model = _onnx.load(onnx_path)
+    _onnx.checker.check_model(onnx_model)
+
+    size_mb = _os.path.getsize(onnx_path) / (1024 * 1024)
+    logger.info(
+        "ONNX export complete: %s  (%.1f MB, opset=%d, num_tabular=%d)",
+        onnx_path,
+        size_mb,
+        opset,
+        num_tabular,
+    )
+
+    return _os.path.abspath(onnx_path)
+
+
 def get_type_embedding_weights(model_path: str | None = None) -> dict[str, Any] | None:
     """Return the learned BreakoutType embedding matrix from a checkpoint.
 
-    Returns a dict mapping breakout type name → embedding vector (list of
-    floats), or None if the model was not trained with type embeddings or
-    torch is not available.
-
-    Useful for debugging/visualising what the model has learned about each
-    breakout type.
+    Returns None for v4 models (no type embedding) or if torch is unavailable.
+    Kept for backward compatibility with callers that checked for embeddings
+    in older v6 checkpoints.
     """
     if not _TORCH_AVAILABLE:
         return None
@@ -1809,11 +2046,10 @@ def get_type_embedding_weights(model_path: str | None = None) -> dict[str, Any] 
             sd = torch.load(mp, map_location="cpu")  # type: ignore[call-overload]
 
         if "type_embedding.weight" not in sd:
+            # v4 models have no type embedding — this is expected
             return None
 
-        emb_weight = sd["type_embedding.weight"].numpy()  # (13, BREAKOUT_EMBED_DIM)
-
-        # Map ordinal index → breakout type name
+        emb_weight = sd["type_embedding.weight"].numpy()
         _ordinal_to_name = {int(round(v * 12)): k for k, v in BREAKOUT_TYPE_ORDINALS.items()}
         result: dict[str, Any] = {}
         for i, vec in enumerate(emb_weight):
@@ -1855,6 +2091,7 @@ def model_info(model_path: str | None = None) -> dict[str, Any]:
         "cuda_available": torch.cuda.is_available(),
         "image_size": IMAGE_SIZE,
         "num_tabular_features": NUM_TABULAR,
+        "feature_contract_version": FEATURE_CONTRACT_VERSION,
         "tabular_features": TABULAR_FEATURES,
         "default_threshold": DEFAULT_THRESHOLD,
     }
@@ -1892,8 +2129,7 @@ def _cli():
         "--type-embedding",
         action="store_true",
         default=False,
-        help="Use learned BreakoutType embedding instead of scalar ordinal feature. "
-        "Recommended for v6 models trained on all 13 breakout types.",
+        help="Legacy flag — ignored for v6 models (no type embedding used).",
     )
     train_parser.add_argument("--workers", type=int, default=4)
 
@@ -1920,7 +2156,7 @@ def _cli():
     )
 
     # Contract
-    contract_parser = sub.add_parser("contract", help="Generate feature_contract.json v6")
+    contract_parser = sub.add_parser("contract", help="Generate feature_contract.json v6 (18 features)")
     contract_parser.add_argument(
         "--output",
         default="feature_contract.json",
@@ -1939,10 +2175,6 @@ def _cli():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
     if args.command == "train":
-        # CNN_TYPE_EMBEDDING env var is read inside train_model(); set it
-        # from the CLI flag so the caller doesn't have to export it manually.
-        if getattr(args, "type_embedding", False):
-            os.environ["CNN_TYPE_EMBEDDING"] = "1"
         result = train_model(
             data_csv=args.csv,
             val_csv=args.val_csv,
@@ -2001,8 +2233,8 @@ def _cli():
             contract = generate_feature_contract(output_path=args.output)
             print(f"✅ feature_contract.json v{contract['version']} written to: {args.output}")
             print(f"   tabular features : {contract['num_tabular']}")
-            print(f"   breakout types   : {len(contract['breakout_types'])}")
-            print(f"   sessions         : {len(contract['sessions'])}")
+            print(f"   breakout types   : {len(contract.get('breakout_types', {}))}")
+            print(f"   sessions         : {len(contract.get('session_thresholds', {}))}")
 
     else:
         parser.print_help()
