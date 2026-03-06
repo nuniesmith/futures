@@ -55,7 +55,7 @@ import os
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -907,8 +907,6 @@ else:
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
-
-from typing import NamedTuple
 
 
 class TrainResult(NamedTuple):
