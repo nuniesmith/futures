@@ -44,8 +44,16 @@ Environment variables:
 from __future__ import annotations
 
 import json
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+# Ensure standard-library loggers (e.g. analysis.breakout_cnn, training.*)
+# emit to stdout so epoch progress and dataset messages appear in docker logs.
+import logging
 import os
 import shutil
+import sys
 import threading
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -58,9 +66,16 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,
+)
+# Quieten noisy third-party loggers that flood docker logs at INFO level
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 structlog.configure(
     processors=[
