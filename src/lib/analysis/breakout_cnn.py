@@ -908,6 +908,23 @@ else:
 # Training
 # ---------------------------------------------------------------------------
 
+from typing import NamedTuple
+
+
+class TrainResult(NamedTuple):
+    """Return value from :func:`train_model`.
+
+    Attributes:
+        model_path:     Absolute path to the saved ``.pt`` checkpoint.
+        best_epoch:     1-based epoch index that achieved the best validation
+                        accuracy (None if no validation was performed).
+        epochs_trained: Total number of epochs completed.
+    """
+
+    model_path: str
+    best_epoch: int | None
+    epochs_trained: int
+
 
 def _detect_docker() -> bool:
     """Return True if we appear to be running inside a Docker container."""
@@ -967,7 +984,7 @@ def train_model(
     image_root: str | None = None,
     num_workers: int = 4,
     save_best: bool = True,
-) -> str | None:
+) -> TrainResult | None:
     """Train the HybridBreakoutCNN model.
 
     Two-phase training:
@@ -991,7 +1008,8 @@ def train_model(
                    validation accuracy instead of the final epoch.
 
     Returns:
-        Path to the saved model file, or None if training failed.
+        :class:`TrainResult` with ``model_path``, ``best_epoch``, and
+        ``epochs_trained``, or ``None`` if training failed.
     """
     if not _TORCH_AVAILABLE:
         logger.error("PyTorch is not installed — cannot train model")
@@ -1055,6 +1073,8 @@ def train_model(
     # --- Training loop ---
     best_val_acc = 0.0
     best_model_path: str | None = None
+    best_epoch: int | None = None
+    epochs_completed: int = 0
     os.makedirs(model_dir, exist_ok=True)
 
     for epoch in range(epochs):
@@ -1153,11 +1173,14 @@ def train_model(
         # --- Save best model ---
         if save_best and val_acc > best_val_acc:
             best_val_acc = val_acc
+            best_epoch = epoch + 1  # 1-based
             best_model_path = os.path.join(
                 model_dir, f"{MODEL_PREFIX}{datetime.now():%Y%m%d_%H%M%S}_acc{val_acc:.0f}.pt"
             )
             torch.save(model.state_dict(), best_model_path)
             logger.info("New best model saved: %s (val_acc=%.1f%%)", best_model_path, val_acc)
+
+        epochs_completed = epoch + 1
 
     # --- Save final model (if not saving best, or as fallback) ---
     final_path = os.path.join(model_dir, f"{MODEL_PREFIX}{datetime.now():%Y%m%d_%H%M%S}_final.pt")
@@ -1166,15 +1189,21 @@ def train_model(
 
     result_path = best_model_path if (save_best and best_model_path) else final_path
     logger.info(
-        "Training complete — best val accuracy: %.1f%% — model: %s",
+        "Training complete — best val accuracy: %.1f%% — model: %s (best_epoch=%s, epochs_trained=%d)",
         best_val_acc,
         result_path,
+        best_epoch,
+        epochs_completed,
     )
 
     # Invalidate cached model so next inference picks up the new one
     invalidate_model_cache()
 
-    return result_path
+    return TrainResult(
+        model_path=result_path,
+        best_epoch=best_epoch,
+        epochs_trained=epochs_completed,
+    )
 
 
 def evaluate_model(
@@ -1991,21 +2020,36 @@ def export_onnx_model(
     # ── Export ────────────────────────────────────────────────────────────
     logger.info("ONNX export: tracing → %s  (opset=%d)", onnx_path, opset)
 
-    with torch.no_grad():
-        torch.onnx.export(
-            export_model,
-            (dummy_image, dummy_tabular),
-            onnx_path,
-            opset_version=opset,
-            input_names=["image", "tabular"],
-            output_names=["logits"],
-            dynamic_axes={
-                "image": {0: "batch_size"},
-                "tabular": {0: "batch_size"},
-                "logits": {0: "batch_size"},
-            },
-            do_constant_folding=True,
-        )
+    # dynamo=False forces the legacy TorchScript trace exporter so that
+    # onnxscript (an optional PyTorch 2.4+ dependency) is never required.
+    # The dynamo path became the default in PyTorch 2.4 and pulls in
+    # onnxscript internally — but that package is not installed in the
+    # trainer image and is not needed for a simple two-input CNN export.
+    _export_kwargs: dict[str, Any] = dict(
+        opset_version=opset,
+        input_names=["image", "tabular"],
+        output_names=["logits"],
+        dynamic_axes={
+            "image": {0: "batch_size"},
+            "tabular": {0: "batch_size"},
+            "logits": {0: "batch_size"},
+        },
+        do_constant_folding=True,
+    )
+
+    # PyTorch >= 2.5 exposes dynamo= as an explicit kwarg; 2.4 does not
+    # but still respects the internal _exporter_type env var.  Try the
+    # kwarg first; fall back gracefully on older builds.
+    try:
+        _export_kwargs["dynamo"] = False
+        with torch.no_grad():
+            torch.onnx.export(export_model, (dummy_image, dummy_tabular), onnx_path, **_export_kwargs)
+    except TypeError:
+        # dynamo= kwarg not recognised (PyTorch < 2.5) — drop it and
+        # re-run; the legacy exporter is the only path available anyway.
+        del _export_kwargs["dynamo"]
+        with torch.no_grad():
+            torch.onnx.export(export_model, (dummy_image, dummy_tabular), onnx_path, **_export_kwargs)
 
     # ── Validate ──────────────────────────────────────────────────────────
     import onnx as _onnx
@@ -2187,7 +2231,8 @@ def _cli():
             num_workers=args.workers,
         )
         if result:
-            print(f"\nModel saved to: {result}")
+            print(f"\nModel saved to: {result.model_path}")
+            print(f"Best epoch: {result.best_epoch}  |  Epochs trained: {result.epochs_trained}")
         else:
             print("\nTraining failed")
             exit(1)

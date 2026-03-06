@@ -319,3 +319,225 @@ Repos:
 10. **Monitoring**: Add Prometheus metrics for training data health, per-type/session win rates, model promotion events
 11. **Dashboard**: Breakout type filter + MTF score column in signal history, trade journal improvements
 12. **Model iteration**: Per-type model heads, session-specific thresholds, automated label balancing, synthetic augmentation
+
+# NinjaTrader Repo — TODO
+
+> Canonical source: `~/github/ninjatrader`
+> Companion repos: [futures](~/github/futures) (engine, web, training) · [rb](~/github/rb) (model hosting)
+
+---
+
+## Current State
+
+- **BreakoutStrategy.cs** (3690 lines, single-file edition): ORB detection + CNN gate across 5 core instruments (`MGC, MES, MNQ, MYM, 6E`). All dependencies inlined (SignalBus, BridgeOrderEngine, OrbCnnPredictor, CnnSessionThresholds, OrbChartRenderer). Crash-resilient with `OnOrderUpdate` rejection handling, OCO GUID uniqueness, SL price validation, signal name truncation, try/catch on all order submissions.
+- **RubyIndicator.cs** (2240 lines): Chart indicator, ORB detection, signal producer via SignalBus + optional HTTP POST.
+- **DataPreloader.cs** (951 lines, AddOn): Seeds 1-min history cache at NT8 startup for all subscribed instruments.
+- **Bridge.cs** (0 lines — empty): Placeholder for new Bridge AddOn (HTTP listener + position push + signal relay to dashboard).
+- **CNN**: v4 contract (14 tabular features), `CNumTabularFeatures = 14`, `BreakoutType` enum has only 4 values (Orb, PrevDay, InitialBalance, Consolidation).
+- **OrbChartRenderer**: Renders ORB shading only (gold box style). No support for 9 new breakout type box styles.
+- **Deploy script** (`scripts/deploy_nt8.ps1`): Deploys BreakoutStrategy.cs, RubyIndicator.cs, DataPreloader.cs, ONNX DLLs, and model. Does NOT deploy Bridge AddOn. Model URL still points to `nuniesmith/orb` (stale — should be `nuniesmith/rb`).
+
+### Archive (reference code)
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `archive/MonitorConnection.cs` | 1277 | Full HTTP listener strategy (position push, `/execute_signal`, `/flatten`, `/cancel_orders`, `/status`, `/orders`, `/health`, `/metrics`). Was a **Strategy** — needs to become an **AddOn** so it runs independently of any chart. |
+| `archive/BridgeOrderEngine.cs` | 818 | Standalone order execution engine (signal parsing, risk sizing, BIP routing, bracket submission, SignalBus drain). Already inlined in BreakoutStrategy.cs but archive copy is the clean standalone version. |
+| `archive/OrbCnnPredictor.cs` | 764 | Standalone CNN predictor (v3/v4 contract, 8 features, chart renderer). Superseded by inlined version in BreakoutStrategy.cs that has v4 14-feature support + auto-adapt. |
+| `archive/SignalBus.cs` | 252 | Standalone SignalBus. Already inlined in BreakoutStrategy.cs. |
+| `archive/BreakoutStrategy.cs` | 1944 | Pre-single-file edition (required separate .cs files). Superseded. |
+
+---
+
+## Active — BreakoutStrategy.cs
+
+### C# BreakoutType Expansion (4 → 13)
+
+- [x] **Update `BreakoutType` enum** to match Python `IntEnum` (13 values, stable ordinals):
+  ```
+  ORB=0, PrevDay=1, InitialBalance=2, Consolidation=3,
+  Weekly=4, Monthly=5, Asian=6, BollingerSqueeze=7,
+  ValueArea=8, InsideDay=9, GapRejection=10, PivotPoints=11, Fibonacci=12
+  ```
+  ~~Current enum uses `Orb` (should be `ORB`), and only has 4 values.~~ Done — renamed `Orb` → `ORB`, added 9 new values with explicit ordinals, updated all 12 call-sites.
+- [x] **Add `RangeConfig` entries** for all 9 new types — each needs `RangeBars`, `SqueezeThreshold`, `MinBarsRequired`, `Description` matching Python `DEFAULT_CONFIGS`. Done — `GetRangeConfig()` now has cases for all 13 types.
+- [x] **Register all 13 types in `InstrumentState` constructor** — ~~currently only registers `Orb`, `PrevDay`, `InitialBalance`, `Consolidation` in the `Ranges` dictionary~~ Done — all 13 types registered.
+- [x] **Add `UpdateRangeWindow()` cases** for Asian and BollingerSqueeze (time-window and squeeze detection). Weekly, Monthly, ValueArea, InsideDay, GapRejection, PivotPoints, Fibonacci added as stub cases (registered but RangeEstablished stays false until full detection logic is implemented — medium-term roadmap).
+- [ ] **Add `CheckBreakout()` cases** for all 9 new types — breakout detection logic must match Python `detect_range_breakout()` for each type. _Note: CheckBreakout already iterates all established ranges uniformly; new types only need their UpdateRangeWindow logic completed to start firing._
+
+### CNN Feature Contract v4 → v6 (14 → 18 features)
+
+- [x] **Update `CNumTabularFeatures`** from `14` to `18` — done.
+- [x] **Update `PrepareCnnTabular()`** to build 18-feature v6 vector — added 4 new slots [14]–[17] (breakout_type_ord, asset_volatility_class, hour_of_day, tp3_atr_mult_norm). Done.
+- [x] **Add `GetVolatilityClass()` helper** — implemented matching Python `ASSET_VOLATILITY_CLASS` dict exactly (High/Med/Low for all 27 symbols). Done.
+- [x] **Update `NormaliseTabular()` in inlined OrbCnnPredictor** — added passthrough normalisation for features [14]–[17] with bounds clamping. Done.
+- [x] **Update `MaxTabular` constant** in inlined OrbCnnPredictor from `14` to `18` — done, also updated `_numTabular` default.
+- [x] **Update startup diagnostic log** — changed from `feature_contract.json v4 (14 features)` to `v6 (18 features)`. Done.
+- [ ] **Test auto-adapt** — when loading a v6 ONNX model (18 features), the auto-detect in `OrbCnnPredictor` constructor should read `_numTabular = 18` from model metadata and the tabular vector should match without truncation/padding
+
+### Chart Rendering — 9 New Box Styles
+
+- [x] **Update inlined `OrbChartRenderer`** to support drawing different range box styles per `BreakoutType`:
+  - `ORB` → gold semi-transparent fill + gold border (solid) ✅
+  - `PrevDay` → cyan dashed border, no fill ✅
+  - `InitialBalance` → blue solid border, light blue fill ✅
+  - `Consolidation` → purple dashed border, no fill ✅
+  - `Weekly` → teal solid border, teal fill (alpha 30) ✅
+  - `Monthly` → orange solid border, orange fill (alpha 30) ✅
+  - `Asian` → red dashed border, no fill ✅
+  - `BollingerSqueeze` → magenta dashed border, no fill ✅
+  - `ValueArea` → olive solid border, olive fill (alpha 30) ✅
+  - `InsideDay` → lime dashed border, no fill ✅
+  - `GapRejection` → coral solid border, no fill ✅
+  - `PivotPoints` → steel-blue dashed border, no fill ✅
+  - `Fibonacci` → amber solid border, amber fill (alpha 20) ✅
+  - `BoxStyle` helper class encapsulates fill color, border color, solid/dashed flag — `GetBoxStyle(BreakoutType)` factory. ✅
+- [x] **Add `BreakoutType` parameter** to `OrbChartRenderer.Render()` and `RenderToTemp()` — both now accept `BreakoutType breakoutType = BreakoutType.ORB` and pass it through to `GetBoxStyle()`. PNG filename now prefixed with `rng_{ordinal}_` for per-type disambiguation. ✅
+- [x] **Wire `BreakoutType` through call chain** — `CheckBreakout()` passes `type` to `PassesCnnFilter()`, which passes it to `PrepareCnnTabular()` (fixes feature [14] breakout_type_ord) and `RenderCnnSnapshot()` (draws correct box). Range H/L in snapshots now comes from the specific `RangeState` that fired, not always ORB. ✅
+
+### TP3 + EMA9 Trailing
+
+- [x] **Add `Tp3AtrMult` constant** (`CTp3AtrMult = 5.0`) and `EnableTp3Trailing` flag (`CEnableTp3Trailing = true`) — gated so the walk can be disabled without recompiling. ✅
+- [x] **Add `BreakoutPhase` enum** (`Phase1`, `Phase2`, `Phase3`, `Closed`) and `PositionPhase` class — tracks per-position bracket state keyed by SignalId. ✅
+- [x] **Implement 3-phase bracket walk** in `OnOrderUpdate`:
+  - Phase 1: SL + TP1 (standard bracket, existing) — entry fill updates `PositionPhase` with actual filled qty, refines tp1/tp2/tp3 splits. ✅
+  - Phase 2: TP1 fill → cancel old SL OCO, submit new breakeven SL (`entry ± 1 tick`) at remaining qty, advance phase to `Phase2`. ✅
+  - Phase 3: TP2 fill → advance phase to `Phase3`; EMA9 trailing activated for remainder. ✅
+  - SL fill → mark `Closed`, remove from `_positionPhases`. ✅
+- [x] **Add `UpdateEma9()` helper** — standard EMA(9) seeded from SMA of first 9 closes, then `prev + 0.2*(close - prev)` per bar. Called from per-bar indicator block (alongside UpdateAtr/UpdateVwap). EMA9 fields (`Ema9Value`, `Ema9Sum`, `Ema9Filled`, `Ema9Ready`) added to `InstrumentState`. ✅
+- [x] **Add `CheckPhase3Exits()`** — called once per primary bar (BIP0) when `EnableTp3Trailing` is true. For each Phase3 position: if price ≥ TP3 → submit limit exit; if price crosses EMA9 adversely → submit market exit. Removes closed phases. ✅
+- [x] **`_positionPhases` dictionary** — `Dictionary<string, PositionPhase>` with lock, stored at strategy level. `FireEntry` registers; `OnOrderUpdate` transitions; `CheckPhase3Exits` closes. ✅
+- [ ] **Match Python `position_manager.py` 3-phase logic exactly** — multipliers match (SL=1.5×, TP1=2.0×, TP2=3.5×, TP3=5.0×); trailing rule matches (EMA9 adverse cross). Verify side-by-side with Python backtest logs.
+- [ ] **Add `tp3_atr_mult` to `RangeConfig`** struct (per-type override from `feature_contract.json`) — currently all types use the global `CTp3AtrMult = 5.0` constant.
+
+### Stop-and-Reverse Integration
+
+- [ ] **Implement always-in 1-lot micro position logic** for core 5 assets — mirror Python `PositionManager`
+- [ ] **Reversal gates**: CNN ≥ 0.85 (0.92 for winning positions), MTF ≥ 0.60, 30-min cooldown
+- [ ] **Limit entry at range edge**, market chase only with CNN ≥ 0.90 and < 0.5×ATR overshoot
+- [ ] **Sync position state** with Python engine via Bridge WebSocket (depends on Bridge AddOn below)
+
+### Bridge → Strategy Risk Gate
+
+- [x] **Wire `Bridge.IsRiskBlocked` → `BreakoutStrategy.RiskBlocked`** — on each BIP0 bar, reflection reads `Bridge.IsRiskBlocked` and `Bridge.RiskBlockReason` static fields from the AddOn assembly and syncs them to the strategy's instance fields. Gracefully no-ops if Bridge type is not loaded (backtest / AddOn absent). ✅
+
+---
+
+## Active — Bridge AddOn (`src/addons/Bridge.cs`)
+
+> **Goal**: Revive the HTTP bridge as an NT8 **AddOn** (not a Strategy) so it runs automatically when NT8 connects to data, independent of any chart. The archive `MonitorConnection.cs` is the reference implementation — extract the listener/push logic, strip the Strategy base class, and wire it as an AddOn that fires on `Connection.ConnectionStatusUpdate`.
+
+### Core Bridge AddOn
+
+- [x] **Create `Bridge.cs` as an NT8 AddOn** (inherits `NinjaTrader.NinjaScript.AddOnBase`):
+  - Fires on `Connection.ConnectionStatusUpdate` (same pattern as `DataPreloader.cs`) — done.
+  - Starts HTTP listener on configurable port (default `5680`) — done, with wildcard→localhost fallback.
+  - Binds to all interfaces: `http://+:{port}/` — done.
+  - Requires URL ACL: `netsh http add urlacl url=http://+:5680/ user=Everyone` — documented in startup log.
+- [x] **Port HTTP endpoints** from archive `MonitorConnection.cs`:
+  - `GET /health` — liveness probe (`{"status":"ok","bridge_version":"4.0"}`) — done.
+  - `GET /status` — full account snapshot (positions, P&L, instrument list, risk state) — done.
+  - `GET /orders` — recent order event log (last 50) — done.
+  - `GET /metrics` — Prometheus exposition format (for Grafana) — done.
+  - `POST /execute_signal` — forward signal JSON to `SignalBus` for BreakoutStrategy to drain — done.
+  - `POST /flatten` — flatten all positions immediately via `Account.Flatten()` — done.
+  - `POST /cancel_orders` — cancel all working orders via `Account.Cancel()` — done.
+- [x] **Position push to dashboard** — on every fill + 15-second heartbeat, POST position snapshot to `{DashboardBaseUrl}/api/positions/update`. Done — matches the JSON schema in the TODO.
+- [x] **Account subscription** — subscribe to `Account.OrderUpdate` and `Account.PositionUpdate` events for fill tracking. Done.
+- [x] **Risk gate feedback** — parse `can_trade` field from dashboard response and set static `Bridge.IsRiskBlocked` flag accessible by `BreakoutStrategy`. Done — supports both nested `risk.can_trade` and flat `can_trade` formats.
+- [x] **CORS headers** — `Access-Control-Allow-Origin: *` on all responses (dashboard served from different host). Done.
+- [x] **Graceful shutdown** — stop listener, dispose HttpClient, unsubscribe events in `OnStateChange(Terminated)`. Done.
+- [x] **Prometheus metrics** — `bridge_up`, `bridge_listener_up`, `bridge_positions_count`, `bridge_cash_balance`, `bridge_unrealized_pnl`, `bridge_realized_pnl`, `bridge_signals_received_total`, `bridge_signals_executed_total`, `bridge_signals_rejected_total`, `bridge_orders_filled_total`, `bridge_orders_rejected_total`, `bridge_heartbeats_total`, `bridge_uptime_seconds`, `bridge_info`. Done — matches Prometheus scrape config.
+
+### Dashboard Integration
+
+- [ ] **Wire web UI positions panel** — add `/api/positions` endpoint to `futures` engine that reads latest Bridge push from Redis (key `bridge:positions`, TTL 60s)
+- [ ] **Wire web UI execute button** — dashboard sends `POST /execute_signal` to Bridge via web proxy (new route `/bridge/execute_signal` in `futures` web service, proxied to `NT_BRIDGE_HOST:NT_BRIDGE_PORT`)
+- [x] **Bridge → Strategy risk gate** — refactored from reflection to `SignalBus.IsRiskBlocked` / `SignalBus.RiskBlockReason` static volatile fields. Bridge.cs writes via private property shims; BreakoutStrategy reads directly on every BIP0 bar. No reflection, no cross-assembly type lookup, works correctly in backtest (defaults false). `SignalBus.Reset()` clears both fields. ✅
+- [ ] **Wire web UI flatten button** — dashboard sends `POST /flatten` to Bridge
+- [ ] **Bridge connection status indicator** — SSE event from engine showing bridge online/offline (checks `bridge:positions` key freshness in Redis)
+
+---
+
+## Active — Deploy Script (`scripts/deploy_nt8.ps1`)
+
+### Update Deploy Manifest
+
+- [x] **Add Bridge.cs to file manifest** — deploy to `bin\Custom\AddOns\Bridge.cs` (step 4/13). Done.
+- [x] **Update step numbering** — updated from 11 steps to 13 steps. Done.
+- [x] **Add RubyIndicator.cs** — already deployed (step 2/13), verified in manifest. Done.
+- [x] **Fix ONNX model URL** — changed `$GH_ORB_LFS = 'https://media.githubusercontent.com/media/nuniesmith/orb/main'` → `$GH_RB_LFS = '...nuniesmith/rb/main'`. Done.
+- [x] **Add `feature_contract.json` to deploy** — step 13/13, downloads from `rb` repo `models/feature_contract.json` and places in `bin\Custom\Models\feature_contract.json`. Done.
+- [x] **Add conflict check for Bridge.cs** — added `Bridge.cs` to `standaloneConflicts` list for both `bin\Custom\` and `Strategies\`. Done.
+- [x] **Update summary layout** to show Bridge AddOn in the deployed file tree. Done.
+- [x] **Update "Next steps" text** to mention Bridge will auto-connect on NT8 data connection (step 6). Done.
+
+### Model Pull Script
+
+- [x] **Create `scripts/pull_model.ps1`** — PowerShell script to fetch latest `.onnx` + `feature_contract.json` v6 from `rb` repo. Done — includes:
+  - Download `https://media.githubusercontent.com/media/nuniesmith/rb/main/models/breakout_cnn_best.onnx` — done.
+  - Download `https://raw.githubusercontent.com/nuniesmith/rb/main/models/feature_contract.json` — done.
+  - Verify SHA256 of ONNX matches `breakout_cnn_best_meta.json` — done (with `-SkipVerify` flag for override).
+  - Copy to `bin\Custom\Models\` — done (with skip-if-unchanged logic).
+  - Can be called standalone or invoked by `deploy_nt8.ps1` — done.
+
+---
+
+## Completed
+
+### Crash Resilience (deployed 2025-03-05)
+- [x] **OnOrderUpdate handler** — absorbs rejected orders
+- [x] **OCO GUID uniqueness** — 6-char GUID suffix
+- [x] **SL price validation** — corrects stop to correct side of market
+- [x] **Signal name truncation** — capped at 49 chars
+- [x] **Try/catch on SubmitOrderUnmanaged** — prevents unhandled exceptions
+- [x] **Max concurrent positions** — `MaxConcurrentPositions = 5`
+- [x] **Reduced to 5 core instruments** — `MGC, MES, MNQ, MYM, 6E`
+- [x] **Increased cooldown** — 10 min between entries
+- [x] **CNN auto-adapt** — reads model's expected tabular dimension at load time
+- [x] **Startup diagnostics** — logs CNN tabular dimension, position count
+
+### Single-File Edition
+- [x] **Inlined all dependencies** — SignalBus, BridgeOrderEngine, OrbCnnPredictor, CnnSessionThresholds, OrbChartRenderer all inside BreakoutStrategy.cs
+- [x] **Deploy script** — `deploy_nt8.ps1` handles download, SHA cache, Config.xml patching, conflict removal
+
+### DataPreloader AddOn
+- [x] **Seeds 1-min history** on NT8 startup for all subscribed instruments
+- [x] **Skip-if-cached** — only requests data for symbols without existing cache
+- [x] **Staggered requests** — avoids flooding the data feed
+
+---
+
+## Priority Order
+
+### Immediate — v6 Model Compatibility ✅
+1. ~~Update `BreakoutType` enum (4 → 13 values)~~ ✅
+2. ~~Update `PrepareCnnTabular()` (14 → 18 features)~~ ✅
+3. ~~Update `CNumTabularFeatures` and `MaxTabular` constants~~ ✅
+4. ~~Add `GetVolatilityClass()` helper~~ ✅
+5. ~~Update `NormaliseTabular()` for features [14]–[17]~~ ✅
+6. Deploy patched BreakoutStrategy.cs to NT8, verify:
+   - CNN startup log shows `CNN tabular dim: model expects 18, C# builds 18`
+   - Entry logs show `[positions: N/5]`
+   - No `OCO ID cannot be reused` or `signal name longer than 50` errors
+   - Run for a full session and review output logs
+
+### Short-term — Bridge AddOn + Deploy ✅
+7. ~~Build `Bridge.cs` AddOn (HTTP listener + position push)~~ ✅
+8. Wire dashboard position panel + execute/flatten buttons (depends on `futures` repo changes)
+9. ~~Update `deploy_nt8.ps1` to include Bridge.cs and fix `orb` → `rb` URL~~ ✅
+10. ~~Create `pull_model.ps1` for standalone model updates~~ ✅
+
+### Medium-term — Advanced Strategy
+11. ~~Implement TP3 + EMA9 trailing in BreakoutStrategy.cs~~ ✅ (3-phase bracket walk + EMA9 per-BIP + CheckPhase3Exits)
+12. Implement stop-and-reverse logic
+13. ~~Add 9 new chart renderer box styles~~ ✅ (OrbChartRenderer now has 13 BoxStyle entries + BreakoutType parameter)
+14. Add `UpdateRangeWindow()` + `CheckBreakout()` for all 9 new types (Weekly, Monthly, ValueArea, InsideDay, GapRejection, PivotPoints, Fibonacci still stubs)
+15. ~~Wire `Bridge.IsRiskBlocked` → `BreakoutStrategy.RiskBlocked`~~ ✅ (via `SignalBus.IsRiskBlocked` static — no reflection)
+
+### Ongoing
+16. Per-type backtest validation in Strategy Analyzer
+17. Parity testing: run Python engine + C# strategy side-by-side, compare signals
+18. Feature contract drift detection: log warning if `feature_contract.json` version != compiled constant
+- Add `tp3_atr_mult` per-type override to `RangeConfig` and read from `feature_contract.json`
+- Parity-test Phase3 EMA9 trailing against Python `position_manager.py` backtest logs

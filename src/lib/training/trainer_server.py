@@ -428,15 +428,44 @@ def _run_training_pipeline(params: TrainRequest) -> None:
 
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Determine CSV paths — dataset_generator writes labels.csv (train)
-        # and optionally val.csv (validation split).
-        train_csv = DATASET_DIR / "labels.csv"
-        val_csv = DATASET_DIR / "val.csv"
+        # ----- Step 1b: Train/val split -----
+        # Always regenerate a clean stratified split from the freshly written
+        # labels.csv so that:
+        #   - train_model uses a held-out val set (not its own random split)
+        #   - evaluate_model runs against the *same* held-out val set
+        #   - metrics in the result JSON reflect true out-of-sample performance
+        from lib.training.dataset_generator import split_dataset
+
+        labels_csv = DATASET_DIR / "labels.csv"
         image_root = str(DATASET_DIR / "images")
 
-        trained_model_path = train_model(
-            data_csv=str(train_csv),
-            val_csv=str(val_csv) if val_csv.exists() else None,
+        logger.info("Splitting dataset into train/val sets (85/15 stratified)")
+        try:
+            train_csv_path, val_csv_path = split_dataset(
+                csv_path=str(labels_csv),
+                val_fraction=0.15,
+                output_dir=str(DATASET_DIR),
+                stratify=True,
+                random_seed=42,
+            )
+            logger.info(
+                "Dataset split complete",
+                train_csv=train_csv_path,
+                val_csv=val_csv_path,
+            )
+        except Exception as split_err:
+            # Non-fatal: fall back to the full CSV for both train and eval.
+            # This preserves the old behaviour rather than aborting the run.
+            logger.warning(
+                "Dataset split failed — falling back to full labels.csv for train/eval (non-fatal)",
+                error=str(split_err),
+            )
+            train_csv_path = str(labels_csv)
+            val_csv_path = None
+
+        trained_result = train_model(
+            data_csv=train_csv_path,
+            val_csv=val_csv_path,
             epochs=epochs,
             batch_size=batch_size,
             lr=lr,
@@ -444,16 +473,21 @@ def _run_training_pipeline(params: TrainRequest) -> None:
             image_root=image_root,
         )
 
-        if trained_model_path is None:
+        if trained_result is None:
             _state.finish(error="train_model returned None — training failed")
             return
 
-        logger.info("Training complete", model_path=trained_model_path)
+        logger.info(
+            "Training complete",
+            model_path=trained_result.model_path,
+            best_epoch=trained_result.best_epoch,
+            epochs_trained=trained_result.epochs_trained,
+        )
 
         # Copy the trained checkpoint to a canonical candidate path for
         # the promotion step to move into place.
         candidate_path = MODELS_DIR / "breakout_cnn_candidate.pt"
-        shutil.copy2(trained_model_path, str(candidate_path))
+        shutil.copy2(trained_result.model_path, str(candidate_path))
 
         # ----- Step 3: Evaluate -----
         if _state.cancel_requested:
@@ -462,10 +496,10 @@ def _run_training_pipeline(params: TrainRequest) -> None:
 
         _state.set(TrainStatus.EVALUATING, "Evaluating candidate model against validation gates")
 
-        # Determine which CSV to evaluate against.  Prefer an explicit
-        # val.csv; fall back to the training CSV (metrics will be
-        # optimistic but still useful as a smoke-test gate).
-        eval_csv = str(val_csv) if val_csv.exists() else str(train_csv)
+        # Evaluate against the held-out val split produced above.  If the
+        # split failed and val_csv_path is None, fall back to labels.csv —
+        # metrics will be optimistic but the gate still acts as a smoke-test.
+        eval_csv = val_csv_path if val_csv_path is not None else str(labels_csv)
 
         metrics = evaluate_model(
             model_path=str(candidate_path),
@@ -504,8 +538,8 @@ def _run_training_pipeline(params: TrainRequest) -> None:
                 "val_accuracy": round(val_acc, 2),
                 "val_precision": round(val_prec, 2),
                 "val_recall": round(val_rec, 2),
-                "epochs_trained": metrics.get("epochs_trained", epochs),
-                "best_epoch": metrics.get("best_epoch"),
+                "epochs_trained": trained_result.epochs_trained,
+                "best_epoch": trained_result.best_epoch,
             },
             "gates": {
                 "passed": gates_passed,

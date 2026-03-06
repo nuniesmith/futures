@@ -6,7 +6,7 @@ set -euo pipefail
 # =============================================================================
 #
 # Downloads the champion model files from:
-#   https://github.com/nuniesmith/rb/tree/main/models
+#   https://github.com/nuniesmith/futures/tree/main/models
 #
 # Handles Git LFS files automatically:
 #   1. First tries raw.githubusercontent.com (works for non-LFS files)
@@ -50,10 +50,13 @@ ok()   { echo -e "${GREEN}[  ✓ ]${NC} $*"; }
 warn() { echo -e "${YELLOW}[warn]${NC} $*"; }
 err()  { echo -e "${RED}[fail]${NC} $*"; }
 
-GITHUB_REPO="nuniesmith/rb"
+GITHUB_REPO="nuniesmith/futures"
 GITHUB_BRANCH="main"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/models"
 LFS_API="https://github.com/${GITHUB_REPO}.git/info/lfs/objects/batch"
+
+# src/ninja paths (CS source + DLLs) — pulled for the --ninja flag
+NINJA_RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/src/ninja"
 
 # Optional auth token (for private repos or rate-limit avoidance)
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
@@ -70,6 +73,25 @@ ALL_FILES=(
 META_FILES=(
     "breakout_cnn_best_meta.json"
     "feature_contract.json"
+)
+
+# NinjaTrader CS source files (relative to src/ninja in repo)
+NINJA_CS_FILES=(
+    "BreakoutStrategy.cs"
+    "RubyIndicator.cs"
+    "addons/Bridge.cs"
+    "addons/DataPreloader.cs"
+)
+
+# NinjaTrader DLL files (relative to src/ninja/dll in repo)
+NINJA_DLL_FILES=(
+    "Microsoft.ML.OnnxRuntime.dll"
+    "System.Buffers.dll"
+    "System.Memory.dll"
+    "System.Numerics.Vectors.dll"
+    "System.Runtime.CompilerServices.Unsafe.dll"
+    "onnxruntime.dll"
+    "onnxruntime_providers_shared.dll"
 )
 
 # Minimum size (bytes) for a file to be considered "real" (not an LFS pointer)
