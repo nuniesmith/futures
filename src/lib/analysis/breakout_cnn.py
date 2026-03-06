@@ -889,6 +889,113 @@ def train_model(
     return result_path
 
 
+def evaluate_model(
+    model_path: str,
+    val_csv: str,
+    image_root: str | None = None,
+    batch_size: int = 32,
+    num_workers: int = 4,
+) -> dict[str, Any] | None:
+    """Evaluate a trained model checkpoint against a validation CSV.
+
+    Computes accuracy, precision, and recall (macro-averaged) on the
+    validation set.  Intended to be called by the trainer server after
+    :func:`train_model` completes, so the pipeline can gate promotion on
+    concrete metrics.
+
+    Args:
+        model_path: Path to a ``.pt`` state-dict checkpoint.
+        val_csv: Path to the validation CSV (same format as training CSV).
+        image_root: Optional root directory prepended to ``image_path``
+                    values in the CSV.
+        batch_size: Evaluation batch size (default 32).
+        num_workers: DataLoader workers (default 4).
+
+    Returns:
+        Dict with keys ``val_accuracy``, ``val_precision``, ``val_recall``
+        (all 0.0–1.0 floats), or ``None`` if evaluation failed.
+    """
+    if not _TORCH_AVAILABLE:
+        logger.error("PyTorch is not installed — cannot evaluate model")
+        return None
+
+    try:
+        from sklearn.metrics import accuracy_score, precision_score, recall_score
+
+        device = torch.device(get_device())
+        num_workers = _safe_num_workers(num_workers)
+
+        # Load model
+        model = HybridBreakoutCNN(pretrained=False)
+        state_dict = torch.load(model_path, map_location=device, weights_only=True)
+        model.load_state_dict(state_dict)
+        model = model.to(device)
+        model.eval()
+
+        # Build validation loader
+        val_transform = get_inference_transform()
+        val_dataset = BreakoutDataset(val_csv, transform=val_transform, image_root=image_root)
+
+        if len(val_dataset) == 0:
+            logger.warning("Validation dataset is empty — cannot evaluate")
+            return None
+
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=(device.type == "cuda"),
+            collate_fn=BreakoutDataset.skip_invalid_collate,
+        )
+
+        all_preds: list[int] = []
+        all_labels: list[int] = []
+
+        with torch.no_grad():
+            for batch in val_loader:
+                if batch is None:
+                    continue
+                imgs, tabs, labels = batch
+                imgs = imgs.to(device, non_blocking=True)
+                tabs = tabs.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
+
+                outputs = model(imgs, tabs)
+                _, predicted = outputs.max(1)
+
+                all_preds.extend(predicted.cpu().tolist())
+                all_labels.extend(labels.cpu().tolist())
+
+        if not all_labels:
+            logger.warning("No valid samples evaluated — cannot compute metrics")
+            return None
+
+        acc = accuracy_score(all_labels, all_preds)
+        # Use zero_division=0.0 so we don't crash when a class is absent
+        prec = precision_score(all_labels, all_preds, average="macro", zero_division=0.0)  # type: ignore[arg-type]
+        rec = recall_score(all_labels, all_preds, average="macro", zero_division=0.0)  # type: ignore[arg-type]
+
+        logger.info(
+            "Evaluation complete — accuracy: %.1f%%, precision: %.1f%%, recall: %.1f%% (%d samples)",
+            acc * 100,
+            prec * 100,
+            rec * 100,
+            len(all_labels),
+        )
+
+        return {
+            "val_accuracy": round(float(acc), 4),
+            "val_precision": round(float(prec), 4),
+            "val_recall": round(float(rec), 4),
+            "num_samples": len(all_labels),
+        }
+
+    except Exception as exc:
+        logger.error("Model evaluation failed: %s", exc, exc_info=True)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Model loading
 # ---------------------------------------------------------------------------

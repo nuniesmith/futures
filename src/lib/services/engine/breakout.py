@@ -201,6 +201,45 @@ class RangeConfig:
     squeeze_bb_std: float = 2.0  # Bollinger Band std-dev multiplier
     squeeze_min_bars: int = 5  # min consecutive squeeze bars needed
 
+    # --- Weekly-specific ---
+    weekly_lookback_days: int = 5  # trading days to look back for prior week H/L
+
+    # --- Monthly-specific ---
+    monthly_lookback_days: int = 20  # trading days to look back for prior month H/L
+
+    # --- Asian-specific ---
+    asian_start_time: dt_time = dt_time(19, 0)  # Asian range start (ET) — wraps midnight
+    asian_end_time: dt_time = dt_time(2, 0)  # Asian range end (ET)
+
+    # --- BollingerSqueeze-specific (BB inside KC) ---
+    bbsqueeze_bb_period: int = 20
+    bbsqueeze_bb_std: float = 2.0
+    bbsqueeze_kc_period: int = 20
+    bbsqueeze_kc_atr_mult: float = 1.5
+    bbsqueeze_min_squeeze_bars: int = 6  # min consecutive bars where BB inside KC
+
+    # --- ValueArea-specific ---
+    va_value_area_pct: float = 0.70  # percentage of volume for value area
+    va_n_bins: int = 50  # price bins for volume profile computation
+
+    # --- InsideDay-specific ---
+    inside_min_compression: float = 0.30  # today range / yesterday range floor
+    inside_max_compression: float = 0.85  # today range / yesterday range cap
+
+    # --- GapRejection-specific ---
+    gap_min_atr_pct: float = 0.15  # minimum gap size as fraction of ATR
+    gap_fill_threshold_pct: float = 0.50  # how much of gap must fill to confirm rejection
+    gap_rejection_bars: int = 3  # bars to confirm rejection at gap edge
+
+    # --- PivotPoints-specific ---
+    pivot_formula: str = "classic"  # "classic", "woodie", "camarilla"
+
+    # --- Fibonacci-specific ---
+    fib_upper: float = 0.618  # upper retracement level
+    fib_lower: float = 0.382  # lower retracement level
+    fib_swing_lookback: int = 100  # bars to search for prior swing H/L
+    fib_min_swing_atr_mult: float = 1.5  # min swing size in ATR multiples
+
     def __str__(self) -> str:
         name = self.label or self.breakout_type.value
         return f"RangeConfig[{name}]"
@@ -261,6 +300,129 @@ DEFAULT_CONFIGS: dict[BreakoutType, RangeConfig] = {
         squeeze_bb_period=20,
         squeeze_bb_std=2.0,
         squeeze_min_bars=5,
+    ),
+    # -------------------------------------------------------------------
+    # New researched breakout types (9 additional)
+    # -------------------------------------------------------------------
+    BreakoutType.WEEKLY: RangeConfig(
+        breakout_type=BreakoutType.WEEKLY,
+        label="Weekly Range",
+        atr_period=14,
+        atr_multiplier=0.5,
+        min_depth_atr_pct=0.20,
+        min_body_ratio=0.50,
+        max_range_atr_ratio=8.0,  # weekly ranges can be very wide
+        min_range_atr_ratio=1.0,
+        min_bars=1,
+        weekly_lookback_days=5,
+    ),
+    BreakoutType.MONTHLY: RangeConfig(
+        breakout_type=BreakoutType.MONTHLY,
+        label="Monthly Range",
+        atr_period=14,
+        atr_multiplier=0.5,
+        min_depth_atr_pct=0.20,
+        min_body_ratio=0.50,
+        max_range_atr_ratio=15.0,  # monthly ranges are the widest
+        min_range_atr_ratio=2.0,
+        min_bars=1,
+        monthly_lookback_days=20,
+    ),
+    BreakoutType.ASIAN: RangeConfig(
+        breakout_type=BreakoutType.ASIAN,
+        label="Asian Session Range",
+        atr_period=14,
+        atr_multiplier=0.45,
+        min_depth_atr_pct=0.15,
+        min_body_ratio=0.50,
+        max_range_atr_ratio=2.5,
+        min_range_atr_ratio=0.20,
+        min_bars=10,  # need decent bar count in 7-hour window
+        asian_start_time=dt_time(19, 0),
+        asian_end_time=dt_time(2, 0),
+    ),
+    BreakoutType.BBSQUEEZE: RangeConfig(
+        breakout_type=BreakoutType.BBSQUEEZE,
+        label="Bollinger Squeeze",
+        atr_period=14,
+        atr_multiplier=0.6,  # squeeze breakouts are explosive
+        min_depth_atr_pct=0.18,
+        min_body_ratio=0.55,
+        max_range_atr_ratio=0.90,  # squeeze range must be narrow
+        min_range_atr_ratio=0.05,
+        min_bars=6,
+        bbsqueeze_bb_period=20,
+        bbsqueeze_bb_std=2.0,
+        bbsqueeze_kc_period=20,
+        bbsqueeze_kc_atr_mult=1.5,
+        bbsqueeze_min_squeeze_bars=6,
+    ),
+    BreakoutType.VA: RangeConfig(
+        breakout_type=BreakoutType.VA,
+        label="Value Area",
+        atr_period=14,
+        atr_multiplier=0.4,
+        min_depth_atr_pct=0.15,
+        min_body_ratio=0.50,
+        max_range_atr_ratio=3.0,
+        min_range_atr_ratio=0.30,
+        min_bars=1,
+        va_value_area_pct=0.70,
+        va_n_bins=50,
+    ),
+    BreakoutType.INSIDE: RangeConfig(
+        breakout_type=BreakoutType.INSIDE,
+        label="Inside Day",
+        atr_period=14,
+        atr_multiplier=0.45,
+        min_depth_atr_pct=0.15,
+        min_body_ratio=0.52,
+        max_range_atr_ratio=1.5,
+        min_range_atr_ratio=0.30,
+        min_bars=1,
+        inside_min_compression=0.30,
+        inside_max_compression=0.85,
+    ),
+    BreakoutType.GAP: RangeConfig(
+        breakout_type=BreakoutType.GAP,
+        label="Gap Rejection",
+        atr_period=14,
+        atr_multiplier=0.4,
+        min_depth_atr_pct=0.15,
+        min_body_ratio=0.50,
+        max_range_atr_ratio=2.0,
+        min_range_atr_ratio=0.10,
+        min_bars=1,
+        gap_min_atr_pct=0.15,
+        gap_fill_threshold_pct=0.50,
+        gap_rejection_bars=3,
+    ),
+    BreakoutType.PIVOT: RangeConfig(
+        breakout_type=BreakoutType.PIVOT,
+        label="Pivot Points",
+        atr_period=14,
+        atr_multiplier=0.4,
+        min_depth_atr_pct=0.15,
+        min_body_ratio=0.50,
+        max_range_atr_ratio=3.5,
+        min_range_atr_ratio=0.20,
+        min_bars=1,
+        pivot_formula="classic",
+    ),
+    BreakoutType.FIB: RangeConfig(
+        breakout_type=BreakoutType.FIB,
+        label="Fibonacci Retracement",
+        atr_period=14,
+        atr_multiplier=0.4,
+        min_depth_atr_pct=0.15,
+        min_body_ratio=0.50,
+        max_range_atr_ratio=2.5,
+        min_range_atr_ratio=0.15,
+        min_bars=1,
+        fib_upper=0.618,
+        fib_lower=0.382,
+        fib_swing_lookback=100,
+        fib_min_swing_atr_mult=1.5,
     ),
 }
 
@@ -392,9 +554,9 @@ class BreakoutResult:
             d["cnn_confidence"] = self.cnn_confidence
             d["cnn_signal"] = bool(self.cnn_signal) if self.cnn_signal is not None else False
         # Type-specific
-        if self.breakout_type == BreakoutType.CONS:
-            d["squeeze_detected"] = self.squeeze_detected
-            d["squeeze_bar_count"] = self.squeeze_bar_count
+        if self.breakout_type in (BreakoutType.CONS, BreakoutType.BBSQUEEZE):
+            d["squeeze_detected"] = bool(self.squeeze_detected)
+            d["squeeze_bar_count"] = int(self.squeeze_bar_count)
             d["squeeze_bb_width"] = round(self.squeeze_bb_width, 4)
             d["bb_upper"] = round(self.bb_upper, 4)
             d["bb_lower"] = round(self.bb_lower, 4)
@@ -405,9 +567,22 @@ class BreakoutResult:
         if self.breakout_type == BreakoutType.IB:
             d["ib_high"] = round(self.ib_high, 4)
             d["ib_low"] = round(self.ib_low, 4)
-            d["ib_complete"] = self.ib_complete
+            d["ib_complete"] = bool(self.ib_complete)
         if self.extra:
-            d["extra"] = self.extra
+            # Ensure all values in extra are JSON-serializable (convert numpy types)
+            safe_extra: dict[str, Any] = {}
+            for k, v in self.extra.items():
+                if isinstance(v, (np.bool_, np.generic)):
+                    safe_extra[k] = v.item()
+                elif isinstance(v, bool):
+                    safe_extra[k] = bool(v)
+                elif isinstance(v, float):
+                    safe_extra[k] = float(v)
+                elif isinstance(v, int):
+                    safe_extra[k] = int(v)
+                else:
+                    safe_extra[k] = v
+            d["extra"] = safe_extra
         return d
 
 
@@ -682,6 +857,515 @@ def _build_consolidation_range(
     )
 
 
+def _build_weekly_range(
+    bars: pd.DataFrame,
+    config: RangeConfig,
+) -> tuple[float, float, int, bool]:
+    """Extract the prior week's high/low from intraday bars.
+
+    Uses ``config.weekly_lookback_days`` (default 5) to identify bars
+    belonging to the prior trading week.  The range is the high/low of
+    those bars.
+
+    Returns:
+        (week_high, week_low, bar_count, complete)
+    ``complete`` is True once at least ``min_bars`` prior-week bars exist.
+    """
+    bars_et = _localize_bars(bars)
+    if len(bars_et) < 2:
+        return 0.0, 0.0, 0, False
+
+    today = bars_et.index[-1].to_pydatetime().date()
+    # Walk back to find the start of this week (Monday)
+    weekday = today.weekday()  # Monday=0 .. Sunday=6
+    this_week_start = today - pd.Timedelta(days=weekday)
+
+    # Prior week bars: everything before this week's Monday
+    cutoff = pd.Timestamp(this_week_start, tz=_ET)
+    prev_week_end = cutoff
+    prev_week_start = cutoff - pd.Timedelta(days=config.weekly_lookback_days)
+
+    mask = (bars_et.index >= prev_week_start) & (bars_et.index < prev_week_end)
+    prev_bars = bars_et.loc[mask]
+
+    if len(prev_bars) < config.min_bars:
+        return 0.0, 0.0, len(prev_bars), False
+
+    week_high = float(prev_bars["High"].max())
+    week_low = float(prev_bars["Low"].min())
+    return week_high, week_low, len(prev_bars), True
+
+
+def _build_monthly_range(
+    bars: pd.DataFrame,
+    config: RangeConfig,
+) -> tuple[float, float, int, bool]:
+    """Extract the prior month's high/low from intraday bars.
+
+    Uses ``config.monthly_lookback_days`` (default 20) calendar trading
+    days prior to the 1st of the current month.
+
+    Returns:
+        (month_high, month_low, bar_count, complete)
+    """
+    bars_et = _localize_bars(bars)
+    if len(bars_et) < 2:
+        return 0.0, 0.0, 0, False
+
+    today = bars_et.index[-1].to_pydatetime().date()
+    # First day of current month
+    first_of_month = today.replace(day=1)
+    cutoff = pd.Timestamp(first_of_month, tz=_ET)
+    lookback_start = cutoff - pd.Timedelta(days=config.monthly_lookback_days)
+
+    mask = (bars_et.index >= lookback_start) & (bars_et.index < cutoff)
+    prev_bars = bars_et.loc[mask]
+
+    if len(prev_bars) < config.min_bars:
+        return 0.0, 0.0, len(prev_bars), False
+
+    month_high = float(prev_bars["High"].max())
+    month_low = float(prev_bars["Low"].min())
+    return month_high, month_low, len(prev_bars), True
+
+
+def _build_asian_range(
+    bars: pd.DataFrame,
+    config: RangeConfig,
+) -> tuple[float, float, int, bool]:
+    """Extract the Asian session range (19:00–02:00 ET, wraps midnight).
+
+    The range is from ``config.asian_start_time`` (19:00 ET) to
+    ``config.asian_end_time`` (02:00 ET).  Because this window wraps
+    midnight, bars whose time >= start OR time < end are included.
+
+    Returns:
+        (asian_high, asian_low, bar_count, complete)
+    ``complete`` is True once the current time is past the end time.
+    """
+    bars_et = _localize_bars(bars)
+    if len(bars_et) < 1:
+        return 0.0, 0.0, 0, False
+
+    start = config.asian_start_time  # 19:00 ET
+    end = config.asian_end_time  # 02:00 ET
+    now_time = bars_et.index[-1].to_pydatetime().time()
+
+    idx_time = pd.DatetimeIndex(bars_et.index).time
+
+    # Wraps midnight: time >= 19:00 OR time < 02:00
+    if start > end:
+        mask = (idx_time >= start) | (idx_time < end)
+    else:
+        mask = (idx_time >= start) & (idx_time < end)
+
+    asian_bars = bars_et.loc[mask]
+    bar_count = len(asian_bars)
+
+    # Complete once we're past the end time and NOT in the start window
+    # (i.e. we're in the 02:00–19:00 window of the next day)
+    if start > end:
+        complete = end <= now_time < start
+    else:
+        complete = now_time >= end
+
+    if bar_count < config.min_bars:
+        return 0.0, 0.0, bar_count, complete
+
+    asian_high = float(asian_bars["High"].max())
+    asian_low = float(asian_bars["Low"].min())
+    return asian_high, asian_low, bar_count, complete
+
+
+def _build_bbsqueeze_range(
+    bars: pd.DataFrame,
+    config: RangeConfig,
+    atr: float,
+) -> tuple[float, float, int, bool, int, float, float, float]:
+    """Detect a Bollinger Band inside Keltner Channel squeeze and extract its range.
+
+    A "squeeze" exists when the Bollinger Bands (period/std from config) are
+    fully inside the Keltner Channel (EMA ± kc_atr_mult × ATR) for at least
+    ``bbsqueeze_min_squeeze_bars`` consecutive bars.
+
+    Returns:
+        (range_high, range_low, bar_count, squeeze_detected,
+         squeeze_bar_count, bb_width, bb_upper, bb_lower)
+    """
+    n_bb = config.bbsqueeze_bb_period
+    if len(bars) < n_bb + 2 or atr <= 0:
+        return 0.0, 0.0, 0, False, 0, 0.0, 0.0, 0.0
+
+    close = bars["Close"].astype(float)
+    high = bars["High"].astype(float)
+    low = bars["Low"].astype(float)
+
+    # Bollinger Bands
+    bb_mid = close.rolling(n_bb).mean()
+    bb_std = close.rolling(n_bb).std(ddof=0)
+    bb_upper = bb_mid + config.bbsqueeze_bb_std * bb_std
+    bb_lower = bb_mid - config.bbsqueeze_bb_std * bb_std
+
+    # Keltner Channel (EMA-based mid + ATR envelope)
+    n_kc = config.bbsqueeze_kc_period
+    kc_mid = close.ewm(span=n_kc, adjust=False).mean()
+
+    # Per-bar ATR for KC (rolling)
+    tr_series = pd.concat(
+        [
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    rolling_atr = tr_series.rolling(n_kc).mean()
+
+    kc_upper = kc_mid + config.bbsqueeze_kc_atr_mult * rolling_atr
+    kc_lower = kc_mid - config.bbsqueeze_kc_atr_mult * rolling_atr
+
+    # Squeeze: BB fully inside KC  (bb_upper < kc_upper AND bb_lower > kc_lower)
+    squeeze_flags = (bb_upper < kc_upper) & (bb_lower > kc_lower)
+    squeeze_flags = squeeze_flags.fillna(False)
+
+    # Count consecutive squeeze bars at the tail
+    squeeze_bar_count = 0
+    for i in range(len(squeeze_flags) - 1, -1, -1):
+        if squeeze_flags.iloc[i]:
+            squeeze_bar_count += 1
+        else:
+            break
+
+    squeeze_detected = squeeze_bar_count >= config.bbsqueeze_min_squeeze_bars
+
+    cur_bb_upper = float(bb_upper.iloc[-1]) if len(bb_upper) > 0 else 0.0
+    cur_bb_lower = float(bb_lower.iloc[-1]) if len(bb_lower) > 0 else 0.0
+    cur_bb_width = cur_bb_upper - cur_bb_lower
+
+    if not squeeze_detected:
+        return 0.0, 0.0, 0, False, 0, cur_bb_width, cur_bb_upper, cur_bb_lower
+
+    squeeze_start_idx = len(bars) - squeeze_bar_count
+    squeeze_slice = bars.iloc[squeeze_start_idx:]
+    r_high = float(squeeze_slice["High"].max())
+    r_low = float(squeeze_slice["Low"].min())
+
+    return r_high, r_low, len(squeeze_slice), True, squeeze_bar_count, cur_bb_width, cur_bb_upper, cur_bb_lower
+
+
+def _build_va_range(
+    bars: pd.DataFrame,
+    config: RangeConfig,
+) -> tuple[float, float, int, bool, float, float, float]:
+    """Build Value Area range (VAH/VAL) from prior session's volume profile.
+
+    Uses the same Globex-day split as PDR (18:00 ET boundary) to isolate
+    the prior session's bars and compute volume profile on them.
+
+    Returns:
+        (vah, val, bar_count, complete, poc, vah, val)
+    """
+    bars_et = _localize_bars(bars)
+    if len(bars_et) < 10:
+        return 0.0, 0.0, 0, False, 0.0, 0.0, 0.0
+
+    # Split at 18:00 ET to get prior session bars (same logic as PDR)
+    session_start = dt_time(18, 0)
+    idx_time = pd.DatetimeIndex(bars_et.index).time
+    today_session_starts = bars_et.index[idx_time == session_start]
+
+    if len(today_session_starts) == 0:
+        today_et = bars_et.index[-1].to_pydatetime().date()
+        cutoff = pd.Timestamp(today_et, tz=_ET)
+        prev_bars = bars_et[bars_et.index < cutoff]
+    else:
+        latest_start = today_session_starts[-1]
+        prev_bars = bars_et[bars_et.index < latest_start]
+
+    if len(prev_bars) < config.min_bars:
+        return 0.0, 0.0, len(prev_bars), False, 0.0, 0.0, 0.0
+
+    # Check that volume data exists
+    if "Volume" not in prev_bars.columns or prev_bars["Volume"].sum() <= 0:
+        # Fall back to simple H/L percentile if no volume data
+        logger.debug("_build_va_range: no volume data — falling back to price-based VA")
+        sorted_closes = prev_bars["Close"].astype(float).sort_values()
+        n = len(sorted_closes)
+        val = float(sorted_closes.iloc[int(n * 0.15)])
+        vah = float(sorted_closes.iloc[int(n * 0.85)])
+        poc = float(sorted_closes.median())
+        return vah, val, len(prev_bars), True, poc, vah, val
+
+    try:
+        from lib.analysis.volume_profile import compute_volume_profile
+
+        profile = compute_volume_profile(
+            prev_bars,
+            n_bins=config.va_n_bins,
+            value_area_pct=config.va_value_area_pct,
+        )
+        vah = float(profile["vah"])
+        val = float(profile["val"])
+        poc = float(profile["poc"])
+    except Exception as exc:
+        logger.warning("_build_va_range: volume profile computation failed: %s", exc)
+        return 0.0, 0.0, len(prev_bars), False, 0.0, 0.0, 0.0
+
+    if vah <= val or vah <= 0:
+        return 0.0, 0.0, len(prev_bars), False, 0.0, 0.0, 0.0
+
+    return vah, val, len(prev_bars), True, poc, vah, val
+
+
+def _build_inside_day_range(
+    bars: pd.DataFrame,
+    config: RangeConfig,
+) -> tuple[float, float, int, bool, float, float, float, float]:
+    """Detect an inside day and return the mother bar's range.
+
+    An "inside day" occurs when today's high/low are both contained within
+    yesterday's high/low.  The breakout range is yesterday's H/L (the
+    "mother bar").
+
+    Returns:
+        (mother_high, mother_low, bar_count, inside_detected,
+         today_high, today_low, yesterday_high, yesterday_low)
+    """
+    bars_et = _localize_bars(bars)
+    if len(bars_et) < 2:
+        return 0.0, 0.0, 0, False, 0.0, 0.0, 0.0, 0.0
+
+    # Split into today vs yesterday using 18:00 ET Globex boundary
+    session_start = dt_time(18, 0)
+    idx_time = pd.DatetimeIndex(bars_et.index).time
+    session_starts = bars_et.index[idx_time == session_start]
+
+    if len(session_starts) < 2:
+        # Not enough sessions to compare — try calendar day fallback
+        today_et = bars_et.index[-1].to_pydatetime().date()
+        cutoff = pd.Timestamp(today_et, tz=_ET)
+        today_bars = bars_et[bars_et.index >= cutoff]
+        yesterday_bars = bars_et[bars_et.index < cutoff]
+    else:
+        latest_start = session_starts[-1]
+        prev_start = session_starts[-2]
+        today_bars = bars_et[bars_et.index >= latest_start]
+        yesterday_bars = bars_et[(bars_et.index >= prev_start) & (bars_et.index < latest_start)]
+
+    if len(today_bars) < 1 or len(yesterday_bars) < 1:
+        return 0.0, 0.0, 0, False, 0.0, 0.0, 0.0, 0.0
+
+    today_high = float(today_bars["High"].max())
+    today_low = float(today_bars["Low"].min())
+    yesterday_high = float(yesterday_bars["High"].max())
+    yesterday_low = float(yesterday_bars["Low"].min())
+
+    # Inside day: today's range is fully contained within yesterday's
+    inside = today_high <= yesterday_high and today_low >= yesterday_low
+
+    if not inside:
+        return 0.0, 0.0, 0, False, today_high, today_low, yesterday_high, yesterday_low
+
+    # Check compression ratio
+    yesterday_range = yesterday_high - yesterday_low
+    today_range = today_high - today_low
+    if yesterday_range <= 0:
+        return 0.0, 0.0, 0, False, today_high, today_low, yesterday_high, yesterday_low
+
+    compression = today_range / yesterday_range
+    if compression < config.inside_min_compression or compression > config.inside_max_compression:
+        return 0.0, 0.0, 0, False, today_high, today_low, yesterday_high, yesterday_low
+
+    # Breakout range is the mother bar (yesterday's H/L)
+    return (
+        yesterday_high,
+        yesterday_low,
+        len(yesterday_bars),
+        True,
+        today_high,
+        today_low,
+        yesterday_high,
+        yesterday_low,
+    )
+
+
+def _build_gap_rejection_range(
+    bars: pd.DataFrame,
+    config: RangeConfig,
+    atr: float,
+) -> tuple[float, float, int, bool, float, float, str]:
+    """Detect an overnight gap and build the gap zone as the breakout range.
+
+    A gap exists when today's open is meaningfully separated from yesterday's
+    close.  The breakout range is defined by the gap boundaries:
+      - Gap up:   range = [yesterday_close, today_open]
+      - Gap down: range = [today_open, yesterday_close]
+
+    Returns:
+        (range_high, range_low, bar_count, gap_detected,
+         gap_size, yesterday_close, gap_direction)
+    ``gap_direction`` is "UP" or "DOWN".
+    """
+    bars_et = _localize_bars(bars)
+    if len(bars_et) < 2 or atr <= 0:
+        return 0.0, 0.0, 0, False, 0.0, 0.0, ""
+
+    # Split at 18:00 ET Globex boundary
+    session_start = dt_time(18, 0)
+    idx_time = pd.DatetimeIndex(bars_et.index).time
+    session_starts = bars_et.index[idx_time == session_start]
+
+    if len(session_starts) < 1:
+        today_et = bars_et.index[-1].to_pydatetime().date()
+        cutoff = pd.Timestamp(today_et, tz=_ET)
+        today_bars = bars_et[bars_et.index >= cutoff]
+        yesterday_bars = bars_et[bars_et.index < cutoff]
+    else:
+        latest_start = session_starts[-1]
+        today_bars = bars_et[bars_et.index >= latest_start]
+        yesterday_bars = bars_et[bars_et.index < latest_start]
+
+    if len(today_bars) < 1 or len(yesterday_bars) < 1:
+        return 0.0, 0.0, 0, False, 0.0, 0.0, ""
+
+    yesterday_close = float(yesterday_bars["Close"].iloc[-1])
+    today_open = (
+        float(today_bars["Open"].iloc[0]) if "Open" in today_bars.columns else float(today_bars["Close"].iloc[0])
+    )
+
+    gap_size = today_open - yesterday_close
+    min_gap = config.gap_min_atr_pct * atr
+
+    if abs(gap_size) < min_gap:
+        return 0.0, 0.0, 0, False, gap_size, yesterday_close, ""
+
+    if gap_size > 0:
+        # Gap up: range is [yesterday_close, today_open]
+        r_high = today_open
+        r_low = yesterday_close
+        direction = "UP"
+    else:
+        # Gap down: range is [today_open, yesterday_close]
+        r_high = yesterday_close
+        r_low = today_open
+        direction = "DOWN"
+
+    return r_high, r_low, len(today_bars), True, gap_size, yesterday_close, direction
+
+
+def _build_pivot_range(
+    bars: pd.DataFrame,
+    config: RangeConfig,
+) -> tuple[float, float, int, bool, float, float, float, float]:
+    """Compute classic floor pivots from prior session's HLC and return S1/R1 as the range.
+
+    Supported formulas (``config.pivot_formula``):
+      - ``classic``: P = (H+L+C)/3, R1 = 2P−L, S1 = 2P−H
+      - ``woodie``:  P = (H+L+2C)/4, R1 = 2P−L, S1 = 2P−H
+      - ``camarilla``: P = (H+L+C)/3, R1 = C+1.1*(H−L)/12, S1 = C−1.1*(H−L)/12
+
+    Returns:
+        (r1, s1, bar_count, complete, pivot, r1, s1, prev_close)
+    """
+    bars_et = _localize_bars(bars)
+    if len(bars_et) < 2:
+        return 0.0, 0.0, 0, False, 0.0, 0.0, 0.0, 0.0
+
+    # Get prior session bars (same split as PDR)
+    session_start = dt_time(18, 0)
+    idx_time = pd.DatetimeIndex(bars_et.index).time
+    session_starts = bars_et.index[idx_time == session_start]
+
+    if len(session_starts) < 1:
+        today_et = bars_et.index[-1].to_pydatetime().date()
+        cutoff = pd.Timestamp(today_et, tz=_ET)
+        prev_bars = bars_et[bars_et.index < cutoff]
+    else:
+        latest_start = session_starts[-1]
+        prev_bars = bars_et[bars_et.index < latest_start]
+
+    if len(prev_bars) < config.min_bars:
+        return 0.0, 0.0, len(prev_bars), False, 0.0, 0.0, 0.0, 0.0
+
+    h = float(prev_bars["High"].max())
+    l = float(prev_bars["Low"].min())
+    c = float(prev_bars["Close"].iloc[-1])
+
+    formula = config.pivot_formula.lower()
+    if formula == "woodie":
+        pivot = (h + l + 2 * c) / 4.0
+        r1 = 2.0 * pivot - l
+        s1 = 2.0 * pivot - h
+    elif formula == "camarilla":
+        pivot = (h + l + c) / 3.0
+        r1 = c + 1.1 * (h - l) / 12.0
+        s1 = c - 1.1 * (h - l) / 12.0
+    else:  # classic
+        pivot = (h + l + c) / 3.0
+        r1 = 2.0 * pivot - l
+        s1 = 2.0 * pivot - h
+
+    if r1 <= s1 or r1 <= 0 or s1 <= 0:
+        return 0.0, 0.0, len(prev_bars), False, pivot, r1, s1, c
+
+    return r1, s1, len(prev_bars), True, pivot, r1, s1, c
+
+
+def _build_fibonacci_range(
+    bars: pd.DataFrame,
+    config: RangeConfig,
+    atr: float,
+) -> tuple[float, float, int, bool, float, float, float, float]:
+    """Find the prior swing high/low and compute the Fibonacci retracement zone.
+
+    Identifies the highest high and lowest low within the last
+    ``config.fib_swing_lookback`` bars.  The swing must be at least
+    ``config.fib_min_swing_atr_mult × ATR`` in size.  The retracement
+    zone between ``fib_lower`` (38.2%) and ``fib_upper`` (61.8%) of that
+    swing becomes the breakout range.
+
+    Returns:
+        (fib_high, fib_low, bar_count, valid,
+         swing_high, swing_low, fib_382, fib_618)
+    """
+    lookback = config.fib_swing_lookback
+    if len(bars) < 10 or atr <= 0:
+        return 0.0, 0.0, 0, False, 0.0, 0.0, 0.0, 0.0
+
+    # Use the last N bars for swing detection
+    window = bars.iloc[-lookback:] if len(bars) > lookback else bars
+
+    swing_high = float(window["High"].max())
+    swing_low = float(window["Low"].min())
+    swing_size = swing_high - swing_low
+
+    if swing_size < config.fib_min_swing_atr_mult * atr:
+        return 0.0, 0.0, 0, False, swing_high, swing_low, 0.0, 0.0
+
+    # Determine swing direction: is the high more recent than the low?
+    high_idx = window["High"].astype(float).values.argmax()
+    low_idx = window["Low"].astype(float).values.argmin()
+
+    if high_idx > low_idx:
+        # Upswing — retracement is measured downward from swing high
+        fib_382 = swing_high - config.fib_lower * swing_size  # 38.2% retrace
+        fib_618 = swing_high - config.fib_upper * swing_size  # 61.8% retrace
+        # Range: fib_618 (lower) to fib_382 (upper)
+        r_high = fib_382
+        r_low = fib_618
+    else:
+        # Downswing — retracement is measured upward from swing low
+        fib_382 = swing_low + config.fib_lower * swing_size
+        fib_618 = swing_low + config.fib_upper * swing_size
+        r_high = fib_618
+        r_low = fib_382
+
+    if r_high <= r_low or r_high <= 0:
+        return 0.0, 0.0, 0, False, swing_high, swing_low, fib_382, fib_618
+
+    return r_high, r_low, len(window), True, swing_high, swing_low, fib_382, fib_618
+
+
 # ===========================================================================
 # Breakout scanner (shared logic for all types)
 # ===========================================================================
@@ -899,6 +1583,160 @@ def detect_range_breakout(
 
             if not squeeze_detected:
                 result.error = "No squeeze detected — cannot form consolidation range"
+                return result
+
+        elif btype == BreakoutType.WEEKLY:
+            r_high, r_low, bar_count, complete = _build_weekly_range(bars, config)
+            result.range_complete = complete
+            result.range_bar_count = bar_count
+            result.extra["weekly_high"] = round(r_high, 4)
+            result.extra["weekly_low"] = round(r_low, 4)
+            scan_start = None
+
+        elif btype == BreakoutType.MONTHLY:
+            r_high, r_low, bar_count, complete = _build_monthly_range(bars, config)
+            result.range_complete = complete
+            result.range_bar_count = bar_count
+            result.extra["monthly_high"] = round(r_high, 4)
+            result.extra["monthly_low"] = round(r_low, 4)
+            scan_start = None
+
+        elif btype == BreakoutType.ASIAN:
+            r_high, r_low, bar_count, complete = _build_asian_range(bars, config)
+            result.range_complete = complete
+            result.range_bar_count = bar_count
+            result.extra["asian_high"] = round(r_high, 4)
+            result.extra["asian_low"] = round(r_low, 4)
+            # Scan for breakout after the Asian window closes
+            scan_start = config.asian_end_time
+
+        elif btype == BreakoutType.BBSQUEEZE:
+            (
+                r_high,
+                r_low,
+                bar_count,
+                squeeze_detected,
+                squeeze_bar_count,
+                bb_width,
+                bb_upper_val,
+                bb_lower_val,
+            ) = _build_bbsqueeze_range(bars, config, atr)
+            result.squeeze_detected = squeeze_detected
+            result.squeeze_bar_count = squeeze_bar_count
+            result.squeeze_bb_width = round(bb_width, 4)
+            result.bb_upper = round(bb_upper_val, 4)
+            result.bb_lower = round(bb_lower_val, 4)
+            result.range_complete = squeeze_detected
+            result.range_bar_count = bar_count
+            scan_start = None
+
+            if not squeeze_detected:
+                result.error = "No BB-inside-KC squeeze detected"
+                return result
+
+        elif btype == BreakoutType.VA:
+            (
+                r_high,
+                r_low,
+                bar_count,
+                complete,
+                poc,
+                vah,
+                val,
+            ) = _build_va_range(bars, config)
+            result.range_complete = complete
+            result.range_bar_count = bar_count
+            result.extra["poc"] = round(poc, 4)
+            result.extra["vah"] = round(vah, 4)
+            result.extra["val"] = round(val, 4)
+            scan_start = None
+
+        elif btype == BreakoutType.INSIDE:
+            (
+                r_high,
+                r_low,
+                bar_count,
+                inside_detected,
+                today_high,
+                today_low,
+                yesterday_high,
+                yesterday_low,
+            ) = _build_inside_day_range(bars, config)
+            result.range_complete = inside_detected
+            result.range_bar_count = bar_count
+            result.extra["inside_detected"] = inside_detected
+            result.extra["today_high"] = round(today_high, 4)
+            result.extra["today_low"] = round(today_low, 4)
+            result.extra["yesterday_high"] = round(yesterday_high, 4)
+            result.extra["yesterday_low"] = round(yesterday_low, 4)
+            scan_start = None
+
+            if not inside_detected:
+                result.error = "No inside day detected — today's range not inside yesterday's"
+                return result
+
+        elif btype == BreakoutType.GAP:
+            (
+                r_high,
+                r_low,
+                bar_count,
+                gap_detected,
+                gap_size,
+                yesterday_close,
+                gap_direction,
+            ) = _build_gap_rejection_range(bars, config, atr)
+            result.range_complete = gap_detected
+            result.range_bar_count = bar_count
+            result.extra["gap_detected"] = gap_detected
+            result.extra["gap_size"] = round(gap_size, 4)
+            result.extra["yesterday_close"] = round(yesterday_close, 4)
+            result.extra["gap_direction"] = gap_direction
+            scan_start = None
+
+            if not gap_detected:
+                result.error = "No significant gap detected"
+                return result
+
+        elif btype == BreakoutType.PIVOT:
+            (
+                r_high,
+                r_low,
+                bar_count,
+                complete,
+                pivot,
+                r1,
+                s1,
+                prev_close,
+            ) = _build_pivot_range(bars, config)
+            result.range_complete = complete
+            result.range_bar_count = bar_count
+            result.extra["pivot"] = round(pivot, 4)
+            result.extra["r1"] = round(r1, 4)
+            result.extra["s1"] = round(s1, 4)
+            result.extra["prev_close"] = round(prev_close, 4)
+            scan_start = None
+
+        elif btype == BreakoutType.FIB:
+            (
+                r_high,
+                r_low,
+                bar_count,
+                valid,
+                swing_high,
+                swing_low,
+                fib_382,
+                fib_618,
+            ) = _build_fibonacci_range(bars, config, atr)
+            result.range_complete = valid
+            result.range_bar_count = bar_count
+            result.extra["swing_high"] = round(swing_high, 4)
+            result.extra["swing_low"] = round(swing_low, 4)
+            result.extra["fib_382"] = round(fib_382, 4)
+            result.extra["fib_618"] = round(fib_618, 4)
+            scan_start = None
+
+            if not valid:
+                result.error = "No valid Fibonacci swing found (swing too small or insufficient data)"
                 return result
 
         else:

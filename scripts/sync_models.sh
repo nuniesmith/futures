@@ -6,7 +6,7 @@ set -euo pipefail
 # =============================================================================
 #
 # Downloads the champion model files from:
-#   https://github.com/nuniesmith/orb/tree/main/models
+#   https://github.com/nuniesmith/rb/tree/main/models
 #
 # Handles Git LFS files automatically:
 #   1. First tries raw.githubusercontent.com (works for non-LFS files)
@@ -50,7 +50,7 @@ ok()   { echo -e "${GREEN}[  ✓ ]${NC} $*"; }
 warn() { echo -e "${YELLOW}[warn]${NC} $*"; }
 err()  { echo -e "${RED}[fail]${NC} $*"; }
 
-GITHUB_REPO="nuniesmith/orb"
+GITHUB_REPO="nuniesmith/rb"
 GITHUB_BRANCH="main"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/models"
 LFS_API="https://github.com/${GITHUB_REPO}.git/info/lfs/objects/batch"

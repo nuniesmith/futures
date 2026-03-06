@@ -349,32 +349,42 @@ def _run_training_pipeline(params: TrainRequest) -> None:
             _state.finish(error="Cancelled before training")
             return
 
-        _state.set(TrainStatus.TRAINING, f"Training for up to {epochs} epochs (patience={patience})")
+        _state.set(TrainStatus.TRAINING, f"Training for up to {epochs} epochs")
 
-        from lib.analysis.breakout_cnn import train_model
+        from lib.analysis.breakout_cnn import evaluate_model, train_model
 
         if train_model is None:
             _state.finish(error="torch not available — cannot train (is the [gpu] extra installed?)")
             return
 
-        candidate_path = MODELS_DIR / "breakout_cnn_candidate.pt"
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-        metrics = train_model(
-            csv_path=str(DATASET_DIR / "labels.csv"),
-            image_root=str(DATASET_DIR / "images"),
-            save_path=str(candidate_path),
+        # Determine CSV paths — dataset_generator writes labels.csv (train)
+        # and optionally val.csv (validation split).
+        train_csv = DATASET_DIR / "labels.csv"
+        val_csv = DATASET_DIR / "val.csv"
+        image_root = str(DATASET_DIR / "images")
+
+        trained_model_path = train_model(
+            data_csv=str(train_csv),
+            val_csv=str(val_csv) if val_csv.exists() else None,
             epochs=epochs,
             batch_size=batch_size,
             lr=lr,
-            patience=patience,
+            model_dir=str(MODELS_DIR),
+            image_root=image_root,
         )
 
-        if metrics is None:
+        if trained_model_path is None:
             _state.finish(error="train_model returned None — training failed")
             return
 
-        logger.info("Training complete", metrics=metrics)
+        logger.info("Training complete", model_path=trained_model_path)
+
+        # Copy the trained checkpoint to a canonical candidate path for
+        # the promotion step to move into place.
+        candidate_path = MODELS_DIR / "breakout_cnn_candidate.pt"
+        shutil.copy2(trained_model_path, str(candidate_path))
 
         # ----- Step 3: Evaluate -----
         if _state.cancel_requested:
@@ -383,7 +393,26 @@ def _run_training_pipeline(params: TrainRequest) -> None:
 
         _state.set(TrainStatus.EVALUATING, "Evaluating candidate model against validation gates")
 
-        # Extract metrics (train_model returns a dict with val_accuracy, val_precision, etc.)
+        # Determine which CSV to evaluate against.  Prefer an explicit
+        # val.csv; fall back to the training CSV (metrics will be
+        # optimistic but still useful as a smoke-test gate).
+        eval_csv = str(val_csv) if val_csv.exists() else str(train_csv)
+
+        metrics = evaluate_model(
+            model_path=str(candidate_path),
+            val_csv=eval_csv,
+            image_root=image_root,
+            batch_size=batch_size,
+        )
+
+        if metrics is None:
+            _state.finish(error="evaluate_model returned None — evaluation failed")
+            return
+
+        logger.info("Evaluation complete", metrics=metrics)
+
+        # evaluate_model returns 0.0–1.0 floats; convert to percentages
+        # for the gate comparisons (gates are expressed as 0–100).
         val_acc = metrics.get("val_accuracy", 0.0) * 100
         val_prec = metrics.get("val_precision", 0.0) * 100
         val_rec = metrics.get("val_recall", 0.0) * 100
@@ -452,11 +481,14 @@ def _run_training_pipeline(params: TrainRequest) -> None:
 
         # ----- Step 5: ONNX export (best-effort) -----
         try:
-            from lib.analysis.breakout_cnn import export_onnx_model
+            import importlib
 
-            if export_onnx_model is not None:
+            _breakout_cnn = importlib.import_module("lib.analysis.breakout_cnn")
+            _export_fn = getattr(_breakout_cnn, "export_onnx_model", None)
+
+            if _export_fn is not None:
                 onnx_path = MODELS_DIR / "breakout_cnn_best.onnx"
-                export_onnx_model(
+                _export_fn(
                     pt_path=str(CHAMPION_PT),
                     onnx_path=str(onnx_path),
                 )
@@ -464,6 +496,7 @@ def _run_training_pipeline(params: TrainRequest) -> None:
                 logger.info("ONNX export complete", path=str(onnx_path))
             else:
                 result["onnx_exported"] = False
+                logger.info("ONNX export skipped — export_onnx_model not yet implemented")
         except Exception as onnx_err:
             logger.warning("ONNX export failed (non-fatal)", error=str(onnx_err))
             result["onnx_exported"] = False
@@ -514,7 +547,7 @@ async def status() -> JSONResponse:
                 "available": True,
                 "device_count": torch.cuda.device_count(),
                 "device_name": torch.cuda.get_device_name(0),
-                "memory_total_gb": round(torch.cuda.get_device_properties(0).total_mem / 1e9, 2),
+                "memory_total_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9, 2),
             }
     except ImportError:
         pass

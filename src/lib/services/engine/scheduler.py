@@ -109,7 +109,7 @@ class ActionType(StrEnum):
     # London morning crypto window; pre-US-open positioning.
     CHECK_ORB_CRYPTO_UTC12 = "check_orb_crypto_utc12"
 
-    # ── Multi-breakout-type checks — PDR, IB, and Consolidation ─────────────
+    # ── Multi-breakout-type checks — PDR, IB, Consolidation + 9 researched ──
     # PDR (Previous Day Range) — active whenever markets are open
     # Runs every 2 min during London open, LN-NY cross, and US open.
     CHECK_PDR = "check_pdr"
@@ -118,9 +118,24 @@ class ActionType(StrEnum):
     # Consolidation / Squeeze — scans for BB contraction + expansion bar
     # relevant throughout the full active window.
     CHECK_CONSOLIDATION = "check_consolidation"
-    # Parallel multi-type sweep: runs ORB + PDR + IB + CONS in one shot
+    # Parallel multi-type sweep: runs multiple breakout types in one shot
     # for a given session's asset list.  Fired by session-specific handlers.
+    # Payload carries {"session_key": "<key>", "types": ["PDR", "CONS", ...]}.
     CHECK_BREAKOUT_MULTI = "check_breakout_multi"
+
+    # ── New researched breakout-type checks (9 additional) ──────────────────
+    # These run via CHECK_BREAKOUT_MULTI payloads in most cases, but
+    # dedicated action types exist for types that need specific scheduling
+    # windows or independent cadences.
+    CHECK_WEEKLY = "check_weekly"  # Prior week H/L — once at session open
+    CHECK_MONTHLY = "check_monthly"  # Prior month H/L — once at session open
+    CHECK_ASIAN = "check_asian"  # Asian range — after 02:00 ET
+    CHECK_BBSQUEEZE = "check_bbsqueeze"  # BB inside KC squeeze — all active
+    CHECK_VA = "check_va"  # Value Area VAH/VAL — all active
+    CHECK_INSIDE = "check_inside"  # Inside Day — after session open
+    CHECK_GAP = "check_gap"  # Gap Rejection — at session open
+    CHECK_PIVOT = "check_pivot"  # Pivot Points S1/R1 — all active
+    CHECK_FIB = "check_fib"  # Fibonacci retracement — all active
 
     # Off-hours actions (12:00–18:00 ET, run once per session)
     HISTORICAL_BACKFILL = "historical_backfill"
@@ -192,11 +207,21 @@ class ScheduleManager:
     ORB_CME_SETTLE_CHECK_INTERVAL = 2 * 60  # CME settlement   14:00–15:30 ET
     ORB_CRYPTO_UTC0_CHECK_INTERVAL = 2 * 60  # Crypto UTC 00:00  19:00–21:00 ET
     ORB_CRYPTO_UTC12_CHECK_INTERVAL = 2 * 60  # Crypto UTC 12:00  07:00–09:00 ET
-    # Multi-breakout-type checks (PDR/IB/CONS) fire on the same cadence.
+    # Multi-breakout-type checks fire on the same 2-min cadence.
     PDR_CHECK_INTERVAL = 2 * 60  # PDR scan  — all active windows
     IB_CHECK_INTERVAL = 2 * 60  # IB scan   — 10:30–12:00 ET only
     CONS_CHECK_INTERVAL = 2 * 60  # Squeeze   — all active windows
     BREAKOUT_MULTI_CHECK_INTERVAL = 2 * 60  # Parallel multi-type sweep
+    # New researched breakout type intervals (all 2 min)
+    WEEKLY_CHECK_INTERVAL = 2 * 60  # Weekly H/L
+    MONTHLY_CHECK_INTERVAL = 2 * 60  # Monthly H/L
+    ASIAN_CHECK_INTERVAL = 2 * 60  # Asian range breakout
+    BBSQUEEZE_CHECK_INTERVAL = 2 * 60  # Bollinger squeeze
+    VA_CHECK_INTERVAL = 2 * 60  # Value Area
+    INSIDE_CHECK_INTERVAL = 2 * 60  # Inside Day
+    GAP_CHECK_INTERVAL = 2 * 60  # Gap Rejection
+    PIVOT_CHECK_INTERVAL = 2 * 60  # Pivot Points
+    FIB_CHECK_INTERVAL = 2 * 60  # Fibonacci retracement
     FOCUS_PUBLISH_INTERVAL = 30  # 30 s during active (throttled downstream)
     STATUS_PUBLISH_INTERVAL = 10  # 10 s always
 
@@ -712,23 +737,47 @@ class ScheduleManager:
             )
 
         # ── Multi-BreakoutType parallel checks ────────────────────────────────
-        # PDR (Previous Day Range) — active during all three primary sessions.
-        # Uses the same session-asset list as the ORB check for that window.
+        # All 13 breakout types are checked during their relevant windows.
+        # PDR, WEEKLY, MONTHLY, VA, PIVOT, FIB, INSIDE, GAP use pre-computed
+        # ranges (prior session/day/week data).  CONS, BBSQUEEZE detect live
+        # compression.  ASIAN fires after the Asian window closes (02:00 ET).
+        #
+        # Strategy:
+        #   - HTF types (WEEKLY, MONTHLY, PIVOT, FIB) scan all active windows
+        #   - Session-derived types (PDR, VA, INSIDE, GAP) scan all active
+        #   - Squeeze types (CONS, BBSQUEEZE) scan all active (detect live)
+        #   - ASIAN fires only after 02:00 ET when range is complete
+        #   - IB fires only after 10:30 ET
 
-        # PDR + CONS during Frankfurt/London window (03:00–05:00 ET)
+        # -- Frankfurt/London window (03:00–05:00 ET) -- all types except IB --
         if _dt_time(3, 0) <= now_time <= _dt_time(5, 0) and self._interval_elapsed(
             ActionType.CHECK_BREAKOUT_MULTI, ts, self.BREAKOUT_MULTI_CHECK_INTERVAL
         ):
+            types_london = [
+                "PDR",
+                "CONS",
+                "WEEKLY",
+                "MONTHLY",
+                "BBSQUEEZE",
+                "VA",
+                "INSIDE",
+                "GAP",
+                "PIVOT",
+                "FIB",
+            ]
+            # Asian range is complete by 02:00 ET, so include it in London window
+            if now_time >= _dt_time(3, 0):
+                types_london.append("ASIAN")
             actions.append(
                 ScheduledAction(
                     action=ActionType.CHECK_BREAKOUT_MULTI,
                     priority=7,
-                    description="Multi-type breakout sweep: PDR + CONS (London session assets)",
-                    payload={"session_key": "london", "types": ["PDR", "CONS"]},
+                    description="Multi-type breakout sweep: all 13 types (London session assets)",
+                    payload={"session_key": "london", "types": types_london},
                 )
             )
 
-        # PDR during London-NY crossover (08:00–10:00 ET)
+        # -- PDR during London-NY crossover (08:00–10:00 ET) --
         if _dt_time(8, 0) <= now_time <= _dt_time(10, 0) and self._interval_elapsed(
             ActionType.CHECK_PDR, ts, self.PDR_CHECK_INTERVAL
         ):
@@ -741,7 +790,7 @@ class ScheduleManager:
                 )
             )
 
-        # CONS (squeeze) during London-NY crossover (08:00–10:00 ET)
+        # -- CONS (squeeze) during London-NY crossover (08:00–10:00 ET) --
         if _dt_time(8, 0) <= now_time <= _dt_time(10, 0) and self._interval_elapsed(
             ActionType.CHECK_CONSOLIDATION, ts, self.CONS_CHECK_INTERVAL
         ):
@@ -754,7 +803,33 @@ class ScheduleManager:
                 )
             )
 
-        # IB breakout — only valid after the 60-min IB window closes (10:30 ET)
+        # -- HTF + researched types during London-NY crossover (08:00–10:00 ET) --
+        if _dt_time(8, 0) <= now_time <= _dt_time(10, 0) and self._interval_elapsed(
+            ActionType.CHECK_WEEKLY, ts, self.WEEKLY_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_BREAKOUT_MULTI,
+                    priority=8,
+                    description="HTF + researched breakout sweep (London-NY assets)",
+                    payload={
+                        "session_key": "london_ny",
+                        "types": [
+                            "WEEKLY",
+                            "MONTHLY",
+                            "ASIAN",
+                            "BBSQUEEZE",
+                            "VA",
+                            "INSIDE",
+                            "GAP",
+                            "PIVOT",
+                            "FIB",
+                        ],
+                    },
+                )
+            )
+
+        # -- IB breakout — only valid after 60-min IB window closes (10:30 ET) --
         if _dt_time(10, 30) <= now_time <= _dt_time(12, 0) and self._interval_elapsed(
             ActionType.CHECK_IB, ts, self.IB_CHECK_INTERVAL
         ):
@@ -767,8 +842,8 @@ class ScheduleManager:
                 )
             )
 
-        # Full multi-type sweep during US Equity Open (09:30–11:00 ET):
-        # ORB is handled separately above; run PDR + IB + CONS in parallel here.
+        # -- Full multi-type sweep during US Equity Open (09:30–11:00 ET) --
+        # ORB is handled separately above; run all other types in parallel.
         if _dt_time(9, 30) <= now_time <= _dt_time(11, 0) and self._interval_elapsed(
             ActionType.CHECK_BREAKOUT_MULTI, ts, self.BREAKOUT_MULTI_CHECK_INTERVAL
         ):
@@ -776,8 +851,24 @@ class ScheduleManager:
                 ScheduledAction(
                     action=ActionType.CHECK_BREAKOUT_MULTI,
                     priority=7,
-                    description="Multi-type breakout sweep: PDR + IB + CONS (US session assets)",
-                    payload={"session_key": "us", "types": ["PDR", "IB", "CONS"]},
+                    description="Multi-type breakout sweep: all types (US session assets)",
+                    payload={
+                        "session_key": "us",
+                        "types": [
+                            "PDR",
+                            "IB",
+                            "CONS",
+                            "WEEKLY",
+                            "MONTHLY",
+                            "ASIAN",
+                            "BBSQUEEZE",
+                            "VA",
+                            "INSIDE",
+                            "GAP",
+                            "PIVOT",
+                            "FIB",
+                        ],
+                    },
                 )
             )
 

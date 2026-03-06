@@ -616,6 +616,42 @@ OVERNIGHT_TICKERS: frozenset[str] = frozenset(
     }
 )
 
+# ---------------------------------------------------------------------------
+# Watchlists — curated asset tiers for strategy & scanning
+# ---------------------------------------------------------------------------
+# CORE_WATCHLIST: 5 assets actively traded with 1-lot micro stop-and-reverse.
+#   Selected for: tight spreads, deep liquidity, clean breakout patterns,
+#   sufficient ATR for meaningful R-multiples, low margin requirement.
+#   Total margin for 5 positions ≈ $5,680 (11.4% of $50K account).
+CORE_WATCHLIST: dict[str, str] = {
+    "Gold": "MGC=F",  # Best breakout patterns, 23h trading, $10/pt, $1,100 margin
+    "Crude Oil": "MCL=F",  # Clean ORB setups, strong session opens, $100/pt, $700 margin
+    "S&P": "MES=F",  # Highest liquidity micro, trends cleanly intraday, $5/pt, $1,500 margin
+    "Nasdaq": "MNQ=F",  # Highest ATR index micro, big moves = big R, $2/pt, $2,100 margin
+    "Euro FX": "M6E=F",  # Best FX micro for breakouts, London open textbook ORB, $280 margin
+}
+
+# EXTENDED_WATCHLIST: 5 additional assets for signal scanning & CNN predictions.
+#   Not actively traded with stop-and-reverse unless core assets aren't setting up.
+#   Still generate breakout signals, CNN inferences, and dashboard alerts.
+EXTENDED_WATCHLIST: dict[str, str] = {
+    "Silver": "SIL=F",  # Correlated with Gold; trade when MGC is choppy but SIL trends
+    "Russell 2000": "M2K=F",  # Small-cap divergence plays; trade when MES/MNQ are range-bound
+    "British Pound": "M6B=F",  # Trade during London session when 6E is flat
+    "Micro Bitcoin": "MBT=F",  # 24/7 market; weekend breakout setups when futures are closed
+    "10Y T-Note": "ZN=F",  # Macro context + flight-to-safety; trade on FOMC/CPI days
+}
+
+# ACTIVE_WATCHLIST: Union of core + extended — all assets the engine should
+# actively monitor for breakout signals, CNN inference, and dashboard display.
+ACTIVE_WATCHLIST: dict[str, str] = {**CORE_WATCHLIST, **EXTENDED_WATCHLIST}
+
+# CORE_TICKERS / EXTENDED_TICKERS / ACTIVE_TICKERS: frozenset variants for
+# quick membership checks (keyed by data_ticker, e.g. "MGC=F").
+CORE_TICKERS: frozenset[str] = frozenset(CORE_WATCHLIST.values())
+EXTENDED_TICKERS: frozenset[str] = frozenset(EXTENDED_WATCHLIST.values())
+ACTIVE_TICKERS: frozenset[str] = frozenset(ACTIVE_WATCHLIST.values())
+
 # Point values for quick P&L calculation (per contract, per full point move)
 # Keyed by data_ticker so callers can look up by the ticker they actually trade.
 POINT_VALUE: dict[str, float] = {
