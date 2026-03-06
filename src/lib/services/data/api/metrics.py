@@ -36,6 +36,9 @@ Tracked metrics:
   - ``regime_state``                  — Gauge: current HMM regime per symbol (1=trending, 2=volatile, 3=choppy)
   - ``regime_confidence``             — Gauge: regime detection confidence (0.0–1.0) per symbol
   - ``regime_position_multiplier``    — Gauge: position sizing multiplier from regime (0.25–1.0) per symbol
+  - ``trainer_images_generated``      — Gauge: total chart images generated in the most recent dataset build
+  - ``trainer_label_balance``         — Gauge: image count per label (``label`` = "good" / "bad") in most recent build
+  - ``trainer_render_time_seconds``   — Histogram: wall-clock seconds spent rendering the full dataset
 
 All metrics are collected in-process via ``prometheus_client`` and the ASGI
 middleware automatically instruments request count + latency.
@@ -308,6 +311,31 @@ REGIME_POSITION_MULTIPLIER = Gauge(
 
 _REGIME_STATE_CODES: dict[str, int] = {"trending": 1, "volatile": 2, "choppy": 3}
 
+# -- Trainer dataset metrics --
+# Updated at the end of each dataset generation run (trainer_server.py).
+# All three are reset/overwritten on each run so Grafana always shows the
+# most-recent build rather than a cumulative total.
+
+TRAINER_IMAGES_GENERATED = Gauge(
+    "trainer_images_generated",
+    "Total chart images generated in the most recent dataset build",
+    registry=_registry,
+)
+
+TRAINER_LABEL_BALANCE = Gauge(
+    "trainer_label_balance",
+    "Image count per label class (good/bad) in the most recent dataset build",
+    labelnames=["label"],
+    registry=_registry,
+)
+
+TRAINER_RENDER_TIME_SECONDS = Histogram(
+    "trainer_render_time_seconds",
+    "Wall-clock seconds spent rendering the full dataset in a training run",
+    buckets=(10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1200.0, 1800.0, 3600.0),
+    registry=_registry,
+)
+
 # Mutable single-element list — converts absolute reconnect_count to Counter increments.
 _kraken_reconnect_last_seen: list[int] = [0]
 
@@ -464,6 +492,25 @@ def update_postgres_status(connected: bool) -> None:
 def update_engine_up(is_up: bool) -> None:
     """Update the engine liveness gauge."""
     ENGINE_UP.set(1 if is_up else 0)
+
+
+def record_trainer_dataset_stats(
+    total_images: int,
+    label_distribution: dict[str, int],
+    render_time_seconds: float,
+) -> None:
+    """Update trainer dataset metrics after a generation run.
+
+    Args:
+        total_images:        Total number of chart images produced.
+        label_distribution:  Mapping of label name → image count,
+                             e.g. ``{"good": 1420, "bad": 580}``.
+        render_time_seconds: Total wall-clock time for the render phase.
+    """
+    TRAINER_IMAGES_GENERATED.set(int(total_images))
+    for label, count in label_distribution.items():
+        TRAINER_LABEL_BALANCE.labels(label=str(label)).set(int(count))
+    TRAINER_RENDER_TIME_SECONDS.observe(float(render_time_seconds))
 
 
 # ---------------------------------------------------------------------------

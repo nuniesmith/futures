@@ -100,18 +100,106 @@ except ImportError:
 
 # Ordered list of tabular feature names expected by the model.
 # The dataset and inference code must provide them in exactly this order.
+#
+# v6 contract (12 features) — adds:
+#   breakout_type_ord    — ordinal of BreakoutType enum (0–12) / 12, normalised
+#   asset_volatility_class — 0=low, 0.5=medium, 1.0=high (based on ATR vs peer group)
+#   range_atr_ratio      — range_size / ATR — how "wide" the setup range is
+#   hour_of_day          — ET hour normalised to [0, 1] (0h=0.0 … 23h≈0.96)
+#
+# v5 → v6 is a BREAKING change for the model weights.  Old 8-feature models
+# will be auto-padded to 12 by NT8's OrbCnnPredictor (runtime dim detection).
+# Retrain required to benefit from the new features.
 TABULAR_FEATURES: list[str] = [
+    # ── v5 features (original 8) ──────────────────────────────────────────
     "quality_pct",  # 0–100, normalised to 0–1
     "volume_ratio",  # breakout bar vol / 20-bar avg vol
     "atr_pct",  # ATR as % of price
-    "cvd_delta",  # cumulative volume delta (normalised)
+    "cvd_delta",  # cumulative volume delta (normalised, −1 to +1)
     "nr7_flag",  # 1.0 if NR7 day, else 0.0
     "direction_flag",  # 1.0 = LONG, 0.0 = SHORT
-    "session_flag",  # 1.0 = US session, 0.0 = London session
-    "london_overlap_flag",  # 1.0 if breakout in 08:00–09:00 ET (London/NY overlap)
+    "session_flag",  # ordinal position in Globex day cycle [0, 1]
+    "london_overlap_flag",  # 1.0 if breakout in 08:00–09:00 ET overlap
+    # ── v6 additions ──────────────────────────────────────────────────────
+    "breakout_type_ord",  # BreakoutType ordinal / 12  → [0.0, 1.0]
+    "asset_volatility_class",  # 0.0=low  0.5=medium  1.0=high
+    "range_atr_ratio",  # range_size / ATR  (clamped to [0, 3], /3 → [0,1])
+    "hour_of_day",  # ET hour / 23  → [0, 1]
 ]
 
 NUM_TABULAR = len(TABULAR_FEATURES)
+
+# Feature contract version — bump whenever TABULAR_FEATURES changes.
+FEATURE_CONTRACT_VERSION = 6
+
+# BreakoutType ordinal map — mirrors lib.services.engine.breakout.BreakoutType
+# and the C# enum in OrbCnnPredictor.  Using a local mapping avoids a circular
+# import between analysis and services layers.
+BREAKOUT_TYPE_ORDINALS: dict[str, float] = {
+    "ORB": 0.0 / 12,
+    "PDR": 1.0 / 12,
+    "IB": 2.0 / 12,
+    "CONS": 3.0 / 12,
+    "WEEKLY": 4.0 / 12,
+    "MONTHLY": 5.0 / 12,
+    "ASIAN": 6.0 / 12,
+    "BBSQUEEZE": 7.0 / 12,
+    "VA": 8.0 / 12,
+    "INSIDE": 9.0 / 12,
+    "GAP": 10.0 / 12,
+    "PIVOT": 11.0 / 12,
+    "FIB": 12.0 / 12,
+}
+
+# Asset volatility classes — maps ticker → class float.
+# Low (0.0): stable, narrow daily ranges (ZN, 6E, M6B)
+# Medium (0.5): moderate volatility (MES, MYM, MGC, MCL)
+# High (1.0): wide intraday ranges (MNQ, M2K, MBT, BTC/ETH crypto)
+ASSET_VOLATILITY_CLASS: dict[str, float] = {
+    # Low
+    "ZN": 0.0,
+    "M6B": 0.0,
+    "M6E": 0.0,
+    # Medium
+    "MES": 0.5,
+    "MYM": 0.5,
+    "MGC": 0.5,
+    "MCL": 0.5,
+    "SIL": 0.5,
+    "M2K": 0.5,
+    # High
+    "MNQ": 1.0,
+    "MBT": 1.0,
+    "MHG": 1.0,
+    # Kraken crypto — treat as high vol
+    "BTC": 1.0,
+    "ETH": 1.0,
+    "SOL": 1.0,
+    "LINK": 1.0,
+    "AVAX": 1.0,
+    "DOT": 1.0,
+    "ADA": 1.0,
+    "MATIC": 1.0,
+    "XRP": 1.0,
+}
+
+
+def get_breakout_type_ordinal(breakout_type: str) -> float:
+    """Return the normalised ordinal [0, 1] for a BreakoutType string.
+
+    Accepts both upper-case ("ORB", "PDR") and lower-case / mixed variants.
+    Falls back to 0.0 (ORB) for unknown types.
+    """
+    return BREAKOUT_TYPE_ORDINALS.get(str(breakout_type).upper().strip(), 0.0)
+
+
+def get_asset_volatility_class(ticker: str) -> float:
+    """Return the volatility class [0.0 low, 0.5 medium, 1.0 high] for *ticker*.
+
+    Falls back to 0.5 (medium) for unknown tickers.
+    """
+    return ASSET_VOLATILITY_CLASS.get(str(ticker).upper().strip(), 0.5)
+
 
 # Image pre-processing — matches ImageNet stats used by EfficientNetV2
 IMAGE_SIZE = 224
@@ -283,6 +371,17 @@ def get_training_transform():
     Augmentations are intentionally light — we want the CNN to learn from
     the chart structure (candlestick bodies, ORB box, overlays), not from
     random crops or heavy colour jitter that would destroy that information.
+
+    Augmentation strategy:
+      - Mild random crop (±16 px): simulates slight chart zoom variation
+      - No horizontal flip: chart direction (left→right time) must be preserved
+      - Mild brightness/contrast jitter (±8%): handles monitor calibration
+        differences and theme variations (dark vs light dashboard)
+      - Mild saturation jitter (±5%): Kraken/crypto pairs use different
+        colour palettes from futures charts
+      - Random rotation (±1.5°): simulates slight chart panel tilt in screenshots
+      - Random erasing (p=0.05, max 10% area): simulates minor UI overlays
+        or partial occlusions on the dashboard
     """
     if not _TORCH_AVAILABLE:
         return None
@@ -291,9 +390,14 @@ def get_training_transform():
             T.Resize((IMAGE_SIZE + 16, IMAGE_SIZE + 16)),
             T.RandomCrop((IMAGE_SIZE, IMAGE_SIZE)),
             T.RandomHorizontalFlip(p=0.0),  # disabled — chart direction matters
+            T.RandomRotation(degrees=1.5, fill=0),  # tiny tilt only
             T.ColorJitter(brightness=0.08, contrast=0.08, saturation=0.05, hue=0.0),
             T.ToTensor(),
             T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            # Random erasing AFTER ToTensor (operates on tensor, not PIL)
+            # Simulates minor UI overlays / partial occlusion.
+            # p=0.05: only 5% of images affected; scale capped at 10% area.
+            T.RandomErasing(p=0.05, scale=(0.01, 0.10), ratio=(0.3, 3.3), value=0),
         ]
     )
 
@@ -417,7 +521,7 @@ if _TORCH_AVAILABLE:
             if self.transform:
                 img = self.transform(img)
 
-            # --- Tabular features (normalised to ~0–1 range) ---
+            # --- Tabular features v6 (normalised to ~0–1 range) ---
             # volume_ratio: raw can be 0–30+; log-scale then clamp to [0, 1]
             _vol_raw = max(float(row.get("volume_ratio", 1.0)), 0.01)
             _vol_norm = min(np.log1p(_vol_raw) / np.log1p(10.0), 1.0)  # log1p(10)≈2.4
@@ -429,8 +533,8 @@ if _TORCH_AVAILABLE:
             _cvd_raw = float(row.get("cvd_delta", 0.0))
             _cvd_norm = max(min(_cvd_raw, 1.0), -1.0)
 
-            # Determine session from breakout_time: London if hour < 8, US otherwise
-            _session = 1.0  # default to US
+            # Determine session ordinal + hour from breakout_time
+            _session = SESSION_ORDINAL["us"]  # default
             _bt = ""
             _hour = 10  # default to US-session hour
             try:
@@ -438,13 +542,41 @@ if _TORCH_AVAILABLE:
                 if _bt and " " in _bt:
                     # Parse hour from timestamp like "2026-01-29 03:30:00-05:00"
                     _hour = int(_bt.split(" ")[1].split(":")[0])
-                    _session = 0.0 if _hour < 8 else 1.0
+                    # Map hour to approximate session ordinal
+                    if _hour < 3:
+                        _session = SESSION_ORDINAL["shanghai"]
+                    elif _hour < 8:
+                        _session = SESSION_ORDINAL["london"]
+                    elif _hour < 9:
+                        _session = SESSION_ORDINAL["london_ny"]
+                    else:
+                        _session = SESSION_ORDINAL["us"]
             except Exception:
-                _session = 1.0
+                _session = SESSION_ORDINAL["us"]
 
             # London/NY overlap flag: 08:00–09:00 ET is historically the
             # strongest breakout window when both sessions are active.
             _london_overlap = 1.0 if 8 <= _hour <= 9 else 0.0
+
+            # ── v6 features ───────────────────────────────────────────────
+            # breakout_type_ord: BreakoutType ordinal / 12
+            _btype_str = str(row.get("breakout_type", "ORB")).upper().strip()
+            _btype_ord = BREAKOUT_TYPE_ORDINALS.get(_btype_str, 0.0)
+
+            # asset_volatility_class: 0.0=low, 0.5=medium, 1.0=high
+            _ticker = str(row.get("ticker", row.get("symbol", ""))).upper().strip()
+            _vol_class = ASSET_VOLATILITY_CLASS.get(_ticker, 0.5)
+
+            # range_atr_ratio: range_size / ATR, clamped to [0, 3] then /3 → [0, 1]
+            _range_size = float(row.get("range_size", row.get("or_range", 0.0)))
+            _atr_raw = float(row.get("atr_value", row.get("atr_pct", 0.0)))
+            if _atr_raw > 0:
+                _range_atr = min(_range_size / _atr_raw, 3.0) / 3.0
+            else:
+                _range_atr = 0.5  # neutral fallback
+
+            # hour_of_day: ET hour / 23
+            _hour_norm = min(_hour, 23) / 23.0
 
             tabular = torch.tensor(
                 [
@@ -454,8 +586,13 @@ if _TORCH_AVAILABLE:
                     _cvd_norm,
                     float(row.get("nr7_flag", 0)),  # 0 or 1
                     1.0 if str(row.get("direction", "")).upper().startswith("L") else 0.0,
-                    _session,  # 1.0 = US, 0.0 = London
-                    _london_overlap,  # 1.0 if 08:00–09:00 ET overlap
+                    _session,  # session ordinal [0, 1]
+                    _london_overlap,  # 1.0 if 08:00–09:00 ET
+                    # v6
+                    _btype_ord,  # breakout_type / 12
+                    _vol_class,  # 0.0/0.5/1.0
+                    _range_atr,  # range/ATR clamped [0,1]
+                    _hour_norm,  # ET hour / 23
                 ],
                 dtype=torch.float32,
             )
@@ -515,14 +652,38 @@ else:
 # Model
 # ---------------------------------------------------------------------------
 
+# Number of distinct breakout types — used to size the embedding table.
+# Mirrors len(BreakoutType) in lib.core.breakout_types.
+NUM_BREAKOUT_TYPES = 13
+
+# Learned embedding dimension for breakout type.
+# Replaces the single scalar ``breakout_type_ord`` feature with a richer
+# NUM_BREAKOUT_TYPES × BREAKOUT_EMBED_DIM lookup table that the model
+# trains end-to-end.  The tabular vector's ``breakout_type_ord`` slot is
+# still consumed (so the input dimension stays at NUM_TABULAR = 12) but
+# when ``use_type_embedding=True`` that slot is ignored and the embedding
+# replaces it in the combined representation.
+BREAKOUT_EMBED_DIM = 8
+
+
 if _TORCH_AVAILABLE:
 
     class HybridBreakoutCNN(nn.Module):  # type: ignore[no-redef]
         """Hybrid image + tabular model for breakout classification.
 
-        Architecture:
-          Image branch:  EfficientNetV2-S (pre-trained) → 1280-dim features
-          Tabular branch: Linear(6→64) → ReLU → Dropout → Linear(64→32)
+        Architecture (use_type_embedding=False, default v5 compat):
+          Image branch:   EfficientNetV2-S (pre-trained) → 1280-dim features
+          Tabular branch: Linear(NUM_TABULAR→64) → ReLU → Dropout → Linear(64→32)
+          Classifier:     Linear(1280+32→256) → ReLU → Dropout → Linear(256→2)
+
+        Architecture (use_type_embedding=True, v6 recommended):
+          Image branch:   EfficientNetV2-S (pre-trained) → 1280-dim features
+          Type embedding: Embedding(13, 8) — learned per-type representation
+                          The scalar ``breakout_type_ord`` slot in the tabular
+                          vector is excluded; the embedding is concatenated
+                          instead, keeping the combined width the same.
+          Tabular branch: Linear(NUM_TABULAR-1→64) → ReLU → Dropout →
+                          Linear(64→32) → concat(embed_8) → Linear(40→32)
           Classifier:     Linear(1280+32→256) → ReLU → Dropout → Linear(256→2)
 
         The model outputs raw logits for 2 classes:
@@ -530,7 +691,24 @@ if _TORCH_AVAILABLE:
           - Class 1: good breakout (clean follow-through)
 
         Use ``torch.softmax(output, dim=1)[:, 1]`` to get P(good breakout).
+
+        Args:
+            num_tabular: Number of tabular features (default NUM_TABULAR=12).
+            dropout: Dropout rate for the classifier head (default 0.4).
+            pretrained: Load ImageNet pre-trained backbone weights (default True).
+            freeze_backbone_epochs: Epochs to freeze backbone at start of training.
+            use_type_embedding: If True, replace the scalar ``breakout_type_ord``
+                feature at position 8 (index 8 in TABULAR_FEATURES) with a
+                learned Embedding(NUM_BREAKOUT_TYPES, BREAKOUT_EMBED_DIM).
+                Requires the caller to pass integer breakout type IDs separately
+                via the ``type_ids`` argument in forward().  Default False for
+                backward compatibility with existing checkpoints.
         """
+
+        # Index of the ``breakout_type_ord`` feature in TABULAR_FEATURES.
+        # When use_type_embedding=True this slot is dropped from the tabular
+        # input and replaced by the embedding lookup.
+        BREAKOUT_TYPE_ORD_IDX: int = 8  # position in v6 TABULAR_FEATURES list
 
         def __init__(
             self,
@@ -538,10 +716,12 @@ if _TORCH_AVAILABLE:
             dropout: float = 0.4,
             pretrained: bool = True,
             freeze_backbone_epochs: int = 0,
+            use_type_embedding: bool = False,
         ):
             super().__init__()
-            self.num_tabular = num_tabular  # now 8 (was 7)
+            self.num_tabular = num_tabular
             self._freeze_backbone_epochs = freeze_backbone_epochs
+            self.use_type_embedding = use_type_embedding
 
             # --- Image backbone: EfficientNetV2-S ---
             weights = models.EfficientNet_V2_S_Weights.DEFAULT if pretrained else None
@@ -554,14 +734,38 @@ if _TORCH_AVAILABLE:
             self.cnn = backbone
             self._cnn_out_dim = 1280  # EfficientNetV2-S feature dim
 
-            # --- Tabular branch ---
-            self.tabular_head = nn.Sequential(
-                nn.Linear(num_tabular, 64),
-                nn.ReLU(inplace=True),
-                nn.Dropout(0.3),
-                nn.Linear(64, 32),
-                nn.ReLU(inplace=True),
-            )
+            # --- Breakout type embedding (optional) ---
+            if use_type_embedding:
+                self.type_embedding: nn.Embedding | None = nn.Embedding(
+                    NUM_BREAKOUT_TYPES, BREAKOUT_EMBED_DIM, padding_idx=None
+                )
+                # Tabular head receives (num_tabular - 1) scalar features
+                # (breakout_type_ord slot excluded) plus BREAKOUT_EMBED_DIM
+                # embedding dims, fused before the final projection.
+                _tab_scalar_dim = num_tabular - 1
+                self.tabular_head = nn.Sequential(
+                    nn.Linear(_tab_scalar_dim, 64),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(0.3),
+                    nn.Linear(64, 32),
+                    nn.ReLU(inplace=True),
+                )
+                # Fusion: merge 32-dim scalar encoding + 8-dim type embedding
+                self.type_fusion = nn.Sequential(
+                    nn.Linear(32 + BREAKOUT_EMBED_DIM, 32),
+                    nn.ReLU(inplace=True),
+                )
+            else:
+                self.type_embedding = None
+                self.type_fusion = None  # type: ignore[assignment]
+                # --- Tabular branch (scalar-only, v5 compat) ---
+                self.tabular_head = nn.Sequential(
+                    nn.Linear(num_tabular, 64),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(0.3),
+                    nn.Linear(64, 32),
+                    nn.ReLU(inplace=True),
+                )
 
             # --- Classifier (merges image + tabular) ---
             combined_dim = self._cnn_out_dim + 32
@@ -575,18 +779,44 @@ if _TORCH_AVAILABLE:
                 nn.Linear(64, 2),
             )
 
-        def forward(self, image: torch.Tensor, tabular: torch.Tensor) -> torch.Tensor:
+        def forward(
+            self,
+            image: torch.Tensor,
+            tabular: torch.Tensor,
+            type_ids: torch.Tensor | None = None,
+        ) -> torch.Tensor:
             """Forward pass.
 
             Args:
                 image: (B, 3, 224, 224) normalised image tensor.
                 tabular: (B, NUM_TABULAR) float tensor.
+                type_ids: (B,) long tensor of breakout type ordinals (0–12).
+                          Required when ``use_type_embedding=True``.
+                          Ignored when ``use_type_embedding=False``.
 
             Returns:
                 (B, 2) logits tensor.
             """
             img_features = self.cnn(image)  # (B, 1280)
-            tab_features = self.tabular_head(tabular)  # (B, 32)
+
+            if self.use_type_embedding and self.type_embedding is not None:
+                # Drop the scalar breakout_type_ord slot from tabular
+                idx = self.BREAKOUT_TYPE_ORD_IDX
+                tab_scalar = torch.cat([tabular[:, :idx], tabular[:, idx + 1 :]], dim=1)  # (B, NUM_TABULAR-1)
+                scalar_enc = self.tabular_head(tab_scalar)  # (B, 32)
+
+                # Breakout type embedding
+                if type_ids is None:
+                    # Fallback: treat ordinal at idx as integer index
+                    type_ids = (tabular[:, idx] * (NUM_BREAKOUT_TYPES - 1)).long().clamp(0, NUM_BREAKOUT_TYPES - 1)
+                type_emb = self.type_embedding(type_ids)  # (B, BREAKOUT_EMBED_DIM)
+
+                # Fuse scalar encoding + type embedding → 32-dim
+                assert self.type_fusion is not None, "type_fusion must be set when use_type_embedding=True"
+                tab_features = self.type_fusion(torch.cat([scalar_enc, type_emb], dim=1))  # (B, 32)
+            else:
+                tab_features = self.tabular_head(tabular)  # (B, 32)
+
             combined = torch.cat([img_features, tab_features], dim=1)  # (B, 1312)
             return self.classifier(combined)  # (B, 2)
 
@@ -606,6 +836,8 @@ else:
 
     class HybridBreakoutCNN:  # type: ignore[no-redef,misc]
         """Stub for environments without PyTorch."""
+
+        BREAKOUT_TYPE_ORD_IDX: int = 8
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             raise RuntimeError("PyTorch is not installed — cannot create HybridBreakoutCNN")
@@ -751,7 +983,10 @@ def train_model(
     )
 
     # --- Model ---
-    model = HybridBreakoutCNN(pretrained=True)
+    use_type_emb = os.getenv("CNN_TYPE_EMBEDDING", "0").strip() in ("1", "true", "yes")
+    model = HybridBreakoutCNN(pretrained=True, use_type_embedding=use_type_emb)
+    if use_type_emb:
+        logger.info("HybridBreakoutCNN: using learned BreakoutType embedding (dim=%d)", BREAKOUT_EMBED_DIM)
     model = model.to(device)
 
     # --- Optimizer ---
@@ -796,7 +1031,12 @@ def train_model(
             labels = labels.to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
-            outputs = model(imgs, tabs)
+            # Derive type_ids from breakout_type_ord slot for embedding models
+            type_ids = None
+            if use_type_emb and tabs.shape[1] > HybridBreakoutCNN.BREAKOUT_TYPE_ORD_IDX:
+                idx = HybridBreakoutCNN.BREAKOUT_TYPE_ORD_IDX
+                type_ids = (tabs[:, idx] * (NUM_BREAKOUT_TYPES - 1)).long().clamp(0, NUM_BREAKOUT_TYPES - 1)
+            outputs = model(imgs, tabs, type_ids=type_ids)
             loss = criterion(outputs, labels)
 
             # NaN guard — skip batch if loss explodes
@@ -836,7 +1076,11 @@ def train_model(
                 tabs = tabs.to(device, non_blocking=True)
                 labels = labels.to(device, non_blocking=True)
 
-                outputs = model(imgs, tabs)
+                val_type_ids = None
+                if use_type_emb and tabs.shape[1] > HybridBreakoutCNN.BREAKOUT_TYPE_ORD_IDX:
+                    idx = HybridBreakoutCNN.BREAKOUT_TYPE_ORD_IDX
+                    val_type_ids = (tabs[:, idx] * (NUM_BREAKOUT_TYPES - 1)).long().clamp(0, NUM_BREAKOUT_TYPES - 1)
+                outputs = model(imgs, tabs, type_ids=val_type_ids)
                 loss = criterion(outputs, labels)
 
                 val_loss += loss.item() * imgs.size(0)
@@ -1085,6 +1329,38 @@ def _find_latest_model(model_dir: str = DEFAULT_MODEL_DIR) -> str | None:
     return _find_best_model(model_dir)
 
 
+def _build_model_from_checkpoint(state_dict: dict) -> Any:
+    """Instantiate a HybridBreakoutCNN whose architecture matches *state_dict*.
+
+    Detects whether the checkpoint was trained with ``use_type_embedding=True``
+    by checking for the ``type_embedding.weight`` key in the state dict.
+
+    Returns a model with weights loaded (eval mode, not moved to device yet).
+    """
+    if not _TORCH_AVAILABLE:
+        return None
+
+    use_type_emb = "type_embedding.weight" in state_dict
+
+    # Infer num_tabular from first tabular_head Linear weight shape.
+    # For scalar-only models the key is ``tabular_head.0.weight`` with shape
+    # (64, num_tabular).  For embedding models it is (64, num_tabular-1).
+    num_tabular = NUM_TABULAR
+    tab_key = "tabular_head.0.weight"
+    if tab_key in state_dict:
+        in_features = state_dict[tab_key].shape[1]
+        num_tabular = in_features + 1 if use_type_emb else in_features
+
+    model = HybridBreakoutCNN(
+        num_tabular=num_tabular,
+        pretrained=False,  # weights come from checkpoint
+        use_type_embedding=use_type_emb,
+    )
+    model.load_state_dict(state_dict, strict=False)
+    model.eval()
+    return model
+
+
 def _load_model(
     model_path: str | None = None,
     device: str | None = None,
@@ -1146,15 +1422,36 @@ def _load_model(
 def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[float]:
     """Apply the same normalisation used in BreakoutDataset to raw inference features.
 
-    Input order: [quality_pct_norm, volume_ratio, atr_pct, cvd_delta, nr7_flag,
-                  direction_flag, session_flag, london_overlap_flag]
+    v6 input order (12 features):
+        [0]  quality_pct_norm      — quality_pct / 100 (caller pre-divides)
+        [1]  volume_ratio          — raw ratio, will be log-normalised here
+        [2]  atr_pct               — ATR / price (will be ×100 clamped)
+        [3]  cvd_delta             — cumulative volume delta (clamped ±1)
+        [4]  nr7_flag              — 0 or 1
+        [5]  direction_flag        — 1.0 LONG / 0.0 SHORT
+        [6]  session_flag          — ordinal [0, 1] via get_session_ordinal()
+        [7]  london_overlap_flag   — 0 or 1
+        [8]  breakout_type_ord     — BreakoutType ordinal / 12  [0, 1]
+        [9]  asset_volatility_class — 0.0 / 0.5 / 1.0
+        [10] range_atr_ratio       — range/ATR clamped to [0, 1]  (/3 applied here)
+        [11] hour_of_day           — ET hour / 23  [0, 1]
+
+    For backward compatibility, vectors of length 8 (v5) are zero-padded to 12.
     The caller is expected to pass quality_pct already divided by 100.
 
-    Returns a list of 8 floats in normalised form.
+    Returns a list of 12 floats in normalised form.
     """
     f = list(raw_features)
+
+    # v5 → v6 backward compat: zero-pad the 4 new features
+    if len(f) == 8:
+        f.extend([0.0, 0.5, 0.5, 0.5])  # sensible defaults for new fields
+
     if len(f) != NUM_TABULAR:
-        raise ValueError(f"Expected {NUM_TABULAR} tabular features, got {len(f)}. Required order: {TABULAR_FEATURES}")
+        raise ValueError(
+            f"Expected {NUM_TABULAR} tabular features (v6) or 8 (v5 compat), "
+            f"got {len(f)}. Required order: {TABULAR_FEATURES}"
+        )
 
     quality_norm = max(min(f[0], 1.0), 0.0)
 
@@ -1169,9 +1466,40 @@ def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[floa
     cvd_norm = max(min(f[3], 1.0), -1.0)
 
     # f[4] = nr7_flag (0 or 1), f[5] = direction_flag (0 or 1),
-    # f[6] = session_flag (1.0 = US, 0.0 = London) — all pass through
-    # f[7] = london_overlap_flag (0 or 1) — pass through
-    return [quality_norm, vol_norm, atr_norm, cvd_norm, f[4], f[5], f[6], f[7]]
+    # f[6] = session ordinal [0, 1], f[7] = london_overlap_flag (0 or 1)
+    # All pass through unchanged.
+
+    # f[8] = breakout_type_ord [0, 1] — pass through
+    btype_ord = max(min(f[8], 1.0), 0.0)
+
+    # f[9] = asset_volatility_class — 0.0 / 0.5 / 1.0 — pass through
+    vol_class = max(min(f[9], 1.0), 0.0)
+
+    # f[10] = range_atr_ratio — caller passes raw ratio; clamp to [0, 3] then /3
+    # If caller already normalised to [0, 1], the clamp is a no-op.
+    raw_range_atr = f[10]
+    if raw_range_atr > 1.0:
+        range_atr = min(raw_range_atr / 3.0, 1.0)
+    else:
+        range_atr = max(min(raw_range_atr, 1.0), 0.0)
+
+    # f[11] = hour_of_day — caller passes ET hour / 23; clamp to [0, 1]
+    hour_norm = max(min(f[11], 1.0), 0.0)
+
+    return [
+        quality_norm,
+        vol_norm,
+        atr_norm,
+        cvd_norm,
+        f[4],
+        f[5],
+        f[6],
+        f[7],
+        btype_ord,
+        vol_class,
+        range_atr,
+        hour_norm,
+    ]
 
 
 def predict_breakout(
@@ -1387,6 +1715,122 @@ def predict_breakout_batch(
 # ---------------------------------------------------------------------------
 
 
+def generate_feature_contract(output_path: str | None = None) -> dict[str, Any]:
+    """Generate and optionally write the ``feature_contract.json`` v6 file.
+
+    The contract encodes every parameter needed by consumers (engine, NT8
+    C# OrbCnnPredictor, rb trainer) to correctly prepare the tabular feature
+    vector and interpret model outputs.
+
+    Structure::
+
+        {
+          "version":          6,
+          "num_tabular":      12,
+          "tabular_features": [...],
+          "default_threshold": 0.82,
+          "image_size":       224,
+          "breakout_types":   {<BreakoutType.name>: {ordinal, box_style, tp1_atr_mult, ...}},
+          "sessions":         {<session_key>: {ordinal, session_ordinal, cnn_threshold, ...}},
+          "asset_volatility": {<ticker>: 0.0|0.5|1.0},
+          "generated_at":     "<ISO timestamp>",
+        }
+
+    Args:
+        output_path: If given, write the JSON to this path (creates parent
+            directories as needed).  If ``None``, only return the dict.
+
+    Returns:
+        The contract as a Python dict (always returned regardless of
+        ``output_path``).
+    """
+    import json as _json
+    from datetime import datetime as _dt
+
+    # ── breakout_types section ─────────────────────────────────────────────
+    try:
+        from lib.core.breakout_types import to_feature_contract_dict as _bt_contract
+
+        bt_section = _bt_contract()
+    except Exception:
+        # Fallback: use the local ordinal map
+        bt_section = {
+            name: {"ordinal": round(ord_val * 12), "breakout_type_ord": round(ord_val, 6)}
+            for name, ord_val in BREAKOUT_TYPE_ORDINALS.items()
+        }
+
+    # ── sessions section ───────────────────────────────────────────────────
+    try:
+        from lib.core.multi_session import to_feature_contract_dict as _sess_contract
+
+        sess_section = _sess_contract()
+    except Exception:
+        sess_section = {}
+
+    contract: dict[str, Any] = {
+        "version": FEATURE_CONTRACT_VERSION,
+        "num_tabular": NUM_TABULAR,
+        "tabular_features": TABULAR_FEATURES,
+        "default_threshold": DEFAULT_THRESHOLD,
+        "image_size": IMAGE_SIZE,
+        "imagenet_mean": IMAGENET_MEAN,
+        "imagenet_std": IMAGENET_STD,
+        "breakout_types": bt_section,
+        "sessions": sess_section,
+        "asset_volatility": ASSET_VOLATILITY_CLASS,
+        "generated_at": _dt.now(tz=__import__("datetime").timezone.utc).isoformat(),
+    }
+
+    if output_path:
+        import os as _os
+
+        _os.makedirs(_os.path.dirname(_os.path.abspath(output_path)), exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as fh:
+            _json.dump(contract, fh, indent=2)
+
+    return contract
+
+
+def get_type_embedding_weights(model_path: str | None = None) -> dict[str, Any] | None:
+    """Return the learned BreakoutType embedding matrix from a checkpoint.
+
+    Returns a dict mapping breakout type name → embedding vector (list of
+    floats), or None if the model was not trained with type embeddings or
+    torch is not available.
+
+    Useful for debugging/visualising what the model has learned about each
+    breakout type.
+    """
+    if not _TORCH_AVAILABLE:
+        return None
+
+    mp = model_path or _find_best_model()
+    if not mp or not os.path.isfile(mp):
+        return None
+
+    try:
+        try:
+            sd = torch.load(mp, map_location="cpu", weights_only=True)
+        except TypeError:
+            sd = torch.load(mp, map_location="cpu")  # type: ignore[call-overload]
+
+        if "type_embedding.weight" not in sd:
+            return None
+
+        emb_weight = sd["type_embedding.weight"].numpy()  # (13, BREAKOUT_EMBED_DIM)
+
+        # Map ordinal index → breakout type name
+        _ordinal_to_name = {int(round(v * 12)): k for k, v in BREAKOUT_TYPE_ORDINALS.items()}
+        result: dict[str, Any] = {}
+        for i, vec in enumerate(emb_weight):
+            name = _ordinal_to_name.get(i, f"type_{i}")
+            result[name] = vec.tolist()
+        return result
+    except Exception as exc:
+        logger.warning("Failed to extract type embedding weights: %s", exc)
+        return None
+
+
 def model_info(model_path: str | None = None) -> dict[str, Any]:
     """Return diagnostic information about the current or specified model.
 
@@ -1441,7 +1885,7 @@ def _cli():
     sub = parser.add_subparsers(dest="command")
 
     # Train
-    train_parser = sub.add_parser("train", help="Train the model")
+    train_parser = sub.add_parser("train", help="Train the CNN model")
     train_parser.add_argument("--csv", required=True, help="Path to training CSV")
     train_parser.add_argument("--val-csv", default=None, help="Path to validation CSV")
     train_parser.add_argument("--epochs", type=int, default=8)
@@ -1450,6 +1894,13 @@ def _cli():
     train_parser.add_argument("--freeze-epochs", type=int, default=2)
     train_parser.add_argument("--model-dir", default=DEFAULT_MODEL_DIR)
     train_parser.add_argument("--image-root", default=None)
+    train_parser.add_argument(
+        "--type-embedding",
+        action="store_true",
+        default=False,
+        help="Use learned BreakoutType embedding instead of scalar ordinal feature. "
+        "Recommended for v6 models trained on all 13 breakout types.",
+    )
     train_parser.add_argument("--workers", type=int, default=4)
 
     # Predict
@@ -1468,12 +1919,36 @@ def _cli():
     # Info
     sub.add_parser("info", help="Show model info")
 
+    # Embedding inspection
+    sub.add_parser(
+        "embedding",
+        help="Print learned BreakoutType embedding weights from the current champion model",
+    )
+
+    # Contract
+    contract_parser = sub.add_parser("contract", help="Generate feature_contract.json v6")
+    contract_parser.add_argument(
+        "--output",
+        default="feature_contract.json",
+        help="Output path for feature_contract.json (default: ./feature_contract.json)",
+    )
+    contract_parser.add_argument(
+        "--print",
+        action="store_true",
+        dest="print_only",
+        help="Print the contract to stdout without writing a file",
+    )
+
     args = parser.parse_args()
 
     # Setup logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
     if args.command == "train":
+        # CNN_TYPE_EMBEDDING env var is read inside train_model(); set it
+        # from the CLI flag so the caller doesn't have to export it manually.
+        if getattr(args, "type_embedding", False):
+            os.environ["CNN_TYPE_EMBEDDING"] = "1"
         result = train_model(
             data_csv=args.csv,
             val_csv=args.val_csv,
@@ -1508,10 +1983,32 @@ def _cli():
             print("\nPrediction failed")
             exit(1)
 
+    elif args.command == "embedding":
+        weights = get_type_embedding_weights()
+        if weights is None:
+            print("No type embedding found in checkpoint (model not trained with --type-embedding).")
+        else:
+            import json as _json
+
+            print(_json.dumps(weights, indent=2))
+
     elif args.command == "info":
         info = model_info()
         for k, v in info.items():
             print(f"  {k}: {v}")
+
+    elif args.command == "contract":
+        import json as _json
+
+        if args.print_only:
+            contract = generate_feature_contract(output_path=None)
+            print(_json.dumps(contract, indent=2))
+        else:
+            contract = generate_feature_contract(output_path=args.output)
+            print(f"✅ feature_contract.json v{contract['version']} written to: {args.output}")
+            print(f"   tabular features : {contract['num_tabular']}")
+            print(f"   breakout types   : {len(contract['breakout_types'])}")
+            print(f"   sessions         : {len(contract['sessions'])}")
 
     else:
         parser.print_help()

@@ -114,7 +114,18 @@ class DatasetConfig:
     chart_figsize: tuple[float, float] = (12, 8)
 
     # Dataset balancing
-    max_samples_per_label: int = 0  # 0 = no cap
+    max_samples_per_label: int = 0  # 0 = no cap (global cap across all types/sessions)
+
+    # Per-(label, breakout_type) cap — prevents high-frequency types (e.g. ORB)
+    # from swamping rarer types (e.g. Monthly, Weekly) when --breakout-type=all.
+    # 0 = no cap.  Example: 500 → at most 500 good_long samples per type.
+    max_samples_per_type_label: int = 0
+
+    # Per-(label, session) cap — ensures overnight sessions (Sydney, Tokyo, Shanghai)
+    # are not under-represented vs the primary London / US sessions.
+    # 0 = no cap.  Example: 300 → at most 300 good_long samples per session.
+    max_samples_per_session_label: int = 0
+
     include_no_trade: bool = False  # include no_trade samples (usually not useful)
 
     # Resumability
@@ -188,6 +199,14 @@ class DatasetStats:
     csv_path: str = ""
     duration_seconds: float = 0.0
     errors: list[str] = field(default_factory=list)
+
+    # Per-(label, breakout_type) sample counters — used for max_samples_per_type_label cap.
+    # Key format: "{label}__{breakout_type}", e.g. "good_long__ORB"
+    _type_label_counts: dict[str, int] = field(default_factory=dict, repr=False)
+
+    # Per-(label, session) sample counters — used for max_samples_per_session_label cap.
+    # Key format: "{label}__{session_key}", e.g. "good_long__london"
+    _session_label_counts: dict[str, int] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1355,9 +1374,26 @@ def generate_dataset_for_symbol(
         label = result.label
         stats.label_distribution[label] = stats.label_distribution.get(label, 0) + 1
 
-        # Check max samples per label
+        # ── Global per-label cap ──────────────────────────────────────────
         if cfg.max_samples_per_label > 0 and stats.label_distribution[label] > cfg.max_samples_per_label:
             continue
+
+        # ── Per-(label, breakout_type) cap ────────────────────────────────
+        if cfg.max_samples_per_type_label > 0:
+            _bt_label_key = f"{label}__{getattr(result, '_breakout_type', 'ORB')}"
+            stats._type_label_counts[_bt_label_key] = stats._type_label_counts.get(_bt_label_key, 0) + 1
+            if stats._type_label_counts[_bt_label_key] > cfg.max_samples_per_type_label:
+                # Don't count this toward label_distribution since we're skipping it
+                stats.label_distribution[label] -= 1
+                continue
+
+        # ── Per-(label, session) cap ──────────────────────────────────────
+        if cfg.max_samples_per_session_label > 0:
+            _sess_label_key = f"{label}__{getattr(result, '_session_key', 'unknown')}"
+            stats._session_label_counts[_sess_label_key] = stats._session_label_counts.get(_sess_label_key, 0) + 1
+            if stats._session_label_counts[_sess_label_key] > cfg.max_samples_per_session_label:
+                stats.label_distribution[label] -= 1
+                continue
 
         # Determine image path
         ts_str = result.breakout_time or result.or_start_time or datetime.now(_EST).isoformat()
@@ -1947,10 +1983,47 @@ def _cli():
     gen_parser.add_argument(
         "--breakout-type",
         default="ORB",
-        choices=["ORB", "PrevDay", "InitialBalance", "Consolidation", "all"],
-        help="Breakout type to generate: 'ORB' (default), 'PrevDay', 'InitialBalance', "
-        "'Consolidation', or 'all' (iterate all types). Controls box style on chart and "
-        "the breakout_type_ord tabular feature.",
+        choices=[
+            "ORB",
+            "PrevDay",
+            "InitialBalance",
+            "Consolidation",
+            "Weekly",
+            "Monthly",
+            "Asian",
+            "BollingerSqueeze",
+            "ValueArea",
+            "InsideDay",
+            "GapRejection",
+            "PivotPoints",
+            "Fibonacci",
+            "all",
+        ],
+        help=(
+            "Breakout type to generate (default: 'ORB'). "
+            "Use 'all' to iterate all 13 types. "
+            "Controls box style on chart and the breakout_type_ord tabular feature."
+        ),
+    )
+    gen_parser.add_argument(
+        "--max-per-type",
+        type=int,
+        default=0,
+        help=(
+            "Maximum samples per (label, breakout_type) bucket when --breakout-type=all. "
+            "0 = unlimited (default). Set e.g. 500 to cap each type/label combination so "
+            "rare types are not swamped by common ones."
+        ),
+    )
+    gen_parser.add_argument(
+        "--max-per-session",
+        type=int,
+        default=0,
+        help=(
+            "Maximum samples per (label, session) bucket. "
+            "0 = unlimited (default). Useful to prevent overnight sessions from being "
+            "under-represented vs the primary US/London sessions."
+        ),
     )
 
     # Split
@@ -1982,12 +2055,17 @@ def _cli():
         # If the user passed "--breakout-type all" we pass "all" directly so
         # _run_simulators_for_breakout_type handles all four types in one pass.
         _bt_config_str = _bt_arg  # "all" or e.g. "PrevDay"
+        _max_per_type = getattr(args, "max_per_type", 0)
+        _max_per_session = getattr(args, "max_per_session", 0)
+
         cfg = DatasetConfig(
             output_dir=args.output_dir,
             image_dir=args.image_dir,
             window_size=args.window_size,
             step_size=args.step_size,
             max_samples_per_label=args.max_per_label,
+            max_samples_per_type_label=_max_per_type,
+            max_samples_per_session_label=_max_per_session,
             chart_dpi=args.dpi,
             skip_existing=not args.no_skip,
             bars_source=args.source,
@@ -1996,7 +2074,12 @@ def _cli():
             use_parity_renderer=args.parity_renderer,
             breakout_type=_bt_config_str,
         )
-        logger.info("Generating dataset for breakout_type=%s ...", _bt_config_str)
+        logger.info(
+            "Generating dataset for breakout_type=%s max_per_type=%d max_per_session=%d ...",
+            _bt_config_str,
+            _max_per_type,
+            _max_per_session,
+        )
         stats = generate_dataset(
             symbols=args.symbols,
             days_back=args.days,

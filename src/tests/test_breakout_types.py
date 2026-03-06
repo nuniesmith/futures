@@ -1187,3 +1187,175 @@ class TestRangeConfigNewFields:
         cfg = DEFAULT_CONFIGS[BreakoutType.WEEKLY]
         with pytest.raises(AttributeError):
             cfg.weekly_lookback_days = 10  # type: ignore[misc]
+
+
+# ===========================================================================
+# Feature contract generation tests
+# ===========================================================================
+
+
+class TestFeatureContractGeneration:
+    """Tests for generate_feature_contract() in breakout_cnn."""
+
+    def test_returns_dict(self):
+        from lib.analysis.breakout_cnn import generate_feature_contract
+
+        contract = generate_feature_contract()
+        assert isinstance(contract, dict)
+
+    def test_version_is_6(self):
+        from lib.analysis.breakout_cnn import FEATURE_CONTRACT_VERSION, generate_feature_contract
+
+        contract = generate_feature_contract()
+        assert contract["version"] == FEATURE_CONTRACT_VERSION
+        assert contract["version"] == 6
+
+    def test_num_tabular_matches_constant(self):
+        from lib.analysis.breakout_cnn import NUM_TABULAR, generate_feature_contract
+
+        contract = generate_feature_contract()
+        assert contract["num_tabular"] == NUM_TABULAR
+        assert contract["num_tabular"] == 12
+
+    def test_tabular_features_list(self):
+        from lib.analysis.breakout_cnn import TABULAR_FEATURES, generate_feature_contract
+
+        contract = generate_feature_contract()
+        assert contract["tabular_features"] == TABULAR_FEATURES
+        assert len(contract["tabular_features"]) == 12
+        # Spot-check v5 originals
+        assert "quality_pct" in contract["tabular_features"]
+        assert "direction_flag" in contract["tabular_features"]
+        # v6 additions
+        assert "breakout_type_ord" in contract["tabular_features"]
+        assert "asset_volatility_class" in contract["tabular_features"]
+        assert "range_atr_ratio" in contract["tabular_features"]
+        assert "hour_of_day" in contract["tabular_features"]
+
+    def test_all_13_breakout_types_present(self):
+        from lib.analysis.breakout_cnn import generate_feature_contract
+
+        contract = generate_feature_contract()
+        bt = contract["breakout_types"]
+        assert len(bt) == 13
+        expected_keys = {
+            "ORB",
+            "PrevDay",
+            "InitialBalance",
+            "Consolidation",
+            "Weekly",
+            "Monthly",
+            "Asian",
+            "BollingerSqueeze",
+            "ValueArea",
+            "InsideDay",
+            "GapRejection",
+            "PivotPoints",
+            "Fibonacci",
+        }
+        assert set(bt.keys()) == expected_keys
+
+    def test_breakout_type_ordinals_in_range(self):
+        from lib.analysis.breakout_cnn import generate_feature_contract
+
+        contract = generate_feature_contract()
+        for name, info in contract["breakout_types"].items():
+            assert "ordinal" in info, f"Missing 'ordinal' for {name}"
+            assert "breakout_type_ord" in info, f"Missing 'breakout_type_ord' for {name}"
+            assert 0 <= info["ordinal"] <= 12, f"Ordinal out of range for {name}: {info['ordinal']}"
+            assert 0.0 <= info["breakout_type_ord"] <= 1.0, (
+                f"breakout_type_ord out of range for {name}: {info['breakout_type_ord']}"
+            )
+
+    def test_sessions_section_has_9_sessions(self):
+        from lib.analysis.breakout_cnn import generate_feature_contract
+
+        contract = generate_feature_contract()
+        sess = contract["sessions"]
+        assert len(sess) == 9
+
+    def test_sessions_have_required_fields(self):
+        from lib.analysis.breakout_cnn import generate_feature_contract
+
+        contract = generate_feature_contract()
+        for key, info in contract["sessions"].items():
+            assert "session_ordinal" in info, f"Missing 'session_ordinal' for {key}"
+            assert "cnn_threshold" in info, f"Missing 'cnn_threshold' for {key}"
+            assert 0.0 <= info["session_ordinal"] <= 1.0, (
+                f"session_ordinal out of range for {key}: {info['session_ordinal']}"
+            )
+
+    def test_asset_volatility_section(self):
+        from lib.analysis.breakout_cnn import ASSET_VOLATILITY_CLASS, generate_feature_contract
+
+        contract = generate_feature_contract()
+        av = contract["asset_volatility"]
+        assert av == ASSET_VOLATILITY_CLASS
+        # All values must be 0.0, 0.5, or 1.0
+        for ticker, val in av.items():
+            assert val in (0.0, 0.5, 1.0), f"Unexpected volatility class for {ticker}: {val}"
+
+    def test_default_threshold_and_image_size(self):
+        from lib.analysis.breakout_cnn import DEFAULT_THRESHOLD, IMAGE_SIZE, generate_feature_contract
+
+        contract = generate_feature_contract()
+        assert contract["default_threshold"] == DEFAULT_THRESHOLD
+        assert contract["image_size"] == IMAGE_SIZE
+
+    def test_imagenet_stats_present(self):
+        from lib.analysis.breakout_cnn import generate_feature_contract
+
+        contract = generate_feature_contract()
+        assert "imagenet_mean" in contract
+        assert "imagenet_std" in contract
+        assert len(contract["imagenet_mean"]) == 3
+        assert len(contract["imagenet_std"]) == 3
+
+    def test_generated_at_is_iso_timestamp(self):
+        from datetime import datetime
+
+        from lib.analysis.breakout_cnn import generate_feature_contract
+
+        contract = generate_feature_contract()
+        assert "generated_at" in contract
+        # Should be parseable as ISO datetime
+        dt = datetime.fromisoformat(contract["generated_at"])
+        assert dt is not None
+
+    def test_write_to_file(self, tmp_path):
+        import json
+
+        from lib.analysis.breakout_cnn import FEATURE_CONTRACT_VERSION, generate_feature_contract
+
+        output = str(tmp_path / "feature_contract.json")
+        contract = generate_feature_contract(output_path=output)
+
+        # File should exist
+        import os
+
+        assert os.path.exists(output)
+
+        # File content should match returned dict
+        with open(output) as fh:
+            loaded = json.load(fh)
+        assert loaded["version"] == FEATURE_CONTRACT_VERSION
+        assert loaded["num_tabular"] == contract["num_tabular"]
+        assert loaded["tabular_features"] == contract["tabular_features"]
+        assert len(loaded["breakout_types"]) == 13
+        assert len(loaded["sessions"]) == 9
+
+    def test_write_creates_parent_directories(self, tmp_path):
+        import os
+
+        from lib.analysis.breakout_cnn import generate_feature_contract
+
+        nested = str(tmp_path / "subdir" / "nested" / "feature_contract.json")
+        generate_feature_contract(output_path=nested)
+        assert os.path.exists(nested)
+
+    def test_output_path_none_returns_only_dict(self):
+        from lib.analysis.breakout_cnn import generate_feature_contract
+
+        result = generate_feature_contract(output_path=None)
+        assert isinstance(result, dict)
+        assert result["version"] == 6

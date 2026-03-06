@@ -335,8 +335,20 @@ def _run_training_pipeline(params: TrainRequest) -> None:
         logger.info(
             "Dataset generation complete",
             total_images=ds_stats.total_images,
-            label_balance=ds_stats.to_dict().get("label_counts", {}),
+            label_balance=ds_stats.label_distribution,
         )
+
+        # Record dataset stats to Prometheus (best-effort — never block training).
+        try:
+            from lib.services.data.api.metrics import record_trainer_dataset_stats
+
+            record_trainer_dataset_stats(
+                total_images=ds_stats.total_images,
+                label_distribution=ds_stats.label_distribution,
+                render_time_seconds=ds_stats.duration_seconds,
+            )
+        except Exception as _metrics_err:
+            logger.debug("Trainer metrics update failed (non-fatal)", error=str(_metrics_err))
 
         if ds_stats.total_images < 100:
             _state.finish(
@@ -479,7 +491,28 @@ def _run_training_pipeline(params: TrainRequest) -> None:
             recall=val_rec,
         )
 
-        # ----- Step 5: ONNX export (best-effort) -----
+        # ----- Step 5: feature_contract.json export (best-effort) -----
+        # Always regenerate and write the contract after promotion so the
+        # models/ directory has an up-to-date v6 contract that consumers
+        # (engine, NT8) can pull alongside the .pt / .onnx files.
+        try:
+            from lib.analysis.breakout_cnn import generate_feature_contract
+
+            fc_path = MODELS_DIR / "feature_contract.json"
+            contract = generate_feature_contract(output_path=str(fc_path))
+            result["feature_contract_version"] = contract.get("version", 6)
+            result["feature_contract_path"] = str(fc_path)
+            logger.info(
+                "feature_contract.json written",
+                path=str(fc_path),
+                version=contract.get("version"),
+                num_tabular=contract.get("num_tabular"),
+            )
+        except Exception as fc_err:
+            logger.warning("feature_contract.json export failed (non-fatal)", error=str(fc_err))
+            result["feature_contract_version"] = None
+
+        # ----- Step 6: ONNX export (best-effort) -----
         try:
             import importlib
 

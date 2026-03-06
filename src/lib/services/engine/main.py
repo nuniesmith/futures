@@ -59,6 +59,30 @@ HEALTH_FILE = "/tmp/engine_health.json"
 _model_watcher = None  # type: ignore[assignment]
 
 
+# ---------------------------------------------------------------------------
+# Module-level PositionManager singleton (initialised in main())
+# ---------------------------------------------------------------------------
+_position_manager = None
+
+
+def _get_position_manager(account_size: int = 50_000):
+    """Lazy-init and return the global PositionManager singleton."""
+    global _position_manager
+    if _position_manager is None:
+        try:
+            from lib.services.engine.position_manager import PositionManager
+
+            _position_manager = PositionManager(account_size=account_size)
+            _position_manager.load_state()
+            logger.info(
+                "PositionManager initialised (account=$%s)",
+                f"{account_size:,}",
+            )
+        except Exception as exc:
+            logger.warning("PositionManager init failed (non-fatal): %s", exc)
+    return _position_manager
+
+
 def _write_health(healthy: bool, status: str, **extras):
     """Write health status to a file for Docker healthcheck."""
     data = {
@@ -1183,33 +1207,63 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                     except Exception:
                                         pass
 
-                                    # Encode session as a normalised ordinal so the CNN
-                                    # can learn session-specific breakout characteristics.
-                                    # Order matches the Globex-day cycle:
-                                    #   0=cme, 1=sydney, 2=tokyo, 3=shanghai,
-                                    #   4=frankfurt, 5=london, 6=london_ny, 7=us, 8=cme_settle
-                                    _session_ordinals = {
-                                        "cme": 0.0,
-                                        "sydney": 0.125,
-                                        "tokyo": 0.25,
-                                        "shanghai": 0.375,
-                                        "frankfurt": 0.5,
-                                        "london": 0.625,
-                                        "london_ny": 0.75,
-                                        "us": 0.875,
-                                        "cme_settle": 1.0,
-                                    }
-                                    _session_enc = _session_ordinals.get(_session_key, 0.875)
+                                    # Encode session as a normalised ordinal using the
+                                    # canonical get_session_ordinal() from breakout_cnn.
+                                    try:
+                                        from lib.analysis.breakout_cnn import (
+                                            get_asset_volatility_class as _get_vol_class,
+                                        )
+                                        from lib.analysis.breakout_cnn import (
+                                            get_breakout_type_ordinal as _get_btype_ord,
+                                        )
+                                        from lib.analysis.breakout_cnn import (
+                                            get_session_ordinal as _get_session_ordinal,
+                                        )
+
+                                        _session_enc = _get_session_ordinal(_session_key)
+                                    except ImportError:
+                                        _get_btype_ord = lambda t: 0.0  # noqa: E731
+                                        _get_vol_class = lambda t: 0.5  # noqa: E731
+                                        _session_enc = 0.875
+
+                                    # v6 features — breakout_type_ord, asset_volatility_class,
+                                    # range_atr_ratio, hour_of_day
+                                    _btype_raw = getattr(result, "breakout_type", "ORB")
+                                    _btype_name = _btype_raw.value if hasattr(_btype_raw, "value") else str(_btype_raw)
+                                    _btype_ord_val = _get_btype_ord(_btype_name)
+                                    _vol_class_val = _get_vol_class(ticker or symbol)
+
+                                    # range_atr_ratio: or_range / atr_value, clamped [0, 3] → /3
+                                    _or_range = getattr(result, "or_range", 0.0) or getattr(result, "range_size", 0.0)
+                                    _range_atr_ratio = 0.5
+                                    if result.atr_value > 0 and _or_range > 0:
+                                        _range_atr_ratio = min(_or_range / result.atr_value / 3.0, 1.0)
+
+                                    # hour_of_day: current ET hour / 23
+                                    _hour_of_day = 0.5
+                                    try:
+                                        from datetime import datetime as _dt2
+                                        from zoneinfo import ZoneInfo as _ZI2
+
+                                        _hour_of_day = _dt2.now(tz=_ZI2("America/New_York")).hour / 23.0
+                                    except Exception:
+                                        pass
 
                                     tab_features = [
+                                        # ── v5 (8 features) ──────────────────────────────────
                                         _quality_norm,  # quality_pct normalised
                                         _vol_ratio,  # volume_ratio
                                         _atr_pct,  # atr_pct
                                         _cvd_delta,  # cvd_delta (real from bars)
                                         _nr7_flag,  # nr7_flag (from daily bars)
                                         1.0 if result.direction == "LONG" else 0.0,
-                                        _session_enc,  # session encoding (ordinal, 0–1)
+                                        _session_enc,  # session ordinal [0–1]
                                         _london_overlap,  # london_overlap_flag
+                                        # ── v6 additions (4 new features) ────────────────────
+                                        _btype_ord_val,  # breakout_type_ord [0–1]
+                                        _vol_class_val,  # asset_volatility_class
+                                        _range_atr_ratio,  # range_atr_ratio [0–1]
+                                        _hour_of_day,  # hour_of_day [0–1]
                                     ]
 
                                     cnn_result = predict_breakout(
@@ -1311,6 +1365,13 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                             )
                         else:
                             publish_orb_alert(result)
+
+                            # Forward to PositionManager (stop-and-reverse)
+                            _dispatch_to_position_manager(
+                                result,
+                                bars_1m=bars_1m,
+                                session_key=_session_key,
+                            )
 
                             # Build enriched log / alert message
                             cnn_line = ""
@@ -1548,15 +1609,14 @@ def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "u
         payload["orb_session"] = orb_session_key
 
         key = f"engine:breakout:{result.breakout_type.lower()}:{result.symbol}"
-        cache_set(key, json.dumps(payload), ttl=300)
+        cache_set(key, json.dumps(payload).encode(), ttl=300)
 
         # Also publish to the generic breakout channel so the SSE picks it up
         try:
-            from lib.core.cache import get_redis
+            from lib.core.cache import REDIS_AVAILABLE, _r
 
-            r = get_redis()
-            if r:
-                r.publish("dashboard:breakout", json.dumps(payload))
+            if REDIS_AVAILABLE and _r is not None:
+                _r.publish("dashboard:breakout", json.dumps(payload))
         except Exception:
             pass
 
@@ -1571,6 +1631,190 @@ def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "u
         )
     except Exception as exc:
         logger.debug("_publish_breakout_result error: %s", exc)
+
+
+def _publish_pm_orders(orders: list) -> None:  # type: ignore[type-arg]
+    """Publish PositionManager OrderCommands to Redis for the NT8 Bridge and dashboard.
+
+    Each order is written to:
+      - ``engine:pm:orders`` — a list (RPUSH) of JSON-serialised commands (TTL 60s)
+      - ``dashboard:pm_orders`` — Redis pub/sub channel for real-time SSE streaming
+
+    The NT8 Bridge subscribes to ``dashboard:pm_orders`` and translates each
+    command into a NinjaScript order submission.
+    """
+    if not orders:
+        return
+    try:
+        from lib.core.cache import REDIS_AVAILABLE, _r, cache_set
+
+        now = datetime.now(tz=_EST).isoformat()
+        serialised = []
+        for order in orders:
+            d = order.to_dict() if hasattr(order, "to_dict") else dict(order)
+            d.setdefault("published_at", now)
+            serialised.append(json.dumps(d, default=str))
+
+        if REDIS_AVAILABLE and _r is not None:
+            pipe = _r.pipeline()
+            key = "engine:pm:orders"
+            for s in serialised:
+                pipe.rpush(key, s)
+            pipe.expire(key, 60)
+            pipe.execute()
+            for s in serialised:
+                _r.publish("dashboard:pm_orders", s)
+
+        # Also write consolidated status for dashboard SSE
+        try:
+            pm = _position_manager
+            if pm is not None:
+                positions_payload = {
+                    p.ticker: {
+                        "direction": p.direction,
+                        "entry_price": p.entry_price,
+                        "current_price": p.current_price,
+                        "stop_loss": p.stop_loss,
+                        "tp1": p.tp1,
+                        "tp2": p.tp2,
+                        "tp3": p.tp3,
+                        "phase": p.phase.value,
+                        "unrealized_pnl": round(p.unrealized_pnl, 4),
+                        "r_multiple": round(p.r_multiple, 3),
+                        "breakout_type": p.breakout_type,
+                        "session_key": p.session_key,
+                    }
+                    for p in pm.get_all_positions().values()
+                }
+                cache_set(
+                    "engine:pm:positions",
+                    json.dumps(
+                        {
+                            "positions": positions_payload,
+                            "count": len(positions_payload),
+                            "updated_at": now,
+                        },
+                        default=str,
+                    ).encode(),
+                    ttl=120,
+                )
+        except Exception:
+            pass
+
+        logger.info(
+            "📤 PositionManager: %d order(s) dispatched → NT8 Bridge",
+            len(orders),
+        )
+    except Exception as exc:
+        logger.debug("_publish_pm_orders error (non-fatal): %s", exc)
+
+
+def _dispatch_to_position_manager(
+    result: object,
+    bars_1m: "pd.DataFrame | None" = None,
+    session_key: str = "us",
+    range_config: object = None,
+) -> None:
+    """Forward a published breakout signal to the PositionManager.
+
+    Accepts either an ``ORBResult`` or a ``BreakoutResult``; both expose the
+    same duck-typed attributes that ``PositionManager.process_signal()`` needs.
+
+    For ORBResult objects (which use ``or_high``/``or_low`` instead of
+    ``range_high``/``range_low``) we attach the missing attributes on-the-fly
+    so the PositionManager doesn't have to know about ORB-specific naming.
+
+    This is intentionally best-effort — any failure here must not block the
+    alert pipeline.
+    """
+    pm = _position_manager
+    if pm is None:
+        return
+
+    try:
+        signal = result
+
+        # ORBResult compatibility shim — attach range_high/range_low
+        if not hasattr(signal, "range_high") or not signal.range_high:
+            or_high = getattr(signal, "or_high", 0.0)
+            or_low = getattr(signal, "or_low", 0.0)
+            try:
+                signal.range_high = or_high
+                signal.range_low = or_low
+                signal.breakout_type = getattr(signal, "breakout_type", None) or type("_T", (), {"value": "ORB"})()
+            except AttributeError:
+                pass  # frozen dataclass — leave as-is
+
+        # Attach session_key if missing
+        if not getattr(signal, "session_key", ""):
+            try:
+                signal.session_key = session_key
+            except AttributeError:
+                pass
+
+        # Attach filter_passed as True (signal already passed the filter gate)
+        if getattr(signal, "filter_passed", None) is None:
+            try:
+                signal.filter_passed = True
+            except AttributeError:
+                pass
+
+        orders = pm.process_signal(signal, bars_1m=bars_1m, range_config=range_config)
+        if orders:
+            _publish_pm_orders(orders)
+
+    except Exception as exc:
+        logger.debug("_dispatch_to_position_manager error (non-fatal): %s", exc)
+
+
+def _handle_update_positions(engine) -> None:
+    """Run PositionManager.update_all() on every scheduled 1m-bar tick.
+
+    Fetches the latest 1-minute bars for every core watchlist ticker,
+    calls ``update_all()``, then dispatches any resulting bracket / EMA9
+    trailing orders to the NT8 Bridge via Redis.
+
+    Safe to call frequently — exits immediately if no positions are active.
+    """
+    pm = _position_manager
+    if pm is None or pm.get_position_count() == 0:
+        return
+
+    try:
+        import io
+
+        import pandas as pd
+
+        from lib.core.cache import cache_get
+        from lib.core.models import CORE_TICKERS
+
+        bars_by_ticker: dict[str, pd.DataFrame] = {}
+
+        for ticker in CORE_TICKERS:
+            try:
+                raw = cache_get(f"engine:bars_1m:{ticker}")
+                if raw:
+                    raw_str = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                    df = pd.read_json(io.StringIO(raw_str))
+                    if not df.empty:
+                        bars_by_ticker[ticker] = df
+            except Exception as exc:
+                logger.debug("Could not fetch bars for PM update (%s): %s", ticker, exc)
+
+        if not bars_by_ticker:
+            return
+
+        orders = pm.update_all(bars_by_ticker)
+        if orders:
+            _publish_pm_orders(orders)
+            logger.info(
+                "📊 PositionManager update: %d order(s) from %d active position(s)",
+                len(orders),
+                pm.get_position_count(),
+            )
+
+    except Exception as exc:
+        logger.debug("_handle_update_positions error (non-fatal): %s", exc)
 
 
 def _persist_breakout_result(result: "BreakoutResult", session_key: str = "") -> int | None:
@@ -1707,6 +1951,8 @@ def _handle_check_pdr(engine, session_key: str = "london_ny") -> None:
                 if result.breakout_detected:
                     found += 1
                     _publish_breakout_result(result, orb_session_key=session_key)
+                    # Forward to PositionManager (stop-and-reverse)
+                    _dispatch_to_position_manager(result, bars_1m=bars_1m, session_key=session_key)
                     try:
                         from lib.core.alerts import send_signal
 
@@ -1797,6 +2043,8 @@ def _handle_check_ib(engine, session_key: str = "us") -> None:
                 if result.breakout_detected:
                     found += 1
                     _publish_breakout_result(result, orb_session_key=session_key)
+                    # Forward to PositionManager (stop-and-reverse)
+                    _dispatch_to_position_manager(result, bars_1m=bars_1m, session_key=session_key)
                     try:
                         from lib.core.alerts import send_signal
 
@@ -1888,6 +2136,8 @@ def _handle_check_consolidation(engine, session_key: str = "london_ny") -> None:
                 if result.breakout_detected:
                     found += 1
                     _publish_breakout_result(result, orb_session_key=session_key)
+                    # Forward to PositionManager (stop-and-reverse)
+                    _dispatch_to_position_manager(result, bars_1m=bars_1m, session_key=session_key)
                     try:
                         from lib.core.alerts import send_signal
 
@@ -2310,6 +2560,49 @@ def _handle_daily_report(engine) -> None:
         except Exception as exc:
             logger.debug("Session stats build failed: %s", exc)
 
+        # ── PositionManager session stats ──────────────────────────────────
+        try:
+            pm = _position_manager
+            if pm is not None:
+                closed = pm.get_history()
+                if closed:
+                    wins = [p for p in closed if p.realized_pnl > 0]
+                    losses = [p for p in closed if p.realized_pnl <= 0]
+                    total_pnl = sum(p.realized_pnl for p in closed)
+                    avg_r = sum(p.r_multiple for p in closed) / len(closed) if closed else 0.0
+                    # Break down by breakout_type
+                    type_breakdown: dict[str, dict] = {}
+                    for p in closed:
+                        btype = p.breakout_type or "UNKNOWN"
+                        bucket = type_breakdown.setdefault(
+                            btype,
+                            {"trades": 0, "wins": 0, "total_pnl": 0.0},
+                        )
+                        bucket["trades"] += 1
+                        if p.realized_pnl > 0:
+                            bucket["wins"] += 1
+                        bucket["total_pnl"] = round(bucket["total_pnl"] + p.realized_pnl, 4)
+                    for btype, b in type_breakdown.items():
+                        b["win_rate"] = round(b["wins"] / b["trades"] * 100, 1) if b["trades"] else 0.0
+
+                    report["position_manager"] = {
+                        "total_trades": len(closed),
+                        "wins": len(wins),
+                        "losses": len(losses),
+                        "win_rate": round(len(wins) / len(closed) * 100, 1) if closed else 0.0,
+                        "total_realized_pnl": round(total_pnl, 4),
+                        "avg_r_multiple": round(avg_r, 3),
+                        "active_positions": pm.get_position_count(),
+                        "by_type": type_breakdown,
+                    }
+                else:
+                    report["position_manager"] = {
+                        "total_trades": 0,
+                        "active_positions": pm.get_position_count(),
+                    }
+        except Exception as exc:
+            logger.debug("PositionManager stats build failed: %s", exc)
+
         # ── Data coverage / gap summary ────────────────────────────────────
         try:
             from lib.services.engine.backfill import _get_backfill_symbols, get_gap_report
@@ -2362,6 +2655,7 @@ def _handle_daily_report(engine) -> None:
         model_info_d = report.get("model", {})
         session_breakdown = report.get("sessions", {})
         coverage = report.get("data_coverage", {})
+        pm_stats = report.get("position_manager", {})
 
         logger.info("=" * 55)
         logger.info("  📊 Daily Session Report — %s", datetime.now(tz=_EST).strftime("%Y-%m-%d"))
@@ -2404,6 +2698,35 @@ def _handle_daily_report(engine) -> None:
                 recall,
                 samples,
             )
+
+        # PositionManager session summary
+        if pm_stats and pm_stats.get("total_trades", 0) > 0:
+            logger.info("  ── PositionManager ────────────────────────────")
+            logger.info(
+                "  Trades : %d total | %d wins | %d losses | win rate %.0f%%",
+                pm_stats.get("total_trades", 0),
+                pm_stats.get("wins", 0),
+                pm_stats.get("losses", 0),
+                pm_stats.get("win_rate", 0.0),
+            )
+            logger.info(
+                "  P&L    : $%.2f realized | avg R=%.2f | %d active",
+                pm_stats.get("total_realized_pnl", 0.0),
+                pm_stats.get("avg_r_multiple", 0.0),
+                pm_stats.get("active_positions", 0),
+            )
+            by_type = pm_stats.get("by_type", {})
+            if by_type:
+                logger.info("  ── By Breakout Type ───────────────────────────")
+                for btype, b in sorted(by_type.items()):
+                    logger.info(
+                        "    %-14s  trades=%2d  wins=%2d  win_rate=%.0f%%  pnl=$%.2f",
+                        btype,
+                        b.get("trades", 0),
+                        b.get("wins", 0),
+                        b.get("win_rate", 0.0),
+                        b.get("total_pnl", 0.0),
+                    )
 
         # Data coverage warning
         if coverage and coverage.get("symbols_with_gaps", 0) > 0:
@@ -2708,6 +3031,9 @@ def main():
     # Initialise the RiskManager early so it's ready for handlers
     _get_risk_manager(account_size)
 
+    # Initialise the PositionManager — loads any persisted positions from Redis
+    _get_position_manager(account_size)
+
     action_handlers = {
         ActionType.COMPUTE_DAILY_FOCUS: lambda: _handle_compute_daily_focus(engine, account_size),
         ActionType.GROK_MORNING_BRIEF: lambda: _handle_grok_morning_brief(engine),
@@ -2823,16 +3149,21 @@ def main():
                     # late-binding workarounds.
                     _payload = getattr(action, "payload", None) or {}
                     if action.action == ActionType.CHECK_PDR:
-                        _handle_check_pdr(engine, session_key=_payload.get("session_key", "london_ny"))
+                        _sk = _payload.get("session_key", "london_ny") if _payload else "london_ny"
+                        _handle_check_pdr(engine, session_key=_sk)
                     elif action.action == ActionType.CHECK_IB:
-                        _handle_check_ib(engine, session_key=_payload.get("session_key", "us"))
+                        _sk = _payload.get("session_key", "us") if _payload else "us"
+                        _handle_check_ib(engine, session_key=_sk)
                     elif action.action == ActionType.CHECK_CONSOLIDATION:
-                        _handle_check_consolidation(engine, session_key=_payload.get("session_key", "london_ny"))
+                        _sk = _payload.get("session_key", "london_ny") if _payload else "london_ny"
+                        _handle_check_consolidation(engine, session_key=_sk)
                     elif action.action == ActionType.CHECK_BREAKOUT_MULTI:
+                        _sk = _payload.get("session_key", "us") if _payload else "us"
+                        _types = _payload.get("types") if _payload else None
                         _handle_check_breakout_multi(
                             engine,
-                            session_key=_payload.get("session_key", "us"),
-                            types=_payload.get("types"),
+                            session_key=_sk,
+                            types=_types,
                         )
                     else:
                         handler()
@@ -2840,6 +3171,12 @@ def main():
                 except Exception as exc:
                     scheduler.mark_failed(action.action, str(exc))
                     logger.error("Action %s failed: %s", action.action.value, exc, exc_info=True)
+
+            # Update active positions on every loop iteration (bracket phases,
+            # EMA9 trailing, stop/TP3 exits).  Exits immediately if no positions
+            # are open.  Must run BEFORE publish so the status payload reflects
+            # the latest position state.
+            _handle_update_positions(engine)
 
             # Publish engine status to Redis every iteration
             _publish_engine_status(

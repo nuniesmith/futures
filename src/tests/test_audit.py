@@ -506,6 +506,81 @@ class TestRecordORBEvent:
         assert len(events) == 1
         assert events[0]["symbol"] == "NEW"
 
+    def test_get_orb_events_filter_breakout_type(self, tmp_db):
+        """Filtering by breakout_type returns only matching events."""
+        from lib.core import models
+
+        models.record_orb_event(symbol="MGC", breakout_detected=True, breakout_type="ORB")
+        models.record_orb_event(symbol="MES", breakout_detected=True, breakout_type="PDR")
+        models.record_orb_event(symbol="MNQ", breakout_detected=True, breakout_type="IB")
+        models.record_orb_event(symbol="MCL", breakout_detected=False, breakout_type="WEEKLY")
+
+        orb_events = models.get_orb_events(breakout_type="ORB")
+        assert len(orb_events) == 1
+        assert orb_events[0]["symbol"] == "MGC"
+
+        pdr_events = models.get_orb_events(breakout_type="PDR")
+        assert len(pdr_events) == 1
+        assert pdr_events[0]["symbol"] == "MES"
+
+        ib_events = models.get_orb_events(breakout_type="IB")
+        assert len(ib_events) == 1
+        assert ib_events[0]["symbol"] == "MNQ"
+
+        weekly_events = models.get_orb_events(breakout_type="WEEKLY")
+        assert len(weekly_events) == 1
+        assert weekly_events[0]["symbol"] == "MCL"
+
+    def test_get_orb_events_filter_breakout_type_all(self, tmp_db):
+        """Passing 'ALL' or None returns all events regardless of type."""
+        from lib.core import models
+
+        models.record_orb_event(symbol="MGC", breakout_type="ORB")
+        models.record_orb_event(symbol="MES", breakout_type="PDR")
+        models.record_orb_event(symbol="MNQ", breakout_type="CONS")
+
+        # None = all types
+        all_events = models.get_orb_events(breakout_type=None)
+        assert len(all_events) == 3
+
+        # "ALL" = all types
+        all_events_str = models.get_orb_events(breakout_type="ALL")
+        assert len(all_events_str) == 3
+
+    def test_get_orb_events_stores_breakout_type_columns(self, tmp_db):
+        """Record an event with all new columns and verify they round-trip."""
+        from lib.core import models
+
+        models.record_orb_event(
+            symbol="MGC",
+            breakout_detected=True,
+            direction="LONG",
+            breakout_type="WEEKLY",
+            mtf_score=0.72,
+            macd_slope=0.0034,
+            divergence="confirming",
+        )
+        events = models.get_orb_events(limit=1)
+        assert len(events) == 1
+        ev = events[0]
+        assert ev["breakout_type"] == "WEEKLY"
+        assert ev["mtf_score"] == pytest.approx(0.72, abs=1e-4)
+        assert ev["macd_slope"] == pytest.approx(0.0034, abs=1e-6)
+        assert ev["divergence"] == "confirming"
+
+    def test_get_orb_events_filter_breakout_type_new_types(self, tmp_db):
+        """All 9 new breakout types can be stored and filtered."""
+        from lib.core import models
+
+        new_types = ["WEEKLY", "MONTHLY", "ASIAN", "BBSQUEEZE", "VA", "INSIDE", "GAP", "PIVOT", "FIB"]
+        for btype in new_types:
+            models.record_orb_event(symbol="MGC", breakout_type=btype, breakout_detected=True)
+
+        for btype in new_types:
+            results = models.get_orb_events(breakout_type=btype)
+            assert len(results) == 1, f"Expected 1 result for {btype}, got {len(results)}"
+            assert results[0]["breakout_type"] == btype
+
 
 # ===========================================================================
 # Audit summary tests
@@ -692,6 +767,52 @@ class TestAuditAPIGetORBEvents:
         for ev in data["events"]:
             assert "breakout_detected_bool" in ev
             assert ev["breakout_detected_bool"] == bool(ev["breakout_detected"])
+
+    def test_get_orb_events_filter_breakout_type_via_api(self, audit_app):
+        """GET /audit/orb?breakout_type=PDR returns only PDR events."""
+        from lib.core import models
+
+        # Insert events of different types
+        models.record_orb_event(symbol="MGC", breakout_detected=True, breakout_type="ORB")
+        models.record_orb_event(symbol="MES", breakout_detected=True, breakout_type="PDR")
+        models.record_orb_event(symbol="MNQ", breakout_detected=False, breakout_type="PDR")
+        models.record_orb_event(symbol="MCL", breakout_detected=True, breakout_type="WEEKLY")
+
+        resp = audit_app.get("/audit/orb?breakout_type=PDR")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 2
+        for ev in data["events"]:
+            assert ev["breakout_type"] == "PDR"
+        assert data["filters"]["breakout_type"] == "PDR"
+
+    def test_get_orb_events_filter_breakout_type_all_via_api(self, audit_app):
+        """GET /audit/orb?breakout_type=ALL returns every event."""
+        from lib.core import models
+
+        models.record_orb_event(symbol="MGC", breakout_type="ORB")
+        models.record_orb_event(symbol="MES", breakout_type="IB")
+        models.record_orb_event(symbol="MCL", breakout_type="FIB")
+
+        resp = audit_app.get("/audit/orb?breakout_type=ALL")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 3
+
+    def test_get_orb_events_filter_breakout_type_new_types_via_api(self, audit_app):
+        """All 9 new breakout types are filterable via the API."""
+        from lib.core import models
+
+        new_types = ["WEEKLY", "MONTHLY", "ASIAN", "BBSQUEEZE", "VA", "INSIDE", "GAP", "PIVOT", "FIB"]
+        for btype in new_types:
+            models.record_orb_event(symbol="MGC", breakout_type=btype, breakout_detected=True)
+
+        for btype in new_types:
+            resp = audit_app.get(f"/audit/orb?breakout_type={btype}")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["count"] == 1, f"Expected 1 result for {btype}"
+            assert data["events"][0]["breakout_type"] == btype
 
 
 class TestAuditAPIGetSummary:

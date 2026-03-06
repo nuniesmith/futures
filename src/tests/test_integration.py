@@ -958,7 +958,7 @@ class TestSchedulerEngineWiring:
         mgr = ScheduleManager()
         session = mgr.get_session_mode()
         # Should return a valid session
-        assert session.value in ("pre-market", "active", "off-hours")
+        assert session.value in ("pre-market", "active", "off-hours", "evening")
         # Should return some pending actions
         pending = mgr.get_pending_actions()
         assert isinstance(pending, list)

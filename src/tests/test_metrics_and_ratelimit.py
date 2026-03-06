@@ -714,9 +714,126 @@ class TestPrometheusOutput:
             "model_val_precision",
             "model_val_recall",
             "model_train_samples",
+            # Trainer dataset metrics
+            "trainer_images_generated",
+            "trainer_label_balance",
+            "trainer_render_time_seconds",
         ]
         for metric in expected_metrics:
             assert metric in output, f"Missing metric: {metric}"
+
+
+class TestTrainerMetrics:
+    """Tests for trainer dataset Prometheus metrics."""
+
+    def test_trainer_images_generated_registered(self):
+        from lib.services.data.api.metrics import TRAINER_IMAGES_GENERATED
+
+        assert TRAINER_IMAGES_GENERATED is not None
+        assert "trainer_images_generated" in TRAINER_IMAGES_GENERATED._name
+
+    def test_trainer_label_balance_registered(self):
+        from lib.services.data.api.metrics import TRAINER_LABEL_BALANCE
+
+        assert TRAINER_LABEL_BALANCE is not None
+        assert "trainer_label_balance" in TRAINER_LABEL_BALANCE._name
+
+    def test_trainer_render_time_seconds_registered(self):
+        from lib.services.data.api.metrics import TRAINER_RENDER_TIME_SECONDS
+
+        assert TRAINER_RENDER_TIME_SECONDS is not None
+        assert "trainer_render_time_seconds" in TRAINER_RENDER_TIME_SECONDS._name
+
+    def test_record_trainer_dataset_stats_sets_images(self):
+        from lib.services.data.api.metrics import (
+            TRAINER_IMAGES_GENERATED,
+            record_trainer_dataset_stats,
+        )
+
+        record_trainer_dataset_stats(
+            total_images=1800,
+            label_distribution={"good": 1200, "bad": 600},
+            render_time_seconds=45.3,
+        )
+        assert TRAINER_IMAGES_GENERATED._value.get() == 1800
+
+    def test_record_trainer_dataset_stats_sets_label_balance(self):
+        from lib.services.data.api.metrics import (
+            TRAINER_LABEL_BALANCE,
+            record_trainer_dataset_stats,
+        )
+
+        record_trainer_dataset_stats(
+            total_images=2000,
+            label_distribution={"good": 1420, "bad": 580},
+            render_time_seconds=60.0,
+        )
+        assert TRAINER_LABEL_BALANCE.labels(label="good")._value.get() == 1420
+        assert TRAINER_LABEL_BALANCE.labels(label="bad")._value.get() == 580
+
+    def test_record_trainer_dataset_stats_observes_render_time(self):
+        from lib.services.data.api.metrics import (
+            TRAINER_RENDER_TIME_SECONDS,
+            record_trainer_dataset_stats,
+        )
+
+        before_sum = TRAINER_RENDER_TIME_SECONDS._sum.get()
+        record_trainer_dataset_stats(
+            total_images=500,
+            label_distribution={"good": 300, "bad": 200},
+            render_time_seconds=120.5,
+        )
+        after_sum = TRAINER_RENDER_TIME_SECONDS._sum.get()
+        assert after_sum == pytest.approx(before_sum + 120.5, abs=1e-3)
+
+    def test_record_trainer_dataset_stats_overwrites_images_on_second_call(self):
+        from lib.services.data.api.metrics import (
+            TRAINER_IMAGES_GENERATED,
+            record_trainer_dataset_stats,
+        )
+
+        record_trainer_dataset_stats(
+            total_images=1000,
+            label_distribution={"good": 600, "bad": 400},
+            render_time_seconds=30.0,
+        )
+        record_trainer_dataset_stats(
+            total_images=2500,
+            label_distribution={"good": 1500, "bad": 1000},
+            render_time_seconds=75.0,
+        )
+        # Gauge should reflect the most recent call
+        assert TRAINER_IMAGES_GENERATED._value.get() == 2500
+
+    def test_record_trainer_dataset_stats_empty_label_distribution(self):
+        from lib.services.data.api.metrics import (
+            TRAINER_IMAGES_GENERATED,
+            record_trainer_dataset_stats,
+        )
+
+        # Should not raise even with no label entries
+        record_trainer_dataset_stats(
+            total_images=0,
+            label_distribution={},
+            render_time_seconds=0.1,
+        )
+        assert TRAINER_IMAGES_GENERATED._value.get() == 0
+
+    def test_record_trainer_dataset_stats_zero_render_time(self):
+        from lib.services.data.api.metrics import (
+            TRAINER_RENDER_TIME_SECONDS,
+            record_trainer_dataset_stats,
+        )
+
+        before_sum = TRAINER_RENDER_TIME_SECONDS._sum.get()
+        record_trainer_dataset_stats(
+            total_images=10,
+            label_distribution={"good": 7, "bad": 3},
+            render_time_seconds=0.0,
+        )
+        after_sum = TRAINER_RENDER_TIME_SECONDS._sum.get()
+        # Sum unchanged when render_time is 0
+        assert after_sum == pytest.approx(before_sum, abs=1e-6)
 
 
 class TestCollectLiveGauges:

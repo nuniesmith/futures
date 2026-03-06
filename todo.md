@@ -39,36 +39,37 @@ Repos:
 - [x] **Position Manager — Stop-and-Reverse strategy** — New `position_manager.py` module: persistent 1-lot micro positions, 3-phase bracket walk (SL/TP1 → breakeven → EMA9 trail to TP3), reversal gates (CNN, MTF, cooldown, winning-position protection), limit/market entry decision, session-end closure for intraday types, Redis state persistence, 105 tests
 - [x] **Asset watchlists** — Added `CORE_WATCHLIST` (5 assets: MGC, MCL, MES, MNQ, M6E), `EXTENDED_WATCHLIST` (5: SIL, M2K, M6B, MBT, ZN), `ACTIVE_WATCHLIST`, and ticker frozensets to `models.py` + exported from `core/__init__.py`
 - [x] **Strategy plan document** — Comprehensive `docs/STRATEGY_PLAN.md` covering asset review (22→10 active, 12 dropped), model versatility architecture, stop-and-reverse design, order management, EMA9 trailing rules, MTF integration, and phased implementation plan
-- [ ] **Wire `PositionManager` into engine main loop** — call `process_signal()` on breakout detections, `update_all()` on every 1m bar close
-- [ ] **Add session-level performance stats** to daily report
-- [ ] **Backfill gap detection** — alert when historical bars have gaps > N minutes
+- [x] **Wire `PositionManager` into engine main loop** — `_dispatch_to_position_manager()` called on all ORB/PDR/IB/CONS breakouts, `_handle_update_positions()` runs on every main loop iteration calling `update_all()`; orders dispatched to NT8 Bridge via `_publish_pm_orders()`; session stats in daily report
+- [x] **Add session-level performance stats** to daily report — `_build_session_stats()` groups `orb_events` by session key and computes pass-rate per session; PositionManager P&L/win-rate by breakout type included in daily report
+- [x] **Backfill gap detection** — `_check_and_alert_gaps()` scans stored bars post-backfill, publishes `engine:gap_alerts` to Redis (TTL 26h), logs warnings; threshold configurable via `BACKFILL_GAP_ALERT_MINUTES` env var
 
 ### Dashboard & Web UI
-- [ ] **Add "Breakout Type" filter + MTF score column** to signal history table
-- [ ] Trade journal UI improvements — inline editing, tag filtering
-- [ ] Kraken crypto price chart — live candlestick chart in dashboard for tracked pairs
-- [ ] Crypto/futures correlation panel — show BTC vs MES/MGC correlation in sidebar
+- [x] **Add "Breakout Type" filter + MTF score column** to signal history table — All 13 breakout type filter pills (ORB/PDR/IB/CONS/WEEKLY/MONTHLY/ASIAN/BBSQUEEZE/VA/INSIDE/GAP/PIVOT/FIB) with per-type colour coding; 9 session tabs (CME/SYD/TYO/SHA/FRA/LON/LN-NY/US/SETTLE); MTF score % with MACD slope arrow and divergence icon; DB-level `breakout_type` filter in `get_orb_events()`; count badges on active type pills; 7 new tests
+- [x] **Trade journal UI improvements** — inline editing (HTMX form per row, hx-get/hx-post), tag filtering (clickable tag pills, `?tag=` query param, filter bar with counts), quick-add form, limit selector, tag legend; all wired in `journal.py` `_render_journal_panel()`
+- [x] **Kraken crypto price chart** — SVG candlestick renderer (`_render_candle_svg`), OHLCV REST fetch, pair/interval/period selectors, live price + 24h change header; `kraken_chart_html` endpoint + `#kraken-chart-container` in dashboard sidebar
+- [x] **Crypto/futures correlation panel** — Pearson correlation matrix across 9 Kraken pairs + MES/MGC/MNQ (returns-based), colour-coded bar chart, `kraken_correlation_html` endpoint + `#correlation-container` in dashboard
 
 ### Training & Dataset (shared `lib`)
 - [x] **Fix trainer_server.py ↔ breakout_cnn.py signature mismatch** — Corrected `_run_training_pipeline` to call `train_model(data_csv=..., val_csv=..., model_dir=..., image_root=...)` with correct kwargs, added new `evaluate_model()` function for post-training metrics (accuracy/precision/recall via sklearn), fixed ONNX export to use `importlib.getattr` for missing function, smoke test passes end-to-end on GPU
 - [x] **Add `evaluate_model()` to breakout_cnn.py** — Loads checkpoint, runs inference on validation CSV, returns `{val_accuracy, val_precision, val_recall}` dict; used by trainer pipeline for gate checks
-- [ ] **Expand tabular features v5→v6** (8→12 features) — Add `breakout_type_ord`, `asset_volatility_class`, `range_atr_ratio`, `hour_of_day` to CNN input; update `TABULAR_FEATURES`, `NUM_TABULAR`, `BreakoutDataset.__getitem__`, `_normalise_tabular_for_inference`, and engine inference callsite
-- [ ] **Per-type model heads or type-embedding** in CNN
-- [ ] **Session-specific training thresholds** (per `SESSION_THRESHOLDS`)
-- [ ] **Automated good/bad balancing** across all 13 types + 9 sessions
-- [ ] Synthetic data augmentation (noise, time shifts)
-- [ ] CLI command: `python -m lib.training.dataset_generator generate --symbols MGC MES --session all --breakout-type all`
-- [ ] Dashboard preview: view random good/bad snapshots per type/session
+- [x] **Expand tabular features v5→v6** (8→12 features) — Added `breakout_type_ord`, `asset_volatility_class`, `range_atr_ratio`, `hour_of_day`; updated `TABULAR_FEATURES` (12 items), `NUM_TABULAR=12`, `FEATURE_CONTRACT_VERSION=6`, `BreakoutDataset.__getitem__`, `_normalise_tabular_for_inference` (v5 backward-compat zero-padding), and engine ORB inference callsite (all 12 features computed inline)
+- [x] **Export `feature_contract.json` v6** — Added `generate_feature_contract()` to `breakout_cnn.py` (returns dict + optionally writes file); `contract` CLI subcommand (`python -m lib.analysis.breakout_cnn contract --output models/feature_contract.json`); written to `models/feature_contract.json` with 12 features, 13 breakout types, 9 sessions, asset volatility classes; 15 tests
+- [x] **BreakoutType embedding in CNN** — Added `use_type_embedding` flag to `HybridBreakoutCNN`; learned `Embedding(13, 8)` table replaces scalar `breakout_type_ord` slot; `type_fusion` layer merges 32-dim scalar encoding + 8-dim embedding; `forward()` accepts optional `type_ids` tensor (falls back to ordinal derivation); `_build_model_from_checkpoint()` auto-detects embedding architecture from state dict; `get_type_embedding_weights()` utility; `--type-embedding` CLI flag; `CNN_TYPE_EMBEDDING=1` env var; `embedding` CLI subcommand to inspect learned weights; backward-compat: existing checkpoints without embedding key load normally
+- [x] **Session-specific training thresholds** — `SESSION_THRESHOLDS` dict in `breakout_cnn.py` with 9 keys (cme=0.75, sydney=0.72, tokyo=0.74, shanghai=0.74, frankfurt=0.80, london=0.82, london_ny=0.82, us=0.82, cme_settle=0.78); `get_session_threshold()` lookup used by `predict_breakout()` and `predict_breakout_batch()`
+- [x] **Automated good/bad balancing across all 13 types + 9 sessions** — `DatasetConfig` gains `max_samples_per_type_label` (caps per (label, breakout_type) bucket) and `max_samples_per_session_label` (caps per (label, session) bucket); both enforced in `generate_dataset_for_symbol()` with rolling counters; `--max-per-type` and `--max-per-session` CLI flags added to `dataset_generator generate`
+- [x] **Synthetic data augmentation** — `get_training_transform()` enhanced: added `T.RandomRotation(degrees=1.5)` (tiny tilt simulating screenshot variation) and `T.RandomErasing(p=0.05, scale=(0.01, 0.10))` (5% chance of minor occlusion patch, simulates UI overlay artefacts); existing `ColorJitter` and `RandomCrop` retained
+- [x] **CLI `dataset_generator generate` — all 13 breakout types** — `--breakout-type` choices expanded from 4 to all 13 types + `all`; `--max-per-type` and `--max-per-session` args wired; example: `python -m lib.training.dataset_generator generate --symbols MGC MES --session all --breakout-type all --max-per-type 500`
+- [x] **Dashboard preview: good/bad snapshots per type/session** — `GET /cnn/dataset/preview` endpoint in `cnn.py`; loads dataset CSV (auto-detected), filters by `breakout_type` / `session` / `label`, samples *n* random rows, renders base64-encoded PNG cards in a responsive grid; HTMX controls for type/session/label/n selectors + shuffle button; wired into dashboard sidebar as collapsible "Dataset Preview" panel (`#cnn-dataset-preview-container`, `hx-trigger="revealed"`)
 
 ### Infrastructure
-- [ ] Rate limiting tuning — review slowapi config for SSE vs REST endpoints
+- [x] **Rate limiting tuning** — `rate_limit.py` fully configured: SSE=10/min (gates new handshakes only), dashboard fragments=120/min (burst-safe for HTMX multi-panel page load), mutations=20/min, heavy actions=5/min, Kraken private=10/min, public/health=60/min; `_PATH_LIMITS` ordered prefix map; `_client_key_func` buckets by API-key prefix then X-Forwarded-For then remote IP; Redis-backed storage available via `RATE_LIMIT_STORAGE=redis://...`; all limits env-var configurable; `RATE_LIMIT_ENABLED=0` disables without removing middleware
 - [ ] Deployment pipeline — add Pi deploy stage back to CI/CD when ready
 - [x] **Fix `sync_models.sh` repo reference** — updated `nuniesmith/orb` → `nuniesmith/rb`
-- [ ] Auto-sync trained models from `rb` repo to engine (rsync/scp post-train hook)
+- [x] **Auto-sync trained models post-train** — `trainer_server.py` now regenerates `feature_contract.json` v6 into `models/` dir at Step 5 of promotion pipeline (after champion `.pt` is written, before ONNX export); `sync_models.sh` already handles pulling `.pt` + `.onnx` + `feature_contract.json` from `rb` repo with Git LFS resolution + SHA256 verification; `--restart` flag triggers engine reload after sync
 
 ### Monitoring
-- [ ] Prometheus metrics: `images_generated`, `label_balance`, `render_time` (trainer)
-- [ ] Grafana panel: "Training Data Health" (win-rate per type/session)
+- [x] **Prometheus metrics: `trainer_images_generated`, `trainer_label_balance`, `trainer_render_time_seconds`** — Added 3 new trainer-specific metrics to `metrics.py` (Gauge for images/label counts, Histogram for render wall-time); `record_trainer_dataset_stats()` helper wired into `trainer_server.py` `_run_training_pipeline()` after dataset generation (best-effort, non-blocking); 7 new tests in `test_metrics_and_ratelimit.py`; all 3 appear in `test_output_contains_all_metric_families`
+- [ ] **Grafana panel: "Training Data Health"** — add dashboard JSON with panels for `trainer_label_balance` gauge (good vs bad ratio per type), `trainer_images_generated` total, `trainer_render_time_seconds` histogram; wire to existing Prometheus scrape target
 
 ---
 ## Active — `rb` repo (`~/github/rb`)

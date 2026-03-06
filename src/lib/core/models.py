@@ -1856,6 +1856,7 @@ def get_orb_events(
     symbol: str | None = None,
     breakout_only: bool = False,
     since: str | None = None,
+    breakout_type: str | None = None,
 ) -> list[dict]:
     """Query ORB events from the database.
 
@@ -1864,6 +1865,8 @@ def get_orb_events(
         symbol: Filter by symbol.
         breakout_only: If True, only return events where breakout was detected.
         since: ISO timestamp — only return events after this time.
+        breakout_type: Filter by breakout type string (e.g. "ORB", "PDR", "IB",
+            "CONS", "WEEKLY", etc.).  Case-insensitive.  None = all types.
 
     Returns:
         List of event dicts, most recent first.
@@ -1880,6 +1883,9 @@ def get_orb_events(
     if since:
         conditions.append(f"timestamp >= {ph}")
         params.append(since)
+    if breakout_type and breakout_type.upper() != "ALL":
+        conditions.append(f"breakout_type = {ph}")
+        params.append(breakout_type.upper())
 
     where = ""
     if conditions:

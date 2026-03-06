@@ -2548,6 +2548,27 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 <div class="t-text-faint text-xs">Loading...</div>
             </div>
 
+            <!-- CNN Dataset Preview -->
+            <details>
+                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
+                         style="padding:4px 0">
+                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
+                    Dataset Preview
+                </summary>
+                <div class="t-panel border t-border rounded-lg p-3"
+                     style="border-left:3px solid rgba(139,92,246,0.5)">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">🖼️ Training Snapshots</h3>
+                    </div>
+                    <div id="cnn-dataset-preview-container"
+                         hx-get="/cnn/dataset/preview"
+                         hx-trigger="revealed"
+                         hx-swap="innerHTML">
+                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
+                    </div>
+                </div>
+            </details>
+
             <!-- Kraken Crypto health + prices -->
             <div id="kraken-panel"
                  class="t-panel border t-border rounded-lg p-3"
@@ -3172,6 +3193,58 @@ def get_orb_html():
     return HTMLResponse(content=_render_orb_panel(orb_data))
 
 
+# ---------------------------------------------------------------------------
+# All 13 breakout types — colour palette for pills, tabs, and row badges
+# ---------------------------------------------------------------------------
+_ALL_BTYPE_LABELS = [
+    "ALL",
+    "ORB",
+    "PDR",
+    "IB",
+    "CONS",
+    "WEEKLY",
+    "MONTHLY",
+    "ASIAN",
+    "BBSQUEEZE",
+    "VA",
+    "INSIDE",
+    "GAP",
+    "PIVOT",
+    "FIB",
+]
+
+_BTYPE_COLORS: dict[str, tuple[str, str]] = {
+    # (background-rgba, foreground-hex)
+    "ORB": ("rgba(96,165,250,0.15)", "#60a5fa"),  # blue
+    "PDR": ("rgba(192,132,252,0.15)", "#c084fc"),  # purple
+    "IB": ("rgba(52,211,153,0.15)", "#34d399"),  # emerald
+    "CONS": ("rgba(251,191,36,0.15)", "#fbbf24"),  # amber
+    "WEEKLY": ("rgba(20,184,166,0.15)", "#2dd4bf"),  # teal
+    "MONTHLY": ("rgba(251,146,60,0.15)", "#fb923c"),  # orange
+    "ASIAN": ("rgba(248,113,113,0.15)", "#f87171"),  # red
+    "BBSQUEEZE": ("rgba(232,121,249,0.15)", "#e879f9"),  # magenta
+    "VA": ("rgba(163,230,53,0.15)", "#a3e635"),  # lime
+    "INSIDE": ("rgba(132,204,22,0.15)", "#84cc16"),  # lime-darker
+    "GAP": ("rgba(249,115,22,0.15)", "#f97316"),  # coral
+    "PIVOT": ("rgba(56,189,248,0.15)", "#38bdf8"),  # steel-blue
+    "FIB": ("rgba(234,179,8,0.15)", "#eab308"),  # gold
+}
+
+# Session display map: key → (tab_key, tab_text)
+_SESSION_TABS: list[tuple[str, str]] = [
+    ("all", "All"),
+    ("cme", "🕕 CME"),
+    ("sydney", "🇦🇺 SYD"),
+    ("tokyo", "🇯🇵 TYO"),
+    ("shanghai", "🇨🇳 SHA"),
+    ("frankfurt", "🇩🇪 FRA"),
+    ("london", "🇬🇧 LON"),
+    ("london_ny", "🌐 LN-NY"),
+    ("us", "🇺🇸 US"),
+    ("cme_settle", "📊 SETTLE"),
+]
+
+
 @router.get("/api/orb/history/html", response_class=HTMLResponse)
 def get_orb_history_html(
     session: str | None = None,
@@ -3183,30 +3256,36 @@ def get_orb_history_html(
     """Return per-session signal history as an HTML table + summary.
 
     Query params:
-        session       — Filter by session key (e.g. "london", "us")
+        session       — Filter by session key (e.g. "london", "us", "tokyo")
         symbol        — Filter by symbol (e.g. "MGC=F")
         days          — Lookback window in calendar days (default 7)
         breakout_only — If true, only show events with a breakout detected
-        btype         — Filter by breakout type: ORB | PDR | IB | CONS
+        btype         — Filter by breakout type: ALL | ORB | PDR | IB | CONS |
+                        WEEKLY | MONTHLY | ASIAN | BBSQUEEZE | VA | INSIDE |
+                        GAP | PIVOT | FIB
     """
     from datetime import timedelta
 
     since = (datetime.now(tz=_EST) - timedelta(days=days)).isoformat()
 
+    # Normalise btype for DB query (None / "ALL" → no filter)
+    _btype_db = btype.upper() if btype and btype.upper() != "ALL" else None
+
     try:
         from lib.core.models import get_orb_events as _get_orb_events
 
         events = _get_orb_events(
-            limit=300,
+            limit=500,
             symbol=symbol,
             breakout_only=breakout_only,
             since=since,
+            breakout_type=_btype_db,
         )
     except Exception:
         events = []
 
     # Optionally filter by session (stored in the 'session' column or metadata)
-    if session:
+    if session and session.lower() != "all":
         filtered = []
         for ev in events:
             ev_session = ev.get("session", "")
@@ -3220,10 +3299,7 @@ def get_orb_history_html(
                 filtered.append(ev)
         events = filtered
 
-    # Filter by breakout type if specified
-    if btype and btype.upper() != "ALL":
-        btype_upper = btype.upper()
-        events = [ev for ev in events if (ev.get("breakout_type") or "ORB").upper() == btype_upper]
+    # (DB already filtered by btype — no additional client-side filter needed)
 
     # Summary stats
     total = len(events)
@@ -3242,47 +3318,51 @@ def get_orb_history_html(
         bt = ev.get("breakout_type") or "ORB"
         type_counts[bt] = type_counts.get(bt, 0) + 1
 
-    # Filter tabs
-    session_filter = session or "all"
-    tab_classes_all = (
-        "t-text font-bold border-b-2 border-blue-500" if session_filter == "all" else "t-text-muted hover:opacity-80"
-    )
-    tab_classes_lon = (
-        "t-text font-bold border-b-2 border-blue-500" if session_filter == "london" else "t-text-muted hover:opacity-80"
-    )
-    tab_classes_us = (
-        "t-text font-bold border-b-2 border-blue-500" if session_filter == "us" else "t-text-muted hover:opacity-80"
-    )
+    # ── Session filter tabs ────────────────────────────────────────────────
+    session_filter = (session or "all").lower()
 
-    # Breakout type tab classes
-    _bt_options = ["ALL", "ORB", "PDR", "IB", "CONS"]
+    def _sess_tab(key: str, label: str) -> str:
+        active = session_filter == key
+        bo_param = f"&breakout_only={'true' if breakout_only else 'false'}"
+        days_param = f"&days={days}"
+        btype_param = f"&btype={btype}" if btype and btype.upper() != "ALL" else ""
+        sess_param = "" if key == "all" else f"&session={key}"
+        href = f"/api/orb/history/html?{days_param}{bo_param}{sess_param}{btype_param}"
+        active_cls = "t-text font-bold border-b-2 border-blue-500" if active else "t-text-muted hover:opacity-80"
+        return (
+            f'<a hx-get="{href}" hx-target="#orb-history-container" hx-swap="innerHTML" '
+            f'class="cursor-pointer pb-0.5 {active_cls} whitespace-nowrap">{label}</a>'
+        )
+
+    session_tabs_html = " ".join(_sess_tab(k, lbl) for k, lbl in _SESSION_TABS)
+
+    # ── Breakout-type filter pills — all 13 types ─────────────────────────
     _bt_active = btype_filter.upper() if btype_filter else "ALL"
-    _bt_colors = {"ORB": "#60a5fa", "PDR": "#c084fc", "IB": "#34d399", "CONS": "#fbbf24"}
 
     def _bt_tab(label: str) -> str:
         active = label == _bt_active
-        color = _bt_colors.get(label, "")
-        base_style = "cursor:pointer;padding:1px 8px;border-radius:9999px;font-size:9px;white-space:nowrap"
+        _fg = _BTYPE_COLORS.get(label, ("rgba(161,161,170,0.15)", "#a1a1aa"))[1]
+        _bg_active = _BTYPE_COLORS.get(label, ("rgba(255,255,255,0.08)", "#ffffff"))[0]
+        base_style = "cursor:pointer;padding:1px 7px;border-radius:9999px;font-size:9px;white-space:nowrap"
         if active:
-            bg = (
-                f"background:{color}22;border:1px solid {color}55;color:{color}"
-                if color
-                else "background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:var(--text-primary)"
-            )
+            bg = f"background:{_bg_active};border:1px solid {_fg}55;color:{_fg}"
         else:
             bg = "background:transparent;border:1px solid transparent;color:var(--text-muted)"
-        # Build the filter param — combine with current session if set
-        sess_param = f"&session={session}" if session else ""
+        # Build href — preserve current session + breakout_only + days
+        sess_param = f"&session={session}" if session and session.lower() != "all" else ""
         bo_param = f"&breakout_only={'true' if breakout_only else 'false'}"
         days_param = f"&days={days}"
         type_param = "" if label == "ALL" else f"&btype={label}"
         href = f"/api/orb/history/html?{days_param}{bo_param}{sess_param}{type_param}"
+        # Show count badge when data is present
+        cnt = type_counts.get(label, 0)
+        cnt_badge = f' <span style="opacity:.6">({cnt})</span>' if cnt and label != "ALL" else ""
         return (
             f'<a hx-get="{href}" hx-target="#orb-history-container" hx-swap="innerHTML" '
-            f'style="{base_style};{bg}">{label}</a>'
+            f'style="{base_style};{bg}">{label}{cnt_badge}</a>'
         )
 
-    bt_tabs_html = " ".join(_bt_tab(b) for b in _bt_options)
+    bt_tabs_html = " ".join(_bt_tab(b) for b in _ALL_BTYPE_LABELS)
 
     # Checkbox state
     bo_checked = "checked" if breakout_only else ""
@@ -3306,7 +3386,7 @@ def get_orb_history_html(
         or_range = ev.get("or_range", 0)
         atr = ev.get("atr_value", 0)
         ev_session = ev.get("session", "")
-        ev_btype = ev.get("breakout_type") or "ORB"
+        ev_btype = (ev.get("breakout_type") or "ORB").upper()
         mtf_score_val = ev.get("mtf_score")
         macd_slope_val = ev.get("macd_slope")
         divergence_val = ev.get("divergence") or ""
@@ -3335,13 +3415,8 @@ def get_orb_history_html(
             row_bg = ""
             dir_html = '<span class="t-text-faint">—</span>'
 
-        # Breakout type badge
-        _bt_pill_color = {
-            "ORB": ("rgba(96,165,250,0.15)", "#60a5fa"),
-            "PDR": ("rgba(192,132,252,0.15)", "#c084fc"),
-            "IB": ("rgba(52,211,153,0.15)", "#34d399"),
-            "CONS": ("rgba(251,191,36,0.15)", "#fbbf24"),
-        }.get(ev_btype, ("rgba(161,161,170,0.15)", "#a1a1aa"))
+        # Breakout type badge — full 13-type colour map
+        _bt_pill_color = _BTYPE_COLORS.get(ev_btype, ("rgba(161,161,170,0.15)", "#a1a1aa"))
         btype_html = (
             f'<span style="font-size:8px;padding:0 4px;border-radius:3px;'
             f'background:{_bt_pill_color[0]};color:{_bt_pill_color[1]};white-space:nowrap">'
@@ -3391,11 +3466,28 @@ def get_orb_history_html(
         else:
             filt_html = '<span class="t-text-faint">—</span>'
 
-        # Session badge
-        if "london" in sk.lower():
+        # Session badge — all 9 sessions
+        _sk_lower = sk.lower()
+        if "london_ny" in _sk_lower or "ln_ny" in _sk_lower:
+            sess_badge = '<span class="text-indigo-400 text-[10px]">🌐 LN-NY</span>'
+        elif "london" in _sk_lower:
             sess_badge = '<span class="text-blue-400 text-[10px]">🇬🇧 LON</span>'
-        elif "us" in sk.lower():
+        elif "frankfurt" in _sk_lower:
+            sess_badge = '<span class="text-yellow-400 text-[10px]">🇩🇪 FRA</span>'
+        elif "tokyo" in _sk_lower:
+            sess_badge = '<span class="text-red-300 text-[10px]">🇯🇵 TYO</span>'
+        elif "shanghai" in _sk_lower:
+            sess_badge = '<span class="text-red-400 text-[10px]">🇨🇳 SHA</span>'
+        elif "sydney" in _sk_lower:
+            sess_badge = '<span class="text-cyan-400 text-[10px]">🇦🇺 SYD</span>'
+        elif "cme_settle" in _sk_lower or "settle" in _sk_lower:
+            sess_badge = '<span class="text-orange-300 text-[10px]">📊 SET</span>'
+        elif "cme" in _sk_lower:
+            sess_badge = '<span class="text-purple-400 text-[10px]">🕕 CME</span>'
+        elif "us" in _sk_lower:
             sess_badge = '<span class="text-emerald-400 text-[10px]">🇺🇸 US</span>'
+        elif "crypto" in _sk_lower:
+            sess_badge = '<span class="text-orange-400 text-[10px]">₿ CRY</span>'
         else:
             sess_badge = f'<span class="t-text-faint text-[10px]">{sk[:6]}</span>'
 
@@ -3422,18 +3514,13 @@ def get_orb_history_html(
             </td>
         </tr>"""
 
-    # Per-type summary pills for the stats bar
+    # Per-type summary pills for the stats bar — all 13 types
     type_pills_html = ""
-    for bt_key in ["ORB", "PDR", "IB", "CONS"]:
+    for bt_key in _ALL_BTYPE_LABELS[1:]:  # skip "ALL"
         count = type_counts.get(bt_key, 0)
         if count == 0:
             continue
-        pill_bg, pill_fg = {
-            "ORB": ("rgba(96,165,250,0.12)", "#60a5fa"),
-            "PDR": ("rgba(192,132,252,0.12)", "#c084fc"),
-            "IB": ("rgba(52,211,153,0.12)", "#34d399"),
-            "CONS": ("rgba(251,191,36,0.12)", "#fbbf24"),
-        }.get(bt_key, ("rgba(161,161,170,0.12)", "#a1a1aa"))
+        pill_bg, pill_fg = _BTYPE_COLORS.get(bt_key, ("rgba(161,161,170,0.12)", "#a1a1aa"))
         type_pills_html += (
             f'<span style="font-size:9px;padding:1px 6px;border-radius:9999px;'
             f'background:{pill_bg};color:{pill_fg};white-space:nowrap">'
@@ -3471,28 +3558,22 @@ def get_orb_history_html(
             </div>
         </div>
 
-        <!-- Session filter tabs -->
-        <div class="flex items-center gap-3 mb-1.5 text-[11px] border-b t-border-subtle pb-1.5">
-            <a hx-get="/api/orb/history/html?days={days}&breakout_only={"true" if breakout_only else "false"}"
-               hx-target="#orb-history-container" hx-swap="innerHTML"
-               class="cursor-pointer pb-0.5 {tab_classes_all}">All</a>
-            <a hx-get="/api/orb/history/html?session=london&days={days}&breakout_only={"true" if breakout_only else "false"}"
-               hx-target="#orb-history-container" hx-swap="innerHTML"
-               class="cursor-pointer pb-0.5 {tab_classes_lon}">🇬🇧 London</a>
-            <a hx-get="/api/orb/history/html?session=us&days={days}&breakout_only={"true" if breakout_only else "false"}"
-               hx-target="#orb-history-container" hx-swap="innerHTML"
-               class="cursor-pointer pb-0.5 {tab_classes_us}">🇺🇸 US</a>
-            <label class="ml-auto flex items-center gap-1 cursor-pointer t-text-muted">
-                <input type="checkbox" {bo_checked}
-                       hx-get="/api/orb/history/html?{"session=" + session + "&" if session else ""}days={days}&breakout_only={{this.checked}}"
-                       hx-target="#orb-history-container" hx-swap="innerHTML"
-                       hx-trigger="change"
-                       class="rounded">
-                <span class="text-[10px]">Breakouts only</span>
-            </label>
+        <!-- Session filter tabs — all 9 Globex sessions -->
+        <div class="overflow-x-auto mb-1.5">
+            <div class="flex items-center gap-2 text-[10px] border-b t-border-subtle pb-1.5 min-w-max">
+                {session_tabs_html}
+                <label class="ml-auto flex items-center gap-1 cursor-pointer t-text-muted pl-2">
+                    <input type="checkbox" {bo_checked}
+                           hx-get="/api/orb/history/html?{"session=" + session + "&" if session and session.lower() != "all" else ""}days={days}&breakout_only={{this.checked}}"
+                           hx-target="#orb-history-container" hx-swap="innerHTML"
+                           hx-trigger="change"
+                           class="rounded">
+                    <span class="text-[10px]">BO only</span>
+                </label>
+            </div>
         </div>
 
-        <!-- Breakout-type filter pills -->
+        <!-- Breakout-type filter pills — all 13 types -->
         <div class="flex items-center gap-1 mb-2 flex-wrap">
             {bt_tabs_html}
         </div>

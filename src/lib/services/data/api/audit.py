@@ -180,6 +180,14 @@ def get_orb_events(
     symbol: str | None = Query(None, description="Filter by symbol"),
     breakout_only: bool = Query(False, description="Only return events where breakout was detected"),
     since: str | None = Query(None, description="ISO timestamp — only return events after this time"),
+    breakout_type: str | None = Query(
+        None,
+        description=(
+            "Filter by breakout type: ORB | PDR | IB | CONS | WEEKLY | MONTHLY | "
+            "ASIAN | BBSQUEEZE | VA | INSIDE | GAP | PIVOT | FIB.  "
+            "Case-insensitive.  Omit or pass 'ALL' for all types."
+        ),
+    ),
 ):
     """Query persisted ORB events from the database.
 
@@ -196,6 +204,7 @@ def get_orb_events(
             symbol=symbol,
             breakout_only=breakout_only,
             since=since,
+            breakout_type=breakout_type,
         )
 
         # Parse metadata_json and convert breakout_detected to bool
@@ -217,6 +226,7 @@ def get_orb_events(
                 "symbol": symbol,
                 "breakout_only": breakout_only,
                 "since": since,
+                "breakout_type": breakout_type,
             },
             "timestamp": datetime.now(tz=_EST).isoformat(),
         }
