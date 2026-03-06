@@ -1643,7 +1643,7 @@ async def export_onnx() -> JSONResponse:
         )
     except Exception as exc:
         logger.error("ONNX export failed", error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

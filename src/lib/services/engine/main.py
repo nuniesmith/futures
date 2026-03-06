@@ -1252,10 +1252,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                         pass
 
                                     # [10] bar_of_day — minutes since Globex open (18:00 ET) / 1380
-                                    if _now_hour >= 18:
-                                        _bar_of_day_min = (_now_hour - 18) * 60
-                                    else:
-                                        _bar_of_day_min = (_now_hour + 6) * 60
+                                    _bar_of_day_min = (_now_hour - 18) * 60 if _now_hour >= 18 else (_now_hour + 6) * 60
                                     _bar_of_day = max(0.0, min(1.0, _bar_of_day_min / 1380.0))
 
                                     # [11] day_of_week — Mon=0..Fri=4 / 4

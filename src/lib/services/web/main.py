@@ -38,7 +38,7 @@ Docker:
 import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from urllib.parse import urlencode
 
 import httpx
@@ -169,10 +169,8 @@ async def lifespan(app: FastAPI):
     # Pre-warm the HTTP clients
     _get_client()
     # Trainer client is pre-warmed best-effort — trainer may not be running
-    try:
+    with suppress(Exception):
         _get_trainer_client()
-    except Exception:
-        pass
 
     yield
 

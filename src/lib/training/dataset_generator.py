@@ -1573,7 +1573,7 @@ def generate_dataset_for_symbol(
     return rows, stats
 
 
-def _build_row(result: "ORBSimResult", image_path: str) -> dict[str, Any]:
+def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     """Build a single CSV row from an ORBSimResult.
 
     The row includes all columns needed by BreakoutDataset.__getitem__ to
@@ -1601,7 +1601,6 @@ def _build_row(result: "ORBSimResult", image_path: str) -> dict[str, Any]:
       [17] tp3_atr_mult_norm      ← tp3_atr_mult / 5.0  [0, 1]
     """
     import math
-    from datetime import timezone as _tz
 
     # ── [2] atr_pct — ATR as fraction of entry price ──────────────────────
     atr_pct = 0.0
@@ -1661,10 +1660,7 @@ def _build_row(result: "ORBSimResult", image_path: str) -> dict[str, Any]:
                 bt = bt.astimezone(_ZI("America/New_York")).replace(tzinfo=None)
             h, m = bt.hour, bt.minute
             # Minutes since Globex open at 18:00 ET
-            if h >= 18:
-                bar_of_day_minutes = (h - 18) * 60 + m
-            else:
-                bar_of_day_minutes = (h + 6) * 60 + m  # +6 = 24-18
+            bar_of_day_minutes = (h - 18) * 60 + m if h >= 18 else (h + 6) * 60 + m  # +6 = 24-18
     except Exception:
         bar_of_day_minutes = 0
 
@@ -1679,10 +1675,7 @@ def _build_row(result: "ORBSimResult", image_path: str) -> dict[str, Any]:
                 bt = _dt.fromisoformat(bt)
             # weekday(): Mon=0 .. Sun=6; clamp to trading days Mon-Fri
             dow = bt.weekday()  # 0=Mon, 4=Fri, 5/6=weekend
-            if 0 <= dow <= 4:
-                day_of_week_norm = dow / 4.0
-            else:
-                day_of_week_norm = 0.5  # fallback for weekend bars (rare)
+            day_of_week_norm = dow / 4.0 if 0 <= dow <= 4 else 0.5  # fallback for weekend bars (rare)
     except Exception:
         day_of_week_norm = 0.5
 
