@@ -349,9 +349,25 @@ jobs:
                       ENVEOF
                         chmod 600 .env
                         echo "✅ Created .env file"
-                      else
-                        echo "✅ Using existing .env file"
                       fi
+
+                      # Generate database passwords once — never overwrite existing values
+                      # so that a redeployment doesn't break a live database
+                      generate_env_secret() {
+                        local key="$1"
+                        if ! grep -q "^${key}=" .env 2>/dev/null; then
+                          local val
+                          val="$(openssl rand -base64 32 | tr -d '/+=' | head -c 40)"
+                          echo "${key}=${val}" >> .env
+                          echo "🔑 Generated ${key}"
+                        else
+                          echo "🔑 ${key} already set — skipping"
+                        fi
+                      }
+                      generate_env_secret "POSTGRES_PASSWORD"
+                      generate_env_secret "REDIS_PASSWORD"
+                      chmod 600 .env
+                      echo "✅ .env ready"
 
                       # Upsert API keys — always overwrite so rotated secrets stay current
                       echo "🔑 Injecting API keys into .env..."
@@ -367,6 +383,7 @@ jobs:
                       upsert_env "MASSIVE_API_KEY"     "${{ secrets.MASSIVE_API_KEY }}"
                       upsert_env "KRAKEN_API_KEY"      "${{ secrets.KRAKEN_API_KEY }}"
                       upsert_env "KRAKEN_API_SECRET"   "${{ secrets.KRAKEN_API_SECRET }}"
+
                       chmod 600 .env
                       echo "✅ API keys injected"
 

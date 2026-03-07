@@ -139,6 +139,9 @@ from lib.services.data.api.rate_limit import (  # noqa: E402
 )
 from lib.services.data.api.risk import router as risk_router  # noqa: E402
 from lib.services.data.api.sar import router as sar_router  # noqa: E402
+from lib.services.data.api.settings import (  # noqa: E402
+    router as settings_router,
+)
 from lib.services.data.api.sse import router as sse_router  # noqa: E402
 from lib.services.data.api.trades import (  # noqa: E402
     router as trades_router,
@@ -555,6 +558,10 @@ app.include_router(sar_router, prefix="/sar", tags=["SAR Sync"])
 #          /trainer/config, /trainer/service_status
 # NOTE: trainer_router is mounted WITHOUT a prefix — routes are defined with /trainer/ paths.
 app.include_router(trainer_router, tags=["Trainer"])
+
+# Settings: /settings (HTML page)
+# NOTE: settings_router is mounted WITHOUT a prefix — route is defined with /settings path.
+app.include_router(settings_router, tags=["Settings"])
 
 
 # ---------------------------------------------------------------------------

@@ -634,6 +634,22 @@ async def proxy_trainer(request: Request, path: str):
 
 
 # ---------------------------------------------------------------------------
+# Settings proxy — forwards /settings to the DATA service
+#
+# The data service hosts the full settings page at GET /settings.
+#
+# Route map (web → data service):
+#   GET  /settings  → data service GET /settings  (HTML page)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    """Serve the settings page from the data service."""
+    return await _proxy_request(request, "/settings")
+
+
+# ---------------------------------------------------------------------------
 # Generic proxy helper
 # ---------------------------------------------------------------------------
 

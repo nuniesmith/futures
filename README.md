@@ -3,14 +3,6 @@
 > Live dashboard, market stats & web UI for futures trading — real-time range breakout detection,
 > session-aware scheduling, and a full HTMX dashboard powered by FastAPI.
 
-This repo is the **web UI and live engine** layer of a three-repo system:
-
-| Repo | Purpose |
-|---|---|
-| **[futures](https://github.com/nuniesmith/futures)** (this) | Live dashboard, web UI, market stats, engine, shared `lib` |
-| **[rb](https://github.com/nuniesmith/rb)** | Service-only trainer (Docker Compose pulls `nuniesmith/futures:trainer`), hosts trained models (.pt, .onnx) |
-| **[ninjatrader](https://github.com/nuniesmith/ninjatrader)** | NinjaTrader 8 C# strategies, indicators, Bridge — pulls best ONNX from `rb` repo |
-
 ---
 
 ## Table of Contents
@@ -19,7 +11,8 @@ This repo is the **web UI and live engine** layer of a three-repo system:
 - [Quick Start](#quick-start)
 - [Docker Deployment](#docker-deployment)
 - [Local Development](#local-development)
-- [Model Sync](#model-sync)
+- [NinjaTrader 8 Deploy](#ninjatrader-8-deploy)
+- [CNN Model Training](#cnn-model-training)
 - [Project Structure](#project-structure)
 - [Configuration](#configuration)
 - [Testing](#testing)
@@ -31,6 +24,12 @@ This repo is the **web UI and live engine** layer of a three-repo system:
 
 ## Architecture
 
+Everything lives in this single repo. There is no external training repo — models are trained
+by the built-in trainer service and stored in `models/`. The NinjaTrader C# source lives in
+`src/ninja/`. A companion [ninjatrader](https://github.com/nuniesmith/ninjatrader) repo exists
+only as a convenience for Windows traders: it holds the `.ps1` / `.bat` deploy scripts that
+pull C# files and models from **this** repo and install them into NT8.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        Futures Trading Co-Pilot                         │
@@ -39,8 +38,8 @@ This repo is the **web UI and live engine** layer of a three-repo system:
 │  │   Postgres   │  │    Redis     │  │ Data Service │  │   Engine   │  │
 │  │  (journal,   │  │  (hot cache, │  │  (FastAPI +  │  │ (scheduler,│  │
 │  │   history,   │  │   live bars, │  │   HTMX dash, │  │  analysis, │  │
-│  │   risk)      │  │   focus,     │  │   REST API,  │  │  ORB, risk │  │
-│  │              │  │   positions) │  │   SSE)       │  │  scoring)  │  │
+│  │   risk)      │  │   positions) │  │   REST API,  │  │  ORB, risk │  │
+│  │              │  │              │  │   SSE)       │  │  scoring)  │  │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └─────┬──────┘  │
 │         └─────────────────┴─────────────────┴────────────────┘         │
 │                                    │                                    │
@@ -50,18 +49,22 @@ This repo is the **web UI and live engine** layer of a three-repo system:
 │  │  Wave Analysis · Volatility Clustering · Regime Detection (HMM)   │  │
 │  │  ICT/SMC (FVGs, OBs, Sweeps) · Volume Profile · CVD              │  │
 │  │  Multi-TF Confluence · Signal Quality · Pre-Market Scoring        │  │
-│  │  Range Breakout Detection · 6 Deterministic Filters · CNN Inference │  │
+│  │  Range Breakout Detection · 6 Deterministic Filters · CNN Inference│  │
 │  │                                                                   │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │  Monitoring: Prometheus · Grafana          (optional profile)     │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────┐  ┌─────────────────────────────────────────┐  │
+│  │  Trainer Service     │  │  Monitoring (optional profile)          │  │
+│  │  GPU CNN training    │  │  Prometheus · Grafana                   │  │
+│  │  port 8200           │  │                                         │  │
+│  └──────────────────────┘  └─────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
-         │                                           │
-         ▼                                           ▼
-   rb repo (training service + models)     ninjatrader repo (execution)
-   CNN .pt/.onnx → models/                Bridge.cs → CME orders
+         │
+         ▼
+   ninjatrader repo
+   deploy_nt8.ps1 / .bat
+   pulls C# + ONNX from
+   this repo → NT8 install
 ```
 
 **Docker services:**
@@ -69,10 +72,10 @@ This repo is the **web UI and live engine** layer of a three-repo system:
 | Service | Role | Port |
 |---|---|---|
 | **Postgres** | Durable storage — trade journal, historical bars, risk events | 5433 |
-| **Redis** | Hot cache — live bars, Ruby metrics, positions, focus, SSE pub/sub | 6380 |
-| **Data Service** | FastAPI REST API + HTMX dashboard + SSE live stream | 8100 |
-| **Web** | HTMX dashboard frontend (reverse-proxies to data service) | 8180 |
-| **Engine** | Background worker — analysis, range breakout detection, scheduling | — |
+| **Redis** | Hot cache — live bars, analysis metrics, positions, focus, SSE pub/sub | 6380 |
+| **Engine** | FastAPI REST API + HTMX dashboard + SSE stream + background analysis worker | 8100 |
+| **Web** | HTMX dashboard frontend (reverse-proxies to engine) | 8180 |
+| **Trainer** | GPU CNN training server — triggered via the 🧠 Trainer UI *(training profile)* | 8200 |
 | **Prometheus** | Metrics collection *(monitoring profile)* | 9095 |
 | **Grafana** | Dashboards & visualization *(monitoring profile)* | 3010 |
 
@@ -85,37 +88,36 @@ This repo is the **web UI and live engine** layer of a three-repo system:
 - Python 3.11+
 - Docker & Docker Compose
 
-### 1. Clone & Setup
+### 1. Clone
 
 ```bash
 git clone https://github.com/nuniesmith/futures.git
 cd futures
 ```
 
-### 2. One-Command Docker Start
+### 2. One-Command Start
 
 ```bash
 ./run.sh
 ```
 
 This will:
-1. Create a Python virtualenv and install dependencies
+1. Create a Python virtualenv and install all dependencies
 2. Generate a `.env` file with secure random secrets
-3. Pull the CNN model from the [rb repo](https://github.com/nuniesmith/rb) (if not present)
-4. Run the test suite and linter
-5. Build and start all Docker services
+3. Run the test suite and linter
+4. Build and start all Docker services
 
 ### 3. Add Your API Keys
 
 Edit `.env` and set:
 
 ```
-MASSIVE_API_KEY=your_key_here    # https://massive.com/dashboard (real-time futures data)
-XAI_API_KEY=your_key_here        # https://console.x.ai (Grok AI analyst)
+MASSIVE_API_KEY=your_key_here    # https://massive.com/dashboard  (real-time CME futures data)
+XAI_API_KEY=your_key_here        # https://console.x.ai           (Grok AI analyst)
 ```
 
-Without `MASSIVE_API_KEY`, the system falls back to yfinance (delayed data).
-Without `XAI_API_KEY`, the Grok AI analyst tab is disabled (everything else works).
+Without `MASSIVE_API_KEY` the system falls back to yfinance (delayed data).
+Without `XAI_API_KEY` the Grok AI analyst tab is disabled — everything else works normally.
 
 ### 4. Verify
 
@@ -124,17 +126,26 @@ docker compose ps                 # all services should be "healthy"
 docker compose logs -f engine     # watch the engine schedule actions
 ```
 
-Open the dashboard at `http://localhost:8180`.
+Open the dashboard at **http://localhost:8180**.
 
 ---
 
 ## Docker Deployment
 
-### Standard (5 services)
+### Standard (engine + web + postgres + redis)
 
 ```bash
 docker compose up -d --build
 ```
+
+### With CNN Trainer (+ GPU training server)
+
+```bash
+docker compose --profile training up -d --build
+```
+
+Requires an NVIDIA GPU with `nvidia-container-toolkit` installed on the host.
+Once running, open the **🧠 Trainer** tab in the dashboard to configure and launch training runs.
 
 ### With Monitoring (+ Prometheus & Grafana)
 
@@ -142,14 +153,22 @@ docker compose up -d --build
 docker compose --profile monitoring up -d --build
 ```
 
-### Useful Docker Commands
+### Combine Profiles
 
 ```bash
-docker compose logs -f engine           # follow engine logs
-docker compose logs -f data             # follow API logs
+docker compose --profile training --profile monitoring up -d --build
+```
+
+### Useful Commands
+
+```bash
+docker compose logs -f engine           # follow engine + API logs
+docker compose logs -f web              # follow web frontend logs
+docker compose logs -f trainer          # follow trainer logs
 docker compose exec engine bash         # shell into engine container
-docker compose down                     # stop everything
-docker compose down -v                  # stop + remove volumes (⚠️ deletes data)
+docker compose restart engine           # restart engine (picks up new model)
+docker compose down                     # stop all services
+docker compose down -v                  # stop + remove volumes (⚠️ deletes all data)
 ```
 
 ---
@@ -164,44 +183,119 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-### Run Locally
+### Run the Web Frontend Locally
 
 ```bash
-./run.sh --local      # starts web service (requires Redis + Postgres running)
+./run.sh --local
 ```
+
+This starts only the web service (port 8180) and expects the engine + Redis + Postgres
+to already be running (e.g. via Docker Compose).
 
 ### Run Tests
 
 ```bash
 pytest src/tests/ -x -q --tb=short     # full suite
-ruff check src/                        # linting
-./run.sh --test                        # tests + lint together
+ruff check src/                         # linting
+./run.sh --test                         # tests + lint together
 ```
 
 ---
 
-## Model Sync
+## NinjaTrader 8 Deploy
 
-The CNN model is trained via the [rb repo](https://github.com/nuniesmith/rb) (which
-pulls the `nuniesmith/futures:trainer` Docker image) and the resulting champion models
-are committed back to `rb`. This repo pulls those models for live inference.
-The model files live in `models/` and are downloaded from GitHub:
+The C# strategies, indicators, Bridge add-on, and OnnxRuntime DLLs all live in `src/ninja/`
+in this repo. The champion ONNX model is stored in `models/breakout_cnn_best.onnx`.
+
+### Deploy from this repo (Linux / Mac / WSL)
 
 ```bash
-# Download latest champion model from rb repo
+# Sync model files locally (pulls from this repo's models/ branch via Git LFS)
 bash scripts/sync_models.sh
 
-# Check if local models are current
-bash scripts/sync_models.sh --check
-
-# Download + restart engine to pick up new model
-bash scripts/sync_models.sh --restart
-
-# Download only the .pt checkpoint (skip ONNX)
-bash scripts/sync_models.sh --pt-only
+# The deploy scripts pull src/ninja/ CS files + models/breakout_cnn_best.onnx
+# directly from GitHub and install into NT8 — see scripts/deploy_nt8.ps1
 ```
 
-`run.sh` automatically pulls the model if `models/breakout_cnn_best.pt` is missing.
+### Deploy from Windows (recommended for NT8 users)
+
+The [ninjatrader](https://github.com/nuniesmith/ninjatrader) companion repo contains
+only Windows deploy scripts (`.ps1` / `.bat`) that pull everything they need from
+**this** repo at runtime. No Python or Docker required on the Windows machine.
+
+```powershell
+# Option A — double-click deploy_nt8.bat
+# Option B — PowerShell direct
+powershell -ExecutionPolicy Bypass -File deploy_nt8.ps1
+
+# Dry-run (shows what would be copied, no changes made)
+powershell -ExecutionPolicy Bypass -File deploy_nt8.ps1 -DryRun
+
+# Skip OnnxRuntime DLL copy (DLLs already installed)
+powershell -ExecutionPolicy Bypass -File deploy_nt8.ps1 -NoDlls
+
+# Deploy from a local clone of this repo (offline / no internet)
+powershell -ExecutionPolicy Bypass -File deploy_nt8.ps1 -LocalRepo C:\code\futures
+
+# Deploy + launch NinjaTrader immediately after
+powershell -ExecutionPolicy Bypass -File deploy_nt8.ps1 -Launch
+```
+
+The scripts install:
+
+| Source (this repo) | NT8 destination |
+|---|---|
+| `src/ninja/BreakoutStrategy.cs` | `Documents\NinjaTrader 8\bin\Custom\Strategies\` |
+| `src/ninja/RubyIndicator.cs` | `Documents\NinjaTrader 8\bin\Custom\Indicators\` |
+| `src/ninja/addons/Bridge.cs` | `Documents\NinjaTrader 8\bin\Custom\AddOns\` |
+| `src/ninja/addons/DataPreloader.cs` | `Documents\NinjaTrader 8\bin\Custom\AddOns\` |
+| `src/ninja/dll/*.dll` | `Documents\NinjaTrader 8\bin\Custom\` |
+| `models/breakout_cnn_best.onnx` | `Documents\NinjaTrader 8\bin\Custom\Models\` |
+
+> **Note:** Close NinjaTrader 8 before running the deploy script.
+> NT8 locks compiled DLLs while it is open.
+
+---
+
+## CNN Model Training
+
+Training runs entirely within this repo — no external training service is needed.
+
+### Via the Dashboard UI (recommended)
+
+1. Start the trainer service: `docker compose --profile training up -d trainer`
+2. Open the dashboard → **🧠 Trainer** tab
+3. Configure epochs, batch size, learning rate, symbols, validation gates
+4. Click **▶ Start Training** — live logs stream into the UI
+5. On successful promotion the champion model is written to `models/` automatically
+   and the engine hot-reloads it within one refresh cycle
+
+### Via CLI (one-shot)
+
+```bash
+docker compose --profile training run --rm trainer \
+    python -m lib.training.trainer_server
+```
+
+### Model Files
+
+| File | Description |
+|---|---|
+| `models/breakout_cnn_best.pt` | PyTorch checkpoint — used by the Python engine for live inference |
+| `models/breakout_cnn_best.onnx` | ONNX export — used by NinjaTrader 8 (`OnnxRuntime`) |
+| `models/breakout_cnn_best_meta.json` | Metadata: accuracy, precision, recall, training date |
+| `models/feature_contract.json` | Feature names + normalization constants for inference |
+
+### Syncing Models Locally
+
+```bash
+bash scripts/sync_models.sh              # download all model files from this repo's main branch
+bash scripts/sync_models.sh --check      # check whether local models are current
+bash scripts/sync_models.sh --pt-only    # download only the .pt checkpoint
+bash scripts/sync_models.sh --restart    # download + restart the engine container
+```
+
+`run.sh` automatically calls `sync_models.sh` if `models/breakout_cnn_best.pt` is missing.
 
 ---
 
@@ -211,65 +305,106 @@ bash scripts/sync_models.sh --pt-only
 futures/
 ├── src/
 │   ├── lib/
-│   │   ├── analysis/                 # Market analysis modules
-│   │   │   ├── breakout_cnn.py       #   CNN inference (model from rb repo)
-│   │   │   ├── confluence.py         #   Multi-timeframe confluence filter
-│   │   │   ├── cvd.py                #   Cumulative Volume Delta + divergences
-│   │   │   ├── ict.py                #   ICT/SMC: FVGs, order blocks, sweeps
-│   │   │   ├── orb_filters.py        #   6 deterministic ORB quality filters
-│   │   │   ├── regime.py             #   HMM market regime detection
-│   │   │   ├── scorer.py             #   Pre-market instrument scoring
-│   │   │   ├── signal_quality.py     #   Ruby signal quality score
-│   │   │   ├── volatility.py         #   K-Means adaptive vol clustering
-│   │   │   ├── volume_profile.py     #   POC, VAH/VAL, naked POCs
-│   │   │   └── wave_analysis.py      #   Wave dominance tracking
+│   │   ├── analysis/                   # Market analysis modules
+│   │   │   ├── breakout_cnn.py         #   CNN inference (ONNX + PyTorch)
+│   │   │   ├── confluence.py           #   Multi-timeframe confluence filter
+│   │   │   ├── cvd.py                  #   Cumulative Volume Delta + divergences
+│   │   │   ├── ict.py                  #   ICT/SMC: FVGs, order blocks, sweeps
+│   │   │   ├── orb_filters.py          #   6 deterministic ORB quality filters
+│   │   │   ├── regime.py               #   HMM market regime detection
+│   │   │   ├── scorer.py               #   Pre-market instrument scoring
+│   │   │   ├── signal_quality.py       #   Signal quality score
+│   │   │   ├── volatility.py           #   K-Means adaptive vol clustering
+│   │   │   ├── volume_profile.py       #   POC, VAH/VAL, naked POCs
+│   │   │   └── wave_analysis.py        #   Wave dominance tracking
 │   │   │
-│   │   ├── core/                     # Infrastructure
-│   │   │   ├── alerts.py             #   Alert dispatch (email, webhook)
-│   │   │   ├── cache.py              #   Redis cache + data source abstraction
-│   │   │   ├── logging_config.py     #   Structured logging (structlog)
-│   │   │   ├── models.py             #   Database models + Postgres/SQLite ORM
-│   │   │   └── redis_helpers.py      #   Redis utility functions
+│   │   ├── core/                       # Infrastructure
+│   │   │   ├── alerts.py               #   Alert dispatch (email, webhook)
+│   │   │   ├── cache.py                #   Redis cache + data source abstraction
+│   │   │   ├── logging_config.py       #   Structured logging (structlog)
+│   │   │   ├── models.py               #   Database models + Postgres ORM
+│   │   │   └── redis_helpers.py        #   Redis utility functions
 │   │   │
-│   │   ├── integrations/             # External services
-│   │   │   ├── grok_helper.py        #   xAI Grok AI analyst
-│   │   │   └── massive_client.py     #   Massive.com REST + WebSocket client
+│   │   ├── integrations/               # External services
+│   │   │   ├── grok_helper.py          #   xAI Grok AI analyst
+│   │   │   └── massive_client.py       #   Massive.com REST + WebSocket client
 │   │   │
-│   │   ├── trading/                  # Trading engine
-│   │   │   ├── engine.py             #   DashboardEngine: optimization, backtest
-│   │   │   ├── strategies.py         #   Backtesting strategies (Optuna-tunable)
-│   │   │   └── costs.py              #   CME slippage + commission model
+│   │   ├── trading/                    # Trading engine
+│   │   │   ├── engine.py               #   DashboardEngine: optimization, backtest
+│   │   │   ├── strategies.py           #   Backtesting strategies (Optuna-tunable)
+│   │   │   └── costs.py                #   CME slippage + commission model
 │   │   │
-│   │   └── services/                 # Deployable services
-│   │       ├── data/                 #   FastAPI data service + API routers
-│   │       ├── engine/               #   Background engine service
-│   │       └── web/                  #   HTMX dashboard frontend
+│   │   ├── training/                   # CNN training pipeline
+│   │   │   ├── trainer_server.py       #   FastAPI training server (port 8200)
+│   │   │   ├── train.py                #   Full training pipeline
+│   │   │   ├── dataset.py              #   Dataset generation from bars
+│   │   │   └── model.py                #   CNN model architecture
+│   │   │
+│   │   └── services/                   # Deployable services
+│   │       ├── data/                   #   FastAPI data service + API routers
+│   │       │   └── api/
+│   │       │       ├── dashboard.py    #     Main HTMX dashboard page
+│   │       │       ├── trainer.py      #     🧠 Trainer page + proxy to trainer:8200
+│   │       │       ├── settings.py     #     ⚙️ Settings page
+│   │       │       ├── actions.py      #     Engine mutation endpoints
+│   │       │       ├── analysis.py     #     Analysis + status endpoints
+│   │       │       ├── positions.py    #     NT8 Bridge position sync
+│   │       │       ├── risk.py         #     Risk engine API
+│   │       │       ├── journal.py      #     Trade journal CRUD + HTMX
+│   │       │       ├── sse.py          #     Server-sent events stream
+│   │       │       └── ...
+│   │       ├── engine/                 #   Background engine service
+│   │       └── web/                    #   HTMX dashboard frontend (reverse proxy)
 │   │
-│   └── tests/                        # Pytest test suite
+│   ├── ninja/                          # NinjaTrader 8 C# source
+│   │   ├── BreakoutStrategy.cs         #   ORB breakout execution strategy
+│   │   ├── RubyIndicator.cs            #   Ruby signal indicator
+│   │   ├── addons/
+│   │   │   ├── Bridge.cs               #   NT8 ↔ Co-Pilot Bridge (positions, signals)
+│   │   │   └── DataPreloader.cs        #   Historical bar pre-loader add-on
+│   │   └── dll/                        #   OnnxRuntime DLLs for NT8
+│   │       ├── Microsoft.ML.OnnxRuntime.dll
+│   │       ├── onnxruntime.dll
+│   │       └── ...
+│   │
+│   └── tests/                          # Pytest test suite
 │
 ├── scripts/
-│   ├── sync_models.sh                # Pull CNN model from rb repo
-│   ├── daily_report.py               # End-of-day breakout session summary
-│   ├── monitor_signals.py            # Live breakout signal terminal monitor
-│   └── session_signal_audit.py       # Per-session signal quality audit
+│   ├── sync_models.sh                  # Pull/check model files from this repo
+│   ├── deploy_nt8.ps1                  # Windows: deploy C# + ONNX → NT8
+│   ├── deploy_nt8.bat                  # Windows: launcher wrapper for deploy_nt8.ps1
+│   ├── daily_report.py                 # End-of-day breakout session summary
+│   ├── monitor_signals.py              # Live breakout signal terminal monitor
+│   ├── session_signal_audit.py         # Per-session signal quality audit
+│   ├── check_onnx_parity.py            # Verify PT and ONNX model outputs match
+│   ├── smoke_test_trainer.py           # Quick end-to-end trainer smoke test
+│   ├── patch_breakout_strategy.py      # Patch BreakoutStrategy.cs with latest params
+│   └── patch_datapreloader.py          # Patch DataPreloader.cs with symbol list
+│
+├── models/                             # CNN model files (git-tracked via LFS)
+│   ├── breakout_cnn_best.pt            #   Champion PyTorch checkpoint
+│   ├── breakout_cnn_best.onnx          #   Champion ONNX export (NT8 inference)
+│   ├── breakout_cnn_best_meta.json     #   Champion metadata (acc, prec, recall, date)
+│   └── feature_contract.json           #   Feature names + normalization constants
 │
 ├── config/
-│   ├── grafana/                      # Grafana provisioning + dashboards
-│   └── prometheus/                   # Prometheus scrape config
+│   ├── grafana/                        # Grafana provisioning + dashboards
+│   └── prometheus/                     # Prometheus scrape config
 │
 ├── docker/
-│   ├── data/Dockerfile               # Data service container
-│   ├── engine/Dockerfile             # Engine container
-│   ├── web/Dockerfile                # Web frontend container
-│   └── monitoring/                   # Prometheus + Grafana Dockerfiles
+│   ├── data/Dockerfile                 # Engine + data API container
+│   ├── engine/Dockerfile               # Background engine container
+│   ├── web/Dockerfile                  # Web frontend container
+│   ├── trainer/Dockerfile              # GPU trainer container
+│   └── monitoring/                     # Prometheus + Grafana Dockerfiles
 │
-├── models/                           # CNN model files (pulled from rb repo)
-│   └── .gitkeep
-│
-├── docker-compose.yml                # Full service stack
-├── pyproject.toml                    # Python project config (hatch + deps)
-├── run.sh                            # One-command build + deploy script
-└── todo.md                           # Project status & phase tracking
+├── dataset/                            # Generated training datasets (git-ignored)
+├── data/                               # Persistent app data (git-ignored)
+├── docs/                               # Design docs and audit reports
+├── docker-compose.yml                  # Full service stack
+├── pyproject.toml                      # Python project config (hatch + deps)
+├── run.sh                              # One-command build + deploy script
+└── todo.md                             # Project status & phase tracking
 ```
 
 ---
@@ -278,34 +413,52 @@ futures/
 
 ### Environment Variables
 
-#### Required
+#### Required (auto-generated by `run.sh`)
 
 | Variable | Description |
 |---|---|
-| `POSTGRES_PASSWORD` | PostgreSQL password (auto-generated by `run.sh`) |
-| `REDIS_PASSWORD` | Redis password (auto-generated by `run.sh`) |
+| `POSTGRES_PASSWORD` | PostgreSQL password |
+| `REDIS_PASSWORD` | Redis password |
 
 #### API Keys
 
 | Variable | Description | Fallback |
 |---|---|---|
-| `MASSIVE_API_KEY` | [Massive.com](https://massive.com) real-time futures data | yfinance (delayed) |
+| `MASSIVE_API_KEY` | [Massive.com](https://massive.com) real-time CME futures data | yfinance (delayed) |
 | `XAI_API_KEY` | [xAI](https://console.x.ai) Grok AI analyst | AI features disabled |
+| `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` | [Kraken](https://www.kraken.com) crypto spot data | Crypto panels hidden |
 
 #### Trading
 
 | Variable | Default | Description |
 |---|---|---|
-| `ACCOUNT_SIZE` | `150000` | Account size for risk calculations |
-| `ORB_FILTER_GATE` | `majority` | Filter mode: `all`, `majority`, or `none` |
-| `ORB_CNN_GATE` | `0` | `0` = CNN advisory, `1` = CNN hard gate |
+| `ACCOUNT_SIZE` | `150000` | Account size for risk calculations ($50K, $100K, or $150K) |
+| `ORB_FILTER_GATE` | `majority` | Filter strictness: `all`, `majority`, or `none` |
+| `ORB_CNN_GATE` | `0` | `0` = CNN advisory only, `1` = CNN hard gate (blocks trade signal) |
+| `NT_BRIDGE_HOST` | `100.113.72.63` | Tailscale IP of the NT8 machine running the Bridge add-on |
+| `NT_BRIDGE_PORT` | `5680` | Bridge TCP port |
 
-### Key Defaults
+#### Trainer
+
+| Variable | Default | Description |
+|---|---|---|
+| `CNN_RETRAIN_EPOCHS` | `25` | Default training epochs |
+| `CNN_RETRAIN_BATCH_SIZE` | `64` | Default batch size |
+| `CNN_RETRAIN_LR` | `0.0002` | Default learning rate |
+| `CNN_RETRAIN_PATIENCE` | `8` | Early stopping patience |
+| `CNN_RETRAIN_MIN_ACC` | `80.0` | Minimum validation accuracy to promote a model (%) |
+| `CNN_RETRAIN_MIN_PRECISION` | `75.0` | Minimum precision gate (%) |
+| `CNN_RETRAIN_MIN_RECALL` | `70.0` | Minimum recall gate (%) |
+| `CNN_RETRAIN_DAYS_BACK` | `90` | Days of history for dataset generation |
+| `CNN_RETRAIN_SYMBOLS` | *(22 CME futures + BTC/ETH/SOL)* | Comma-separated symbol list |
+| `TRAINER_API_KEY` | *(unset)* | Optional bearer token to protect the `/train` endpoint |
+
+### Key Runtime Defaults
 
 | Setting | Value | Location |
 |---|---|---|
 | CNN inference threshold | 0.82 | `breakout_cnn.py` |
-| Ruby recompute interval | 5 minutes | `scheduler.py` |
+| Engine refresh interval | 5 minutes | `scheduler.py` |
 | Grok update interval | 15 minutes | `scheduler.py` |
 | Risk check interval | 1 minute | `scheduler.py` |
 
@@ -331,6 +484,12 @@ pytest src/tests/ --cov=lib --cov-report=html
 
 # Linting
 ruff check src/
+
+# Verify ONNX and PyTorch model outputs match
+PYTHONPATH=src python scripts/check_onnx_parity.py
+
+# Quick trainer smoke test (requires trainer service running)
+PYTHONPATH=src python scripts/smoke_test_trainer.py
 ```
 
 ---
@@ -340,9 +499,10 @@ ruff check src/
 ### Model Sync
 
 ```bash
-bash scripts/sync_models.sh              # pull latest model from rb repo
+bash scripts/sync_models.sh              # pull latest model files
 bash scripts/sync_models.sh --check      # check if models are current
-bash scripts/sync_models.sh --restart    # pull + restart engine
+bash scripts/sync_models.sh --pt-only    # pull only the .pt checkpoint
+bash scripts/sync_models.sh --restart    # pull + restart engine container
 ```
 
 ### Daily Report
@@ -356,7 +516,7 @@ PYTHONPATH=src python scripts/daily_report.py --json       # JSON output
 ### Live Signal Monitor
 
 ```bash
-PYTHONPATH=src python scripts/monitor_signals.py              # watch signals
+PYTHONPATH=src python scripts/monitor_signals.py              # watch live signals
 PYTHONPATH=src python scripts/monitor_signals.py --interval 2 # 2s polling
 PYTHONPATH=src python scripts/monitor_signals.py --json       # JSON output
 ```
@@ -364,17 +524,29 @@ PYTHONPATH=src python scripts/monitor_signals.py --json       # JSON output
 ### Session Signal Audit
 
 ```bash
-PYTHONPATH=src python scripts/session_signal_audit.py                    # all sessions, 30 days
-PYTHONPATH=src python scripts/session_signal_audit.py --days 14          # last 14 days
+PYTHONPATH=src python scripts/session_signal_audit.py                      # all sessions, 30 days
+PYTHONPATH=src python scripts/session_signal_audit.py --days 14            # last 14 days
 PYTHONPATH=src python scripts/session_signal_audit.py --export-json out.json
+```
+
+### NT8 Source Patching
+
+```bash
+# Patch BreakoutStrategy.cs with latest model params from feature_contract.json
+PYTHONPATH=src python scripts/patch_breakout_strategy.py
+
+# Patch DataPreloader.cs with the current tracked symbol list
+PYTHONPATH=src python scripts/patch_datapreloader.py
 ```
 
 ---
 
 ## Related Repos
 
-- **[rb](https://github.com/nuniesmith/rb)** — Service-only training repo. Uses Docker Compose to pull the `nuniesmith/futures:trainer` image from Docker Hub. Hosts trained champion models (.pt for Python engine, .onnx for NinjaTrader). Models are pulled from here via `scripts/sync_models.sh`. NinjaTrader uses PowerShell to pull the best ONNX model from this repo.
-- **[ninjatrader](https://github.com/nuniesmith/ninjatrader)** — NinjaTrader 8 C# code: Ruby indicator, Bridge execution strategy, SignalBus, OrbCnnPredictor. The dashboard's NT8 Deploy panel pulls installer scripts from this repo. Pulls best `.onnx` model from the `rb` repo.
+- **[ninjatrader](https://github.com/nuniesmith/ninjatrader)** — Windows-only deploy scripts
+  (`deploy_nt8.ps1` / `deploy_nt8.bat`). They pull C# source from `src/ninja/` and the champion
+  ONNX model from `models/` in **this** repo, then install everything into the local NT8
+  installation. No Python, no Docker — just PowerShell and an internet connection.
 
 ---
 
@@ -383,11 +555,12 @@ PYTHONPATH=src python scripts/session_signal_audit.py --export-json out.json
 | Layer | Stack |
 |---|---|
 | **Language** | Python 3.11+ |
-| **Web** | FastAPI, HTMX, Jinja2, SSE |
-| **Data** | Massive.com (real-time CME), yfinance (fallback), pandas |
+| **Web** | FastAPI, HTMX, SSE |
+| **Data** | Massive.com (real-time CME), yfinance (fallback), Kraken (crypto), pandas |
 | **Storage** | PostgreSQL 16, Redis 7 |
-| **AI** | xAI Grok (morning briefing + live updates) |
-| **Analysis** | scikit-learn, HMM (hmmlearn), backtesting.py, Optuna |
+| **AI / ML** | PyTorch (CNN training), ONNX (inference), xAI Grok (AI analyst) |
+| **Analysis** | scikit-learn, hmmlearn (HMM regime), backtesting.py, Optuna |
+| **Execution** | NinjaTrader 8 (C# strategies + Bridge add-on) |
 | **Observability** | structlog, Prometheus, Grafana |
 | **Deployment** | Docker Compose |
 

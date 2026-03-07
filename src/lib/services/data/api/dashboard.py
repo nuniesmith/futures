@@ -2535,9 +2535,77 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 
         /* ── Link styling ──────────────────────────────────────── */
         a {{ color: inherit; }}
+
+        /* ── Top nav bar ───────────────────────────────────────── */
+        .co-nav {{
+            display: flex;
+            align-items: center;
+            gap: 0;
+            padding: 0 1rem;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border-subtle);
+            height: 42px;
+            position: sticky;
+            top: 0;
+            z-index: 200;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            margin-bottom: 0.75rem;
+        }}
+        .co-nav-brand {{
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: var(--text);
+            text-decoration: none;
+            margin-right: 1.25rem;
+            letter-spacing: -0.02em;
+            white-space: nowrap;
+        }}
+        .co-nav-tab {{
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 5px 12px;
+            border-radius: 6px;
+            text-decoration: none;
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            font-weight: 500;
+            transition: background .12s, color .12s;
+            white-space: nowrap;
+        }}
+        .co-nav-tab:hover {{
+            background: var(--bg-input);
+            color: var(--text);
+        }}
+        .co-nav-tab.active {{
+            background: var(--bg-input);
+            color: var(--text);
+            font-weight: 650;
+        }}
+        .co-nav-right {{
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
     </style>
 </head>
 <body class="mode-trading">
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TOP NAV BAR
+═══════════════════════════════════════════════════════════════════ -->
+<nav class="co-nav">
+    <a class="co-nav-brand" href="/">📈 Co-Pilot</a>
+    <a class="co-nav-tab active" href="/">📊 Dashboard</a>
+    <a class="co-nav-tab" href="/trainer">🧠 Trainer</a>
+    <a class="co-nav-tab" href="/settings">⚙️ Settings</a>
+    <div class="co-nav-right">
+        <span id="nav-sse-dot" style="font-size:10px;color:#52525b" title="SSE connection">●</span>
+    </div>
+</nav>
+
 <div id="sse-container">
 <div class="container">
 
@@ -3175,9 +3243,20 @@ function toggleTheme() {{
     function _setStatus(state) {{
         var dot = document.getElementById('sse-status-dot');
         var txt = document.getElementById('sse-status-text');
-        if (state==='connected')      {{ if(dot){{dot.className='connected';dot.title='live';}} if(txt){{txt.textContent='live';}} }}
-        else if(state==='connecting') {{ if(dot){{dot.className='connecting';}} if(txt){{txt.textContent='connecting';}} }}
-        else                          {{ if(dot){{dot.className='disconnected';}} if(txt){{txt.textContent='reconnecting';}} }}
+        var navDot = document.getElementById('nav-sse-dot');
+        if (state==='connected') {{
+            if(dot){{dot.className='connected';dot.title='live';}}
+            if(txt){{txt.textContent='live';}}
+            if(navDot){{navDot.style.color='#22c55e';navDot.title='SSE live';}}
+        }} else if(state==='connecting') {{
+            if(dot){{dot.className='connecting';}}
+            if(txt){{txt.textContent='connecting';}}
+            if(navDot){{navDot.style.color='#eab308';navDot.title='SSE connecting';}}
+        }} else {{
+            if(dot){{dot.className='disconnected';}}
+            if(txt){{txt.textContent='reconnecting';}}
+            if(navDot){{navDot.style.color='#ef4444';navDot.title='SSE disconnected';}}
+        }}
     }}
 
     function _connect() {{
