@@ -1,168 +1,158 @@
 {
-  "summary": "The 'nuniesmith/futures' backlog contains 20 open tasks spanning model validation, NT8 safety features, web UI enhancements, Kraken data integration for training, and future multi-asset/trade copier features. Tasks are grouped into 5 batches prioritized by risk (TPT safety first), impact (validation for deployment), and dependencies (UI before new pages, data unification before training expansions). This enables safe progression to TPT evaluation account launch.",
+  "summary": "The 'nuniesmith/futures' backlog centers on finalizing model validation, NT8 safety enhancements, web UI polish for trading/review modes, trainer/settings UI separation, and integrating Kraken data into training/cross-asset signals. 20 active items grouped into 5 batches ordered by risk reduction (validations/safety first), then usability (UI), integration (NT8/web), UI expansion, and data pipeline enhancements. Deferred items await funded account or are ongoing.",
   "total_items": 20,
   "batches": [
     {
       "batch_number": 1,
-      "title": "critical-validation-safety",
-      "rationale": "Highest risk/impact: Ensures model parity, NT8 compatibility, and TPT-mandated 4PM hard stop before live trading; blocks all downstream deployment.",
+      "title": "model-nt8-validation-safety",
+      "rationale": "Highest impact/risk: blocks live TPT trading. Validates model parity, NT8 deployment, and adds critical 4PM hard flatten to prevent account termination. Dependencies minimal (uses existing models/scripts).",
       "priority": "critical",
-      "estimated_effort": "2-3 days",
+      "estimated_effort": "1-2 days",
       "items": [
-        "**Validate ONNX \u2194 PyTorch parity** \u2014 run same 18-feature v6 tabular batch through `.pt` and `.onnx` inference; assert max absolute difference < 1e-4",
-        "**Verify `sync_models.sh`** pulls new `.pt` + `.onnx` + `feature_contract.json` from `nuniesmith/futures` and restarts engine container cleanly",
-        "**Test v6 ONNX auto-adapt** \u2014 deploy `BreakoutStrategy.cs` to NT8, compile, verify:",
-        "**Parity-test Phase 3 EMA9 trailing** \u2014 run Python engine + C# strategy side-by-side on same OHLCV data, compare Phase 3 trail stop levels and exit prices. Target: \u2264 1 tick divergence per bar.",
-        "**4:00 PM ET hard flatten** \u2014 add a time-based safety check in `OnBarUpdate()` (BIP0 path) that calls `FlattenAll(\"TPT_HARD_STOP_16:00\")` if current ET time \u2265 16:00 and any positions are open",
-        "**Bridge `/flatten` from web UI** \u2014 ensure the Flatten All button in the dashboard triggers Bridge `FlattenAll` which closes every position across all instruments immediately (already wired, needs live test)",
-        "**Manual trade from dashboard** \u2014 when the strategy is always running and I place a manual entry from the web UI via `/execute_signal`, it should coexist with automated entries. Verify:"
+        "Validate ONNX \u2194 PyTorch parity \u2014 run same 18-feature v6 tabular batch through .pt and .onnx inference; assert max absolute difference < 1e-4",
+        "Verify sync_models.sh pulls new .pt + .onnx + feature_contract.json from nuniesmith/futures and restarts engine container cleanly",
+        "Test v6 ONNX auto-adapt \u2014 deploy BreakoutStrategy.cs to NT8, compile, verify: Startup log shows CNN tabular dim: model expects 18, C# builds 18; Per-type TP3 mults loaded from feature_contract.json (log each type's mult at startup); Entry logs show [positions: N/5]; No OCO ID cannot be reused or signal name longer than 50 errors; Run for a full session and review output logs",
+        "Parity-test Phase 3 EMA9 trailing \u2014 run Python engine + C# strategy side-by-side on same OHLCV data, compare Phase 3 trail stop levels and exit prices. Target: \u2264 1 tick divergence per bar.",
+        "4:00 PM ET hard flatten \u2014 add a time-based safety check in OnBarUpdate() (BIP0 path) that calls FlattenAll(\"TPT_HARD_STOP_16:00\") if current ET time \u2265 16:00 and any positions are open"
       ],
       "implementation_steps": [
-        "Run ONNX/PyTorch parity script on sample batches; fix any discrepancies.",
-        "Execute sync_models.sh on Pi; verify model files update and engine restarts without errors.",
-        "Deploy NT8 via deploy_nt8.bat; check compile logs for tabular dim=18, TP3 mults, position counts.",
-        "Run phase3 parity tests; extend to full session simulation if needed.",
-        "Implement 4PM flatten logic in BreakoutStrategy.cs with TPT guards and logging; redeploy/test.",
-        "Test flatten button end-to-end: UI \u2192 API \u2192 Bridge \u2192 NT8 flatten.",
-        "Simulate manual entry during auto trading; verify position tracking and limits."
+        "Run parity script on models/breakout_cnn_best.pt and .onnx; fix if diffs >1e-4.",
+        "Execute sync_models.sh on Pi; verify files pulled/restarted via docker logs.",
+        "Run deploy_nt8.bat; load strategy in NT8; check startup logs, run sim session.",
+        "Extend test_phase3_ema9_parity.py for live data parity if needed; run side-by-side.",
+        "Implement TPT hard flatten in BreakoutStrategy.cs OnBarUpdate; add RiskBlocked logic; deploy/test."
       ],
       "acceptance_criteria": [
-        "ONNX/PyTorch max diff <1e-4 on 100+ samples.",
-        "sync_models.sh pulls/verifies/restarts successfully.",
-        "NT8 logs confirm v6 model load, no errors, positions track correctly.",
-        "Phase3 exits match within 1 tick across 100+ bars.",
-        "4PM flatten triggers automatically; risk blocked until 6PM.",
-        "Flatten button closes all positions instantly.",
-        "Manual + auto positions coexist up to max=5."
+        "ONNX/PyTorch max diff <1e-4 on validation batch.",
+        "sync_models.sh pulls files, restarts engine without errors.",
+        "NT8 logs confirm 18 features, TP3 mults, no errors in full session.",
+        "Phase 3 parity \u22641 tick divergence.",
+        "NT8 flattens all at 16:00 ET in TPT mode, blocks risk until 18:00."
       ],
       "dependencies": []
     },
     {
       "batch_number": 2,
-      "title": "web-ui-polish",
-      "rationale": "Post-validation UX fixes for active trading; low risk, high usability impact during sessions.",
+      "title": "web-ui-trading-review-mode",
+      "rationale": "High impact for trader UX during live sessions; low risk, builds on existing dashboard. Follows validation to enable safe trading UI.",
       "priority": "high",
-      "estimated_effort": "1-2 days",
+      "estimated_effort": "1 day",
       "items": [
-        "**Add UI mode toggle** \u2014 \"Trading\" vs \"Review\" mode switch in the dashboard header",
-        "**Remove \"Next Session\" panel** \u2014 it's static schedule info that doesn't change; remove from `_render_full_dashboard()` in `dashboard.py` (the session strip at the top already shows open/closed sessions dynamically)",
-        "**Grok AI \u2192 manual pull only** \u2014 change Grok panel from auto-refresh (`hx-trigger=\"every 60s\"`) to a manual button (\"Ask Grok\") that fetches on click",
-        "**Fix forex futures spread on asset cards** \u2014 `6E` and other forex pairs show identical entry/stop/TP values when ATR is very small relative to price",
-        "**Estimated dollar value on asset cards** \u2014 add `$risk` and `$reward` estimates next to stop/TP levels"
+        "Add UI mode toggle \u2014 \"Trading\" vs \"Review\" mode switch in the dashboard header",
+        "Remove \"Next Session\" panel \u2014 it's static schedule info that doesn't change; remove from _render_full_dashboard() in dashboard.py",
+        "Grok AI \u2192 manual pull only \u2014 change Grok panel from auto-refresh (hx-trigger=\"every 60s\") to a manual button (\"Ask Grok\") that fetches on click",
+        "Fix forex futures spread on asset cards \u2014 6E and other forex pairs show identical entry/stop/TP values when ATR is very small relative to price",
+        "Estimated dollar value on asset cards \u2014 add $risk and $reward estimates next to stop/TP levels"
       ],
       "implementation_steps": [
-        "Add toggle button; implement localStorage persistence and CSS mode classes.",
-        "Remove Next Session code from dashboard.py; confirm session strip suffices.",
-        "Update Grok panel HTMX to click trigger; test manual refresh.",
-        "Enhance _compute_entry_zone() with tick-size aware rounding (e.g. 5 decimals for 6E).",
-        "Extend compute_asset_focus() to calculate/display $risk/$target1 in levels grid."
+        "Add toggle button/JS localStorage in dashboard.html.py; CSS classes for .mode-trading/.mode-review.",
+        "Remove next-session HTML from render_full_dashboard().",
+        "Update Grok panel hx-trigger to 'click' on button.",
+        "In compute_asset_focus(), use tick_size-aware rounding (e.g. 5 decimals for 6E); update template.",
+        "Compute $risk/$target1 in compute_asset_focus(); add to Levels grid template."
       ],
       "acceptance_criteria": [
-        "Toggle switches panels correctly; persists across refreshes; auto-detects mode by time.",
-        "No Next Session panel; session status clear.",
-        "Grok fetches only on click; no auto-polling.",
-        "Forex cards show distinct entry/stop/TP with proper decimals.",
-        "Asset cards display e.g. 'TP1: 1.0850 (~$45)' accurately."
+        "Toggle switches panels correctly; persists in localStorage; auto-detects mode by time.",
+        "No Next Session panel visible.",
+        "Grok fetches only on button click.",
+        "6E asset cards show distinct entry/stop/TP with 5 decimals.",
+        "Asset cards display e.g. 'TP1: 1.0850 (~$45)'."
       ],
       "dependencies": [
-        "critical-validation-safety"
+        "batch 1"
       ]
     },
     {
       "batch_number": 3,
-      "title": "web-ui-new-pages",
-      "rationale": "Builds on UI polish; separates concerns for trainer/settings; enables better ops.",
+      "title": "nt8-bridge-trading-tests",
+      "rationale": "Ensures NT8/web integration for live control; medium risk post-validation/UI. Tests coexistence of manual/auto trades.",
       "priority": "high",
-      "estimated_effort": "2 days",
+      "estimated_effort": "0.5-1 day",
       "items": [
-        "**Extract trainer UI into its own page** \u2014 currently the trainer server has its own HTML UI at `/trainer/` that's proxied through web service. Instead:",
-        "**Settings page** \u2014 new `/settings` page in the web dashboard"
+        "Bridge /flatten from web UI \u2014 ensure the Flatten All button in the dashboard triggers Bridge FlattenAll which closes every position across all instruments immediately (already wired, needs live test)",
+        "Manual trade from dashboard \u2014 when the strategy is always running and I place a manual entry from the web UI via /execute_signal, it should coexist with automated entries. Verify: Manual entry gets its own PositionPhase tracking; Automated entries continue alongside manual positions; Both respect MaxConcurrentPositions = 5"
       ],
       "implementation_steps": [
-        "Create /train route in web; proxy trainer APIs; remove trainer_ui endpoint; add controls for start/cancel/export.",
-        "Build /settings with forms for URLs/toggles/env; integrate Redis/Postgres for persistence; add Tailscale/Kraken status checks."
+        "Deploy NT8+Bridge; trigger Flatten from dashboard; verify all positions closed.",
+        "Run NT8 live; manual entry via dashboard during auto signals; check position counts/phases."
       ],
       "acceptance_criteria": [
-        "Trainer fully accessible/managed via /train; no direct /trainer/ HTML.",
-        "Settings page saves/loads configs; shows service statuses accurately."
+        "Dashboard Flatten closes all NT8 positions instantly.",
+        "Manual + auto entries coexist up to 5 total; each tracks own phase."
       ],
       "dependencies": [
-        "web-ui-polish"
+        "batch 1"
       ]
     },
     {
       "batch_number": 4,
-      "title": "kraken-data-integration",
-      "rationale": "Unifies data access; required for training expansions; medium risk with API keys.",
+      "title": "trainer-settings-ui",
+      "rationale": "Improves ops/monitoring UX; low risk, separates concerns. Depends on core UI stable.",
       "priority": "medium",
-      "estimated_effort": "2-3 days",
+      "estimated_effort": "1-2 days",
       "items": [
-        "**Kraken API key/secret via CI/CD** \u2014 ensure `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` are injected as secrets in the CI/CD pipeline and `.env` on prod server",
-        "**Kraken data in training pipeline** \u2014 when training is triggered from the web UI, the dataset generator should automatically:",
-        "**Unified data resolver for training** \u2014 create a `DataResolver` class in the data service that:"
+        "Extract trainer UI into its own page \u2014 currently the trainer server has its own HTML UI at /trainer/ that's proxied through web service. Instead: Create a dedicated /train page in the web service dashboard; ...",
+        "Settings page \u2014 new /settings page in the web dashboard"
       ],
       "implementation_steps": [
-        "Add secrets to GitHub Actions; update .env on Pi; test private endpoints.",
-        "Wire dataset_generator to use DataResolver for Kraken fetches/backfills.",
-        "Implement DataResolver class with cache\u2192DB\u2192API fallback; integrate into training/engine."
+        "Add /train route in web FastAPI; proxy /api/trainer/* to trainer; build HTML with status/start buttons.",
+        "Add /settings route; forms for URLs/toggles/env; fetch Tailscale IPs, API statuses."
       ],
       "acceptance_criteria": [
-        "Kraken private APIs work post-deploy; no key leaks.",
-        "Training generates crypto datasets with breakouts.",
-        "DataResolver returns unified DF; logs hits/misses; backfills caches."
+        "Trainer API-only; /train page shows status/metrics/controls.",
+        "/settings configures services, shows statuses, saves to Redis."
       ],
       "dependencies": [
-        "web-ui-new-pages"
+        "batch 2"
       ]
     },
     {
       "batch_number": 5,
-      "title": "multi-asset-future",
-      "rationale": "Expands to cross-asset; lowest priority post-launch; high future impact.",
-      "priority": "low",
-      "estimated_effort": "3-4 days",
+      "title": "kraken-data-training-integration",
+      "rationale": "Expands data sources for better models/signals; higher effort/risk due to APIs. Last as it enhances post-core.",
+      "priority": "medium",
+      "estimated_effort": "2-3 days",
       "items": [
-        "**Cross-asset breakout signals** \u2014 use Kraken crypto data alongside Massive futures data to find correlated breakouts",
-        "**Generalize model across asset classes** \u2014 the CNN is already trained on 22 symbols across 5 asset classes (indices, forex, metals, energy, crypto via MBT/MET)",
-        "**Simple trade copier for multiple TPT accounts** \u2014 once the first $50k account is funded and profitable:"
+        "Kraken API key/secret via CI/CD \u2014 ensure KRAKEN_API_KEY and KRAKEN_API_SECRET are injected as secrets...",
+        "Kraken data in training pipeline \u2014 when training is triggered from the web UI, the dataset generator should automatically...",
+        "Unified data resolver for training \u2014 create a DataResolver class in the data service that...",
+        "Cross-asset breakout signals \u2014 use Kraken crypto data alongside Massive futures data...",
+        "Generalize model across asset classes \u2014 the CNN is already trained on 22 symbols... Extend to include direct Kraken crypto pairs in training..."
       ],
       "implementation_steps": [
-        "Add crypto momentum feature to CNN v7; correlate signals for futures entries.",
-        "Extend dataset_generator for direct Kraken; retrain v7.",
-        "Build copier service using Bridge pushes; mirror fills across accounts."
+        "Add GH secrets; update CI/CD/.env for Kraken keys.",
+        "Wire DataResolver into dataset_generator; test cache/API fallback.",
+        "Implement DataResolver class; integrate into training/engine.",
+        "Add crypto momentum feature; correlation-based signals.",
+        "Update dataset_generator for Kraken; retrain v7."
       ],
       "acceptance_criteria": [
-        "Dashboard shows cross-asset alerts; improves entry timing.",
-        "v7 model trains on native crypto; acc \u226585%.",
-        "Copier mirrors fills accurately within limits."
+        "Kraken keys deploy without leaks; data fetches.",
+        "Training pulls Kraken via resolver; generates crypto datasets.",
+        "DataResolver unifies sources with backfill.",
+        "Dashboard shows cross-asset correlations/signals.",
+        "v7 model trains on crypto; feature_contract updated."
       ],
       "dependencies": [
-        "kraken-data-integration"
+        "batch 4"
       ]
     }
   ],
   "deferred": [
-    "Get TPT $50k evaluation account \u2014 real Rithmic data feed",
-    "Verify strategy with real data \u2014 Rithmic fills, slippage, commission costs",
-    "Pass challenge \u2014 demonstrate consistent profitability within TPT rules",
-    "First funded account \u2014 live trading with real capital",
-    "Cloud migration \u2014 once profitable, move from local Tailscale to cloud infra with proper CI/CD",
-    "Domain + TLS \u2014 get a domain, set up HTTPS for the dashboard",
+    "Simple trade copier for multiple TPT accounts \u2014 once the first $50k account is funded...",
     "Per-type/session win-rate Prometheus metrics and Grafana panels",
-    "Feature contract drift detection \u2014 log warning in C# if loaded `feature_contract.json` version \u2260 compiled `CFeatureContractVersion` constant",
+    "Feature contract drift detection...",
     "Per-type backtest validation in NT8 Strategy Analyzer",
-    "Automated label rebalancing + synthetic augmentation tuning as dataset grows",
-    "SAR backtest validation \u2014 run NT8 Strategy Analyzer on a full quarter",
-    "MTF divergence detection \u2014 add swing-point pivot detection to `UpdateMtf` for the +0.15 weight",
-    "SAR dashboard panel \u2014 `GET /sar/state` visible in HTMX dashboard"
+    "SAR backtest validation...",
+    "MTF divergence detection...",
+    "SAR dashboard panel..."
   ],
   "risks": [
-    "Model inference mismatch between PyTorch/ONNX leading to divergent signals.",
-    "NT8 deployment failures or runtime errors blocking TPT eval.",
-    "TPT rule violations (e.g. overnight holds) causing account termination.",
-    "Kraken API key exposure in CI/CD or logs.",
-    "Data cache inconsistencies causing training gaps.",
-    "UI changes disrupting live trading monitoring."
+    "Model parity failure blocks NT8 deployment.",
+    "TPT rule violation (e.g. overnight holds) terminates account.",
+    "API key exposure in CI/CD/logs.",
+    "Training data gaps degrade model quality.",
+    "Cross-asset overfit without sufficient validation."
   ],
-  "gameplan_markdown": "# GAMEPLAN.md\n\n## Summary\nThe 'nuniesmith/futures' backlog contains 20 open tasks spanning model validation, NT8 safety features, web UI enhancements, Kraken data integration for training, and future multi-asset/trade copier features. Tasks are grouped into 5 batches prioritized by risk (TPT safety first), impact (validation for deployment), and dependencies (UI before new pages, data unification before training expansions). This enables safe progression to TPT evaluation account launch.\n\n## Batches\n\n### Batch 1: critical-validation-safety (Critical, 2-3 days)\n**Rationale**: Highest risk/impact: Ensures model parity, NT8 compatibility, and TPT-mandated 4PM hard stop before live trading; blocks all downstream deployment.\n\n**Items**:\n- Validate ONNX \u2194 PyTorch parity...\n- Verify `sync_models.sh`...\n- Test v6 ONNX auto-adapt...\n- Parity-test Phase 3 EMA9 trailing...\n- 4:00 PM ET hard flatten...\n- Bridge `/flatten` from web UI...\n- Manual trade from dashboard...\n\n**Steps**:\n1. Run ONNX/PyTorch parity script...\n...\n\n**Acceptance**:\n- ONNX/PyTorch max diff <1e-4...\n...\n\n**Deps**: None\n\n### Batch 2: web-ui-polish (High, 1-2 days)\n**Rationale**: Post-validation UX fixes...\n\n*(Similar structure for all batches)*\n\n### Batch 3: web-ui-new-pages (High, 2 days)\n...\n\n### Batch 4: kraken-data-integration (Medium, 2-3 days)\n...\n\n### Batch 5: multi-asset-future (Low, 3-4 days)\n...\n\n## Deferred\n- Get TPT $50k...\n...\n\n## Risks\n- Model inference mismatch...\n...\n\n## Next Review\nReassess after Batch 1 completion for TPT eval readiness."
+  "gameplan_markdown": "# GAMEPLAN.md\n\n## Summary\nThe 'nuniesmith/futures' backlog centers on finalizing model validation, NT8 safety enhancements, web UI polish for trading/review modes, trainer/settings UI separation, and integrating Kraken data into training/cross-asset signals. 20 active items grouped into 5 batches ordered by risk reduction (validations/safety first), then usability (UI), integration (NT8/web), UI expansion, and data pipeline enhancements.\n\n## Batches\n\n### Batch 1: model-nt8-validation-safety (Critical, 1-2 days)\n**Rationale**: Highest impact/risk: blocks live TPT trading.\n**Items**:\n- Validate ONNX \u2194 PyTorch parity...\n- Verify `sync_models.sh`...\n- Test v6 ONNX auto-adapt...\n- Parity-test Phase 3 EMA9 trailing...\n- 4:00 PM ET hard flatten...\n**Steps**:\n1. Run parity script...\n**Acceptance**:\n- ONNX/PyTorch max diff <1e-4...\n\n### Batch 2: web-ui-trading-review-mode (High, 1 day)\n**Rationale**: High impact for trader UX...\n**Items**:\n- Add UI mode toggle...\n(and so on for all items)\n**Steps**:\n1. Add toggle button...\n**Acceptance**:\n- Toggle switches panels...\n\n### Batch 3: nt8-bridge-trading-tests (High, 0.5-1 day)\n...\n\n### Batch 4: trainer-settings-ui (Medium, 1-2 days)\n...\n\n### Batch 5: kraken-data-training-integration (Medium, 2-3 days)\n...\n\n## Deferred\n- Simple trade copier...\n(and list)\n\n## Risks\n- Model parity failure...\n(and list)\n\n## Next Review: After Batch 1"
 }

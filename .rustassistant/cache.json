@@ -3,15 +3,21 @@
   "repo": "nuniesmith/futures",
   "base_branch": "main",
   "created_at": "2026-03-07T02:29:46Z",
-  "last_run_at": "2026-03-07T03:24:48Z",
-  "last_run_id": "22791043831",
-  "last_run_number": 5,
+  "last_run_at": "2026-03-07T17:17:44Z",
+  "last_run_id": "22803521161",
+  "last_run_number": 6,
   "runs": [
     {
       "run_id": "22791043831",
       "run_number": 5,
       "mode": "full",
       "started_at": "2026-03-07T03:24:48Z"
+    },
+    {
+      "run_id": "22803521161",
+      "run_number": 6,
+      "mode": "full",
+      "started_at": "2026-03-07T17:17:44Z"
     }
   ],
   "file_hashes": {
@@ -38,8 +44,12 @@
     "docker/monitoring/prometheus/Dockerfile": "310878c531ed2f48",
     "docker/web/Dockerfile": "fda858831fa2d526",
     "docs/STRATEGY_PLAN.md": "c8730bf18e24c32e",
-    "docs/audit/llm-analysis.json": "478a6d8aab4fade4",
-    "docs/audit/LLM_AUDIT_REPORT.md": "f7e9f16802870ded",
+    "docs/audit/llm-analysis.json": "507017d036ce0f1c",
+    "docs/audit/LLM_AUDIT_REPORT.md": "6cb107440f9222e4",
+    "docs/audit/todo-analysis-report.json": "d666e7f9f72d353b",
+    "docs/audit/TODO_ANALYSIS_REPORT.md": "ccdd2de9a29e03e4",
+    "docs/audit/GAMEPLAN.md": "6c5c19edd105ffe1",
+    "docs/audit/todo-plan.json": "ecd5aaf4a367fbbf",
     "config/grafana/orb-trading-dashboard.json": "168e32a1ffb1176c",
     "config/grafana/grafana-dashboard.json": "e2752ed9fd7fc596",
     "config/grafana/trading-analytics-dashboard.json": "d3671f419002bf40",
@@ -182,14 +192,20 @@
   "active_batches": [],
   "completed_batches": [],
   "failed_batches": [],
-  "last_file_scan": "2026-03-07T03:24:48Z",
+  "last_file_scan": "2026-03-07T17:17:44Z",
   "files_changed": [
     "docs/audit/llm-analysis.json",
-    "docs/audit/LLM_AUDIT_REPORT.md"
+    "docs/audit/LLM_AUDIT_REPORT.md",
+    "docs/audit/todo-analysis-report.json",
+    "docs/audit/TODO_ANALYSIS_REPORT.md",
+    "docs/audit/GAMEPLAN.md",
+    "docs/audit/todo-plan.json"
   ],
   "files_added": [
-    "docs/audit/llm-analysis.json",
-    "docs/audit/LLM_AUDIT_REPORT.md"
+    "docs/audit/todo-analysis-report.json",
+    "docs/audit/TODO_ANALYSIS_REPORT.md",
+    "docs/audit/GAMEPLAN.md",
+    "docs/audit/todo-plan.json"
   ],
   "files_removed": []
 }
