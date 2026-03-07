@@ -363,9 +363,10 @@ jobs:
                           echo "${key}=${val}" >> .env
                         fi
                       }
-                      upsert_env "XAI_API_KEY"    "${{ secrets.XAI_API_KEY }}"
-                      upsert_env "MASSIVE_API_KEY" "${{ secrets.MASSIVE_API_KEY }}"
-                      upsert_env "KRAKEN_API_KEY"  "${{ secrets.KRAKEN_API_KEY }}"
+                      upsert_env "XAI_API_KEY"        "${{ secrets.XAI_API_KEY }}"
+                      upsert_env "MASSIVE_API_KEY"     "${{ secrets.MASSIVE_API_KEY }}"
+                      upsert_env "KRAKEN_API_KEY"      "${{ secrets.KRAKEN_API_KEY }}"
+                      upsert_env "KRAKEN_API_SECRET"   "${{ secrets.KRAKEN_API_SECRET }}"
                       chmod 600 .env
                       echo "✅ API keys injected"
 

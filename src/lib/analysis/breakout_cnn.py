@@ -184,9 +184,10 @@ ASSET_CLASS_ORDINALS: dict[str, float] = {
     "ZC": 3.0 / 4,
     "ZS": 3.0 / 4,
     "ZW": 3.0 / 4,
-    # Crypto
+    # Crypto (CME futures)
     "MBT": 4.0 / 4,
     "MET": 4.0 / 4,
+    # Crypto (short aliases — used in training symbol lists)
     "BTC": 4.0 / 4,
     "ETH": 4.0 / 4,
     "SOL": 4.0 / 4,
@@ -196,6 +197,16 @@ ASSET_CLASS_ORDINALS: dict[str, float] = {
     "ADA": 4.0 / 4,
     "MATIC": 4.0 / 4,
     "XRP": 4.0 / 4,
+    # Crypto (Kraken internal tickers — KRAKEN: prefix)
+    "KRAKEN:XBTUSD": 4.0 / 4,
+    "KRAKEN:ETHUSD": 4.0 / 4,
+    "KRAKEN:SOLUSD": 4.0 / 4,
+    "KRAKEN:LINKUSD": 4.0 / 4,
+    "KRAKEN:AVAXUSD": 4.0 / 4,
+    "KRAKEN:DOTUSD": 4.0 / 4,
+    "KRAKEN:ADAUSD": 4.0 / 4,
+    "KRAKEN:MATICUSD": 4.0 / 4,
+    "KRAKEN:XRPUSD": 4.0 / 4,
 }
 
 # Keep BREAKOUT_TYPE_ORDINALS for generate_feature_contract / model_info consumers
@@ -231,6 +242,7 @@ ASSET_VOLATILITY_CLASS: dict[str, float] = {
     "MNQ": 1.0,
     "MBT": 1.0,
     "MHG": 1.0,
+    # Crypto short aliases
     "BTC": 1.0,
     "ETH": 1.0,
     "SOL": 1.0,
@@ -240,6 +252,16 @@ ASSET_VOLATILITY_CLASS: dict[str, float] = {
     "ADA": 1.0,
     "MATIC": 1.0,
     "XRP": 1.0,
+    # Crypto Kraken internal tickers
+    "KRAKEN:XBTUSD": 1.0,
+    "KRAKEN:ETHUSD": 1.0,
+    "KRAKEN:SOLUSD": 1.0,
+    "KRAKEN:LINKUSD": 1.0,
+    "KRAKEN:AVAXUSD": 1.0,
+    "KRAKEN:DOTUSD": 1.0,
+    "KRAKEN:ADAUSD": 1.0,
+    "KRAKEN:MATICUSD": 1.0,
+    "KRAKEN:XRPUSD": 1.0,
 }
 
 

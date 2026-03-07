@@ -1192,11 +1192,35 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
     tp2 = asset.get("tp2", 0)
     position_size = asset.get("position_size", 0)
     risk_dollars = asset.get("risk_dollars", 0)
+    target1_dollars = asset.get("target1_dollars", 0)
+    target2_dollars = asset.get("target2_dollars", 0)
+    price_decimals = asset.get("price_decimals", 4)
     trend_dir = asset.get("trend_direction", "NEUTRAL ↔️")
     _dominance = asset.get("dominance_text", "Neutral")  # noqa: F841
     _market_phase = asset.get("market_phase", "UNKNOWN")  # noqa: F841
     notes = asset.get("notes", "")
     skip = asset.get("skip", False)
+
+    # Build a locale-aware price formatter that respects the tick precision
+    def _fmt(v: float) -> str:
+        if price_decimals <= 2:
+            return f"{v:,.{price_decimals}f}"
+        # For high-precision prices (forex), use fixed notation without thousands sep
+        return f"{v:.{price_decimals}f}"
+
+    # Dollar estimate badges — only show when > $0
+    def _dollar_badge(amount: float, color: str = "green") -> str:
+        if amount <= 0:
+            return ""
+        color_map = {
+            "green": "rgba(34,197,94,0.15);color:#4ade80",
+            "red": "rgba(239,68,68,0.15);color:#f87171",
+        }
+        style = color_map.get(color, color_map["green"])
+        return (
+            f'<span style="font-size:8px;padding:1px 3px;border-radius:3px;'
+            f'background:{style};margin-left:2px">~${amount:,.0f}</span>'
+        )
 
     # Color scheme based on bias
     if bias == "LONG":
@@ -1268,17 +1292,22 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
         <div class="grid grid-cols-3 gap-1 mb-2 sm:mb-3 text-xs">
             <div class="t-panel-inner rounded p-1 sm:p-1.5 text-center">
                 <div class="t-text-muted text-[10px] sm:text-xs">Entry</div>
-                <div class="t-text-secondary font-mono text-[10px] sm:text-xs">{entry_low:,.2f}</div>
-                <div class="t-text-muted font-mono text-[10px] sm:text-xs">– {entry_high:,.2f}</div>
+                <div class="t-text-secondary font-mono text-[10px] sm:text-xs">{_fmt(entry_low)}</div>
+                <div class="t-text-muted font-mono text-[10px] sm:text-xs">– {_fmt(entry_high)}</div>
             </div>
             <div class="t-panel-inner rounded p-1 sm:p-1.5 text-center">
                 <div class="t-text-muted text-[10px] sm:text-xs">Stop</div>
-                <div class="text-red-400 font-mono text-[10px] sm:text-xs">{stop:,.2f}</div>
+                <div class="text-red-400 font-mono text-[10px] sm:text-xs">{_fmt(stop)}</div>
+                <div class="text-red-300 font-mono" style="font-size:8px">-${risk_dollars:,.0f}</div>
             </div>
             <div class="t-panel-inner rounded p-1 sm:p-1.5 text-center">
                 <div class="t-text-muted text-[10px] sm:text-xs">TP1 / TP2</div>
-                <div class="text-green-400 font-mono text-[10px] sm:text-xs">{tp1:,.2f}</div>
-                <div class="text-green-300 font-mono text-[10px] sm:text-xs">{tp2:,.2f}</div>
+                <div class="text-green-400 font-mono text-[10px] sm:text-xs">
+                    {_fmt(tp1)}{_dollar_badge(target1_dollars)}
+                </div>
+                <div class="text-green-300 font-mono text-[10px] sm:text-xs">
+                    {_fmt(tp2)}{_dollar_badge(target2_dollars)}
+                </div>
             </div>
         </div>
 
@@ -2033,12 +2062,34 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Futures Trading Co-Pilot</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
-    <!-- Apply saved theme BEFORE paint to prevent flash -->
+    <!-- Apply saved theme AND dashboard mode BEFORE paint to prevent flash -->
     <script>
         (function() {{
             var t = localStorage.getItem('theme');
             if (t === 'light') document.documentElement.classList.remove('dark');
             else document.documentElement.classList.add('dark');
+        }})();
+        // Apply dashboard mode before body renders to avoid review-only panel flash
+        (function() {{
+            var saved = localStorage.getItem('dashMode');
+            if (!saved) {{
+                // Auto-detect from ET hour
+                try {{
+                    var etStr = new Date().toLocaleString('en-US', {{
+                        timeZone: 'America/New_York', hour: 'numeric', hour12: false
+                    }});
+                    var h = parseInt(etStr, 10);
+                    saved = (h >= 3 && h < 16) ? 'trading' : 'review';
+                }} catch(e) {{
+                    saved = 'trading';
+                }}
+            }}
+            // Patch body class before it is painted — body tag already has mode-trading
+            // as a fallback; override if saved preference differs
+            document.addEventListener('DOMContentLoaded', function() {{
+                document.body.classList.remove('mode-trading', 'mode-review');
+                document.body.classList.add(saved === 'review' ? 'mode-review' : 'mode-trading');
+            }});
         }})();
     </script>
     <!-- HTMX for live fragment swaps -->
@@ -2363,6 +2414,17 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         .val-match    {{ background: rgba(34,197,94,0.06); }}
         .val-mismatch {{ background: rgba(239,68,68,0.06); }}
 
+        /* ── Trading / Review mode visibility ─────────────────── */
+        /* Default: Trading Mode (active session focus) */
+        body.mode-review  .trading-only {{ display: none !important; }}
+        body.mode-trading .review-only  {{ display: none !important; }}
+
+        /* Mode toggle button states */
+        .mode-btn {{ cursor: pointer; border-radius: 9999px; padding: 2px 10px; font-size: 11px; font-weight: 600; border: 1px solid transparent; transition: all 0.15s ease; }}
+        .mode-btn.active-trading {{ background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.4); color: #4ade80; }}
+        .mode-btn.active-review  {{ background: rgba(96,165,250,0.15); border-color: rgba(96,165,250,0.4); color: #60a5fa; }}
+        .mode-btn:not(.active-trading):not(.active-review) {{ background: var(--bg-input); border-color: var(--border-panel); color: var(--text-muted); }}
+
         /* ── Table ─────────────────────────────────────────────── */
         table {{ border-collapse: collapse; }}
         td, th {{ border-color: inherit; }}
@@ -2475,7 +2537,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         a {{ color: inherit; }}
     </style>
 </head>
-<body>
+<body class="mode-trading">
 <div id="sse-container">
 <div class="container">
 
@@ -2520,6 +2582,21 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                     <div id="session-badge" style="font-size:11px;font-weight:600;text-align:right;margin-top:2px;color:{session["color_hex"]}">
                         {session["emoji"]} {session["label"]}
                     </div>
+                </div>
+                <!-- Mode toggle: Trading vs Review -->
+                <div class="flex items-center" style="gap:4px;background:var(--bg-input);border:1px solid var(--border-panel);border-radius:9999px;padding:2px 4px">
+                    <button id="mode-btn-trading"
+                            onclick="setDashboardMode('trading')"
+                            class="mode-btn active-trading"
+                            title="Trading Mode — actionable info only">
+                        ⚡ Trading
+                    </button>
+                    <button id="mode-btn-review"
+                            onclick="setDashboardMode('review')"
+                            class="mode-btn"
+                            title="Review Mode — all panels expanded">
+                        🔍 Review
+                    </button>
                 </div>
                 <button id="theme-toggle"
                         onclick="toggleTheme()"
@@ -2640,8 +2717,8 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 <div class="t-text-faint text-xs">Loading...</div>
             </div>
 
-            <!-- CNN Dataset Preview -->
-            <details>
+            <!-- CNN Dataset Preview — review only -->
+            <details class="review-only">
                 <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
                          style="padding:4px 0">
                     <span class="rotate-on-open" style="transition:transform .15s">▶</span>
@@ -2672,8 +2749,8 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 <div class="t-text-faint text-xs">Loading...</div>
             </div>
 
-            <!-- Kraken Candlestick Chart -->
-            <details>
+            <!-- Kraken Candlestick Chart — review only -->
+            <details class="review-only">
                 <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
                          style="padding:4px 0">
                     <span class="rotate-on-open" style="transition:transform .15s">▶</span>
@@ -2711,8 +2788,8 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 </div>
             </details>
 
-            <!-- Crypto/Futures Correlation -->
-            <details>
+            <!-- Crypto/Futures Correlation — review only -->
+            <details class="review-only">
                 <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
                          style="padding:4px 0">
                     <span class="rotate-on-open" style="transition:transform .15s">▶</span>
@@ -2732,8 +2809,8 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 </div>
             </details>
 
-            <!-- Volume Profile -->
-            <details>
+            <!-- Volume Profile — review only -->
+            <details class="review-only">
                 <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
                          style="padding:4px 0">
                     <span class="rotate-on-open" style="transition:transform .15s">▶</span>
@@ -2753,8 +2830,8 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 </div>
             </details>
 
-            <!-- Performance Charts -->
-            <details>
+            <!-- Performance Charts — review only -->
+            <details class="review-only">
                 <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
                          style="padding:4px 0">
                     <span class="rotate-on-open" style="transition:transform .15s">▶</span>
@@ -2774,8 +2851,8 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 </div>
             </details>
 
-            <!-- Trade Journal -->
-            <details>
+            <!-- Trade Journal — review only -->
+            <details class="review-only">
                 <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
                          style="padding:4px 0">
                     <span class="rotate-on-open" style="transition:transform .15s">▶</span>
@@ -2795,10 +2872,10 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 </div>
             </details>
 
-            <!-- Grok AI Brief -->
+            <!-- Grok AI Brief — manual pull only in Trading Mode, auto-refresh in Review Mode -->
             <div id="grok-container"
                  hx-get="/api/grok/html"
-                 hx-trigger="every 60s"
+                 hx-trigger="load"
                  hx-swap="innerHTML">
                 {grok_html}
             </div>
@@ -2817,8 +2894,9 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 </div>
             </div>
 
-            <!-- Market Regime (HMM) -->
+            <!-- Market Regime (HMM) — review only -->
             <div id="regime-container"
+                 class="review-only"
                  hx-get="/api/regime/html"
                  hx-trigger="load, every 60s"
                  hx-swap="innerHTML">
@@ -2845,21 +2923,6 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                     <div id="sse-heartbeat" class="text-xs t-text-muted">Waiting for heartbeat...</div>
                 </div>
                 <div id="sse-last-update" class="text-[9px] t-text-faint mt-1">—</div>
-            </div>
-
-            <!-- Next Session / Schedule -->
-            <div class="t-panel border t-border rounded-lg p-3" style="border-left:3px solid #7c3aed">
-                <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">📅 NEXT SESSION</h3>
-                <div class="space-y-1 text-xs">
-                    <div>🌙 Pre-market: <span class="font-mono" style="color:#c084fc">00:00–03:00 ET</span></div>
-                    <div>🟢 London Open: <span class="font-mono" style="color:#4ade80">03:00–08:00 ET</span></div>
-                    <div>🟢 US Open: <span class="font-mono" style="color:#4ade80">08:00–12:00 ET</span></div>
-                    <div>⚙️ Off-hours: <span class="font-mono t-text-muted">12:00–00:00 ET</span></div>
-                </div>
-                <div class="t-text-faint text-[10px]" style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--border-subtle)">
-                    Engine is running backfill, optimization, and next-day prep.
-                    Trading panels will appear when the next session begins.
-                </div>
             </div>
 
         </div>
@@ -3016,6 +3079,86 @@ function toggleTheme() {{
 (function() {{
     var icon = document.getElementById('theme-icon');
     if (icon) icon.textContent = document.documentElement.classList.contains('dark') ? '☀️' : '🌙';
+}})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════
+     TRADING / REVIEW MODE TOGGLE
+     - Trading Mode: active session focus — hides review-only panels
+     - Review Mode:  all panels visible — for post-session analysis
+     - Default: Trading Mode during 03:00–16:00 ET, Review Mode otherwise
+     - Persisted in localStorage as 'dashMode'
+═══════════════════════════════════════════════════════ -->
+<script>
+(function() {{
+    // Determine default mode based on current ET hour
+    function _defaultMode() {{
+        try {{
+            var etStr = new Date().toLocaleString('en-US', {{
+                timeZone: 'America/New_York',
+                hour: 'numeric',
+                hour12: false
+            }});
+            var h = parseInt(etStr, 10);
+            // Active session hours 03:00–16:00 → Trading; off-hours → Review
+            return (h >= 3 && h < 16) ? 'trading' : 'review';
+        }} catch(e) {{
+            return 'trading';
+        }}
+    }}
+
+    // Apply the given mode to the document
+    function _applyMode(mode) {{
+        var body = document.body;
+        if (mode === 'review') {{
+            body.classList.remove('mode-trading');
+            body.classList.add('mode-review');
+        }} else {{
+            body.classList.remove('mode-review');
+            body.classList.add('mode-trading');
+        }}
+
+        // Update button states
+        var btnT = document.getElementById('mode-btn-trading');
+        var btnR = document.getElementById('mode-btn-review');
+        if (btnT && btnR) {{
+            if (mode === 'trading') {{
+                btnT.classList.add('active-trading');
+                btnT.classList.remove('active-review');
+                btnR.classList.remove('active-review');
+                btnR.classList.remove('active-trading');
+            }} else {{
+                btnR.classList.add('active-review');
+                btnR.classList.remove('active-trading');
+                btnT.classList.remove('active-trading');
+                btnT.classList.remove('active-review');
+            }}
+        }}
+
+        // In Review Mode, trigger Grok auto-refresh by adding hx-trigger polling.
+        // In Trading Mode, the Grok container only loads once (manual pull via buttons).
+        var grokContainer = document.getElementById('grok-container');
+        if (grokContainer) {{
+            if (mode === 'review') {{
+                grokContainer.setAttribute('hx-trigger', 'every 60s');
+                if (window.htmx) window.htmx.process(grokContainer);
+            }} else {{
+                grokContainer.setAttribute('hx-trigger', 'load');
+                if (window.htmx) window.htmx.process(grokContainer);
+            }}
+        }}
+    }}
+
+    // Global setter — called by the toggle buttons
+    window.setDashboardMode = function(mode) {{
+        localStorage.setItem('dashMode', mode);
+        _applyMode(mode);
+    }};
+
+    // On page load: restore saved preference or auto-detect from ET hour
+    var saved = localStorage.getItem('dashMode');
+    var initial = saved || _defaultMode();
+    _applyMode(initial);
 }})();
 </script>
 

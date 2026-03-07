@@ -238,14 +238,20 @@ services:
             - CNN_RETRAIN_PATIENCE=${CNN_RETRAIN_PATIENCE:-8}
 
             # ----------------------------------------------------------------
-            # Market data — Massive API (primary data source for dataset gen)
+            # Market data — Massive API (futures) + Kraken API (crypto)
             # ----------------------------------------------------------------
             - MASSIVE_API_KEY=${MASSIVE_API_KEY}
+            - KRAKEN_API_KEY=${KRAKEN_API_KEY:-}
+            - KRAKEN_API_SECRET=${KRAKEN_API_SECRET:-}
 
             # ----------------------------------------------------------------
             # Dataset generation defaults
+            # Kraken spot crypto symbols (BTC/ETH/SOL/etc.) are included by
+            # default alongside CME futures. They are resolved via the
+            # DataResolver → Kraken REST API with automatic Postgres/Redis
+            # backfill so subsequent training runs hit the warm cache.
             # ----------------------------------------------------------------
-            - CNN_RETRAIN_SYMBOLS=${CNN_RETRAIN_SYMBOLS:-MGC,SIL,MHG,MCL,MNG,MES,MNQ,M2K,MYM,6E,6B,6J,6A,6C,6S,ZN,ZB,ZC,ZS,ZW,MBT,MET}
+            - CNN_RETRAIN_SYMBOLS=${CNN_RETRAIN_SYMBOLS:-MGC,SIL,MHG,MCL,MNG,MES,MNQ,M2K,MYM,6E,6B,6J,6A,6C,6S,ZN,ZB,ZC,ZS,ZW,MBT,MET,BTC,ETH,SOL}
             - CNN_RETRAIN_DAYS_BACK=${CNN_RETRAIN_DAYS_BACK:-90}
             - CNN_RETRAIN_BARS_SOURCE=${CNN_RETRAIN_BARS_SOURCE:-massive}
             - CNN_RETRAIN_ORB_SESSION=${CNN_RETRAIN_ORB_SESSION:-all}

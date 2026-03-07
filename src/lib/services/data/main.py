@@ -143,6 +143,9 @@ from lib.services.data.api.sse import router as sse_router  # noqa: E402
 from lib.services.data.api.trades import (  # noqa: E402
     router as trades_router,
 )
+from lib.services.data.api.trainer import (  # noqa: E402
+    router as trainer_router,
+)
 
 # ---------------------------------------------------------------------------
 # Engine mode: embedded (legacy, all-in-one) or remote (reads from Redis)
@@ -548,6 +551,11 @@ app.include_router(grok_router, tags=["Grok"])
 # direction to the engine and dashboard.
 app.include_router(sar_router, prefix="/sar", tags=["SAR Sync"])
 
+# Trainer: /trainer (HTML page), /trainer/api/* (proxy to trainer service),
+#          /trainer/config, /trainer/service_status
+# NOTE: trainer_router is mounted WITHOUT a prefix — routes are defined with /trainer/ paths.
+app.include_router(trainer_router, tags=["Trainer"])
+
 
 # ---------------------------------------------------------------------------
 # Root endpoint — now served by dashboard_router (GET / returns HTML dashboard)
@@ -600,6 +608,10 @@ def api_info():
             "kraken_tickers": "/kraken/tickers",
             "kraken_ohlcv": "/kraken/ohlcv/{pair}",
             "kraken_health_html": "/kraken/health/html",
+            "trainer_page": "/trainer",
+            "trainer_config": "/trainer/config",
+            "trainer_service_status": "/trainer/service_status",
+            "trainer_api": "/trainer/api/{path}",
             "bars": "/bars/{symbol}",
             "bars_bulk": "/bars/bulk",
             "bars_status": "/bars/status",

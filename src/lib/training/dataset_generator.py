@@ -296,9 +296,9 @@ _SYMBOL_TO_TICKER: dict[str, str] = {
     "HG": "HG=F",
     "YM": "YM=F",
     "RTY": "RTY=F",
-    # ── Crypto (CME full-size) ─────────────────────────────────────────────
-    "BTC": "BTC=F",
-    "ETH": "ETH=F",  # Ether (CME full-size)
+    # ── Crypto (CME full-size futures) ────────────────────────────────────
+    "BTC_CME": "BTC=F",  # CME Bitcoin (full-size) — disambiguated alias
+    "ETH_CME": "ETH=F",  # CME Ether (full-size) — disambiguated alias
     # ── Kraken spot crypto ────────────────────────────────────────────────
     # Kraken tickers use the "KRAKEN:" prefix convention.
     # These are 24/7 spot pairs — no =F suffix, no contract roll.
@@ -311,7 +311,19 @@ _SYMBOL_TO_TICKER: dict[str, str] = {
     "KRAKEN:DOTUSD": "KRAKEN:DOTUSD",  # Polkadot / USD
     "KRAKEN:ADAUSD": "KRAKEN:ADAUSD",  # Cardano / USD
     "KRAKEN:XRPUSD": "KRAKEN:XRPUSD",  # Ripple / USD
-    # Short-form aliases for convenience
+    # Short-form aliases — preferred for training symbol lists.
+    # BTC/ETH/SOL/etc. route directly to Kraken spot (24/7 data).
+    # MBT/MET continue to route to their CME futures tickers above.
+    "BTC": "KRAKEN:XBTUSD",  # Bitcoin spot via Kraken
+    "ETH": "KRAKEN:ETHUSD",  # Ether spot via Kraken
+    "SOL": "KRAKEN:SOLUSD",  # Solana spot via Kraken
+    "AVAX": "KRAKEN:AVAXUSD",  # Avalanche spot via Kraken
+    "LINK": "KRAKEN:LINKUSD",  # Chainlink spot via Kraken
+    "MATIC": "KRAKEN:MATICUSD",  # Polygon spot via Kraken
+    "DOT": "KRAKEN:DOTUSD",  # Polkadot spot via Kraken
+    "ADA": "KRAKEN:ADAUSD",  # Cardano spot via Kraken
+    "XRP": "KRAKEN:XRPUSD",  # Ripple spot via Kraken
+    # Kraken pair-style aliases (no prefix)
     "XBTUSD": "KRAKEN:XBTUSD",
     "ETHUSD": "KRAKEN:ETHUSD",
     "SOLUSD": "KRAKEN:SOLUSD",
@@ -668,7 +680,7 @@ def load_bars(
     Tries the specified source first, then falls back through the remaining
     sources in priority order:
 
-        db → cache → massive → csv
+        db → cache → massive/kraken → csv
 
     The ``"db"`` source reads from the Postgres/SQLite ``historical_bars``
     table that is populated by the data service's nightly backfill and
@@ -676,9 +688,15 @@ def load_bars(
     dataset generation because it supports deep history (up to 365 days
     with Massive) and has no live network dependency at generation time.
 
+    When the cold-path API is hit (Massive or Kraken REST), the fetched bars
+    are automatically backfilled into both Postgres and Redis via
+    ``DataResolver`` so subsequent calls for the same symbol are served from
+    the warm/hot tiers without another network round-trip.
+
     Args:
-        symbol: Instrument symbol (e.g. "MGC") or Yahoo-style ticker ("MGC=F").
-        source: Primary source — "db", "cache", "massive", or "csv".
+        symbol: Instrument symbol (e.g. "MGC") or Kraken internal ticker
+                (e.g. "KRAKEN:XBTUSD") or short alias (e.g. "BTC").
+        source: Primary source — "db", "cache", "massive", "kraken", or "csv".
         days: Number of days of history to request.
         csv_dir: Directory for CSV bar files (used when source=="csv").
 
@@ -690,9 +708,60 @@ def load_bars(
     # richest history; csv is last resort (offline / synthetic data).
     _FALLBACK_ORDER = ["db", "cache", "massive", "kraken", "csv"]
 
-    # Kraken spot pairs bypass Massive/yfinance entirely — route directly
+    # Kraken spot pairs bypass Massive/yfinance entirely — route directly.
+    # _resolve_ticker() handles short aliases like "BTC" → "KRAKEN:XBTUSD".
     _is_kraken = _is_kraken_symbol(symbol)
 
+    # ------------------------------------------------------------------
+    # Fast path: use DataResolver for the full three-tier hierarchy.
+    # DataResolver handles Redis → Postgres → API with automatic backfill,
+    # so we get free cache warming for every cold-path API hit.
+    # This path covers both Kraken and Massive-backed symbols.
+    # ------------------------------------------------------------------
+    # Only use DataResolver when the caller hasn't explicitly asked for "csv"
+    # and we're not in a pure offline / test context.
+    if source != "csv":
+        try:
+            from lib.services.data.resolver import DataResolver
+
+            # Resolve the canonical ticker that DataResolver understands.
+            # For Kraken symbols we pass the internal ticker (KRAKEN:XBTUSD);
+            # for futures we pass the short symbol (MES, MGC, …).
+            resolver_symbol = _resolve_ticker(symbol) if _is_kraken else symbol
+
+            # Determine skip flags based on the requested primary source so
+            # the caller can still force "massive" or "cache" explicitly.
+            skip_redis = source not in ("cache", "db", "massive", "kraken")
+            skip_postgres = source == "cache"
+
+            resolver = DataResolver(
+                enable_backfill_redis=True,
+                enable_backfill_postgres=True,
+                skip_redis=skip_redis,
+                skip_postgres=skip_postgres,
+            )
+
+            df, meta = resolver.resolve_with_meta(resolver_symbol, days=days)
+            if df is not None and not df.empty:
+                logger.debug(
+                    "DataResolver: loaded %d bars for %s via %s (backfill: pg=%s redis=%s)",
+                    len(df),
+                    symbol,
+                    meta.source,
+                    meta.backfilled_postgres,
+                    meta.backfilled_redis,
+                )
+                return df
+            logger.debug("DataResolver returned no data for %s — falling back to legacy loaders", symbol)
+        except ImportError:
+            logger.debug("DataResolver not available — falling back to legacy loaders")
+        except Exception as exc:
+            logger.debug("DataResolver failed for %s (%s) — falling back: %s", symbol, source, exc)
+
+    # ------------------------------------------------------------------
+    # Legacy fallback path — kept for offline/CSV use and edge cases where
+    # the DataResolver is not available (e.g. running outside the service).
+    # ------------------------------------------------------------------
     loaders: dict[str, Any] = {
         "db": lambda: _load_bars_from_db(symbol, days),
         "cache": lambda: _load_bars_from_cache(symbol, days),
@@ -709,7 +778,7 @@ def load_bars(
             try:
                 df = loaders[name]()
                 if df is not None and not df.empty:
-                    logger.info("Loaded Kraken bars for %s via %s", symbol, name)
+                    logger.info("Loaded Kraken bars for %s via legacy %s", symbol, name)
                     return df
             except Exception:
                 continue

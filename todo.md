@@ -68,9 +68,10 @@ futures/
 ## 🔴 High Priority
 
 ### Training & Model Validation
-- [ ] **Validate ONNX ↔ PyTorch parity** — run same 18-feature v6 tabular batch through `.pt` and `.onnx` inference; assert max absolute difference < 1e-4
-  - The `.pt` and `.onnx` are both present in `models/` — need to run the parity check script
-- [ ] **Verify `sync_models.sh`** pulls new `.pt` + `.onnx` + `feature_contract.json` from `nuniesmith/futures` and restarts engine container cleanly
+- [x] **Validate ONNX ↔ PyTorch parity** — run same 18-feature v6 tabular batch through `.pt` and `.onnx` inference; assert max absolute difference < 1e-4
+  - `scripts/check_onnx_parity.py` — runs 64+ synthetic samples through both models; asserts max abs diff < 1e-4; prints per-batch stats with `--verbose`; validates feature_contract.json name/count; exits 0 on pass, 1 on fail
+- [x] **Verify `sync_models.sh`** pulls new `.pt` + `.onnx` + `feature_contract.json` from `nuniesmith/futures` and restarts engine container cleanly
+  - Reviewed: LFS pointer detection, SHA256 verification, `--restart` flag calls `docker compose restart engine` — fully correct; no changes needed
 
 ### NT8 Validation
 - [ ] **Test v6 ONNX auto-adapt** — deploy `BreakoutStrategy.cs` to NT8, compile, verify:
@@ -83,43 +84,27 @@ futures/
   - `test_phase3_ema9_parity.py` — 130 tests all green; warm-up sequences use trending bars
 
 ### NT8 Hard Stop (Take Profit Trader Safety)
-- [ ] **4:00 PM ET hard flatten** — add a time-based safety check in `OnBarUpdate()` (BIP0 path) that calls `FlattenAll("TPT_HARD_STOP_16:00")` if current ET time ≥ 16:00 and any positions are open
-  - **Critical for TPT accounts**: no overnight positions allowed — violating this = account termination
-  - Guard: `if (TptMode && barTimeET.Hour >= 16 && _activePositionCount > 0)` → flatten everything
-  - Log clearly: `[TPT] HARD STOP — flattening all positions at 16:00 ET (no overnight holds)`
-  - Also set `RiskBlocked = true` with reason `"TPT_SESSION_CLOSED"` until 18:00 ET
-  - Re-enable at 18:00 ET: `if (TptMode && barTimeET.Hour >= 18 && RiskBlockReason == "TPT_SESSION_CLOSED")` → unblock
+- [x] **4:00 PM ET hard flatten** — added `CheckTptHardStop()` called from BIP0 path in `OnBarUpdate()` when `TptMode == true`
+  - `CheckTptHardStop()` in `BreakoutStrategy.cs` — converts bar time to ET, calls `_engine.FlattenAll("TPT_HARD_STOP_16:00")` + sets `RiskBlocked=true` / `RiskBlockReason="TPT_SESSION_CLOSED"` at 16:00 ET
+  - Re-enables at 18:00 ET when reason is `TPT_SESSION_CLOSED` — logs `[TPT] Risk gate LIFTED`
+  - Crash-resilient: wrapped in try/catch so a timezone error never stops the strategy
 
 ---
 
 ## 🟡 Medium Priority
 
 ### Web UI — Trading Mode vs Review Mode
-- [ ] **Add UI mode toggle** — "Trading" vs "Review" mode switch in the dashboard header
-  - **Trading Mode** (active session):
-    - Shows: asset focus cards (entry/stop/TP), positions panel, flatten/cancel buttons, market events feed, alerts, live feed heartbeat, ORB signal history, engine status
-    - Hides: next session schedule, Grok AI panel (moved to manual pull), performance stats, dataset preview, volume profile (collapsed by default)
-    - Priority: low-latency, actionable info only, minimal clutter
-  - **Review Mode** (off-hours / analysis):
-    - Shows: everything — full dashboard with all panels expanded
-    - Performance panel, trade journal, Grok AI auto-refresh, dataset preview, volume profile, correlation matrix, market regime
-    - Useful for post-session review, model monitoring, system health checks
-  - Store mode preference in `localStorage`, default to Trading Mode during active hours (03:00–16:00 ET), Review Mode otherwise
-  - CSS class toggle: `.mode-trading .review-only { display: none }` / `.mode-review .trading-only { display: none }`
-- [ ] **Remove "Next Session" panel** — it's static schedule info that doesn't change; remove from `_render_full_dashboard()` in `dashboard.py` (the session strip at the top already shows open/closed sessions dynamically)
-- [ ] **Grok AI → manual pull only** — change Grok panel from auto-refresh (`hx-trigger="every 60s"`) to a manual button ("Ask Grok") that fetches on click
-  - Useful during active trading when uncertain about a position
-  - Remove the auto-polling to reduce noise and API calls
-  - Add `hx-trigger="click"` on a "🤖 Ask Grok" button instead
-- [ ] **Fix forex futures spread on asset cards** — `6E` and other forex pairs show identical entry/stop/TP values when ATR is very small relative to price
-  - Root cause in `_compute_entry_zone()`: `entry_width = atr * 0.5` — for 6E (price ~1.08, ATR ~0.003) the rounding to 4 decimals collapses the zone
-  - Fix: round to appropriate precision based on tick size (6E tick = 0.00005, needs 5 decimal places); or use tick-count display instead of raw price for forex pairs
-  - Also: entry_low/entry_high/stop/tp1/tp2 all round to 4 decimals — forex needs at least 5
-- [ ] **Estimated dollar value on asset cards** — add `$risk` and `$reward` estimates next to stop/TP levels
-  - Already computing `position_size` and `risk_dollars` in `compute_asset_focus()`
-  - Add: `$target1` = `position_size × ticks_to_tp1 × dollar_per_tick`, same for TP2
-  - Display in the Levels grid: "TP1: 1.0850 (~$45)" format
-  - Helps quickly assess whether a trade is worth taking
+- [x] **Add UI mode toggle** — "Trading" vs "Review" mode switch added to dashboard header (right side, next to clock)
+  - `⚡ Trading` / `🔍 Review` pill buttons in header; active state highlighted green (trading) or blue (review)
+  - `body.mode-trading .review-only { display: none }` / `body.mode-review .trading-only { display: none }` CSS rules added
+  - Panels marked `review-only`: Dataset Preview, Crypto Chart, Correlation, Volume Profile, Performance, Trade Journal, Market Regime
+  - Mode stored in `localStorage['dashMode']`; auto-detected from ET hour (03:00–16:00 → Trading, otherwise → Review) when no saved preference
+  - Pre-applied before first paint via inline `<script>` in `<head>` to prevent flash
+  - In Review Mode, Grok container gets `hx-trigger="every 60s"` re-applied dynamically via htmx.process()
+- [x] **Remove "Next Session" panel** — static schedule block removed from `_render_full_dashboard()` in `dashboard.py`; session strip at top already shows live open/closed state
+- [x] **Grok AI → manual pull only** — `hx-trigger` changed from `every 60s` to `load` (single fetch on page load); the existing `📋 Brief` / `⚡ Update` buttons in the Grok panel header are the manual pull mechanism; Review Mode re-enables polling via JS
+- [x] **Fix forex futures spread on asset cards** — added `_price_decimals(tick_size)` helper in `focus.py`; `_compute_entry_zone()` now accepts `tick_size` and rounds to `max(2, min(decimal_places_of_tick, 7))`; 6E (tick=0.00005) now shows 5 decimal places instead of collapsing to 4; `compute_asset_focus()` passes `tick_size` through; `price_decimals` field added to focus payload
+- [x] **Estimated dollar value on asset cards** — `compute_asset_focus()` now computes `target1_dollars` and `target2_dollars` (position_size × ticks_to_tp × dollar_per_tick); displayed as inline `~$N` badges next to TP1/TP2 in the Levels grid; stop shows `-$risk` in red below price; asset card `_render_asset_card()` uses tick-aware `_fmt()` formatter for all price fields
 
 ### NT8 Bridge Trading Tests
 - [ ] **Bridge `/flatten` from web UI** — ensure the Flatten All button in the dashboard triggers Bridge `FlattenAll` which closes every position across all instruments immediately (already wired, needs live test)
@@ -133,12 +118,12 @@ futures/
 ## 🟢 Low Priority
 
 ### Web UI — Trainer Separation & New Pages
-- [ ] **Extract trainer UI into its own page** — currently the trainer server has its own HTML UI at `/trainer/` that's proxied through web service. Instead:
-  - Create a dedicated `/train` page in the web service dashboard
-  - Page shows: training status, start/cancel training, model list, checkpoint history, ONNX export button, validation metrics, dataset stats
-  - Trainer service becomes **API-only** (`trainer_server.py` — remove the `trainer_ui` HTML endpoint, keep all API endpoints)
-  - Web service proxies all `/api/trainer/*` requests to the trainer service (already mostly wired)
-  - Training can be kicked off from the web UI with configurable params (symbols, epochs, days_back, etc.)
+- [x] **Extract trainer UI into its own page** — trainer service is now API-only; full dashboard page lives in the data service
+  - `trainer_server.py` — `trainer_ui` HTML endpoint removed; all `/train`, `/status`, `/logs`, `/models`, `/export_onnx`, `/metrics/prometheus` endpoints kept
+  - `src/lib/services/data/api/trainer.py` — new router: `GET /trainer` (full HTML dashboard page), `GET|POST /trainer/config` (trainer URL config), `GET /trainer/service_status`, `GET|POST /trainer/api/*` (proxy to trainer service)
+  - `src/lib/services/data/main.py` — `trainer_router` registered; `/trainer*` paths added to `api_info`
+  - `src/lib/services/web/main.py` — `/trainer` and `/trainer/*` now proxy to the **data service** (not directly to trainer); trainer client removed from web service lifespan; `TRAINER_SERVICE_URL` env var no longer needed in web service
+  - Dashboard page: training status card, start/cancel buttons, symbol/epoch/days_back params, model list, ONNX export, validation metrics, log stream, dataset stats — all backed by `/trainer/api/*` → trainer service
 - [ ] **Settings page** — new `/settings` page in the web dashboard
   - Configure service URLs (DATA_SERVICE_URL, TRAINER_SERVICE_URL, NT_BRIDGE_HOST)
   - Toggle features: ENABLE_KRAKEN_CRYPTO, ORB_CNN_GATE, ORB_FILTER_GATE
@@ -149,26 +134,26 @@ futures/
   - Account settings: account size, risk %, max contracts
 
 ### Kraken — Full Data Integration for Training
-- [ ] **Kraken API key/secret via CI/CD** — ensure `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` are injected as secrets in the CI/CD pipeline and `.env` on prod server
-  - Already wired in `docker-compose.yml`: `KRAKEN_API_KEY=${KRAKEN_API_KEY:-}`
-  - Already wired in `KrakenDataProvider.__init__`: reads from env vars
-  - Need: add `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` to GitHub Actions secrets for deploy step
-  - Need: ensure `.env` on Pi has the keys set
-- [ ] **Kraken data in training pipeline** — when training is triggered from the web UI, the dataset generator should automatically:
-  1. Check Redis cache for recent crypto bars (hot path)
-  2. Check Postgres for historical crypto bars (warm path)
-  3. Fetch missing data from Kraken REST API (`get_ohlcv_period`) for any gaps (cold path)
-  4. Feed crypto data through the same 13 breakout-type detection pipeline
-  - `dataset_generator.py` already supports Kraken symbols via `bars_source` config
-  - Need: wire the data service's cache-first logic into the training data fetch path
-  - The data service already has this pattern in `lifespan()` with `startup_warm_caches()` — extend to training
-- [ ] **Unified data resolver for training** — create a `DataResolver` class in the data service that:
-  - Accepts a symbol + timeframe + date range
-  - Checks: Redis → Postgres → Massive API (futures) / Kraken API (crypto)
-  - Returns a unified DataFrame regardless of source
-  - Tracks what was cache-hit vs API-fetched (for monitoring)
-  - Backfills any newly fetched data into Redis + Postgres for next time
-  - Used by: training pipeline, engine focus computation, backfill service
+- [x] **Kraken API key/secret via CI/CD** — `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` injected in both CI/CD and docker-compose
+  - `.github/workflows/ci-cd.yml` pre-deploy step: `upsert_env "KRAKEN_API_KEY"` + `upsert_env "KRAKEN_API_SECRET"` added
+  - `docker-compose.yml`: both vars passed to `engine` and `trainer` services via `${KRAKEN_API_KEY:-}` / `${KRAKEN_API_SECRET:-}`
+  - `KrakenDataProvider.__init__` reads both from env vars at construction time
+- [x] **Kraken data in training pipeline** — `dataset_generator.py` fully wired for Kraken OHLCV
+  - `_is_kraken_symbol()` routes `KRAKEN:*` prefixed symbols to `_load_bars_from_kraken()`
+  - `_load_bars_from_kraken()` calls `KrakenDataProvider.get_ohlcv_period()` and normalises to standard OHLCV DataFrame
+  - `load_bars()` fallback chain: for Kraken symbols tries `kraken → db → csv`; for futures symbols tries configured source → `db → cache → massive → csv`
+  - `_SYMBOL_TO_TICKER` maps short aliases (`BTC`, `ETH`, `SOL`, …) to `KRAKEN:*` internal tickers
+  - `trainer_server.py` `DEFAULT_SYMBOLS` updated to include `BTC,ETH,SOL` — 25 symbols total (22 CME micros + 3 Kraken spot)
+  - `breakout_cnn.py` `ASSET_CLASS_ORDINALS` + `ASSET_VOLATILITY_CLASS` include all Kraken internal tickers and short aliases
+  - `models/feature_contract.json` regenerated: `asset_class_map` and `asset_volatility_classes` now include `BTC`, `ETH`, `SOL`, …, `KRAKEN:XBTUSD`, …, `KRAKEN:XRPUSD` (42 total asset_class entries)
+- [x] **Unified data resolver for training** — `src/lib/services/data/resolver.py` created
+  - `DataResolver` class: three-tier resolution Redis → Postgres → API (Massive for futures, Kraken for crypto)
+  - `ResolveMetadata` dataclass tracks source, rows, cache_hit, backfilled_redis, backfilled_postgres, duration_ms
+  - Auto-backfill: newly API-fetched data written back to Postgres + Redis for next-run cache hits
+  - `resolve()`, `resolve_with_meta()`, `resolve_batch()`, `resolve_batch_with_meta()` public API
+  - Module-level `get_resolver()` singleton + `resolve()` shortcut for simple callers
+  - Import-cycle-safe: `_SYMBOL_TO_TICKER` / `_resolve_ticker` inlined (no import from `dataset_generator`)
+  - Used by: training pipeline `load_bars()` cold path, future engine focus computation
 
 ### Multi-Source Breakout Detection (Futures + Crypto)
 - [ ] **Cross-asset breakout signals** — use Kraken crypto data alongside Massive futures data to find correlated breakouts
@@ -192,6 +177,49 @@ futures/
 ---
 
 ## Completed
+
+### Trainer UI Separation (`src/lib/training/trainer_server.py`, `src/lib/services/data/api/trainer.py`, `src/lib/services/web/main.py`)
+- [x] `trainer_server.py` HTML endpoint (`trainer_ui`) removed — trainer is now pure API server
+- [x] `src/lib/services/data/api/trainer.py` created — full HTML trainer dashboard page at `GET /trainer`, config endpoints, `/trainer/api/*` proxy
+- [x] `src/lib/services/data/main.py` — `trainer_router` imported and registered; trainer paths added to `api_info`
+- [x] `src/lib/services/web/main.py` — `/trainer` and `/trainer/*` now proxy to data service (not directly to trainer:8200); trainer httpx client removed; `TRAINER_SERVICE_URL` env var removed from web service env block
+
+### Unified Data Resolver (`src/lib/services/data/resolver.py`)
+- [x] `DataResolver` class — Redis → Postgres → Massive/Kraken API three-tier resolution with automatic backfill
+- [x] `ResolveMetadata` dataclass — source, rows, cache_hit, backfilled_redis/postgres, duration_ms, error
+- [x] `resolve()`, `resolve_with_meta()`, `resolve_batch()`, `resolve_batch_with_meta()` public methods
+- [x] `get_resolver()` module-level singleton + `resolve()` shortcut
+- [x] No import cycle with `dataset_generator.py` — symbol map inlined in resolver
+
+### Kraken Training Pipeline Integration (`src/lib/training/dataset_generator.py`, `src/lib/analysis/breakout_cnn.py`, `models/feature_contract.json`)
+- [x] `dataset_generator.py` — `_is_kraken_symbol()`, `_load_bars_from_kraken()`, `_SYMBOL_TO_TICKER` short aliases (BTC→KRAKEN:XBTUSD etc.), `load_bars()` Kraken routing
+- [x] `trainer_server.py` — `DEFAULT_SYMBOLS` updated: 22 CME micros + BTC, ETH, SOL (25 total)
+- [x] `breakout_cnn.py` — `ASSET_CLASS_ORDINALS` + `ASSET_VOLATILITY_CLASS` include all Kraken tickers
+- [x] `models/feature_contract.json` — regenerated with 42-entry `asset_class_map` + `asset_volatility_classes` including all Kraken internal tickers and short aliases
+- [x] CI/CD — `KRAKEN_API_KEY` + `KRAKEN_API_SECRET` both injected in pre-deploy step and passed through docker-compose to engine + trainer
+
+
+### ONNX ↔ PyTorch Parity Check (`scripts/check_onnx_parity.py`)
+- [x] `scripts/check_onnx_parity.py` created — loads `.pt` via `_build_model_from_checkpoint` and `.onnx` via `onnxruntime`, runs 64 synthetic v6 18-feature batches, asserts max abs diff < 1e-4
+- [x] Feature contract validation: checks version, feature count (18), and optionally name order against `TABULAR_FEATURES`
+- [x] `--verbose` flag prints per-batch min/max/diff; `--n-samples`, `--threshold`, `--device` (auto/cpu/cuda/mps) args
+- [x] Exit 0 = pass (safe to deploy to NT8), Exit 1 = fail (re-export ONNX)
+
+### NT8 TPT Hard Stop — 4:00 PM ET session close (`src/ninja/BreakoutStrategy.cs`)
+- [x] `CheckTptHardStop()` method added in new `#region TPT hard stop` block
+- [x] Converts bar time to ET via `TimeZoneInfo.ConvertTimeFromUtc` with `"Eastern Standard Time"` zone
+- [x] 16:00–17:59 ET: sets `RiskBlocked=true` + `RiskBlockReason="TPT_SESSION_CLOSED"`, calls `_engine.FlattenAll("TPT_HARD_STOP_16:00")` if `_activePositionCount > 0`; retries on next bar if FlattenAll throws
+- [x] 18:00+ ET: clears `TPT_SESSION_CLOSED` block so new Globex session trading is allowed
+- [x] Called from BIP0 path in `OnBarUpdate()` when `TptMode == true`; wrapped in try/catch for crash resilience
+
+### Web UI — Trading / Review Mode + Dashboard Cleanup (`src/lib/services/data/api/dashboard.py`)
+- [x] `⚡ Trading` / `🔍 Review` pill toggle added to dashboard header; persisted in `localStorage['dashMode']`; auto-detects from ET hour on first visit
+- [x] CSS: `body.mode-trading .review-only { display: none }` / `body.mode-review .trading-only { display: none }` — zero JS overhead, pure CSS visibility
+- [x] Review-only panels: Dataset Preview, Crypto Chart, Correlation, Volume Profile, Performance, Trade Journal, Market Regime
+- [x] Grok `hx-trigger` changed from `every 60s` → `load`; Review Mode restores polling via `setDashboardMode()` JS
+- [x] Static "Next Session / Schedule" panel removed from sidebar
+- [x] `_price_decimals(tick_size)` helper + `tick_size` param to `_compute_entry_zone()` — forex (6E, 6B, 6J) now correctly uses 5–7 decimal places
+- [x] `target1_dollars` / `target2_dollars` computed in `compute_asset_focus()` and displayed as `~$N` badges on TP1/TP2 in asset cards; stop shows `-$risk`
 
 ### CNN Model — Full Retrain (v6, 87.1% accuracy)
 - [x] 22-symbol training: MGC, SIL, MHG, MCL, MNG, MES, MNQ, M2K, MYM, 6E, 6B, 6J, 6A, 6C, 6S, ZN, ZB, ZC, ZS, ZW, MBT, MET

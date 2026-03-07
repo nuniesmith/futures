@@ -2023,11 +2023,105 @@ namespace NinjaTrader.NinjaScript.Strategies
                 // adversely or reached TP3.  If so, submit a market exit.
                 if (EnableTp3Trailing)
                     CheckPhase3Exits();
+
+                // ── TPT hard stop — 4:00 PM ET flatten ───────────────────────
+                // Take Profit Trader funded accounts prohibit overnight positions.
+                // Holding past 4 PM ET = account termination.  This guard fires
+                // on every primary bar once ET time ≥ 16:00 and any positions are
+                // still open, and it also lifts the risk block at 18:00 ET when
+                // the new Globex session is about to open.
+                if (TptMode)
+                    CheckTptHardStop();
             }
 
             // ── Breakout detection (runs for every BIP in built-in modes) ─────
             if (Mode == BreakoutMode.BuiltIn || Mode == BreakoutMode.Both)
                 CheckBreakout(bip, st);
+        }
+
+        #endregion
+
+        // =====================================================================
+        // TPT hard stop — 4:00 PM ET session close safety
+        // =====================================================================
+        #region TPT hard stop
+
+        /// <summary>
+        /// Enforce Take Profit Trader's no-overnight-position rule.
+        ///
+        /// Called once per primary bar (BIP0) when TptMode == true.
+        ///
+        /// Behaviour:
+        ///   16:00–17:59 ET — if any micro positions are open, flatten them all
+        ///                     immediately and set RiskBlocked with reason
+        ///                     "TPT_SESSION_CLOSED" until 18:00 ET.
+        ///   18:00+ ET       — lift the TPT_SESSION_CLOSED block so the strategy
+        ///                     can trade the new Globex session.
+        ///
+        /// The flatten fires on EVERY bar in the 16:00–17:59 window until the
+        /// position count hits zero — this handles partial-fill edge cases where
+        /// the first FlattenAll call only closes some legs.
+        /// </summary>
+        private void CheckTptHardStop()
+        {
+            try
+            {
+                // Convert the current bar's time to Eastern Time
+                DateTime barTimeET = TimeZoneInfo.ConvertTimeFromUtc(
+                    Time[0].Kind == DateTimeKind.Utc
+                        ? Time[0]
+                        : DateTime.SpecifyKind(Time[0], DateTimeKind.Utc),
+                    TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time"));
+
+                int hour = barTimeET.Hour;
+
+                // ── Re-enable trading at 18:00 ET (new Globex session) ────────
+                if (hour >= 18 && RiskBlockReason == "TPT_SESSION_CLOSED")
+                {
+                    RiskBlocked     = false;
+                    RiskBlockReason = "";
+                    Print($"[TPT] Risk gate LIFTED at {barTimeET:HH:mm} ET — new Globex session open");
+                    return;
+                }
+
+                // ── Hard flatten at 16:00 ET ──────────────────────────────────
+                if (hour >= 16 && hour < 18)
+                {
+                    // Set the risk block immediately so no new entries fire
+                    // even if the flatten takes a bar or two to confirm
+                    if (!RiskBlocked || RiskBlockReason != "TPT_SESSION_CLOSED")
+                    {
+                        RiskBlocked     = true;
+                        RiskBlockReason = "TPT_SESSION_CLOSED";
+                        Print($"[TPT] HARD STOP — session closed at {barTimeET:HH:mm} ET. " +
+                              $"Risk gate BLOCKED (reason=TPT_SESSION_CLOSED). " +
+                              $"No new entries until 18:00 ET.");
+                    }
+
+                    // Flatten if any positions are still open
+                    if (_activePositionCount > 0)
+                    {
+                        Print($"[TPT] HARD STOP — flattening all {_activePositionCount} open position(s) " +
+                              $"at {barTimeET:HH:mm} ET (no overnight holds allowed on TPT accounts)");
+
+                        try
+                        {
+                            // FlattenAll submits market orders on all instruments
+                            // in the strategy's account to close every open position.
+                            _engine?.FlattenAll("TPT_HARD_STOP_16:00");
+                        }
+                        catch (Exception flatEx)
+                        {
+                            Print($"[TPT] FlattenAll error: {flatEx.Message} — retrying next bar");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Swallow: never let a timezone conversion failure crash the strategy
+                Print($"[TPT] CheckTptHardStop error: {ex.Message}");
+            }
         }
 
         #endregion

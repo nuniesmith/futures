@@ -58,20 +58,50 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
         return default
 
 
+def _price_decimals(tick_size: float) -> int:
+    """Return the number of decimal places needed to represent one tick.
+
+    Examples:
+        0.25    → 2   (ES, NQ, MES, MNQ)
+        0.10    → 2   (MGC, M2K)
+        0.01    → 2   (MCL)
+        0.0001  → 4   (M6B, 6A, 6C, 6S)
+        0.00005 → 5   (6E full-size tick; micro uses 0.0001 but keep 5 as max)
+        0.0000005 → 7 (6J)
+    """
+    if tick_size <= 0:
+        return 4
+    # Express tick as string and count decimal places
+    s = f"{tick_size:.10f}".rstrip("0")
+    if "." not in s:
+        return 2
+    decimals = len(s.split(".")[1])
+    # Always show at least 2 decimal places, at most 7
+    return max(2, min(decimals, 7))
+
+
 def _compute_entry_zone(
     last_price: float,
     bias: str,
     atr: float,
     wave_ratio: float,
+    tick_size: float = 0.01,
 ) -> dict[str, float]:
     """Compute entry zone, stop, TP1, TP2 based on bias and ATR.
 
     Entry zone is a range around the current price adjusted by ATR.
     Stop is placed at 1.5× ATR from entry midpoint.
     TP1 at 2× ATR, TP2 at 3.5× ATR (for scaling out).
+
+    Rounding uses tick-aware precision so that forex pairs (e.g. 6E with
+    tick=0.00005) are displayed with enough decimal places instead of
+    collapsing to 4 decimals where entry_low == entry_high.
     """
     if atr <= 0:
         atr = last_price * 0.005  # fallback: 0.5% of price
+
+    # Determine display precision from tick size
+    decimals = _price_decimals(tick_size)
 
     # Tighter entries when wave is strong
     entry_width = atr * 0.5 if wave_ratio > 1.5 else atr * 0.75
@@ -100,11 +130,12 @@ def _compute_entry_zone(
         tp2 = last_price + atr * 3.5
 
     return {
-        "entry_low": round(entry_low, 4),
-        "entry_high": round(entry_high, 4),
-        "stop": round(stop, 4),
-        "tp1": round(tp1, 4),
-        "tp2": round(tp2, 4),
+        "entry_low": round(entry_low, decimals),
+        "entry_high": round(entry_high, decimals),
+        "stop": round(stop, decimals),
+        "tp1": round(tp1, decimals),
+        "tp2": round(tp2, decimals),
+        "price_decimals": decimals,
     }
 
 
@@ -272,8 +303,8 @@ def compute_asset_focus(
     # Derive bias
     bias = _derive_bias(wave_result, sq_result, quality)
 
-    # Compute levels
-    levels = _compute_entry_zone(last_price, bias, atr, wave_ratio)
+    # Compute levels — pass tick_size so forex gets correct decimal precision
+    levels = _compute_entry_zone(last_price, bias, atr, wave_ratio, tick_size=tick_size)
 
     # Max risk per trade
     max_risk = account_size * DEFAULT_RISK_PCT
@@ -287,6 +318,18 @@ def compute_asset_focus(
         max_risk_dollars=max_risk,
     )
 
+    # Estimate dollar value of TP targets for the display card.
+    # dollar_per_tick = tick_size × point_value (already in micro-contract terms)
+    dollar_per_tick = tick_size * point_value if tick_size > 0 and point_value > 0 else 0.0
+    if dollar_per_tick > 0 and tick_size > 0:
+        ticks_to_tp1 = abs(levels["tp1"] - last_price) / tick_size
+        ticks_to_tp2 = abs(levels["tp2"] - last_price) / tick_size
+        target1_dollars = float(int(position_size * ticks_to_tp1 * dollar_per_tick))
+        target2_dollars = float(int(position_size * ticks_to_tp2 * dollar_per_tick))
+    else:
+        target1_dollars = 0.0
+        target2_dollars = 0.0
+
     # Build skip note
     notes = []
     if quality < MIN_QUALITY_THRESHOLD:
@@ -294,17 +337,20 @@ def compute_asset_focus(
     if vol_percentile > EXTREME_VOL_THRESHOLD:
         notes.append(f"Extreme volatility ({vol_percentile:.0%}) — dangerous")
 
+    price_decimals = int(levels.get("price_decimals", 4))
+
     return {
         "symbol": name,
         "ticker": ticker,
         "bias": bias,
         "bias_emoji": {"LONG": "🟢", "SHORT": "🔴", "NEUTRAL": "⚪"}.get(bias, "⚪"),
-        "last_price": round(last_price, 4),
+        "last_price": round(last_price, price_decimals),
         "entry_low": levels["entry_low"],
         "entry_high": levels["entry_high"],
         "stop": levels["stop"],
         "tp1": levels["tp1"],
         "tp2": levels["tp2"],
+        "price_decimals": price_decimals,
         "wave_ratio": round(wave_ratio, 2),
         "wave_ratio_text": wave_result.get("wave_ratio_text", f"{wave_ratio:.2f}x"),
         "quality": round(quality, 3),
@@ -318,6 +364,8 @@ def compute_asset_focus(
         "dominance_text": wave_result.get("dominance_text", "Neutral"),
         "position_size": position_size,
         "risk_dollars": risk_dollars,
+        "target1_dollars": target1_dollars,
+        "target2_dollars": target2_dollars,
         "max_risk_allowed": round(max_risk, 2),
         "atr": round(atr, 6),
         "notes": "; ".join(notes) if notes else "",
@@ -340,12 +388,12 @@ def compute_daily_focus(
       - session_mode: current session
     """
     try:
-        from lib.core.models import ASSETS
+        from lib.core.models import ASSETS as assets_map
     except ImportError:
-        ASSETS = {}
+        assets_map: dict[str, str] = {}
 
     if symbols is None:
-        symbols = list(ASSETS.keys())
+        symbols = list(assets_map.keys())
 
     now = datetime.now(tz=_EST)
 
