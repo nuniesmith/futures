@@ -324,6 +324,41 @@ def _get_positions() -> list[dict[str, Any]]:
     return []
 
 
+def _get_bridge_info() -> dict[str, Any]:
+    """Read NT8 Bridge liveness from the heartbeat cache key.
+
+    Returns a dict with: connected (bool), age_seconds (float), account (str).
+    Safe to call even when Redis is unavailable — returns disconnected state.
+    """
+    try:
+        from lib.core.cache import _cache_key, cache_get
+
+        key = _cache_key("bridge_heartbeat", "current")
+        raw = cache_get(key)
+        if raw is None:
+            return {"connected": False, "age_seconds": -1.0, "account": ""}
+        hb = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+        received = hb.get("received_at", "")
+        age = -1.0
+        connected = False
+        if received:
+            try:
+                from zoneinfo import ZoneInfo
+
+                dt = datetime.fromisoformat(received)
+                age = (datetime.now(tz=ZoneInfo("America/New_York")) - dt).total_seconds()
+                connected = age < 60.0
+            except Exception:
+                pass
+        return {
+            "connected": connected,
+            "age_seconds": round(age, 1),
+            "account": hb.get("account", ""),
+        }
+    except Exception:
+        return {"connected": False, "age_seconds": -1.0, "account": ""}
+
+
 def _get_risk_status() -> dict[str, Any] | None:
     """Read risk manager status from Redis."""
     try:
@@ -1276,8 +1311,11 @@ def _render_no_trade_banner(reason: str = "Low-conviction day") -> str:
 def _render_positions_panel(
     positions: list[dict[str, Any]],
     risk_status: dict[str, Any] | None = None,
+    bridge_connected: bool = False,
+    bridge_age_seconds: float = -1,
+    bridge_account: str = "",
 ) -> str:
-    """Render condensed live positions + daily P&L panel."""
+    """Render condensed live positions + daily P&L panel with Bridge status and action buttons."""
     daily_pnl = 0.0
     can_trade = True
     block_reason = ""
@@ -1308,6 +1346,47 @@ def _render_positions_panel(
     trade_color = "text-yellow-400" if open_count >= max_trades else "text-zinc-200"
     streak_color = "text-red-400" if consecutive > 1 else "text-zinc-400"
 
+    # Bridge status dot + age
+    if bridge_connected:
+        age_str = f"{bridge_age_seconds:.0f}s ago" if bridge_age_seconds >= 0 else ""
+        acct_str = f" · {bridge_account}" if bridge_account else ""
+        bridge_dot_html = f'<span style="color:#22c55e;font-size:9px" title="Bridge connected{acct_str} · last heartbeat {age_str}">● BRIDGE</span>'
+    else:
+        bridge_dot_html = (
+            '<span style="color:#71717a;font-size:9px" title="Bridge offline — no heartbeat">○ BRIDGE</span>'
+        )
+
+    # Action buttons (disabled when bridge is offline)
+    btn_disabled = "" if bridge_connected else ' style="opacity:0.4;pointer-events:none" disabled'
+    btn_title_flatten = "Flatten all positions via Bridge" if bridge_connected else "Bridge offline"
+    btn_title_cancel = "Cancel all working orders via Bridge" if bridge_connected else "Bridge offline"
+    action_buttons_html = f"""
+    <div class="flex items-center gap-1 mt-1 mb-2">
+        <button
+            hx-post="/api/positions/flatten"
+            hx-confirm="Flatten ALL positions immediately?"
+            hx-target="#positions-panel"
+            hx-swap="outerHTML"
+            title="{btn_title_flatten}"
+            class="co-btn"
+            style="font-size:10px;padding:2px 8px;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.4);color:#f87171"
+            {btn_disabled}>
+            ⚡ Flatten All
+        </button>
+        <button
+            hx-post="/api/positions/cancel_orders"
+            hx-confirm="Cancel ALL working orders?"
+            hx-target="#positions-panel"
+            hx-swap="outerHTML"
+            title="{btn_title_cancel}"
+            class="co-btn"
+            style="font-size:10px;padding:2px 8px;background:rgba(250,204,21,0.10);border-color:rgba(250,204,21,0.3);color:#facc15"
+            {btn_disabled}>
+            ✕ Cancel Orders
+        </button>
+    </div>
+    """
+
     # Stats row
     stats_html = f"""
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-1 mb-2 text-center">
@@ -1334,8 +1413,11 @@ def _render_positions_panel(
         return f"""
         <div id="positions-panel" class="t-panel border t-border rounded-lg p-3"
              hx-swap-oob="true">
-            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">Positions &amp; P&amp;L</h3>
-            {block_html}{stats_html}
+            <div class="flex items-center justify-between mb-2">
+                <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">Positions &amp; P&amp;L</h3>
+                {bridge_dot_html}
+            </div>
+            {block_html}{stats_html}{action_buttons_html}
             <div class="text-xs t-text-faint flex items-center gap-1.5">
                 <span class="text-green-500">✓</span> No open positions
             </div>
@@ -1369,9 +1451,12 @@ def _render_positions_panel(
          hx-swap-oob="true">
         <div class="flex items-center justify-between mb-2">
             <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">Positions &amp; P&amp;L</h3>
-            <span class="{total_color} font-mono text-xs font-bold">Open: ${total_pnl:,.2f}</span>
+            <div class="flex items-center gap-2">
+                {bridge_dot_html}
+                <span class="{total_color} font-mono text-xs font-bold">Open: ${total_pnl:,.2f}</span>
+            </div>
         </div>
-        {block_html}{stats_html}
+        {block_html}{stats_html}{action_buttons_html}
         <div class="overflow-x-auto -mx-1 px-1">
         <table class="w-full min-w-[200px]">
             <thead>
@@ -1901,10 +1986,17 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     if focus_data and focus_data.get("no_trade"):
         no_trade_html = _render_no_trade_banner(str(focus_data.get("no_trade_reason", "Low-conviction day")))
 
-    # Positions panel with risk status
+    # Positions panel with risk status + Bridge liveness
     positions = _get_positions()
     risk_status = _get_risk_status()
-    positions_html = _render_positions_panel(positions, risk_status=risk_status)
+    _bridge_info = _get_bridge_info()
+    positions_html = _render_positions_panel(
+        positions,
+        risk_status=risk_status,
+        bridge_connected=_bridge_info["connected"],
+        bridge_age_seconds=_bridge_info["age_seconds"],
+        bridge_account=_bridge_info["account"],
+    )
 
     # Risk panel
     risk_html = _render_risk_panel(risk_status)
@@ -3013,6 +3105,24 @@ function toggleTheme() {{
             _pushEvent('📋','Position update','#60a5fa');
         }});
 
+        // Bridge status — online/offline state change
+        _es.addEventListener('bridge-status', function(e) {{
+            try {{
+                var bs = JSON.parse(e.data);
+                // Always refresh the positions panel so the bridge dot + button state updates
+                if (typeof htmx!=='undefined') {{
+                    htmx.ajax('GET','/api/positions/html',{{target:'#positions-container',swap:'innerHTML'}});
+                    htmx.ajax('GET','/api/nt8/health/html',{{target:'#health-bar',swap:'innerHTML'}});
+                }}
+                if (bs.connected) {{
+                    var acct = bs.account ? ' (' + bs.account + ')' : '';
+                    _pushEvent('🟢','NT8 Bridge connected' + acct,'#22c55e');
+                }} else {{
+                    _pushEvent('🔴','NT8 Bridge offline — no heartbeat','#f87171');
+                }}
+            }} catch(err) {{}}
+        }});
+
         // Grok update
         _es.addEventListener('grok-update', function() {{
             if (typeof htmx!=='undefined') htmx.ajax('GET','/api/grok/html',{{target:'#grok-container',swap:'innerHTML'}});
@@ -3158,14 +3268,23 @@ def get_focus_symbol(request: Request, symbol: str):
 
 @router.get("/api/positions/html", response_class=HTMLResponse)
 def get_positions_html():
-    """Return live positions panel with risk status as HTML fragment.
+    """Return live positions panel with risk status and Bridge state as HTML fragment.
 
     Always returns content (positions panel renders even when empty),
     so no 204 guard needed here.
     """
     positions = _get_positions()
     risk_status = _get_risk_status()
-    return HTMLResponse(content=_render_positions_panel(positions, risk_status=risk_status))
+    bridge_info = _get_bridge_info()
+    return HTMLResponse(
+        content=_render_positions_panel(
+            positions,
+            risk_status=risk_status,
+            bridge_connected=bridge_info["connected"],
+            bridge_age_seconds=bridge_info["age_seconds"],
+            bridge_account=bridge_info["account"],
+        )
+    )
 
 
 @router.get("/api/risk/html", response_class=HTMLResponse)

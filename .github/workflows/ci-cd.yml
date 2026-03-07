@@ -1,11 +1,11 @@
 # =============================================================================
-# Futures — CI/CD Pipeline
+# Futures - CI/CD Pipeline
 # =============================================================================
-# Automated lint, test, and multi-image Docker build & push to Docker Hub.
+# Automated build, push, and deployment of Futures to Raspberry Pi via Tailscale
 #
-# Pipeline: Lint → Test → Build & Push Docker Images (engine, web, trainer)
+# Pipeline: Lint → Test → Docker Build & Push (matrix) → Deploy to Pi → Health Check
 #
-# Single DockerHub repo with tag-per-service:
+# Single DockerHub repo (nuniesmith/futures) with tag-per-service:
 #   nuniesmith/futures:engine          — Engine + Data API (arm64 + amd64, runs on Pi)
 #   nuniesmith/futures:web             — HTMX Dashboard (arm64 + amd64, runs on Pi)
 #   nuniesmith/futures:trainer         — GPU Training Server (amd64 only, dedicated rig)
@@ -15,9 +15,18 @@
 #   nuniesmith/futures:latest          — Alias for :engine (default pull)
 #
 # Required Secrets:
+#   - TAILSCALE_OAUTH_CLIENT_ID: Tailscale OAuth Client ID
+#   - TAILSCALE_OAUTH_SECRET: Tailscale OAuth Secret
+#   - PROD_TAILSCALE_IP: Production server Tailscale IP
+#   - PROD_SSH_KEY: SSH private key for deployment
+#   - PROD_SSH_USER: SSH username (default: actions)
+#   - PROD_SSH_PORT: SSH port (default: 22)
 #   - DOCKER_USERNAME: Docker Hub username
 #   - DOCKER_TOKEN: Docker Hub access token
-#   - DISCORD_WEBHOOK_ACTIONS: Discord webhook for CI/CD notifications (optional)
+#   - DISCORD_WEBHOOK_ACTIONS: Discord webhook for CI/CD notifications
+#   - XAI_API_KEY: xAI (Grok) API key injected into prod .env
+#   - MASSIVE_API_KEY: Massive API key injected into prod .env
+#   - KRAKEN_API_KEY: Kraken API key injected into prod .env
 # =============================================================================
 
 name: 🚀 CI/CD Pipeline
@@ -41,6 +50,11 @@ on:
                 default: false
             skip_docker:
                 description: "Skip Docker build (test only)"
+                required: false
+                type: boolean
+                default: false
+            skip_deploy:
+                description: "Skip Pi deploy (build only)"
                 required: false
                 type: boolean
                 default: false
@@ -243,13 +257,215 @@ jobs:
                   fields: '[{"name": "Dockerfile", "value": "`${{ matrix.dockerfile }}`", "inline": true}, {"name": "Workflow", "value": "[View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}]'
 
     # =========================================================================
+    # Stage 4: Deploy to Production (Raspberry Pi via Tailscale)
+    # =========================================================================
+    #
+    # Connects to the Pi over Tailscale VPN, then uses the shared ssh-deploy
+    # action to pull the freshly-pushed :engine and :web images (arm64 variants)
+    # and restart the services via docker compose.
+    #
+    # The :trainer image is NOT deployed to the Pi (GPU rig only).
+    #
+    # Gates:
+    #   - Only runs on push to main (same gate as docker stage)
+    #   - Only runs after ALL docker matrix jobs succeed
+    #   - Can be skipped manually via workflow_dispatch skip_deploy input
+    # =========================================================================
+    deploy:
+        name: 🚀 Deploy to Raspberry Pi
+        needs: docker
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        if: |
+            github.event_name == 'push' && github.ref == 'refs/heads/main'
+            && (github.event_name != 'workflow_dispatch' || inputs.skip_deploy != true)
+        steps:
+            - name: 📥 Checkout code
+              uses: actions/checkout@v4
+
+            - name: 🔢 Compute short SHA
+              id: vars
+              run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+            - name: 🔌 Connect to Tailscale
+              id: tailscale
+              uses: nuniesmith/actions/.github/actions/tailscale-connect@main
+              with:
+                  oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+                  oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+                  target-ip: ${{ secrets.PROD_TAILSCALE_IP }}
+                  target-ssh-port: ${{ secrets.PROD_SSH_PORT || '22' }}
+
+            - name: 🚀 Deploy via SSH
+              id: deploy
+              if: steps.tailscale.outputs.connected == 'true'
+              uses: nuniesmith/actions/.github/actions/ssh-deploy@main
+              with:
+                  host: ${{ secrets.PROD_TAILSCALE_IP }}
+                  port: ${{ secrets.PROD_SSH_PORT || '22' }}
+                  username: ${{ secrets.PROD_SSH_USER || 'actions' }}
+                  ssh-key: ${{ secrets.PROD_SSH_KEY }}
+                  project-path: ~/futures
+                  git-pull: false
+                  git-branch: main
+                  docker-prune: false
+                  pre-deploy-command: |
+                      echo "📦 Preparing Futures deployment on Raspberry Pi..."
+
+                      # Handle git repository setup
+                      if [ ! -d "$HOME/futures/.git" ]; then
+                        if [ -d "$HOME/futures" ]; then
+                          echo "📁 Directory exists but is not a git repo — initializing..."
+                          cd ~/futures
+                          git init
+                          git remote add origin https://github.com/${{ github.repository }}.git
+                          git fetch origin
+                          git checkout -f main
+                          git branch --set-upstream-to=origin/main main
+                        else
+                          echo "📥 First deployment — cloning repository..."
+                          git clone https://github.com/${{ github.repository }}.git ~/futures
+                          cd ~/futures
+                          git checkout main
+                        fi
+                      else
+                        cd ~/futures
+                        echo "📥 Pulling latest changes..."
+                        git fetch origin
+                        git checkout main
+                        git pull origin main
+                      fi
+
+                      # Ensure scripts are executable
+                      find . -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+
+                      # Create .env file if it doesn't exist
+                      if [ ! -f ".env" ]; then
+                        echo "📝 Creating default .env..."
+                        cat > .env <<'ENVEOF'
+                      # Futures Environment Configuration
+                      PYTHONUNBUFFERED=1
+                      LOG_LEVEL=info
+                      ENVEOF
+                        chmod 600 .env
+                        echo "✅ Created .env file"
+                      else
+                        echo "✅ Using existing .env file"
+                      fi
+
+                      # Upsert API keys — always overwrite so rotated secrets stay current
+                      echo "🔑 Injecting API keys into .env..."
+                      upsert_env() {
+                        local key="$1" val="$2"
+                        if grep -q "^${key}=" .env 2>/dev/null; then
+                          sed -i "s|^${key}=.*|${key}=${val}|" .env
+                        else
+                          echo "${key}=${val}" >> .env
+                        fi
+                      }
+                      upsert_env "XAI_API_KEY"    "${{ secrets.XAI_API_KEY }}"
+                      upsert_env "MASSIVE_API_KEY" "${{ secrets.MASSIVE_API_KEY }}"
+                      upsert_env "KRAKEN_API_KEY"  "${{ secrets.KRAKEN_API_KEY }}"
+                      chmod 600 .env
+                      echo "✅ API keys injected"
+
+                      # Create required directories
+                      echo "📁 Ensuring data directories exist..."
+                      mkdir -p data config
+                      chmod 755 data config
+                      echo "✅ Directories ready"
+
+                  deploy-command: |
+                      cd ~/futures
+
+                      # Stop existing services
+                      echo "🐳 Stopping existing services..."
+                      docker compose -f docker-compose.prod.yml down 2>/dev/null || \
+                        docker compose down 2>/dev/null || true
+
+                      # Log in to Docker Hub and pull latest per-service images
+                      echo "🐳 Pulling latest images from Docker Hub..."
+                      echo "${{ secrets.DOCKER_TOKEN }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin 2>/dev/null || true
+
+                      echo "==> Pulling :engine image..."
+                      docker pull ${{ env.IMAGE_NAME }}:engine
+
+                      echo "==> Pulling :web image..."
+                      docker pull ${{ env.IMAGE_NAME }}:web
+
+                      # Start services (trainer is GPU-rig only — not deployed to Pi)
+                      echo "🚀 Starting engine and web services..."
+                      docker compose -f docker-compose.prod.yml up -d --no-build --remove-orphans engine web 2>/dev/null || \
+                        docker compose up -d --no-build --remove-orphans
+
+                  post-deploy-command: |
+                      cd ~/futures
+
+                      echo ""
+                      echo "📊 Container status:"
+                      docker compose -f docker-compose.prod.yml ps engine web 2>/dev/null || \
+                        docker ps --filter "name=futures" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+                      echo ""
+                      echo "📊 Storage usage:"
+                      df -h / | grep -v Filesystem
+                      docker system df 2>/dev/null || true
+
+                      # Prune dangling images to save space on Raspberry Pi
+                      echo ""
+                      echo "🧹 Pruning dangling Docker images..."
+                      docker image prune -f 2>/dev/null || true
+
+                      echo ""
+                      echo "🎯 Architecture:"
+                      uname -m
+                      docker info --format '{{.Architecture}}' 2>/dev/null || true
+
+                      echo ""
+                      echo "✅ Futures deployment complete!"
+
+            - name: 🏥 Run Health Checks
+              id: health-checks
+              if: always() && steps.deploy.outcome == 'success'
+              uses: nuniesmith/actions/.github/actions/health-check@main
+              with:
+                  containers: futures
+                  ssh-host: ${{ secrets.PROD_TAILSCALE_IP }}
+                  ssh-port: ${{ secrets.PROD_SSH_PORT || '22' }}
+                  ssh-user: ${{ secrets.PROD_SSH_USER || 'actions' }}
+                  ssh-key: ${{ secrets.PROD_SSH_KEY }}
+                  initial-delay: 15
+                  retry-count: 3
+                  retry-delay: 10
+                  fail-on-unhealthy: false
+
+            - name: 📣 Notify deployment
+              if: always()
+              uses: nuniesmith/actions/.github/actions/discord-notify@main
+              continue-on-error: true
+              with:
+                  webhook-url: ${{ secrets.DISCORD_WEBHOOK_ACTIONS }}
+                  title: "${{ steps.deploy.outcome == 'success' && '🚀 Futures Deployed to Pi' || '❌ Futures Pi Deploy Failed' }}"
+                  description: "${{ steps.deploy.outcome == 'success' && 'Engine + Web updated on Raspberry Pi' || 'Failed to deploy Futures to Raspberry Pi' }}"
+                  status: ${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}
+                  include-repo-info: "true"
+                  fields: |
+                      [
+                        {"name": "Platform", "value": "🥧 Raspberry Pi (ARM64)", "inline": true},
+                        {"name": "Images", "value": "`${{ env.IMAGE_NAME }}:engine`\n`${{ env.IMAGE_NAME }}:web`", "inline": true},
+                        {"name": "Commit", "value": "`${{ steps.vars.outputs.sha_short }}`", "inline": true},
+                        {"name": "Network", "value": "🔒 Tailscale VPN", "inline": true},
+                        {"name": "Health", "value": "${{ steps.health-checks.outputs.healthy == 'true' && '✅ Healthy' || '⚠️ Check logs' }}", "inline": true}
+                      ]
+
+    # =========================================================================
     # Pipeline Summary
     # =========================================================================
     summary:
         name: 📊 Pipeline Summary
         runs-on: ubuntu-latest
         timeout-minutes: 5
-        needs: [lint, test, docker]
+        needs: [lint, test, docker, deploy]
         if: always()
         steps:
             - name: 📊 Generate summary
@@ -263,12 +479,22 @@ jobs:
                   echo "| ✨ Lint & Format | \`${{ needs.lint.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "| 🧪 Test | \`${{ needs.test.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "| 🐳 Docker Build & Push | \`${{ needs.docker.result }}\` |" >> $GITHUB_STEP_SUMMARY
+                  echo "| 🚀 Deploy to Raspberry Pi | \`${{ needs.deploy.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
 
                   if [ "${{ needs.lint.result }}" = "success" ] && \
                      [ "${{ needs.test.result }}" = "success" ] && \
                      [ "${{ needs.docker.result }}" = "success" ]; then
-                    echo "### ✅ All stages completed successfully!" >> $GITHUB_STEP_SUMMARY
+                    DEPLOY="${{ needs.deploy.result }}"
+                    if [ "$DEPLOY" = "success" ]; then
+                      echo "### ✅ All stages completed — Pi updated!" >> $GITHUB_STEP_SUMMARY
+                    elif [ "$DEPLOY" = "skipped" ]; then
+                      echo "### ✅ Build + test passed (Pi deploy skipped)" >> $GITHUB_STEP_SUMMARY
+                    elif [ "$DEPLOY" = "failure" ]; then
+                      echo "### ⚠️ Build passed but Pi deploy failed — check Tailscale / SSH secrets" >> $GITHUB_STEP_SUMMARY
+                    else
+                      echo "### ✅ All stages completed successfully!" >> $GITHUB_STEP_SUMMARY
+                    fi
                   elif [ "${{ needs.lint.result }}" = "failure" ]; then
                     echo "### ❌ Pipeline failed at lint stage" >> $GITHUB_STEP_SUMMARY
                     echo "Fix linting/formatting errors before proceeding." >> $GITHUB_STEP_SUMMARY
@@ -301,10 +527,11 @@ jobs:
                   echo "| 🔗 Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
 
             - name: ❌ Fail on critical errors
-              if: needs.lint.result == 'failure' || needs.test.result == 'failure' || needs.docker.result == 'failure'
+              if: needs.lint.result == 'failure' || needs.test.result == 'failure' || needs.docker.result == 'failure' || needs.deploy.result == 'failure'
               run: |
                   echo "❌ Pipeline had failures"
                   echo "  Lint:   ${{ needs.lint.result }}"
                   echo "  Test:   ${{ needs.test.result }}"
                   echo "  Docker: ${{ needs.docker.result }}"
+                  echo "  Deploy: ${{ needs.deploy.result }}"
                   exit 1

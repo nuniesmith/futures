@@ -755,16 +755,20 @@ class PositionManager:
             current_price = float(bars["Close"].iloc[-1])
             pos.update_price(current_price)
 
-            # Check stop loss hit
-            stop_hit, stop_reason = self._check_stop_hit(pos, bars)
-            if stop_hit:
-                tickers_to_close.append((ticker, stop_reason, current_price))
-                continue
-
-            # Check TP3 hit (hard exit regardless of phase)
+            # Check TP3 hit first — hard exit at full target takes priority over
+            # any trailing stop, matching C# CheckPhase3Exits which checks tp3Hit
+            # before ema9Stop.  Without this order a bar that simultaneously
+            # touches the EMA9 trail and TP3 would close at the stop price
+            # instead of booking the full profit.
             tp3_hit = self._check_tp3_hit(pos)
             if tp3_hit:
                 tickers_to_close.append((ticker, "TP3 hit — full target achieved", current_price))
+                continue
+
+            # Check stop loss hit (EMA9 trail or original SL)
+            stop_hit, stop_reason = self._check_stop_hit(pos, bars)
+            if stop_hit:
+                tickers_to_close.append((ticker, stop_reason, current_price))
                 continue
 
             # Phase-specific updates

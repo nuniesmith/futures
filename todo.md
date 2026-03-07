@@ -1,543 +1,466 @@
-Docker Hub repo (`nuniesmith/futures`):
-- `:engine` — engine + data API (runs on Raspberry Pi)
-- `:web` — HTMX dashboard (runs on Raspberry Pi)
-- `:trainer` — GPU training server (runs on dedicated rig)
-- `:latest` — alias for `:engine` (default pull)
-- `:engine-<sha>` / `:web-<sha>` / `:trainer-<sha>` — pinned to commit
+# futures — TODO
 
-Repos:
-| Repo | Path | Purpose |
-|---|---|---|
-| **futures** | `~/github/futures` | Live dashboard, web UI, engine, shared `lib` (this repo) |
-| **rb** | `~/github/rb` | Service-only trainer (compose pulls `nuniesmith/futures:trainer`), hosts trained models (.pt, .onnx) |
-| **ninjatrader** | `~/github/ninjatrader` | NinjaTrader 8 C# strategies, indicators, Bridge — pulls best ONNX from `rb` repo |
+> **Single repo**: `github.com/nuniesmith/futures`
+> **Docker Hub**: `nuniesmith/futures` — `:engine` · `:web` · `:trainer`
+> **NinjaTrader deploy**: `scripts/deploy_nt8.bat` → `scripts/deploy_nt8.ps1` (pulls all C# source + ONNX from this repo)
+> **Infrastructure**: Local (Tailscale mesh) — Pi (engine + web), GPU rig (trainer), Windows (NT8)
 
 ---
+
+## Repo Layout
+
+```
+futures/
+├── src/
+│   ├── lib/
+│   │   ├── core/          # BreakoutType, RangeConfig, models, multi_session, alerts, cache
+│   │   ├── analysis/      # breakout_cnn, chart_renderer, mtf_analyzer, regime, scorer, …
+│   │   ├── training/      # dataset_generator, orb_simulator, trainer_server
+│   │   ├── trading/       # costs, engine, strategies
+│   │   ├── services/
+│   │   │   ├── engine/    # main, breakout, scheduler, position_manager, backfill, risk, focus, …
+│   │   │   ├── web/       # HTMX dashboard, FastAPI reverse-proxy (port 8080)
+│   │   │   └── data/      # FastAPI data API (positions, SSE, bridge, trades, journal, kraken, …)
+│   │   └── integrations/  # kraken_client, massive_client, grok_helper
+│   └── ninja/
+│       ├── BreakoutStrategy.cs   # NT8 strategy (single-file, all deps inlined)
+│       ├── RubyIndicator.cs      # NT8 chart indicator
+│       └── addons/
+│           ├── Bridge.cs         # NT8 HTTP bridge AddOn (port 5680)
+│           └── DataPreloader.cs  # NT8 history seeder AddOn
+├── models/                # champion .pt, .onnx, feature_contract.json (Git LFS)
+├── scripts/
+│   ├── deploy_nt8.bat     # Windows launcher (double-click to deploy NT8)
+│   ├── deploy_nt8.ps1     # NT8 deploy: pulls C# + DLLs + ONNX from this repo
+│   ├── sync_models.sh     # Pi-side: pull .pt + .onnx from this repo → restart engine
+│   └── …
+├── config/                # Prometheus, Grafana, Alertmanager
+├── docker/                # Dockerfiles per service
+└── docker-compose.yml
+```
+
+---
+
 ## Current State
-- **Dashboard**: HTMX + FastAPI serving live market stats, multi-type breakout signals, risk status, Grok AI analyst.
-- **Engine**: Session-aware scheduler covering full 24h Globex day (9 sessions, 18:00 ET start). CNN inference builds full 18-feature v6 tabular vector.
-- **Breakout Pipeline**: Detection → 6 deterministic filters (majority gate) → optional CNN inference → Redis publish.
-- **Breakout Types**: 13 types — ORB, PrevDay, InitialBalance, Consolidation + 9 researched (Weekly, Monthly, Asian, BollingerSqueeze, ValueArea, InsideDay, GapRejection, PivotPoints, Fibonacci). All implemented in engine detection + training simulators.
-- **TP3 + EMA9 Trailing**: 3-phase bracket walk-forward (SL/TP1 → TP2 → EMA9 trail toward TP3) on all 13 types.
-- **CNN Model**: EfficientNetV2-S + tabular head. v6 contract with 18 tabular features. ONNX export for NT8. C# auto-adapts via runtime dimension detection.
-- **NT8 Live Trading**: 5 core instruments (`MGC, MES, MNQ, MYM, 6E`), max 5 concurrent positions, 10-min cooldown. Crash-resilient with `OnOrderUpdate` rejection handling, OCO GUID uniqueness, SL price validation, signal name truncation, and try/catch around all order submissions.
-- **Feature Contract**: **v6 current (18 tabular features)** — v4's 14 core features + 4 new: `breakout_type_ord`, `asset_volatility_class`, `hour_of_day`, `tp3_atr_mult_norm`. Backward compat for v4 (14) and v5 (8) vectors via zero-padding.
-- **Multi-Session**: All 9 sessions with bracket params matching futures + NT8.
-- **Parity Renderer**: Default for training — pixel-perfect match with NT8 `OrbChartRenderer`.
-- **CNN Inference**: CPU-only fallback in engine, watchdog-based hot-reload. NT8 auto-adapts tabular vector to model dimension.
-- **Kraken Crypto**: REST + WebSocket v2 integration for 9 spot pairs (BTC, ETH, SOL, LINK, AVAX, DOT, ADA, MATIC, XRP).
-- **NT8 Deploy**: Dashboard panel generates installer .bat that pulls C# from ninjatrader repo.
-- **Monitoring**: Prometheus + Grafana dashboards (optional profile).
-- **CI/CD**: Lint → Test → Build & push 3 tagged images to `nuniesmith/futures` on DockerHub.
-- **rb Repo**: Renamed from `orb` → `rb`. Service-only compose pulling trainer image. Hosts trained champion models (.pt for engine, .onnx for NT8). NinjaTrader pulls best ONNX via PowerShell.
-- **All Source in `futures` repo**: Training code (`lib/training`), analysis (`lib/analysis`), engine, web, trainer server — all in one monorepo. `rb` repo is service-only (compose + model hosting).
+
+- **Monorepo**: All source — engine, web, trainer, lib, C# strategies, deploy scripts — lives here. No separate `rb` or `ninjatrader` repos.
+- **Models**: `models/breakout_cnn_best.pt` + `.onnx` + `feature_contract.json` committed (Git LFS). Engine pulls via `sync_models.sh`, NT8 pulls via `deploy_nt8.ps1`. Latest champion: **87.1% accuracy**, 87.15% precision, 87.27% recall, 25 epochs, v6 18-feature, 41 checkpoints saved.
+- **Docker**: `:engine` (data API + CNN inference), `:web` (HTMX dashboard), `:trainer` (GPU training server). Runs on Pi (engine + web) and GPU rig (trainer).
+- **Feature Contract**: v6, 18 tabular features. `models/feature_contract.json` is the canonical source for both Python and C#.
+- **CNN Model**: EfficientNetV2-S + tabular head. ONNX export for NT8. `OrbCnnPredictor` auto-detects tabular dimension from ONNX metadata at load time. Training pipeline: generate dataset → train → evaluate → gate check (≥80% acc, ≥75% prec, ≥70% rec) → promote → export ONNX + feature_contract.json.
+- **Breakout Types**: 13 — ORB, PrevDay, InitialBalance, Consolidation, Weekly, Monthly, Asian, BollingerSqueeze, ValueArea, InsideDay, GapRejection, PivotPoints, Fibonacci. Fully wired in engine detection, training, dataset generator, C# enum, CNN tabular vector, chart renderer, `UpdateRangeWindow`, and `CheckBreakout`.
+- **NT8 Strategy**: `BreakoutStrategy.cs` — 5 core instruments (`MGC, MES, MNQ, MYM, 6E`), v6 18-feature tabular vector, all 13 `BreakoutType` range builders fully implemented (no stubs remain), 13 chart renderer box styles, 3-phase bracket walk (TP1 → breakeven → EMA9 trail to TP3), per-type `tp3_atr_mult` loaded from `feature_contract.json` via `ParseTp3MultsFromContract` + `ApplyTp3MultsToStates`, crash-resilient. TPT Mode built-in ($50k/2, $100k/3, $150k/4 micros).
+- **NT8 Bridge**: `Bridge.cs` AddOn — HTTP listener (port 5680), position push to dashboard (`POST /api/positions/update`), 15s heartbeat, `SignalBus.IsRiskBlocked` risk gate, Prometheus `/metrics`, all endpoints including `/execute_signal`, `/flatten`, `/cancel_orders`, `/status`, `/orders`, `/health`.
+- **NT8 Deploy**: `deploy_nt8.bat` / `deploy_nt8.ps1` — downloads C# source, DLLs, ONNX model, `feature_contract.json` from this repo and installs into NT8.
+- **TP3 + EMA9 Trailing**: 3-phase bracket in both Python `position_manager.py` and C# `BreakoutStrategy.cs`. Phase 1 (SL/TP1) → Phase 2 (breakeven) → Phase 3 (EMA9 trail to TP3).
+- **Position Manager**: `position_manager.py` — always-in 1-lot micro positions, reversal gates (CNN ≥ 0.85, MTF ≥ 0.60, 30min cooldown), Redis persistence, `OrderCommand` emitter for Bridge.
+- **Dashboard**: HTMX + FastAPI — live signals, 13 breakout type filter pills, 9 session tabs, MTF score column, trade journal, Kraken crypto chart + correlation panel, Grok AI analyst, CNN dataset preview, positions panel, Bridge status badge, flatten/cancel buttons, market regime (HMM), performance panel, volume profile, equity curve, asset focus cards with entry/stop/TP levels.
+- **Kraken Integration**: `KrakenDataProvider` REST client (public + private endpoints), `KrakenFeedManager` WebSocket feed (OHLC + trades), 9 crypto pairs (ETH, SOL, LINK, AVAX, DOT, ADA + more), API key/secret from env vars, auto-start on engine boot when `ENABLE_KRAKEN_CRYPTO=1`. REST API connected, WS live with 5097+ bars and 7214+ trades streaming.
+- **Massive Integration**: `MassiveDataProvider` REST client (futures OHLCV, snapshots, contracts), `MassiveFeedManager` WebSocket (bars, trades, quotes), front-month resolution, used as primary bars source for training.
+- **Data Service**: Unified data layer inside engine service — checks Redis cache first, then Postgres, then fetches from external APIs (Massive for futures, Kraken for crypto). Startup cache warming from Postgres (7 days). Bar data persisted to both Redis (hot) and Postgres (durable).
+- **Training**: `trainer_server.py` FastAPI HTTP server (port 8200). `dataset_generator.py` covers all 13 types + all 9 sessions + Kraken. Session-specific thresholds. Type embedding. Synthetic augmentation. Balanced sampling. Full pipeline: generate → split (85/15 stratified) → train → evaluate → gate → promote → ONNX export.
+- **Monitoring**: Prometheus + Grafana. "Training Data Health" dashboard provisioned.
+- **CI/CD**: Lint → Test → Build & push 3 Docker images → Deploy to Pi via Tailscale SSH → Health checks → Discord notifications. All on push to `main`.
+- **Tailscale**: NT8 Windows at `100.127.182.112`, Pi (Docker) at `100.100.84.48`, all services communicate over Tailscale mesh. HTTP only (no domain/TLS needed for local mesh).
 
 ---
-## Active — `futures` repo (`~/github/futures`)
+
+## Active
+
+### 1. Training & Model — Final Validation
+
+- [x] **Full retrain on GPU rig** — 22 symbols, all 13 breakout types, all 9 sessions, 90 days, 25 epochs
+  - Champion: 87.1% accuracy, 87.15% precision, 87.27% recall ✅
+  - ONNX exported (`breakout_cnn_best.onnx` — 80.7 MB) ✅
+  - `feature_contract.json` v6 regenerated ✅
+
+- [ ] **Validate ONNX ↔ PyTorch parity** — run same 18-feature v6 tabular batch through `.pt` and `.onnx` inference; assert max absolute difference < 1e-4
+  - The `.pt` and `.onnx` are both present in `models/` — need to run the parity check script
+
+- [ ] **Verify `sync_models.sh`** pulls new `.pt` + `.onnx` + `feature_contract.json` from `nuniesmith/futures` and restarts engine container cleanly
+
+### 2. NT8 — Remaining Validation
+
+- [ ] **Test v6 ONNX auto-adapt** — deploy `BreakoutStrategy.cs` to NT8, compile, verify:
+  - Startup log shows `CNN tabular dim: model expects 18, C# builds 18`
+  - Per-type TP3 mults loaded from `feature_contract.json` (log each type's mult at startup)
+  - Entry logs show `[positions: N/5]`
+  - No `OCO ID cannot be reused` or `signal name longer than 50` errors
+  - Run for a full session and review output logs
+
+- [ ] **Parity-test Phase 3 EMA9 trailing** — run Python engine + C# strategy side-by-side on same OHLCV data, compare Phase 3 trail stop levels and exit prices. Target: ≤ 1 tick divergence per bar.
+  - `test_phase3_ema9_parity.py` — 130 tests all green; warm-up sequences use trending bars ✅
+
+### 3. NT8 — Hard Stop (Take Profit Trader Safety)
+
+- [ ] **4:00 PM ET hard flatten** — add a time-based safety check in `OnBarUpdate()` (BIP0 path) that calls `FlattenAll("TPT_HARD_STOP_16:00")` if current ET time ≥ 16:00 and any positions are open
+  - **Critical for TPT accounts**: no overnight positions allowed — violating this = account termination
+  - Guard: `if (TptMode && barTimeET.Hour >= 16 && _activePositionCount > 0)` → flatten everything
+  - Log clearly: `[TPT] HARD STOP — flattening all positions at 16:00 ET (no overnight holds)`
+  - Also set `RiskBlocked = true` with reason `"TPT_SESSION_CLOSED"` until 18:00 ET
+  - Re-enable at 18:00 ET: `if (TptMode && barTimeET.Hour >= 18 && RiskBlockReason == "TPT_SESSION_CLOSED")` → unblock
+
+- [ ] **Bridge `/flatten` from web UI** — ensure the Flatten All button in the dashboard triggers Bridge `FlattenAll` which closes every position across all instruments immediately (already wired, needs live test)
+
+- [ ] **Manual trade from dashboard** — when the strategy is always running and I place a manual entry from the web UI via `/execute_signal`, it should coexist with automated entries. Verify:
+  - Manual entry gets its own `PositionPhase` tracking
+  - Automated entries continue alongside manual positions
+  - Both respect `MaxConcurrentPositions = 5`
+
+### 4. Web UI — Trading Mode vs Review Mode
+
+- [ ] **Add UI mode toggle** — "Trading" vs "Review" mode switch in the dashboard header
+  - **Trading Mode** (active session):
+    - Shows: asset focus cards (entry/stop/TP), positions panel, flatten/cancel buttons, market events feed, alerts, live feed heartbeat, ORB signal history, engine status
+    - Hides: next session schedule, Grok AI panel (moved to manual pull), performance stats, dataset preview, volume profile (collapsed by default)
+    - Priority: low-latency, actionable info only, minimal clutter
+  - **Review Mode** (off-hours / analysis):
+    - Shows: everything — full dashboard with all panels expanded
+    - Performance panel, trade journal, Grok AI auto-refresh, dataset preview, volume profile, correlation matrix, market regime
+    - Useful for post-session review, model monitoring, system health checks
+  - Store mode preference in `localStorage`, default to Trading Mode during active hours (03:00–16:00 ET), Review Mode otherwise
+  - CSS class toggle: `.mode-trading .review-only { display: none }` / `.mode-review .trading-only { display: none }`
+
+- [ ] **Remove "Next Session" panel** — it's static schedule info that doesn't change; remove from `_render_full_dashboard()` in `dashboard.py` (the session strip at the top already shows open/closed sessions dynamically)
+
+- [ ] **Grok AI → manual pull only** — change Grok panel from auto-refresh (`hx-trigger="every 60s"`) to a manual button ("Ask Grok") that fetches on click
+  - Useful during active trading when uncertain about a position
+  - Remove the auto-polling to reduce noise and API calls
+  - Add `hx-trigger="click"` on a "🤖 Ask Grok" button instead
+
+- [ ] **Fix forex futures spread on asset cards** — `6E` and other forex pairs show identical entry/stop/TP values when ATR is very small relative to price
+  - Root cause in `_compute_entry_zone()`: `entry_width = atr * 0.5` — for 6E (price ~1.08, ATR ~0.003) the rounding to 4 decimals collapses the zone
+  - Fix: round to appropriate precision based on tick size (6E tick = 0.00005, needs 5 decimal places); or use tick-count display instead of raw price for forex pairs
+  - Also: entry_low/entry_high/stop/tp1/tp2 all round to 4 decimals — forex needs at least 5
+
+- [ ] **Estimated dollar value on asset cards** — add `$risk` and `$reward` estimates next to stop/TP levels
+  - Already computing `position_size` and `risk_dollars` in `compute_asset_focus()` ✅
+  - Add: `$target1` = `position_size × ticks_to_tp1 × dollar_per_tick`, same for TP2
+  - Display in the Levels grid: "TP1: 1.0850 (~$45)" format
+  - Helps quickly assess whether a trade is worth taking
+
+### 5. Web UI — Trainer Separation & New Pages
+
+- [ ] **Extract trainer UI into its own page** — currently the trainer server has its own HTML UI at `/trainer/` that's proxied through web service. Instead:
+  - Create a dedicated `/train` page in the web service dashboard
+  - Page shows: training status, start/cancel training, model list, checkpoint history, ONNX export button, validation metrics, dataset stats
+  - Trainer service becomes **API-only** (`trainer_server.py` — remove the `trainer_ui` HTML endpoint, keep all API endpoints)
+  - Web service proxies all `/api/trainer/*` requests to the trainer service (already mostly wired)
+  - Training can be kicked off from the web UI with configurable params (symbols, epochs, days_back, etc.)
+
+- [ ] **Settings page** — new `/settings` page in the web dashboard
+  - Configure service URLs (DATA_SERVICE_URL, TRAINER_SERVICE_URL, NT_BRIDGE_HOST)
+  - Toggle features: ENABLE_KRAKEN_CRYPTO, ORB_CNN_GATE, ORB_FILTER_GATE
+  - View/edit environment overrides (stored in Redis or a config table)
+  - Show current Tailscale IPs and connection status for all services
+  - Manage Kraken API key status (show if configured, don't show the actual key)
+  - Massive API key status
+  - Account settings: account size, risk %, max contracts
+
+### 6. Kraken — Full Data Integration for Training
+
+- [ ] **Kraken API key/secret via CI/CD** — ensure `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` are injected as secrets in the CI/CD pipeline and `.env` on prod server
+  - Already wired in `docker-compose.yml`: `KRAKEN_API_KEY=${KRAKEN_API_KEY:-}` ✅
+  - Already wired in `KrakenDataProvider.__init__`: reads from env vars ✅
+  - Need: add `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` to GitHub Actions secrets for deploy step
+  - Need: ensure `.env` on Pi has the keys set
+
+- [ ] **Kraken data in training pipeline** — when training is triggered from the web UI, the dataset generator should automatically:
+  1. Check Redis cache for recent crypto bars (hot path)
+  2. Check Postgres for historical crypto bars (warm path)
+  3. Fetch missing data from Kraken REST API (`get_ohlcv_period`) for any gaps (cold path)
+  4. Feed crypto data through the same 13 breakout-type detection pipeline
+  - `dataset_generator.py` already supports Kraken symbols via `bars_source` config ✅
+  - Need: wire the data service's cache-first logic into the training data fetch path
+  - The data service already has this pattern in `lifespan()` with `startup_warm_caches()` — extend to training
+
+- [ ] **Unified data resolver for training** — create a `DataResolver` class in the data service that:
+  - Accepts a symbol + timeframe + date range
+  - Checks: Redis → Postgres → Massive API (futures) / Kraken API (crypto)
+  - Returns a unified DataFrame regardless of source
+  - Tracks what was cache-hit vs API-fetched (for monitoring)
+  - Backfills any newly fetched data into Redis + Postgres for next time
+  - Used by: training pipeline, engine focus computation, backfill service
+
+### 7. Multi-Source Breakout Detection (Futures + Crypto)
+
+- [ ] **Cross-asset breakout signals** — use Kraken crypto data alongside Massive futures data to find correlated breakouts
+  - BTC/ETH breakout at Asian session → MES/MNQ follow at London/US open (known correlation)
+  - Crypto 24/7 data provides overnight context for futures that only trade ~23h
+  - Add crypto momentum as an additional CNN tabular feature (future v7 contract)
+  - Start with correlation scoring (already in Kraken correlation panel on dashboard) → advance to signal generation
+
+- [ ] **Generalize model across asset classes** — the CNN is already trained on 22 symbols across 5 asset classes (indices, forex, metals, energy, crypto via MBT/MET)
+  - Extend to include direct Kraken crypto pairs in training (BTC, ETH, SOL, etc.)
+  - The `feature_contract.json` already has `asset_class_map` entries for crypto ✅
+  - Need: ensure `dataset_generator.py` can pull Kraken OHLCV and render chart images for crypto pairs
+
+### 8. Trade Copier (Future — Post First Funded Account)
+
+- [ ] **Simple trade copier for multiple TPT accounts** — once the first $50k account is funded and profitable:
+  - Mirror all fills from Account 1 → Accounts 2–5
+  - Use Bridge AddOn's position push to detect fills on the primary account
+  - Fire identical orders on secondary accounts via their own Bridge instances (or a shared copier service)
+  - Respect per-account contract limits (each TPT tier has its own max)
+  - Scale up to 5 accounts max
+
+---
+
+## Completed
+
+### CNN Model — Full Retrain (v6, 87.1% accuracy)
+- [x] 22-symbol training: MGC, SIL, MHG, MCL, MNG, MES, MNQ, M2K, MYM, 6E, 6B, 6J, 6A, 6C, 6S, ZN, ZB, ZC, ZS, ZW, MBT, MET
+- [x] All 13 breakout types, all 9 sessions, 90 days lookback, 25 epochs
+- [x] 85/15 stratified train/val split
+- [x] Validation gates: 87.1% acc (≥80%), 87.15% prec (≥75%), 87.27% rec (≥70%) — all passed
+- [x] Champion promoted: `breakout_cnn_best.pt` + `breakout_cnn_best.onnx` (80.7 MB)
+- [x] `feature_contract.json` v6 regenerated with all 13 type configs
+- [x] `breakout_cnn_best_meta.json` written with full training config and metrics
+- [x] 41 checkpoint `.pt` files saved during training (timestamped with accuracy)
+- [x] ONNX export: opset 17, dynamic batch axes, validated with `onnx.checker`
+
+### NT8 — Stop-and-Reverse (SAR) always-in micro position (`src/ninja/BreakoutStrategy.cs`)
+- [x] `ReversalState` sealed class — direction, signalId, entryPrice, ATR, SL, lastReversalTime, reversalCount; `RMultiple(price)` + `IsWinning(price)` helpers; `Open()` / `Close()` lifecycle methods
+- [x] `_sarStates[]` allocated at DataLoaded alongside `_states[]`; SAR constants mirror Python PM env vars: `CSarMinCnnProb=0.85`, `CSarWinningCnnProb=0.92`, `CSarHighWinnerCnnProb=0.95`, `CSarMinMtfScore=0.60`, `CSarCooldownMinutes=30`, `CSarChaseMaxAtrFraction=0.50`, `CSarChaseMinCnnProb=0.90`
+- [x] `ShouldReverse()` — 5 gates matching Python `_should_reverse`: direction, CNN prob, cooldown, MTF, high-winner protection
+- [x] `DecideEntryType()` — limit-at-range-edge / market-chase logic matching Python `_decide_entry_type`
+- [x] `TryReversePosition()` — flatten → clean phase tracking → reset fired flags → pre-decrement active count → FireEntry → update cooldown
+- [x] `CheckBreakout()` SAR path: when `rs.FiredLong`/`rs.FiredShort` already set, check `sar.IsShort`/`sar.IsLong` and evaluate reversal gates; fresh entries still use original path
+- [x] `PassesCnnFilter()` overload with `out double cnnProbOut` for SAR reversal gate evaluation
+- [x] `FireEntry()` → `sarRef.Open()` stamps direction + signalId on fill; `OnOrderUpdate` closes SAR state on flatten/SL/TP; per-bar `Positions[bip]` sync as belt-and-suspenders
+
+### NT8 — MTF (15-minute) EMA/MACD alignment scoring (`src/ninja/BreakoutStrategy.cs`)
+- [x] **`InstrumentState` MTF fields** — EMA-9/21/50 incremental state, MACD-12/26/9 incremental state, histogram ring-buffer (3 bars) for slope, EMA-50 5-bar ring-buffer for slope, `MtfScore` sentinel (-1 = ready, 1.0 = warm-up pass-through), `MtfBip` back-reference to the 15m BIP index
+- [x] **15m `AddDataSeries`** — one 15m series added per tracked instrument in `Configure` immediately after each 1m series; primary instrument (BIP0) gets its 15m series separately; all use the same trading-hours template as the 1m series
+- [x] **`_mtfBipBySymbol` map** — built at `DataLoaded` by scanning `BarsArray` for `BarsPeriod.Value == 15`; wires `st.MtfBip` on every matching `InstrumentState`
+- [x] **`UpdateMtf(int mtfBip, InstrumentState st)`** — called from `OnBarUpdate` whenever a 15m BIP fires a new closed bar; incremental EMA-9/21/50, MACD-12/26/9, histogram ring-buffer; writes `-1` sentinel to `MtfScore` once both EMA-50 (≥50 bars) and MACD signal (≥35 bars) are warmed up; `1.0` pass-through during warm-up
+- [x] **`ComputeMtfScore(InstrumentState st, string direction)`** — directional score 0.0–1.0 matching Python `MTFAnalyzer` weights: +0.30 EMA stacked, +0.15 EMA slope ≥0.02%/bar, +0.25 MACD histogram polarity, +0.15 histogram slope, +0.15 no opposing divergence (always granted)
+- [x] **`GetMtfScore(InstrumentState st, string direction)`** — thin wrapper: calls `ComputeMtfScore` when sentinel is -1, returns `1.0` pass-through otherwise
+- [x] **`ShouldReverse()` Gate 4 wired** — replaced `double mtfScore = 1.0` stand-in with `GetMtfScore(st, direction)` in both long and short SAR paths in `CheckBreakout()`
+- [x] **Tailscale topology** — NT8 Windows server at `100.127.182.112`; Pi (Docker) at `100.100.84.48`; 15m bars subscribed directly from NT8's data feed — no Pi round-trip needed for MTF computation
+
+### NT8 → Python SAR state sync (`src/ninja/BreakoutStrategy.cs` + `src/lib/services/data/api/sar.py`)
+- [x] **`CSarSyncUrl` constant** — `http://100.100.84.48:8000/sar/sync`; `CEngineBaseUrl = http://100.100.84.48:8000`
+- [x] **`_sarHttpClient`** — `System.Net.Http.HttpClient` initialised at `DataLoaded` with 3s timeout; disposed at `Terminated`
+- [x] **`PushSarSyncAsync(instrName, newDirection, sar, barTime)`** — fire-and-forget `POST /sar/sync` with JSON body; `ContinueWith` logs HTTP status or throttled error on failure; never blocks the bar thread
+- [x] **`SarEsc(string s)`** — minimal JSON string escape helper (backslash, quote, newline) used by `PushSarSyncAsync`
+- [x] **`TryReversePosition()` Step 7** — calls `PushSarSyncAsync` after `FireEntry` returns for every reversal
+- [x] **`FireEntry()` fresh-entry push** — calls `PushSarSyncAsync` when `sarRef.ReversalCount == 0` and `State != Historical` so Python PM learns about the very first position opening
+- [x] **`src/lib/services/data/api/sar.py`** — FastAPI router: `POST /sar/sync`, `GET /sar/state`, `GET /sar/state/{asset}`, `DELETE /sar/state/{asset}`, `DELETE /sar/state`; Pydantic models; 24h Redis TTL
+- [x] **`_notify_position_manager(payload)`** — lazy-imports `lib.services.engine.main._position_manager`; handles flat/reversal state sync
+- [x] **Network** — NT8 → Pi over Tailscale; Pi never initiates to NT8 for SAR (push-only from NT8 side)
+
+### Python PM — TP3 priority fix (`src/lib/services/engine/position_manager.py`)
+- [x] **`update_all()` TP3 check order** — moved `_check_tp3_hit()` before `_check_stop_hit()` so TP3 hard exit always takes priority over EMA9 trailing stop on the same bar, matching C# `CheckPhase3Exits` behaviour
+
+### C# `BreakoutStrategy.cs` — `PrepareCnnTabular` fix
+- [x] **Feature [17] `tp3_atr_mult_norm`** — now reads `st.Ranges[breakoutType].Tp3AtrMult` (loaded from `feature_contract.json`) instead of hardcoding `5.0 / 5.0 = 1.0`; per-type values now flow correctly into CNN inference
+
+### Parity test suite (`src/tests/test_phase3_ema9_parity.py`)
+- [x] **`_warmed_up_state()` warm-up** — switched from flat-price warm-up to trending warm-up (drift=5, LONG rises, SHORT falls) so EMA9 lags the close throughout seeding
+- [x] **`run_parity()` initialisation** — direction-aware initial `stop_loss` / `ema9_trail_price`: `0.0` for LONG, `float('inf')` for SHORT
+- [x] **`PyPhase3State.process_bar()`** — stop-hit check guarded by `trail_established` flag
+- [x] **`test_tp3_takes_priority_over_ema9_stop`** — rewritten with two-phase manual warm-up
+- [x] **`TestEndToEndParity` warm-up sequences** — all five scenario tests updated to trending (not flat) warm-up bars
+- [x] **`test_flat_market_no_premature_exit`** — replaced sinusoidal oscillation with slow linear rise
+
+### NT8 — v6 Model Compatibility
+- [x] **`BreakoutType` enum (4 → 13)** — renamed `Orb` → `ORB`, added 9 new values with explicit ordinals matching Python `IntEnum`
+- [x] **`PrepareCnnTabular()` (14 → 18 features)** — added slots [14] `breakout_type_ord`, [15] `asset_volatility_class`, [16] `hour_of_day`, [17] `tp3_atr_mult_norm`
+- [x] **`GetVolatilityClass()` helper** — matches Python `ASSET_VOLATILITY_CLASS` dict exactly
+- [x] **`NormaliseTabular()` updated** — passthrough normalisation for features [14]–[17] with bounds clamping
+- [x] **`CNumTabularFeatures` and `MaxTabular` updated** from 14 → 18
+- [x] **Startup diagnostic log** — logs `feature_contract.json v6 (18 features)` and per-type TP3 mults
+- [x] **`RangeConfig` entries for all 13 types** — `GetRangeConfig()` has cases for all 13 types
+- [x] **All 13 types registered in `InstrumentState` constructor**
+
+### NT8 — All 13 Range Builders (UpdateRangeWindow)
+- [x] **ORB** — time-window accumulation (30 min from session open), mid-session startup guard
+- [x] **PrevDay** — snapshots prior session H/L via `PrevOrbHigh`/`PrevOrbLow` on session boundary
+- [x] **InitialBalance** — time-window accumulation (60 min), mid-session startup guard
+- [x] **Consolidation** — ATR contraction squeeze (bar range < `SqueezeThreshold × ATR`), resets until `MinBarsRequired` consecutive squeeze bars
+- [x] **Asian** — time-window 19:00–01:00 ET (360 min), hour filter for in-window bars
+- [x] **BollingerSqueeze** — tighter squeeze threshold (0.50 × ATR), 10-bar minimum
+- [x] **Weekly** — rolling prior-week H/L via bar scan (Mon–Fri before this week's Monday), capped at 2730 bars
+- [x] **Monthly** — rolling prior-month H/L via bar scan (before 1st of current month), capped at 12000 bars
+- [x] **ValueArea** — prior-session (close, volume) pairs sorted by price; POC outward expansion to 70% volume target → VAH/VAL
+- [x] **InsideDay** — today H/L vs yesterday H/L; compression ratio guard (0.25–0.85); mother bar as range
+- [x] **GapRejection** — overnight gap ≥ 0.25 × ATR; range = [min(yest_close, today_open), max(…)]
+- [x] **PivotPoints** — classic floor pivot formula (P = (H+L+C)/3, R1 = 2P−L, S1 = 2P−H) from prior session H/L/C
+- [x] **Fibonacci** — 50-bar swing H/L ≥ 1.5 × ATR; 38.2%–61.8% retracement zone; direction-aware
+
+### NT8 — Per-Type TP3 Mults from feature_contract.json
+- [x] **`ParseTp3MultsFromContract(json)`** — manual JSON parser extracts `breakout_types[type].tp3_atr_mult` for all 13 types; no `System.Text.Json` dependency
+- [x] **`ApplyTp3MultsToStates()`** — writes loaded mults into every `InstrumentState`'s `RangeState.Tp3AtrMult` field
+- [x] **`_tp3MultByType` dictionary** — populated at `OnStateChange(DataLoaded)` from loaded `feature_contract.json`
+
+### NT8 — Chart Renderer (13 Box Styles)
+- [x] **`OrbChartRenderer` updated** — `BoxStyle` helper (fill color, border color, solid/dashed), `GetBoxStyle(BreakoutType)` factory for all 13 types
+- [x] **`BreakoutType` parameter** threaded through `Render()`, `RenderToTemp()`, `CheckBreakout()`, `PassesCnnFilter()`, `PrepareCnnTabular()`, `RenderCnnSnapshot()`
+- [x] **PNG filenames** prefixed with `rng_{ordinal}_` for per-type disambiguation
+
+### NT8 — TP3 + EMA9 Trailing
+- [x] **`Tp3AtrMult` per-type** via `RangeState.Tp3AtrMult` (loaded from contract; fallback = 5.0)
+- [x] **`EnableTp3Trailing` flag**
+- [x] **`BreakoutPhase` enum** (`Phase1`, `Phase2`, `Phase3`, `Closed`) + `PositionPhase` class
+- [x] **3-phase bracket walk** in `OnOrderUpdate` — Phase 1 → Phase 2 → Phase 3
+- [x] **`UpdateEma9()` helper** — standard EMA(9) seeded from SMA, called per primary bar
+- [x] **`CheckPhase3Exits()`** — per BIP0 bar, checks Phase 3 positions: TP3 limit exit or EMA9 adverse cross market exit
+
+### NT8 — Bridge AddOn (`src/ninja/addons/Bridge.cs`)
+- [x] **`Bridge.cs` as NT8 AddOn** (inherits `AddOnBase`) — HTTP listener on port 5680
+- [x] **HTTP endpoints** — `GET /health`, `GET /status`, `GET /orders`, `GET /metrics`, `POST /execute_signal`, `POST /flatten`, `POST /cancel_orders`
+- [x] **Position push** — POST snapshot to `{DashboardBaseUrl}/api/positions/update` on every fill + 15-second heartbeat
+- [x] **Risk gate** — `SignalBus.IsRiskBlocked` / `SignalBus.RiskBlockReason` static volatile fields
+- [x] **Prometheus metrics** — 14 gauge/counter metrics
+- [x] **CORS headers** on all responses; graceful shutdown in `OnStateChange(Terminated)`
+
+### NT8 — Deploy Scripts (`scripts/`)
+- [x] **`deploy_nt8.ps1`** — pulls C# source + DLLs + ONNX + `feature_contract.json` from `nuniesmith/futures`; patches `NinjaTrader.Custom.csproj`; optional `-Launch`
+- [x] **`deploy_nt8.bat`** — thin Windows launcher; forwards all args to PS1
+- [x] **`scripts/pull_model.ps1`** — standalone model-only update: downloads `.onnx` + `feature_contract.json`, verifies SHA256
+- [x] **`Bridge.cs` in deploy manifest** — deployed to `AddOns\Bridge.cs`
+
+### NT8 — Crash Resilience
+- [x] `OnOrderUpdate` handler — absorbs rejected orders instead of terminating strategy
+- [x] OCO GUID uniqueness — 6-char GUID suffix on every OCO ID
+- [x] SL price validation — corrects stop to correct side of market before submission
+- [x] Signal name truncation — capped at 49 chars (NT8 limit = 50)
+- [x] Try/catch on all `SubmitOrderUnmanaged` calls
+- [x] `MaxConcurrentPositions = 5` with fill/flat tracking via `OnOrderUpdate`
+- [x] Reduced to 5 core instruments (`MGC, MES, MNQ, MYM, 6E`)
+- [x] Cooldown 10 min; `OrbCnnPredictor.NumTabular` dynamic from ONNX metadata
+- [x] Startup diagnostics — logs CNN tabular dimension, per-type TP3 mults, and position count
+
+### NT8 — TPT Mode
+- [x] **`TptMode` property** — NinjaScript property, defaults to `true`
+- [x] **`TptAccountTier` enum** — FiftyK (2 micros), HundredK (3 micros), HundredFiftyK (4 micros)
+- [x] **`GetTptContracts()`** — returns fixed contract count based on tier
+- [x] **`FireEntry()`** — uses `GetTptContracts()` when TptMode=true instead of dynamic ATR-based sizing
 
 ### Engine & Detection
-- [x] **Add engine detection for new 9 breakout types** — Wired WEEKLY, MONTHLY, ASIAN, BBSQUEEZE, VA, INSIDE, GAP, PIVOT, FIB into `detect_all_breakout_types()` with proper range builders, DEFAULT_CONFIGS for all 13 types, scheduler action types, and 81 tests
-- [x] **Position Manager — Stop-and-Reverse strategy** — New `position_manager.py` module: persistent 1-lot micro positions, 3-phase bracket walk (SL/TP1 → breakeven → EMA9 trail to TP3), reversal gates (CNN, MTF, cooldown, winning-position protection), limit/market entry decision, session-end closure for intraday types, Redis state persistence, 105 tests
-- [x] **Asset watchlists** — Added `CORE_WATCHLIST` (5 assets: MGC, MCL, MES, MNQ, M6E), `EXTENDED_WATCHLIST` (5: SIL, M2K, M6B, MBT, ZN), `ACTIVE_WATCHLIST`, and ticker frozensets to `models.py` + exported from `core/__init__.py`
-- [x] **Strategy plan document** — Comprehensive `docs/STRATEGY_PLAN.md` covering asset review (22→10 active, 12 dropped), model versatility architecture, stop-and-reverse design, order management, EMA9 trailing rules, MTF integration, and phased implementation plan
-- [x] **Wire `PositionManager` into engine main loop** — `_dispatch_to_position_manager()` called on all ORB/PDR/IB/CONS breakouts, `_handle_update_positions()` runs on every main loop iteration calling `update_all()`; orders dispatched to NT8 Bridge via `_publish_pm_orders()`; session stats in daily report
-- [x] **Add session-level performance stats** to daily report — `_build_session_stats()` groups `orb_events` by session key and computes pass-rate per session; PositionManager P&L/win-rate by breakout type included in daily report
-- [x] **Backfill gap detection** — `_check_and_alert_gaps()` scans stored bars post-backfill, publishes `engine:gap_alerts` to Redis (TTL 26h), logs warnings; threshold configurable via `BACKFILL_GAP_ALERT_MINUTES` env var
+- [x] 13 range builder functions + `DEFAULT_CONFIGS` for all types in Python engine
+- [x] All 13 types wired into `detect_range_breakout()` dispatch and `detect_all_breakout_types()`
+- [x] `BreakoutResult.extra` dict with type-specific metadata
+- [x] `PositionManager` wired into engine main loop
+- [x] `OrderCommand` emitter published to NT8 Bridge via `_publish_pm_orders()`; also writes `engine:pm:positions` to Redis (TTL 120s)
+- [x] Session-level performance stats in daily report
+- [x] Backfill gap detection — `_check_and_alert_gaps()` publishes `engine:gap_alerts`
+- [x] Asset watchlists — `CORE_WATCHLIST`, `EXTENDED_WATCHLIST`, `ACTIVE_WATCHLIST`
 
-### Dashboard & Web UI
-- [x] **Add "Breakout Type" filter + MTF score column** to signal history table — All 13 breakout type filter pills (ORB/PDR/IB/CONS/WEEKLY/MONTHLY/ASIAN/BBSQUEEZE/VA/INSIDE/GAP/PIVOT/FIB) with per-type colour coding; 9 session tabs (CME/SYD/TYO/SHA/FRA/LON/LN-NY/US/SETTLE); MTF score % with MACD slope arrow and divergence icon; DB-level `breakout_type` filter in `get_orb_events()`; count badges on active type pills; 7 new tests
-- [x] **Trade journal UI improvements** — inline editing (HTMX form per row, hx-get/hx-post), tag filtering (clickable tag pills, `?tag=` query param, filter bar with counts), quick-add form, limit selector, tag legend; all wired in `journal.py` `_render_journal_panel()`
-- [x] **Kraken crypto price chart** — SVG candlestick renderer (`_render_candle_svg`), OHLCV REST fetch, pair/interval/period selectors, live price + 24h change header; `kraken_chart_html` endpoint + `#kraken-chart-container` in dashboard sidebar
-- [x] **Crypto/futures correlation panel** — Pearson correlation matrix across 9 Kraken pairs + MES/MGC/MNQ (returns-based), colour-coded bar chart, `kraken_correlation_html` endpoint + `#correlation-container` in dashboard
+### Dashboard & Bridge API
+- [x] **`GET /positions/`** — reads `bridge:positions` cache key; returns `NTPositionsResponse`
+- [x] **`POST /positions/update`** — written by Bridge AddOn on every fill + heartbeat
+- [x] **`POST /positions/execute_signal`** — pre-flight risk check, proxies to Bridge
+- [x] **`POST /positions/flatten`** — proxies to Bridge `/flatten`
+- [x] **`POST /positions/cancel_orders`** — proxies to Bridge `/cancel_orders`
+- [x] **`GET /positions/bridge_status`** — heartbeat age, account, bridge version, position count
+- [x] **`GET /positions/bridge_orders`** — proxies to Bridge `/orders`
+- [x] **SSE `bridge-status` event** — emitted whenever bridge online/offline state changes
+- [x] **SSE `positions-update` event** — emitted via pub/sub channel and polled from cache fallback
+- [x] 13 breakout type filter pills + 9 session tabs in signal history table
+- [x] MTF score % column with MACD slope arrow and divergence icon
+- [x] Trade journal — inline editing, tag filtering, quick-add, limit selector
+- [x] Kraken crypto price chart — SVG candlestick, OHLCV REST, pair/interval/period selectors
+- [x] Crypto/futures correlation panel — Pearson matrix (9 Kraken pairs + MES/MGC/MNQ)
+- [x] CNN dataset preview — `GET /cnn/dataset/preview`, base64 PNG cards
 
-### Training & Dataset (shared `lib`)
-- [x] **Fix trainer_server.py ↔ breakout_cnn.py signature mismatch** — Corrected `_run_training_pipeline` to call `train_model(data_csv=..., val_csv=..., model_dir=..., image_root=...)` with correct kwargs, added new `evaluate_model()` function for post-training metrics (accuracy/precision/recall via sklearn), fixed ONNX export to use `importlib.getattr` for missing function, smoke test passes end-to-end on GPU
-- [x] **Add `evaluate_model()` to breakout_cnn.py** — Loads checkpoint, runs inference on validation CSV, returns `{val_accuracy, val_precision, val_recall}` dict; used by trainer pipeline for gate checks
-- [x] **Upgrade feature contract v4→v6** (14→18 features) — Added 4 new slots: `breakout_type_ord` [14], `asset_volatility_class` [15], `hour_of_day` [16], `tp3_atr_mult_norm` [17]; updated `TABULAR_FEATURES` (18 items), `NUM_TABULAR=18`, `FEATURE_CONTRACT_VERSION=6`; updated `BreakoutDataset.__getitem__` (builds all 18 features), `_normalise_tabular_for_inference` (backward compat for 8-feature v5 and 14-feature v4 via zero-padding), engine inference callsite (full 18 features computed inline), dataset_generator `_build_row` (emits v6 columns); `generate_feature_contract()` includes `breakout_type_ordinals`, `asset_volatility_classes`, and full `breakout_types` config section
-- [x] **Export `feature_contract.json` v6** — Added `generate_feature_contract()` to `breakout_cnn.py` (returns dict + optionally writes file); `contract` CLI subcommand (`python -m lib.analysis.breakout_cnn contract --output models/feature_contract.json`); written to `models/feature_contract.json` with 18 features, 13 breakout types, 9 sessions, asset volatility classes, breakout type configs; 15 tests
-- [x] **BreakoutType embedding in CNN** — Added `use_type_embedding` flag to `HybridBreakoutCNN`; learned `Embedding(13, 8)` table replaces scalar `breakout_type_ord` slot; `type_fusion` layer merges 32-dim scalar encoding + 8-dim embedding; `forward()` accepts optional `type_ids` tensor (falls back to ordinal derivation); `_build_model_from_checkpoint()` auto-detects embedding architecture from state dict; `get_type_embedding_weights()` utility; `--type-embedding` CLI flag; `CNN_TYPE_EMBEDDING=1` env var; `embedding` CLI subcommand to inspect learned weights; backward-compat: existing checkpoints without embedding key load normally
-- [x] **Session-specific training thresholds** — `SESSION_THRESHOLDS` dict in `breakout_cnn.py` with 9 keys (cme=0.75, sydney=0.72, tokyo=0.74, shanghai=0.74, frankfurt=0.80, london=0.82, london_ny=0.82, us=0.82, cme_settle=0.78); `get_session_threshold()` lookup used by `predict_breakout()` and `predict_breakout_batch()`
-- [x] **Automated good/bad balancing across all 13 types + 9 sessions** — `DatasetConfig` gains `max_samples_per_type_label` (caps per (label, breakout_type) bucket) and `max_samples_per_session_label` (caps per (label, session) bucket); both enforced in `generate_dataset_for_symbol()` with rolling counters; `--max-per-type` and `--max-per-session` CLI flags added to `dataset_generator generate`
-- [x] **Synthetic data augmentation** — `get_training_transform()` enhanced: added `T.RandomRotation(degrees=1.5)` (tiny tilt simulating screenshot variation) and `T.RandomErasing(p=0.05, scale=(0.01, 0.10))` (5% chance of minor occlusion patch, simulates UI overlay artefacts); existing `ColorJitter` and `RandomCrop` retained
-- [x] **CLI `dataset_generator generate` — all 13 breakout types** — `--breakout-type` choices expanded from 4 to all 13 types + `all`; `--max-per-type` and `--max-per-session` args wired; example: `python -m lib.training.dataset_generator generate --symbols MGC MES --session all --breakout-type all --max-per-type 500`
-- [x] **Dashboard preview: good/bad snapshots per type/session** — `GET /cnn/dataset/preview` endpoint in `cnn.py`; loads dataset CSV (auto-detected), filters by `breakout_type` / `session` / `label`, samples *n* random rows, renders base64-encoded PNG cards in a responsive grid; HTMX controls for type/session/label/n selectors + shuffle button; wired into dashboard sidebar as collapsible "Dataset Preview" panel (`#cnn-dataset-preview-container`, `hx-trigger="revealed"`)
+### Training & Dataset
+- [x] `evaluate_model()` in `breakout_cnn.py` — accuracy/precision/recall; used by trainer pipeline gate
+- [x] Feature contract v6 — 18 tabular features; `generate_feature_contract()` + `contract` CLI subcommand
+- [x] `BreakoutType` embedding in CNN — `Embedding(13, 8)` table, `use_type_embedding` flag
+- [x] Session-specific inference thresholds — `SESSION_THRESHOLDS` dict (9 keys)
+- [x] Balanced sampling — `max_samples_per_type_label` + `max_samples_per_session_label`
+- [x] Synthetic augmentation — `RandomRotation(1.5°)` + `RandomErasing(p=0.05)`
+- [x] `trainer_server.py` pipeline: generate → split → train → evaluate → gate → promote → ONNX export → feature contract write
+- [x] `split_dataset()` — 85/15 stratified split by label, used by training pipeline
 
-### Infrastructure
-- [x] **Rate limiting tuning** — `rate_limit.py` fully configured: SSE=10/min (gates new handshakes only), dashboard fragments=120/min (burst-safe for HTMX multi-panel page load), mutations=20/min, heavy actions=5/min, Kraken private=10/min, public/health=60/min; `_PATH_LIMITS` ordered prefix map; `_client_key_func` buckets by API-key prefix then X-Forwarded-For then remote IP; Redis-backed storage available via `RATE_LIMIT_STORAGE=redis://...`; all limits env-var configurable; `RATE_LIMIT_ENABLED=0` disables without removing middleware
-- [ ] Deployment pipeline — add Pi deploy stage back to CI/CD when ready
-- [x] **Fix `sync_models.sh` repo reference** — updated `nuniesmith/orb` → `nuniesmith/rb`
-- [x] **Auto-sync trained models post-train** — `trainer_server.py` now regenerates `feature_contract.json` v6 into `models/` dir at Step 5 of promotion pipeline (after champion `.pt` is written, before ONNX export); `sync_models.sh` already handles pulling `.pt` + `.onnx` + `feature_contract.json` from `rb` repo with Git LFS resolution + SHA256 verification; `--restart` flag triggers engine reload after sync
+### Dashboard & Bridge UI
+- [x] **Positions panel** — `#positions-container` with 10s polling; renders account, positions table, unrealized P&L, cash balance, pending orders count
+- [x] **Bridge status badge** — green `● BRIDGE` (connected + age) or grey `○ BRIDGE` (offline)
+- [x] **Flatten All button** — `hx-post="/api/positions/flatten"` with confirm dialog; disabled when bridge offline
+- [x] **Cancel Orders button** — `hx-post="/api/positions/cancel_orders"` with confirm dialog
+- [x] **SSE bridge-status event handler** — JS listener triggers HTMX refresh on connect/disconnect transition
 
-### Monitoring
-- [x] **Prometheus metrics: `trainer_images_generated`, `trainer_label_balance`, `trainer_render_time_seconds`** — Added 3 new trainer-specific metrics to `metrics.py` (Gauge for images/label counts, Histogram for render wall-time); `record_trainer_dataset_stats()` helper wired into `trainer_server.py` `_run_training_pipeline()` after dataset generation (best-effort, non-blocking); 7 new tests in `test_metrics_and_ratelimit.py`; all 3 appear in `test_output_contains_all_metric_families`
-- [x] **Grafana panel: "Training Data Health"** — `config/grafana/training-data-health-dashboard.json` with 4 row sections (Trainer Service Health, Dataset Quality, Render Performance, Model Promotion History); panels for `trainer_label_balance` gauge (good vs bad ratio per type), `trainer_images_generated` total, `trainer_render_time_seconds` histogram (p50/p90/p99 + heatmap), champion accuracy/precision/recall gauges, render time trend; COPY'd into Grafana image via `docker/monitoring/grafana/Dockerfile`; provisioned via `config/grafana/provisioning/dashboards/dashboards.yml`; wired to existing Prometheus scrape target (`data-service` job at `engine:8000` + `trainer` job at `trainer:8200`)
-- [x] **Trainer UI proxy fix** — All `fetch()` calls in `trainer_server.py` trainer dashboard JS now use auto-detected `BASE` path prefix (`''` when served directly at `:8200/`, `'/trainer'` when proxied via web service at `:8080/trainer/`); updated breakout type dropdown to all 13 types (was only 4: ORB/PDR/IB/CONS); added missing `cme_settle` session to session dropdown (was 8, now all 9); fixed 4 stale test assertions in `test_breakout_types.py` (`num_tabular` 12→18, feature name spot-checks, `sessions`→`session_thresholds`, `asset_volatility`→`asset_volatility_classes`)
+### Kraken Integration
+- [x] **`KrakenDataProvider`** — full REST client: public (OHLCV, ticker, asset pairs, server time) + private (balance, trade balance, open orders, trade history) endpoints
+- [x] **`KrakenFeedManager`** — WebSocket feed: OHLC + trade subscriptions, bar aggregation, Redis cache push, reconnect logic
+- [x] **9 crypto pairs** tracked with live prices on dashboard
+- [x] **REST API connected** — health check shows green status
+- [x] **WS live** — 5097+ bars and 7214+ trades streaming
+- [x] **Kraken health endpoint** — `/api/kraken/health` with detailed status
+- [x] **Kraken chart HTML** — SVG candlestick chart with pair/interval/period selectors
+- [x] **Kraken account HTML** — balance display (when authenticated)
+- [x] **Kraken correlation panel** — Pearson correlation matrix (crypto + futures)
+- [x] **Rate limiting** — public (0.35s) and private (1.0s) rate limits enforced
+- [x] **HMAC-SHA512 signing** for private endpoints
 
----
-## Active — `rb` repo (`~/github/rb`)
+### Massive Integration
+- [x] **`MassiveDataProvider`** — REST client: aggregates, daily, snapshots, recent trades, active contracts, products, schedules, quotes, market statuses
+- [x] **`MassiveFeedManager`** — WebSocket: bars, trades, quotes, front-month resolution, second-agg upgrade/downgrade
+- [x] **Front-month contract resolution** — automatic continuous contract mapping
+- [x] **Primary data source for training** — `bars_source=massive` default in trainer config
 
-### Trainer Service
-- [x] **End-to-end trainer smoke test** — Smoke test passes: 257 images generated, 2-epoch training on RTX 2070 SUPER, 63.8% accuracy (expected for quick test), model promoted, champion .pt (83.1 MB) written to disk, full pipeline in 20s
-- [ ] **Full retrain** — `docker compose up` on GPU rig, generate dataset for 5 core assets (`MGC, MES, MNQ, MYM, 6E`) + all 13 types + all 9 sessions + 90 days, train 25+ epochs, export ONNX v6, commit champion
-- [ ] **Verify compose pulls `nuniesmith/futures:trainer`** correctly and trainer server starts
+### Infrastructure & Monitoring
+- [x] Rate limiting — `rate_limit.py` Redis-backed with env-var overrides
+- [x] `sync_models.sh` — Git LFS resolution + SHA256 verify; `--restart` flag
+- [x] Trainer Prometheus metrics — `trainer_images_generated`, `trainer_label_balance`, `trainer_render_time_seconds`
+- [x] "Training Data Health" Grafana dashboard provisioned
+- [x] CI/CD — Lint → Test → Build & push 3 tagged images on push to `main`
+- [x] **Pi deploy stage** (`deploy-pi` job in CI/CD) — Tailscale connect → SSH deploy → health checks → Discord notify
+- [x] **Tailscale connect action** — OAuth-based Tailscale connection in CI/CD pipeline
+- [x] **SSH deploy action** — git pull, docker-compose up, prune dangling images
+- [x] **Health check action** — container health verification post-deploy
+- [x] **Discord notifications** — build started, tests passed/failed, docker pushed, deploy success/failure
 
-### Training & Model Export
-- [ ] **Retrain with all 13 breakout types + TP3**
-  - Generate dataset for ALL 13 breakout types + ALL 9 sessions + Kraken
-  - Validate ONNX export matches PyTorch predictions (18-feature v6 tabular input)
-  - Export `feature_contract.json` v6 with 18 features, 13 types + TP3 fields
-- [ ] **Commit champion models to `rb` repo**
-  - `models/breakout_cnn_best.pt` — PyTorch checkpoint (engine pulls this)
-  - `models/breakout_cnn_best.onnx` — ONNX export (NT8 pulls this via PowerShell, 18 tabular features)
-  - `models/breakout_cnn_best_meta.json` — metadata (version: v6)
-  - `models/feature_contract.json` — v6 contract (18 features, 13 types, 9 sessions)
-
-### Model Hosting
-- [ ] **Verify `futures` engine can pull best `.pt`** from `rb` repo via `scripts/sync_models.sh`
-- [ ] **Verify `ninjatrader` PowerShell can pull best `.onnx`** from `rb` repo
-- [ ] Document model promotion workflow (train → evaluate → commit champion → consumers pull)
-
----
-## Active — `ninjatrader` repo (`~/github/ninjatrader`)
-
-### Crash Resilience (Done — deployed 2026-03-05)
-- [x] **OnOrderUpdate handler** — absorbs rejected orders instead of letting NT8 terminate the strategy
-- [x] **OCO GUID uniqueness** — every OCO ID gets a 6-char GUID suffix, can never be reused
-- [x] **SL price validation** — corrects stop price to correct side of market before submission
-- [x] **Signal name truncation** — capped at 49 chars (NT8 limit is 50)
-- [x] **Try/catch on SubmitOrderUnmanaged** — prevents unhandled exceptions from killing strategy
-- [x] **Max concurrent positions** — `MaxConcurrentPositions = 5` with `OnOrderUpdate` fill/flat tracking
-- [x] **Reduced to 5 core instruments** — `MGC, MES, MNQ, MYM, 6E` (from 15)
-- [x] **Increased cooldown** — 10 min between entries per instrument (from 5)
-- [x] **CNN auto-adapt** — `OrbCnnPredictor` reads model's expected tabular dimension at load time, truncates/pads automatically
-- [x] **Startup diagnostics** — logs CNN tabular dimension, position count in entry logs
-
-### C# BreakoutType Expansion
-- [ ] **Update C# `BreakoutType` enum** to match 13-value IntEnum:
-  ```
-  ORB=0, PrevDay=1, InitialBalance=2, Consolidation=3,
-  Weekly=4, Monthly=5, Asian=6, BollingerSqueeze=7,
-  ValueArea=8, InsideDay=9, GapRejection=10, PivotPoints=11, Fibonacci=12
-  ```
-- [ ] **Update C# `OrbCnnPredictor`** to build 18-feature v6 tabular vector:
-  - [0..13] existing v4 features (quality_pct_norm through asset_class_id)
-  - [14] breakout_type_ord — BreakoutType ordinal / 12
-  - [15] asset_volatility_class — GetVolatilityClass(ticker)
-  - [16] hour_of_day — ET hour / 23
-  - [17] tp3_atr_mult_norm — TP3 ATR mult / 5.0
-
-### Chart Rendering
-- [ ] **Update C# `OrbChartRenderer`** to draw 9 new box styles:
-  - `teal_solid` (Weekly), `orange_solid` (Monthly), `red_dashed` (Asian)
-  - `magenta_dashed` (BollingerSqueeze), `olive_solid` (ValueArea), `lime_dashed` (InsideDay)
-  - `coral_solid` (GapRejection), `steel_dashed` (PivotPoints), `amber_solid` (Fibonacci)
-
-### TP3 + EMA9 Trailing
-- [ ] **Implement C# TP3 + EMA9 trailing** in `BreakoutStrategy.cs`:
-  - Add `tp3_atr_mult` from `RangeConfig` / `feature_contract.json`
-  - After TP2 hit: trail remaining contracts with EMA9 crossover
-  - Exit at TP3 or EMA9 stop
-  - Match Python 3-phase bracket logic in `position_manager.py` exactly
-
-### Stop-and-Reverse Integration
-- [ ] **Implement C# stop-and-reverse** in `BreakoutStrategy.cs`:
-  - Mirror `PositionManager` logic: always-in 1-lot micro for core 5 assets
-  - Reversal gates: CNN ≥ 0.85 (0.92 for winning positions), MTF ≥ 0.60, 30min cooldown
-  - Limit entry at range edge, market chase only with CNN ≥ 0.90 and < 0.5×ATR overshoot
-  - Sync position state with Python engine via Bridge WebSocket
-
-### Model Pull
-- [ ] **Update PowerShell model pull script** to fetch `.onnx` + `feature_contract.json` v6 (18 features) from `rb` repo
+### Monorepo Consolidation
+- [x] All training code merged from `orb` → `lib/training`
+- [x] `rb` repo eliminated — models live in `futures/models/` (Git LFS)
+- [x] `ninjatrader` repo eliminated — C# source lives in `src/ninja/`, deploy scripts in `scripts/`
+- [x] All URLs updated from `nuniesmith/orb` → `nuniesmith/futures`
 
 ---
-## Completed
 
-### BreakoutStrategy Crash Fix (2026-03-05)
-- [x] **Root cause analysis**: Strategy terminated with 34 open positions across 15 instruments
-  - OCO ID reuse: NinjaTrader rejected a bracket order because the OCO group ID was already consumed by a prior rejected SL in the same session
-  - SL price validation: BuyToCover StopMarket for a SHORT position was placed at/below market price ("Buy stop orders can't be placed below the market")
-  - NinjaTrader's default unmanaged error handling (`ErrorHandling=Stop strategy, cancel orders, close positions`) killed the entire strategy
-- [x] **CNN dimension mismatch**: C# sent 14 tabular features (v4 contract) but deployed ONNX model expects 8 (v3) — every CNN inference failed, meaning zero AI filtering was active
-- [x] **Signal name > 50 chars**: NinjaTrader silently ignores orders with signal names exceeding 50 characters
-- [x] **Fix 1**: Reduced tracked instruments from 15 → 5 core assets (`MGC,MES,MNQ,MYM,6E`)
-- [x] **Fix 2**: Added `MaxConcurrentPositions` (default 5) with active position tracking via `OnOrderUpdate` fill/flat detection
-- [x] **Fix 3**: Added `OnOrderUpdate` override to absorb rejected orders gracefully instead of letting NT8 terminate the strategy
-- [x] **Fix 4**: Added max concurrent positions gate before entry submission
-- [x] **Fix 5**: Made OCO IDs globally unique by appending a 6-char GUID suffix (`OCO-{signalId}-{guid6}`)
-- [x] **Fix 6**: Truncated signal names to 49 chars (NT8 limit is 50)
-- [x] **Fix 7**: Added SL price validation — corrects stop price to correct side of market before submission
-- [x] **Fix 8**: Wrapped `SubmitOrderUnmanaged` calls in try/catch to prevent unhandled exceptions
-- [x] **Fix 9**: Made `OrbCnnPredictor.NumTabular` dynamic — auto-detects expected dimension from ONNX model metadata and adapts the tabular vector (truncate/zero-pad)
-- [x] **Fix 10**: Added position count to entry log lines for monitoring
-- [x] **Fix 11**: Increased entry cooldown from 5 → 10 minutes to reduce over-trading
-- [x] **Fix 12**: Added CNN tabular dimension logging at startup for diagnosis
-- [x] Created `scripts/patch_breakout_strategy.py` — repeatable patch script with 25 targeted text replacements, dry-run mode, and verification
-
-### Trainer Pipeline Fix + Evaluate Model
-- [x] Fixed `trainer_server.py` `_run_training_pipeline()` — replaced incorrect `train_model(csv_path=..., save_path=..., patience=...)` with correct `train_model(data_csv=..., val_csv=..., model_dir=..., image_root=...)`
-- [x] Added `evaluate_model()` to `breakout_cnn.py` — loads checkpoint, computes accuracy/precision/recall via sklearn on validation set, returns metrics dict consumed by trainer pipeline gate checks
-- [x] Fixed ONNX export step — uses `importlib.getattr` to gracefully handle missing `export_onnx_model` function
-- [x] Trainer smoke test passes end-to-end on RTX 2070 SUPER: dataset generation (257 images) → CNN training (2 epochs, GPU) → evaluation (63.8% acc) → champion promotion → .pt on disk (83.1 MB)
-
-### Position Manager & Strategy
-- [x] Created `lib/services/engine/position_manager.py` — stop-and-reverse micro contract strategy module
-  - `MicroPosition` dataclass: full position state with bracket levels, phase tracking, EMA9 trail, excursion metrics, serialisable to/from Redis
-  - `PositionManager` class: manages persistent 1-lot positions for core watchlist assets
-  - 3-phase bracket walk: Phase 1 (SL/TP1) → Phase 2 (breakeven after TP1) → Phase 3 (EMA9 trailing after TP2, hard cap at TP3)
-  - Reversal gate: CNN prob (0.85 min, 0.92 for winners, 0.95 for +1R winners), filter pass, 30min cooldown, MTF ≥ 0.60
-  - Entry type decision: limit at range edge, market chase only with CNN ≥ 0.90 within 0.5×ATR
-  - Session-end closure: closes intraday types (ORB, IB, etc.) but keeps swing types (Weekly, Monthly, Asian)
-  - `OrderCommand` emitter: BUY/SELL/MODIFY_STOP/CANCEL for NinjaTrader Bridge consumption
-  - Redis persistence: save/load state for engine restart survival
-  - 105 tests covering all paths
-- [x] Added `CORE_WATCHLIST` (5 assets), `EXTENDED_WATCHLIST` (5 assets), `ACTIVE_WATCHLIST` (union), ticker frozensets to `models.py`
-- [x] Exported new watchlist constants from `lib/core/__init__.py`
-- [x] Created `docs/STRATEGY_PLAN.md` — comprehensive strategy document
-
-### Breakout Types Expansion
-- [x] Extended `BreakoutType` IntEnum from 4 → 13 types (ORB through Fibonacci)
-- [x] Added 9 new `RangeConfig` entries with unique box styles, RGBA colours, and tuned bracket params
-- [x] Added engine `BreakoutType` StrEnum: WEEKLY, MONTHLY, ASIAN, BBSQUEEZE, VA, INSIDE, GAP, PIVOT, FIB
-- [x] Added bidirectional engine↔training type mapping for all 13 types
-- [x] Implemented 9 new simulators: Weekly, Monthly, Asian, BollingerSqueeze (BB inside KC), ValueArea (volume profile VAH/VAL), InsideDay, GapRejection, PivotPoints (classic/Woodie/Camarilla), Fibonacci (38.2%–61.8% zone)
-- [x] Wired all 13 types into dataset generator dispatcher
-- [x] Added grouping constants: `EXCHANGE_BREAKOUT_TYPES`, `RESEARCHED_BREAKOUT_TYPES`, `HTF_BREAKOUT_TYPES`, `DETECTED_BREAKOUT_TYPES`
-- [x] Added helper functions: `types_with_ema_trailing()`, `types_with_tp3()`
-
-### TP3 + EMA9 Trailing
-- [x] Added `tp3_atr_mult`, `enable_ema_trail_after_tp2`, `ema_trail_period` to `RangeConfig` and `BracketConfig`
-- [x] Added `tp3`, `hit_tp2`, `hit_tp3`, `ema_trail_exit`, `trail_exit_price` to `ORBSimResult`
-- [x] Implemented 3-phase bracket walk-forward: Phase 1 SL/TP1 → Phase 2 TP2 → Phase 3 EMA9 trail toward TP3
-- [x] Applied to both `simulate_orb_outcome` (ORB) and `_simulate_range_outcome` (all other types)
-- [x] New outcome types: `tp2_hit`, `tp3_hit`, `ema_trail_exit` with correct R-multiple PnL
-
-### Monorepo Merge (orb → lib)
-- [x] Merged `orb/breakout_types.py` → `lib/core/breakout_types.py` (canonical `BreakoutType(IntEnum)` + `RangeConfig`)
-- [x] Merged `orb/multi_session.py` → `lib/core/multi_session.py` (9 sessions, bracket params, ordinals)
-- [x] Merged `orb/chart_renderer.py` → `lib/analysis/chart_renderer.py` (mplfinance Ruby-style renderer)
-- [x] Merged `orb/chart_renderer_parity.py` → `lib/analysis/chart_renderer_parity.py` (pixel-perfect C# match)
-- [x] Merged `orb/dataset_generator.py` → `lib/training/dataset_generator.py`
-- [x] Merged `orb/orb_simulator.py` → `lib/training/orb_simulator.py`
-- [x] Created `lib/training/trainer_server.py` — FastAPI HTTP training server
-- [x] Updated all bare sibling imports to `lib.*` paths
-- [x] Updated `lib/core/__init__.py` — exports `BreakoutType`, `RangeConfig`, etc.
-
-### CI/CD & Docker
-- [x] Rewrote CI/CD pipeline — Lint → Test → Build & push 3 Docker images
-- [x] `nuniesmith/futures:engine`, `nuniesmith/futures:web`, `nuniesmith/futures:trainer`
-- [x] Added `profiles: [training]` to trainer service
-
-### Breakout Detection (Engine)
-- [x] Generalized breakout detection — `lib/services/engine/breakout.py` with `BreakoutType` + `RangeConfig` covering ORB, PrevDay, IB, Consolidation
-- [x] Integrated full MTF analyzer as hard filter + CNN features for all types
-- [x] Updated scheduler to run multiple BreakoutType checks in parallel per session
-- [x] Extended `orb_events` table with `breakout_type`, `mtf_score`, `macd_slope`, `divergence`
-
-### Training Pipeline
-- [x] Core generalization: `BreakoutType` enum + `RangeConfig`
-- [x] All 9 sessions as `ORBSession` frozen dataclasses
-- [x] Updated `dataset_generator.py` — stores `breakout_type` + `breakout_type_ord`, Kraken support, parity renderer default
-- [x] Added Kraken crypto support in backfill
-- [x] Extended tabular features to 15 (CNN & ONNX) — `breakout_type_ord` at [14]
-- [x] Updated `feature_contract.json` to v5 (v6 ready with 13 types + TP3)
-- [x] Parity renderer is now default
-- [x] Normalised `breakout_type_ord` to [0.0, 1.0] across 13 types (was /3, now /12)
-
-### Dashboard & Web UI
-- [x] Volume profile chart visualization
-- [x] Historical performance charts
-- [x] Kraken crypto ORB tuning
-- [x] Dark/light theme toggle
-- [x] Per-session ORB signal history view with multi-type filter tabs
-- [x] Grok AI analyst — streaming response display with SSE
-
-### Engine & Infrastructure
-- [x] Full 24h Globex coverage (9 sessions)
-- [x] Per-session CNN gate via Redis
-- [x] Prometheus + Grafana monitoring stack
-- [x] HTMX dashboard with SSE live updates
-- [x] Session-aware scheduler
-- [x] Risk engine integrated
-- [x] Grok AI morning briefing + live updates
-- [x] Daily report generation + email
-- [x] Docker consolidation
-- [x] CNN model watcher
-- [x] CNN sync endpoint
-- [x] Alert rules in Prometheus
-- [x] Regime detection display
-
-### Kraken Crypto
-- [x] REST + WebSocket v2 integration for 9 spot pairs
-- [x] Contract specs + data routing
-- [x] WebSocket feed + dashboard panel
-- [x] API endpoints
-- [x] ORB injection + backfill
-
-### Repo Split & Cleanup
-- [x] Split into three repos: futures, rb (training service), ninjatrader
-- [x] Renamed `orb` → `rb` — service-only compose, hosts trained models
-- [x] Removed training code from futures (moved to `lib/training`)
-- [x] Added `scripts/sync_models.sh` (pulls from `rb` repo)
-- [x] Fixed `sync_models.sh` GitHub repo URL from `nuniesmith/orb` → `nuniesmith/rb`
-- [x] Cleaned up `pyproject.toml`
-
-### Engine Detection — 9 New Breakout Types
-- [x] Added 9 range builder functions: `_build_weekly_range`, `_build_monthly_range`, `_build_asian_range`, `_build_bbsqueeze_range`, `_build_va_range`, `_build_inside_day_range`, `_build_gap_rejection_range`, `_build_pivot_range`, `_build_fibonacci_range`
-- [x] Added `DEFAULT_CONFIGS` entries for all 9 new types with tuned thresholds
-- [x] Extended engine `RangeConfig` with type-specific fields (weekly lookback, Asian window, BB/KC params, VA bins, fib levels, pivot formula, etc.)
-- [x] Wired all 9 new types into `detect_range_breakout()` dispatch (range build + scan + result population)
-- [x] Added `BreakoutResult.extra` dict population with type-specific metadata (pivots, fib levels, gap direction, POC/VAH/VAL, etc.)
-- [x] Fixed `to_dict()` JSON serialization for BBSQUEEZE squeeze fields and numpy type safety in `extra`
-- [x] Added 9 new `ActionType` entries and interval constants in scheduler
-- [x] Updated scheduler active-session windows to include all 13 types in multi-type sweeps
-- [x] Added 81 tests: range builders, detect_range_breakout integration, detect_all_breakout_types (13 types), config completeness, enum mapping, scheduler wiring, RangeConfig fields
-
----
 ## Next Steps (Priority Order)
 
-### Immediate — Validate & Retrain
-1. **`futures`**: ~~Expand CNN tabular features to v6~~ ✅ Done — 18 features (v4's 14 + 4 new: `breakout_type_ord`, `asset_volatility_class`, `hour_of_day`, `tp3_atr_mult_norm`). `FEATURE_CONTRACT_VERSION=6`, backward compat for v4 (14) and v5 (8).
-2. **`rb`**: Full retrain on GPU rig — all 22 symbols, all 13 breakout types, all 9 sessions, 90 days, 25+ epochs → export ONNX v6 (18 features) → commit champion to `rb/models/`
-3. **`futures`**: Verify `sync_models.sh` pulls new `.pt` + `.onnx` champion from `rb` repo
-4. **`ninjatrader`**: Deploy patched `BreakoutStrategy.cs` to NT8 machine, compile, and verify:
-   - Only 5 instruments load (`MGC, MES, MNQ, MYM, 6E`)
-   - CNN startup log shows `CNN tabular dim: model expects 18, C# builds 18`
-   - Entry logs show `[positions: N/5]`
-   - No `OCO ID cannot be reused` or `signal name longer than 50` errors
-   - Run for a full session and review output logs
+### Immediate — Validate & Ship (before TPT account)
+1. **ONNX ↔ PyTorch parity check** — run validation script, confirm <1e-4 max diff
+2. **NT8 deploy + compile** — `.\scripts\deploy_nt8.bat`, verify startup logs show correct tabular dim and TP3 mults
+3. **NT8 full session test** — let it run a full trading day, review all logs for errors
+4. **Hard stop at 4 PM ET** — implement in `BreakoutStrategy.cs` (critical for TPT safety)
+5. **Fix forex spread display** — update `_compute_entry_zone()` rounding for forex tick sizes
+6. **Verify `sync_models.sh`** — pull latest champion and restart engine cleanly
 
-### Short-term — NT8 Integration & Strategy
-5. **`ninjatrader`**: Update C# `BreakoutType` enum (13 values), `OrbCnnPredictor` (v6 18-feature vector), `OrbChartRenderer` (9 new box styles)
-6. **`ninjatrader`**: Implement C# TP3 + EMA9 trailing + stop-and-reverse in `BreakoutStrategy.cs` (match `position_manager.py`)
-7. **`ninjatrader`**: Update PowerShell model pull to fetch `.onnx` + `feature_contract.json` v6 from `rb` repo
+### Short-term — Web UI & UX (this week)
+7. **Remove "Next Session" panel** from dashboard
+8. **Grok AI → manual pull** — button instead of auto-refresh
+9. **Trading/Review mode toggle** — CSS-based panel visibility switching
+10. **Dollar estimates on asset cards** — show $risk and $target alongside price levels
+11. **Extract trainer UI to `/train` page** — trainer becomes API-only
+12. **Settings page** (`/settings`) — service URLs, feature toggles, API key status
 
-### Medium-term — Advanced Strategy
-8. **`futures`**: Wire `PositionManager` into engine main loop — `process_signal()` on breakout detections, `update_all()` on every 1m bar close, persist to Redis
-9. **`futures`**: Add Pi deployment stage back to CI/CD when ready
+### Medium-term — Data & Training Pipeline (next 2 weeks)
+13. **Kraken API keys in CI/CD secrets** — add to GitHub Actions and `.env` on Pi
+14. **Unified `DataResolver` class** — Redis → Postgres → API with auto-backfill
+15. **Kraken data in training pipeline** — crypto chart images + breakout detection for training
+16. **Cross-asset breakout signals** — crypto momentum as context for futures entries
 
-### Ongoing
-10. **Monitoring**: Add Prometheus metrics for training data health, per-type/session win rates, model promotion events
-11. **Dashboard**: Breakout type filter + MTF score column in signal history, trade journal improvements
-12. **Model iteration**: Per-type model heads, session-specific thresholds, automated label balancing, synthetic augmentation
+### Launch — Take Profit Trader Account
+17. **Get TPT $50k evaluation account** — real Rithmic data feed
+18. **Verify strategy with real data** — Rithmic fills, slippage, commission costs
+19. **Pass challenge** — demonstrate consistent profitability within TPT rules
+20. **First funded account** — live trading with real capital
 
-# NinjaTrader Repo — TODO
-
-> Canonical source: `~/github/ninjatrader`
-> Companion repos: [futures](~/github/futures) (engine, web, training) · [rb](~/github/rb) (model hosting)
-
----
-
-## Current State
-
-- **BreakoutStrategy.cs** (3690 lines, single-file edition): ORB detection + CNN gate across 5 core instruments (`MGC, MES, MNQ, MYM, 6E`). All dependencies inlined (SignalBus, BridgeOrderEngine, OrbCnnPredictor, CnnSessionThresholds, OrbChartRenderer). Crash-resilient with `OnOrderUpdate` rejection handling, OCO GUID uniqueness, SL price validation, signal name truncation, try/catch on all order submissions.
-- **RubyIndicator.cs** (2240 lines): Chart indicator, ORB detection, signal producer via SignalBus + optional HTTP POST.
-- **DataPreloader.cs** (951 lines, AddOn): Seeds 1-min history cache at NT8 startup for all subscribed instruments.
-- **Bridge.cs** (0 lines — empty): Placeholder for new Bridge AddOn (HTTP listener + position push + signal relay to dashboard).
-- **CNN**: v4 contract (14 tabular features), `CNumTabularFeatures = 14`, `BreakoutType` enum has only 4 values (Orb, PrevDay, InitialBalance, Consolidation).
-- **OrbChartRenderer**: Renders ORB shading only (gold box style). No support for 9 new breakout type box styles.
-- **Deploy script** (`scripts/deploy_nt8.ps1`): Deploys BreakoutStrategy.cs, RubyIndicator.cs, DataPreloader.cs, ONNX DLLs, and model. Does NOT deploy Bridge AddOn. Model URL still points to `nuniesmith/orb` (stale — should be `nuniesmith/rb`).
-
-### Archive (reference code)
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `archive/MonitorConnection.cs` | 1277 | Full HTTP listener strategy (position push, `/execute_signal`, `/flatten`, `/cancel_orders`, `/status`, `/orders`, `/health`, `/metrics`). Was a **Strategy** — needs to become an **AddOn** so it runs independently of any chart. |
-| `archive/BridgeOrderEngine.cs` | 818 | Standalone order execution engine (signal parsing, risk sizing, BIP routing, bracket submission, SignalBus drain). Already inlined in BreakoutStrategy.cs but archive copy is the clean standalone version. |
-| `archive/OrbCnnPredictor.cs` | 764 | Standalone CNN predictor (v3/v4 contract, 8 features, chart renderer). Superseded by inlined version in BreakoutStrategy.cs that has v4 14-feature support + auto-adapt. |
-| `archive/SignalBus.cs` | 252 | Standalone SignalBus. Already inlined in BreakoutStrategy.cs. |
-| `archive/BreakoutStrategy.cs` | 1944 | Pre-single-file edition (required separate .cs files). Superseded. |
-
----
-
-## Active — BreakoutStrategy.cs
-
-### C# BreakoutType Expansion (4 → 13)
-
-- [x] **Update `BreakoutType` enum** to match Python `IntEnum` (13 values, stable ordinals):
-  ```
-  ORB=0, PrevDay=1, InitialBalance=2, Consolidation=3,
-  Weekly=4, Monthly=5, Asian=6, BollingerSqueeze=7,
-  ValueArea=8, InsideDay=9, GapRejection=10, PivotPoints=11, Fibonacci=12
-  ```
-  ~~Current enum uses `Orb` (should be `ORB`), and only has 4 values.~~ Done — renamed `Orb` → `ORB`, added 9 new values with explicit ordinals, updated all 12 call-sites.
-- [x] **Add `RangeConfig` entries** for all 9 new types — each needs `RangeBars`, `SqueezeThreshold`, `MinBarsRequired`, `Description` matching Python `DEFAULT_CONFIGS`. Done — `GetRangeConfig()` now has cases for all 13 types.
-- [x] **Register all 13 types in `InstrumentState` constructor** — ~~currently only registers `Orb`, `PrevDay`, `InitialBalance`, `Consolidation` in the `Ranges` dictionary~~ Done — all 13 types registered.
-- [x] **Add `UpdateRangeWindow()` cases** for Asian and BollingerSqueeze (time-window and squeeze detection). Weekly, Monthly, ValueArea, InsideDay, GapRejection, PivotPoints, Fibonacci added as stub cases (registered but RangeEstablished stays false until full detection logic is implemented — medium-term roadmap).
-- [ ] **Add `CheckBreakout()` cases** for all 9 new types — breakout detection logic must match Python `detect_range_breakout()` for each type. _Note: CheckBreakout already iterates all established ranges uniformly; new types only need their UpdateRangeWindow logic completed to start firing._
-
-### CNN Feature Contract v4 → v6 (14 → 18 features)
-
-- [x] **Update `CNumTabularFeatures`** from `14` to `18` — done.
-- [x] **Update `PrepareCnnTabular()`** to build 18-feature v6 vector — added 4 new slots [14]–[17] (breakout_type_ord, asset_volatility_class, hour_of_day, tp3_atr_mult_norm). Done.
-- [x] **Add `GetVolatilityClass()` helper** — implemented matching Python `ASSET_VOLATILITY_CLASS` dict exactly (High/Med/Low for all 27 symbols). Done.
-- [x] **Update `NormaliseTabular()` in inlined OrbCnnPredictor** — added passthrough normalisation for features [14]–[17] with bounds clamping. Done.
-- [x] **Update `MaxTabular` constant** in inlined OrbCnnPredictor from `14` to `18` — done, also updated `_numTabular` default.
-- [x] **Update startup diagnostic log** — changed from `feature_contract.json v4 (14 features)` to `v6 (18 features)`. Done.
-- [ ] **Test auto-adapt** — when loading a v6 ONNX model (18 features), the auto-detect in `OrbCnnPredictor` constructor should read `_numTabular = 18` from model metadata and the tabular vector should match without truncation/padding
-
-### Chart Rendering — 9 New Box Styles
-
-- [x] **Update inlined `OrbChartRenderer`** to support drawing different range box styles per `BreakoutType`:
-  - `ORB` → gold semi-transparent fill + gold border (solid) ✅
-  - `PrevDay` → cyan dashed border, no fill ✅
-  - `InitialBalance` → blue solid border, light blue fill ✅
-  - `Consolidation` → purple dashed border, no fill ✅
-  - `Weekly` → teal solid border, teal fill (alpha 30) ✅
-  - `Monthly` → orange solid border, orange fill (alpha 30) ✅
-  - `Asian` → red dashed border, no fill ✅
-  - `BollingerSqueeze` → magenta dashed border, no fill ✅
-  - `ValueArea` → olive solid border, olive fill (alpha 30) ✅
-  - `InsideDay` → lime dashed border, no fill ✅
-  - `GapRejection` → coral solid border, no fill ✅
-  - `PivotPoints` → steel-blue dashed border, no fill ✅
-  - `Fibonacci` → amber solid border, amber fill (alpha 20) ✅
-  - `BoxStyle` helper class encapsulates fill color, border color, solid/dashed flag — `GetBoxStyle(BreakoutType)` factory. ✅
-- [x] **Add `BreakoutType` parameter** to `OrbChartRenderer.Render()` and `RenderToTemp()` — both now accept `BreakoutType breakoutType = BreakoutType.ORB` and pass it through to `GetBoxStyle()`. PNG filename now prefixed with `rng_{ordinal}_` for per-type disambiguation. ✅
-- [x] **Wire `BreakoutType` through call chain** — `CheckBreakout()` passes `type` to `PassesCnnFilter()`, which passes it to `PrepareCnnTabular()` (fixes feature [14] breakout_type_ord) and `RenderCnnSnapshot()` (draws correct box). Range H/L in snapshots now comes from the specific `RangeState` that fired, not always ORB. ✅
-
-### TP3 + EMA9 Trailing
-
-- [x] **Add `Tp3AtrMult` constant** (`CTp3AtrMult = 5.0`) and `EnableTp3Trailing` flag (`CEnableTp3Trailing = true`) — gated so the walk can be disabled without recompiling. ✅
-- [x] **Add `BreakoutPhase` enum** (`Phase1`, `Phase2`, `Phase3`, `Closed`) and `PositionPhase` class — tracks per-position bracket state keyed by SignalId. ✅
-- [x] **Implement 3-phase bracket walk** in `OnOrderUpdate`:
-  - Phase 1: SL + TP1 (standard bracket, existing) — entry fill updates `PositionPhase` with actual filled qty, refines tp1/tp2/tp3 splits. ✅
-  - Phase 2: TP1 fill → cancel old SL OCO, submit new breakeven SL (`entry ± 1 tick`) at remaining qty, advance phase to `Phase2`. ✅
-  - Phase 3: TP2 fill → advance phase to `Phase3`; EMA9 trailing activated for remainder. ✅
-  - SL fill → mark `Closed`, remove from `_positionPhases`. ✅
-- [x] **Add `UpdateEma9()` helper** — standard EMA(9) seeded from SMA of first 9 closes, then `prev + 0.2*(close - prev)` per bar. Called from per-bar indicator block (alongside UpdateAtr/UpdateVwap). EMA9 fields (`Ema9Value`, `Ema9Sum`, `Ema9Filled`, `Ema9Ready`) added to `InstrumentState`. ✅
-- [x] **Add `CheckPhase3Exits()`** — called once per primary bar (BIP0) when `EnableTp3Trailing` is true. For each Phase3 position: if price ≥ TP3 → submit limit exit; if price crosses EMA9 adversely → submit market exit. Removes closed phases. ✅
-- [x] **`_positionPhases` dictionary** — `Dictionary<string, PositionPhase>` with lock, stored at strategy level. `FireEntry` registers; `OnOrderUpdate` transitions; `CheckPhase3Exits` closes. ✅
-- [ ] **Match Python `position_manager.py` 3-phase logic exactly** — multipliers match (SL=1.5×, TP1=2.0×, TP2=3.5×, TP3=5.0×); trailing rule matches (EMA9 adverse cross). Verify side-by-side with Python backtest logs.
-- [ ] **Add `tp3_atr_mult` to `RangeConfig`** struct (per-type override from `feature_contract.json`) — currently all types use the global `CTp3AtrMult = 5.0` constant.
-
-### Stop-and-Reverse Integration
-
-- [ ] **Implement always-in 1-lot micro position logic** for core 5 assets — mirror Python `PositionManager`
-- [ ] **Reversal gates**: CNN ≥ 0.85 (0.92 for winning positions), MTF ≥ 0.60, 30-min cooldown
-- [ ] **Limit entry at range edge**, market chase only with CNN ≥ 0.90 and < 0.5×ATR overshoot
-- [ ] **Sync position state** with Python engine via Bridge WebSocket (depends on Bridge AddOn below)
-
-### Bridge → Strategy Risk Gate
-
-- [x] **Wire `Bridge.IsRiskBlocked` → `BreakoutStrategy.RiskBlocked`** — on each BIP0 bar, reflection reads `Bridge.IsRiskBlocked` and `Bridge.RiskBlockReason` static fields from the AddOn assembly and syncs them to the strategy's instance fields. Gracefully no-ops if Bridge type is not loaded (backtest / AddOn absent). ✅
-
----
-
-## Active — Bridge AddOn (`src/addons/Bridge.cs`)
-
-> **Goal**: Revive the HTTP bridge as an NT8 **AddOn** (not a Strategy) so it runs automatically when NT8 connects to data, independent of any chart. The archive `MonitorConnection.cs` is the reference implementation — extract the listener/push logic, strip the Strategy base class, and wire it as an AddOn that fires on `Connection.ConnectionStatusUpdate`.
-
-### Core Bridge AddOn
-
-- [x] **Create `Bridge.cs` as an NT8 AddOn** (inherits `NinjaTrader.NinjaScript.AddOnBase`):
-  - Fires on `Connection.ConnectionStatusUpdate` (same pattern as `DataPreloader.cs`) — done.
-  - Starts HTTP listener on configurable port (default `5680`) — done, with wildcard→localhost fallback.
-  - Binds to all interfaces: `http://+:{port}/` — done.
-  - Requires URL ACL: `netsh http add urlacl url=http://+:5680/ user=Everyone` — documented in startup log.
-- [x] **Port HTTP endpoints** from archive `MonitorConnection.cs`:
-  - `GET /health` — liveness probe (`{"status":"ok","bridge_version":"4.0"}`) — done.
-  - `GET /status` — full account snapshot (positions, P&L, instrument list, risk state) — done.
-  - `GET /orders` — recent order event log (last 50) — done.
-  - `GET /metrics` — Prometheus exposition format (for Grafana) — done.
-  - `POST /execute_signal` — forward signal JSON to `SignalBus` for BreakoutStrategy to drain — done.
-  - `POST /flatten` — flatten all positions immediately via `Account.Flatten()` — done.
-  - `POST /cancel_orders` — cancel all working orders via `Account.Cancel()` — done.
-- [x] **Position push to dashboard** — on every fill + 15-second heartbeat, POST position snapshot to `{DashboardBaseUrl}/api/positions/update`. Done — matches the JSON schema in the TODO.
-- [x] **Account subscription** — subscribe to `Account.OrderUpdate` and `Account.PositionUpdate` events for fill tracking. Done.
-- [x] **Risk gate feedback** — parse `can_trade` field from dashboard response and set static `Bridge.IsRiskBlocked` flag accessible by `BreakoutStrategy`. Done — supports both nested `risk.can_trade` and flat `can_trade` formats.
-- [x] **CORS headers** — `Access-Control-Allow-Origin: *` on all responses (dashboard served from different host). Done.
-- [x] **Graceful shutdown** — stop listener, dispose HttpClient, unsubscribe events in `OnStateChange(Terminated)`. Done.
-- [x] **Prometheus metrics** — `bridge_up`, `bridge_listener_up`, `bridge_positions_count`, `bridge_cash_balance`, `bridge_unrealized_pnl`, `bridge_realized_pnl`, `bridge_signals_received_total`, `bridge_signals_executed_total`, `bridge_signals_rejected_total`, `bridge_orders_filled_total`, `bridge_orders_rejected_total`, `bridge_heartbeats_total`, `bridge_uptime_seconds`, `bridge_info`. Done — matches Prometheus scrape config.
-
-### Dashboard Integration
-
-- [ ] **Wire web UI positions panel** — add `/api/positions` endpoint to `futures` engine that reads latest Bridge push from Redis (key `bridge:positions`, TTL 60s)
-- [ ] **Wire web UI execute button** — dashboard sends `POST /execute_signal` to Bridge via web proxy (new route `/bridge/execute_signal` in `futures` web service, proxied to `NT_BRIDGE_HOST:NT_BRIDGE_PORT`)
-- [x] **Bridge → Strategy risk gate** — refactored from reflection to `SignalBus.IsRiskBlocked` / `SignalBus.RiskBlockReason` static volatile fields. Bridge.cs writes via private property shims; BreakoutStrategy reads directly on every BIP0 bar. No reflection, no cross-assembly type lookup, works correctly in backtest (defaults false). `SignalBus.Reset()` clears both fields. ✅
-- [ ] **Wire web UI flatten button** — dashboard sends `POST /flatten` to Bridge
-- [ ] **Bridge connection status indicator** — SSE event from engine showing bridge online/offline (checks `bridge:positions` key freshness in Redis)
-
----
-
-## Active — Deploy Script (`scripts/deploy_nt8.ps1`)
-
-### Update Deploy Manifest
-
-- [x] **Add Bridge.cs to file manifest** — deploy to `bin\Custom\AddOns\Bridge.cs` (step 4/13). Done.
-- [x] **Update step numbering** — updated from 11 steps to 13 steps. Done.
-- [x] **Add RubyIndicator.cs** — already deployed (step 2/13), verified in manifest. Done.
-- [x] **Fix ONNX model URL** — changed `$GH_ORB_LFS = 'https://media.githubusercontent.com/media/nuniesmith/orb/main'` → `$GH_RB_LFS = '...nuniesmith/rb/main'`. Done.
-- [x] **Add `feature_contract.json` to deploy** — step 13/13, downloads from `rb` repo `models/feature_contract.json` and places in `bin\Custom\Models\feature_contract.json`. Done.
-- [x] **Add conflict check for Bridge.cs** — added `Bridge.cs` to `standaloneConflicts` list for both `bin\Custom\` and `Strategies\`. Done.
-- [x] **Update summary layout** to show Bridge AddOn in the deployed file tree. Done.
-- [x] **Update "Next steps" text** to mention Bridge will auto-connect on NT8 data connection (step 6). Done.
-
-### Model Pull Script
-
-- [x] **Create `scripts/pull_model.ps1`** — PowerShell script to fetch latest `.onnx` + `feature_contract.json` v6 from `rb` repo. Done — includes:
-  - Download `https://media.githubusercontent.com/media/nuniesmith/rb/main/models/breakout_cnn_best.onnx` — done.
-  - Download `https://raw.githubusercontent.com/nuniesmith/rb/main/models/feature_contract.json` — done.
-  - Verify SHA256 of ONNX matches `breakout_cnn_best_meta.json` — done (with `-SkipVerify` flag for override).
-  - Copy to `bin\Custom\Models\` — done (with skip-if-unchanged logic).
-  - Can be called standalone or invoked by `deploy_nt8.ps1` — done.
-
----
-
-## Completed
-
-### Crash Resilience (deployed 2025-03-05)
-- [x] **OnOrderUpdate handler** — absorbs rejected orders
-- [x] **OCO GUID uniqueness** — 6-char GUID suffix
-- [x] **SL price validation** — corrects stop to correct side of market
-- [x] **Signal name truncation** — capped at 49 chars
-- [x] **Try/catch on SubmitOrderUnmanaged** — prevents unhandled exceptions
-- [x] **Max concurrent positions** — `MaxConcurrentPositions = 5`
-- [x] **Reduced to 5 core instruments** — `MGC, MES, MNQ, MYM, 6E`
-- [x] **Increased cooldown** — 10 min between entries
-- [x] **CNN auto-adapt** — reads model's expected tabular dimension at load time
-- [x] **Startup diagnostics** — logs CNN tabular dimension, position count
-
-### Single-File Edition
-- [x] **Inlined all dependencies** — SignalBus, BridgeOrderEngine, OrbCnnPredictor, CnnSessionThresholds, OrbChartRenderer all inside BreakoutStrategy.cs
-- [x] **Deploy script** — `deploy_nt8.ps1` handles download, SHA cache, Config.xml patching, conflict removal
-
-### DataPreloader AddOn
-- [x] **Seeds 1-min history** on NT8 startup for all subscribed instruments
-- [x] **Skip-if-cached** — only requests data for symbols without existing cache
-- [x] **Staggered requests** — avoids flooding the data feed
-
----
-
-## Priority Order
-
-### Immediate — v6 Model Compatibility ✅
-1. ~~Update `BreakoutType` enum (4 → 13 values)~~ ✅
-2. ~~Update `PrepareCnnTabular()` (14 → 18 features)~~ ✅
-3. ~~Update `CNumTabularFeatures` and `MaxTabular` constants~~ ✅
-4. ~~Add `GetVolatilityClass()` helper~~ ✅
-5. ~~Update `NormaliseTabular()` for features [14]–[17]~~ ✅
-6. Deploy patched BreakoutStrategy.cs to NT8, verify:
-   - CNN startup log shows `CNN tabular dim: model expects 18, C# builds 18`
-   - Entry logs show `[positions: N/5]`
-   - No `OCO ID cannot be reused` or `signal name longer than 50` errors
-   - Run for a full session and review output logs
-
-### Short-term — Bridge AddOn + Deploy ✅
-7. ~~Build `Bridge.cs` AddOn (HTTP listener + position push)~~ ✅
-8. Wire dashboard position panel + execute/flatten buttons (depends on `futures` repo changes)
-9. ~~Update `deploy_nt8.ps1` to include Bridge.cs and fix `orb` → `rb` URL~~ ✅
-10. ~~Create `pull_model.ps1` for standalone model updates~~ ✅
-
-### Medium-term — Advanced Strategy
-11. ~~Implement TP3 + EMA9 trailing in BreakoutStrategy.cs~~ ✅ (3-phase bracket walk + EMA9 per-BIP + CheckPhase3Exits)
-12. Implement stop-and-reverse logic
-13. ~~Add 9 new chart renderer box styles~~ ✅ (OrbChartRenderer now has 13 BoxStyle entries + BreakoutType parameter)
-14. Add `UpdateRangeWindow()` + `CheckBreakout()` for all 9 new types (Weekly, Monthly, ValueArea, InsideDay, GapRejection, PivotPoints, Fibonacci still stubs)
-15. ~~Wire `Bridge.IsRiskBlocked` → `BreakoutStrategy.RiskBlocked`~~ ✅ (via `SignalBus.IsRiskBlocked` static — no reflection)
+### Post-Launch — Scale
+21. **Trade copier** — mirror fills from Account 1 → Accounts 2–5
+22. **Cloud migration** — once profitable, move from local Tailscale to cloud infra with proper CI/CD
+23. **Domain + TLS** — get a domain, set up HTTPS for the dashboard
 
 ### Ongoing
-16. Per-type backtest validation in Strategy Analyzer
-17. Parity testing: run Python engine + C# strategy side-by-side, compare signals
-18. Feature contract drift detection: log warning if `feature_contract.json` version != compiled constant
-- Add `tp3_atr_mult` per-type override to `RangeConfig` and read from `feature_contract.json`
-- Parity-test Phase3 EMA9 trailing against Python `position_manager.py` backtest logs
+- Per-type/session win-rate Prometheus metrics and Grafana panels
+- Feature contract drift detection — log warning in C# if loaded `feature_contract.json` version ≠ compiled `CFeatureContractVersion` constant
+- Per-type backtest validation in NT8 Strategy Analyzer
+- Automated label rebalancing + synthetic augmentation tuning as dataset grows
+- SAR backtest validation — run NT8 Strategy Analyzer on a full quarter
+- MTF divergence detection — add swing-point pivot detection to `UpdateMtf` for the +0.15 weight
+- SAR dashboard panel — `GET /sar/state` visible in HTMX dashboard

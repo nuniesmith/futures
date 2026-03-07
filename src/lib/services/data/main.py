@@ -138,6 +138,7 @@ from lib.services.data.api.rate_limit import (  # noqa: E402
     setup_rate_limiting,
 )
 from lib.services.data.api.risk import router as risk_router  # noqa: E402
+from lib.services.data.api.sar import router as sar_router  # noqa: E402
 from lib.services.data.api.sse import router as sse_router  # noqa: E402
 from lib.services.data.api.trades import (  # noqa: E402
     router as trades_router,
@@ -540,6 +541,12 @@ app.include_router(kraken_router, tags=["Kraken"])
 #        /api/grok/trigger/update, /sse/grok/briefing, /sse/grok/update
 # NOTE: grok_router is mounted WITHOUT a prefix — routes are defined with full paths.
 app.include_router(grok_router, tags=["Grok"])
+
+# SAR Sync: /sar/sync, /sar/state, /sar/state/{asset}
+# Receives stop-and-reverse reversal events from the NinjaTrader BreakoutStrategy
+# (POST /sar/sync from 100.127.182.112) and exposes current per-instrument SAR
+# direction to the engine and dashboard.
+app.include_router(sar_router, prefix="/sar", tags=["SAR Sync"])
 
 
 # ---------------------------------------------------------------------------

@@ -124,6 +124,82 @@ namespace NinjaTrader.NinjaScript.Strategies
     /// Tracks the bracket walk state for a single position identified by its SignalId.
     /// One instance per FireEntry call; removed when phase reaches Closed.
     /// </summary>
+    // =========================================================================
+    // Per-instrument stop-and-reverse (SAR) state
+    // =========================================================================
+    /// <summary>
+    /// Tracks the always-in micro position state per instrument for the
+    /// stop-and-reverse strategy.  Mirrors Python PositionManager's
+    /// MicroPosition / reversal-gate fields.
+    /// </summary>
+    public sealed class ReversalState
+    {
+        /// <summary>Current open direction: "long", "short", or "" (flat).</summary>
+        public string ActiveDirection   = "";
+
+        /// <summary>SignalId of the position that is currently open (matches _positionPhases key).</summary>
+        public string ActiveSignalId    = "";
+
+        /// <summary>Entry price of the currently open position.</summary>
+        public double EntryPrice        = 0;
+
+        /// <summary>ATR at entry — used for R-multiple calculation.</summary>
+        public double AtrAtEntry        = 0;
+
+        /// <summary>SL price of the currently open position (updated at phase transitions).</summary>
+        public double SlPrice           = 0;
+
+        /// <summary>Time of the last entry or reversal — used for cooldown gate.</summary>
+        public DateTime LastReversalTime = DateTime.MinValue;
+
+        /// <summary>Number of reversals made (for logging).</summary>
+        public int ReversalCount        = 0;
+
+        public bool IsFlat   => string.IsNullOrEmpty(ActiveDirection);
+        public bool IsLong   => ActiveDirection == "long";
+        public bool IsShort  => ActiveDirection == "short";
+
+        /// <summary>
+        /// Approximate R-multiple for the current position given the current
+        /// bar close price.  Positive = winning, negative = losing.
+        /// </summary>
+        public double RMultiple(double currentPrice)
+        {
+            if (IsFlat || AtrAtEntry <= 0) return 0;
+            double raw = IsLong
+                ? (currentPrice - EntryPrice) / AtrAtEntry
+                : (EntryPrice - currentPrice) / AtrAtEntry;
+            return raw;
+        }
+
+        /// <summary>Returns true when the position is currently profitable.</summary>
+        public bool IsWinning(double currentPrice)
+        {
+            if (IsFlat) return false;
+            return IsLong ? currentPrice > EntryPrice : currentPrice < EntryPrice;
+        }
+
+        public void Open(string direction, string signalId, double entryPrice,
+                         double atr, double sl, DateTime time)
+        {
+            ActiveDirection  = direction;
+            ActiveSignalId   = signalId;
+            EntryPrice       = entryPrice;
+            AtrAtEntry       = atr;
+            SlPrice          = sl;
+            LastReversalTime = time;
+        }
+
+        public void Close()
+        {
+            ActiveDirection = "";
+            ActiveSignalId  = "";
+            EntryPrice      = 0;
+            AtrAtEntry      = 0;
+            SlPrice         = 0;
+        }
+    }
+
     public sealed class PositionPhase
     {
         public string   SignalId    { get; set; }
@@ -150,6 +226,11 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         // OCO group for the current SL leg (updated at each phase transition)
         public string OcoGroup      { get; set; }
+
+        // Phase3: EMA9 ratcheted trail price (high-water mark, mirrors Python ema9_trail_price)
+        // Only moves in the favourable direction — never retreats.
+        // Initialised to 0 (unset); set to the first EMA9 value when Phase3 begins.
+        public double Ema9TrailPrice { get; set; }
 
         // Phase3: EMA9-based trailing exit was triggered
         public bool   Tp3Submitted  { get; set; }
@@ -185,6 +266,53 @@ namespace NinjaTrader.NinjaScript.Strategies
         // One instance per BIP index, allocated at DataLoaded.
         private sealed class InstrumentState
         {
+            // ── MTF (15-minute higher-timeframe) EMA / MACD state ─────────────
+            // Updated by UpdateMtf() on every 15m bar close for the 15m BIP
+            // that corresponds to this instrument.  The score and alignment
+            // flags are read by ShouldReverse() to enforce Gate 4 (MTF ≥ 0.60).
+            //
+            // EMA periods mirror Python MTFAnalyzer defaults: fast=9, mid=21, slow=50.
+            // MACD mirrors Python: fast=12, slow=26, signal=9.
+            //
+            // EMA state — incremental exponential moving average using:
+            //   alpha = 2 / (period + 1)
+            //   ema_new = alpha * close + (1 - alpha) * ema_prev
+            public double MtfEmaFast   = 0;        // EMA-9 on 15m
+            public double MtfEmaMid    = 0;        // EMA-21 on 15m
+            public double MtfEmaSlow   = 0;        // EMA-50 on 15m
+            public int    MtfEmaFilled = 0;        // bars consumed so far
+            public bool   MtfEmaReady  = false;    // true once EMA-50 warmed up (≥50 bars)
+
+            // MACD state — EMA-12, EMA-26, Signal EMA-9 of (fast−slow)
+            public double MtfMacdFastEma   = 0;
+            public double MtfMacdSlowEma   = 0;
+            public double MtfMacdLine      = 0;    // macdFastEma − macdSlowEma
+            public double MtfMacdSigEma    = 0;    // EMA-9 of MtfMacdLine
+            public double MtfMacdHistogram = 0;    // MtfMacdLine − MtfMacdSigEma
+            public int    MtfMacdFilled    = 0;    // bars consumed for MACD (needs ≥26)
+            public bool   MtfMacdReady     = false;// true once signal line warmed (≥35 bars)
+
+            // Histogram ring-buffer for slope (last 3 values → slope over 3 bars)
+            public double[] MtfHistBuf     = new double[3];
+            public int      MtfHistBufIdx  = 0;
+            public int      MtfHistFilled  = 0;
+
+            // Computed outputs (written by UpdateMtf, read by ShouldReverse)
+            // MtfScore: 0.0–1.0 matching Python's weighted sum:
+            //   +0.30  EMA fully stacked in direction
+            //   +0.15  EMA slope agrees with direction
+            //   +0.25  MACD histogram polarity agrees
+            //   +0.15  MACD histogram slope agrees
+            //   +0.15  (no opposing divergence — always granted in C#, divergence detection omitted)
+            public double MtfScore          = 0;   // last computed score (direction-agnostic)
+            public double MtfEmaSlopePerBar = 0;   // % change in slow EMA per bar (last 5 bars)
+            public double[] MtfEmaSlowBuf   = new double[5]; // ring buffer for slope calc
+            public int      MtfEmaSlowIdx   = 0;
+            public int      MtfEmaSlowFill  = 0;
+
+            // BIP index of the corresponding 15m data series (-1 = not yet assigned)
+            public int MtfBip = -1;
+
             // ── Multi-range support ───────────────────────────────────────────
             // One RangeState per BreakoutType, keyed by enum value.
             public Dictionary<BreakoutType, RangeState> Ranges =
@@ -201,8 +329,14 @@ namespace NinjaTrader.NinjaScript.Strategies
                 public int BarsInRange = 0;
                 public bool FiredLong = false;
                 public bool FiredShort = false;
-                // TP3 multiplier (loaded from RangeConfig; used for Phase3 target)
+                // TP3 multiplier — overwritten from feature_contract.json after DataLoaded
                 public double Tp3AtrMult = 5.0;
+                // Scratch fields used by range builders that need to carry extra state
+                // between bar updates without allocating heap objects per bar.
+                public double AuxHigh  = 0;   // e.g. yesterday_high / swing_high / pivot
+                public double AuxLow   = 0;   // e.g. yesterday_low  / swing_low  / s1
+                public double AuxValue = 0;   // e.g. pivot point PP / gap_size / fib level
+                public string AuxTag   = "";  // e.g. gap direction "UP"/"DOWN"
             }
 
             // ── ORB (legacy fields kept for CNN feature extraction & VWAP guard) ──
@@ -383,8 +517,24 @@ namespace NinjaTrader.NinjaScript.Strategies
             new Dictionary<string, PositionPhase>(StringComparer.Ordinal);
         private object _phaseLock = new object();
 
+        // ── Per-instrument SAR (stop-and-reverse) state ───────────────────────
+        // One ReversalState per BIP index.  Tracks the always-in position
+        // direction so CheckBreakout knows whether a new signal is a fresh
+        // entry or a reversal candidate.
+        private ReversalState[] _sarStates;
+
         // ── Per-instrument state array (index = BIP) ──────────────────────────
         private InstrumentState[] _states;
+
+        // Property shims for SAR constants (keep call-sites readable)
+        private double SarMinCnnProb          => CSarMinCnnProb;
+        private double SarWinningCnnProb      => CSarWinningCnnProb;
+        private double SarHighWinnerCnnProb   => CSarHighWinnerCnnProb;
+        private double SarMinMtfScore         => CSarMinMtfScore;
+        private int    SarCooldownMinutes     => CSarCooldownMinutes;
+        private double SarChaseMaxAtrFraction => CSarChaseMaxAtrFraction;
+        private double SarChaseMinCnnProb     => CSarChaseMinCnnProb;
+        private double SarHighWinnerRMult     => CSarHighWinnerRMult;
 
         // ── Order engine (all SubmitOrderUnmanaged calls go through here) ─────
         private BridgeOrderEngine _engine;
@@ -417,12 +567,53 @@ namespace NinjaTrader.NinjaScript.Strategies
         private int _activePositionCount = 0;
         private readonly HashSet<string> _activeInstruments = new HashSet<string>();
 
+        // ── Per-type TP3 multipliers loaded from feature_contract.json ────────
+        // Populated at DataLoaded time. If the contract file is missing or a
+        // type is absent, the global CTp3AtrMult constant is used as fallback.
+        private Dictionary<BreakoutType, double> _tp3MultByType =
+            new Dictionary<BreakoutType, double>();
+
+        // ── MTF BIP routing ────────────────────────────────────────────────────
+        // Maps instrument root name → BIP index of the *15m* data series for that
+        // instrument.  Populated at DataLoaded once BarsArray is fully built.
+        // Used by UpdateMtf() to read the correct 15m series.
+        private readonly Dictionary<string, int> _mtfBipBySymbol =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        // ── SAR sync — HTTP client for pushing reversals to the Python engine ──
+        // Posts to POST http://100.100.84.48:8000/sar/sync after every reversal.
+        // Fire-and-forget (ContinueWith, no await) so the bar-update thread is
+        // never blocked.  Initialised in OnStateChange(DataLoaded).
+        private System.Net.Http.HttpClient _sarHttpClient;
+        private const string CSarSyncUrl = "http://100.100.84.48:8000/sar/sync";
+        // MTF bars base URL — used by GetMtfBarsFromEngine() to fetch 15m bars
+        // from the Pi's data engine as a fallback when NT8's own 15m BIP is missing.
+        private const string CEngineBaseUrl = "http://100.100.84.48:8000";
+
         // ── Risk gate (mirrors Bridge.RiskBlocked so both respect it) ─────────
         // BreakoutStrategy has no HTTP listener of its own; it simply won't
         // allow entries when this is set.  Bridge can set it via SignalBus
         // or the caller can set it programmatically.
         internal volatile bool RiskBlocked = false;
         internal volatile string RiskBlockReason = "";
+
+        // ── Stop-and-reverse constants (mirror Python PositionManager env vars) ──
+        // Min CNN probability required to reverse a losing position.
+        private const double CSarMinCnnProb         = 0.85;
+        // Min CNN probability required to reverse a *winning* position (higher bar).
+        private const double CSarWinningCnnProb     = 0.92;
+        // Even higher threshold when position is at 1R+ profit — mirror Python Gate 6.
+        private const double CSarHighWinnerCnnProb  = 0.95;
+        // Min MTF alignment score required for a reversal.
+        private const double CSarMinMtfScore        = 0.60;
+        // Cooldown in minutes between reversals (matches Python 1800 s default).
+        private const int    CSarCooldownMinutes    = 30;
+        // Max ATR fraction for a market-chase entry (mirrors PM_CHASE_MAX_ATR_FRACTION 0.50).
+        private const double CSarChaseMaxAtrFraction = 0.50;
+        // Min CNN probability for a market-chase entry (mirrors PM_CHASE_MIN_CNN_PROB 0.90).
+        private const double CSarChaseMinCnnProb    = 0.90;
+        // R-multiple threshold above which Gate 6 (high-winner protection) kicks in.
+        private const double CSarHighWinnerRMult    = 1.0;
 
         // =====================================================================
         // Properties
@@ -723,7 +914,24 @@ namespace NinjaTrader.NinjaScript.Strategies
                                 new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 },
                                 th);
                             extras.Add(root);
-                            Print($"[BreakoutStrategy] AddDataSeries: {addName} → BIP {extras.Count}  session='{th}'");
+                            Print($"[BreakoutStrategy] AddDataSeries: {addName} → BIP {extras.Count} (1m)  session='{th}'");
+
+                            // ── 15m HTF series for MTF alignment scoring ──────────────
+                            // Added immediately after the 1m series so the BIP index is
+                            // predictable: mtfBip = 1m_bip + extras.Count (N extra symbols).
+                            // UpdateMtf() looks up the 15m BIP from _mtfBipBySymbol (built
+                            // at DataLoaded by matching BarsPeriod.Value == 15).
+                            try
+                            {
+                                AddDataSeries(addName,
+                                    new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 15 },
+                                    th);
+                                Print($"[BreakoutStrategy] AddDataSeries: {addName} → BIP {extras.Count * 2} (15m)  session='{th}'");
+                            }
+                            catch (Exception ex15)
+                            {
+                                Print($"[BreakoutStrategy] 15m AddDataSeries failed for {root} (non-fatal): {ex15.Message}");
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -732,6 +940,26 @@ namespace NinjaTrader.NinjaScript.Strategies
                     }
 
                     _extraSymbols = extras.ToArray();
+                }
+
+                // ── 15m series for the primary instrument (BIP0) ──────────────
+                // Extra instruments get their 15m series inside the loop above.
+                // The primary instrument only has BIP0 (1m) by default; we add
+                // its 15m series here so UpdateMtf works for it too.
+                try
+                {
+                    string primaryTh = GetTradingHoursTemplate(
+                        Instrument?.MasterInstrument?.Name?.ToUpperInvariant() ?? "");
+                    AddDataSeries(
+                        Instrument?.MasterInstrument?.Name ?? "",
+                        new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 15 },
+                        primaryTh);
+                    Print($"[BreakoutStrategy] AddDataSeries: primary 15m BIP added for " +
+                          $"{Instrument?.MasterInstrument?.Name}");
+                }
+                catch (Exception exPrimary15)
+                {
+                    Print($"[BreakoutStrategy] Primary 15m AddDataSeries failed (non-fatal): {exPrimary15.Message}");
                 }
             }
 
@@ -864,10 +1092,12 @@ namespace NinjaTrader.NinjaScript.Strategies
 
                 // Allocate per-instrument state — one entry per BIP
                 int count = BarsArray.Length;
-                _states = new InstrumentState[count];
+                _states    = new InstrumentState[count];
+                _sarStates = new ReversalState[count];
                 for (int i = 0; i < count; i++)
                 {
-                    _states[i] = new InstrumentState(VolumeAvgPeriod, 14, CnnLookbackBars);
+                    _states[i]    = new InstrumentState(VolumeAvgPeriod, 14, CnnLookbackBars);
+                    _sarStates[i] = new ReversalState();
                     // Each BIP gets its own SessionIterator so Globex futures
                     // (which roll sessions at 18:00 ET, not midnight) reset their
                     // ORB and VWAP at the correct time rather than on calendar-date.
@@ -888,6 +1118,40 @@ namespace NinjaTrader.NinjaScript.Strategies
                               $"(need ≥{lowBarThreshold} to warm ATR+volume). " +
                               $"Consider increasing DaysToLoad (currently {DaysToLoad}).");
                     }
+                }
+
+                // ── Load per-type TP3 multipliers from feature_contract.json ──────────
+                // The contract lives at models/feature_contract.json relative to the
+                // NT8 Custom directory.  We look for it alongside the ONNX model.
+                // Falls back to the global CTp3AtrMult constant for any missing type.
+                try
+                {
+                    string modelDir = string.IsNullOrWhiteSpace(CnnModelPath)
+                        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                                       "NinjaTrader 8", "bin", "Custom", "Models")
+                        : Path.GetDirectoryName(CnnModelPath) ?? "";
+                    string contractPath = Path.Combine(modelDir, "feature_contract.json");
+
+                    if (File.Exists(contractPath))
+                    {
+                        string json = File.ReadAllText(contractPath);
+                        _tp3MultByType = ParseTp3MultsFromContract(json);
+                        Print($"[BreakoutStrategy] feature_contract.json loaded — " +
+                              $"{_tp3MultByType.Count} per-type TP3 mults applied");
+
+                        // Propagate to already-allocated RangeStates (if states built early)
+                        if (_states != null)
+                            ApplyTp3MultsToStates();
+                    }
+                    else
+                    {
+                        Print($"[BreakoutStrategy] feature_contract.json not found at '{contractPath}' " +
+                              $"— using global CTp3AtrMult ({CTp3AtrMult}) for all types");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Print($"[BreakoutStrategy] feature_contract.json parse error (non-fatal): {ex.Message}");
                 }
 
                 // ── CNN predictor ─────────────────────────────────────────────
@@ -965,6 +1229,72 @@ namespace NinjaTrader.NinjaScript.Strategies
                 // Capture for closures
                 Account capturedAccount = myAccount;
 
+                // Apply TP3 mults to states now that they're allocated
+                if (_states != null && _tp3MultByType.Count > 0)
+                    ApplyTp3MultsToStates();
+
+                // ── MTF BIP map — pair each 1m BIP with its 15m sibling ─────────
+                // The 15m series are added in Configure immediately after the 1m series
+                // for each extra symbol.  They land at BIP indices N+extra_count onward.
+                // We match by instrument name: find every BIP whose BarsPeriod is 15m
+                // and store it in _mtfBipBySymbol keyed by instrument root name.
+                _mtfBipBySymbol.Clear();
+                for (int bipIdx = 0; bipIdx < BarsArray.Length; bipIdx++)
+                {
+                    try
+                    {
+                        var bipBars = BarsArray[bipIdx];
+                        if (bipBars == null) continue;
+                        var bp = bipBars.BarsPeriod;
+                        if (bp != null &&
+                            bp.BarsPeriodType == BarsPeriodType.Minute &&
+                            bp.Value == 15)
+                        {
+                            string rootName = bipBars.Instrument.MasterInstrument.Name;
+                            if (!_mtfBipBySymbol.ContainsKey(rootName))
+                            {
+                                _mtfBipBySymbol[rootName] = bipIdx;
+                                // Wire the MtfBip reference into the corresponding 1m state
+                                if (_states != null)
+                                {
+                                    // Find the 1m state for this symbol
+                                    int oneMBip;
+                                    if (_symbolToBip.TryGetValue(rootName, out oneMBip) &&
+                                        oneMBip < _states.Length)
+                                    {
+                                        _states[oneMBip].MtfBip = bipIdx;
+                                    }
+                                    else if (rootName.Equals(
+                                        Instrument?.MasterInstrument?.Name ?? "",
+                                        StringComparison.OrdinalIgnoreCase) &&
+                                        _states.Length > 0)
+                                    {
+                                        _states[0].MtfBip = bipIdx;
+                                    }
+                                }
+                                Print($"[BreakoutStrategy] MTF BIP{bipIdx} → {rootName} (15m)");
+                            }
+                        }
+                    }
+                    catch { /* non-fatal — MTF will fall back to 1.0 score for this symbol */ }
+                }
+
+                // ── SAR HTTP client (fire-and-forget push to Python engine) ─────
+                try
+                {
+                    _sarHttpClient = new System.Net.Http.HttpClient
+                    {
+                        Timeout = TimeSpan.FromSeconds(3)
+                    };
+                    _sarHttpClient.DefaultRequestHeaders.Add("User-Agent", "NinjaTrader-SAR/1.0");
+                    Print($"[BreakoutStrategy] SAR sync client initialised → {CSarSyncUrl}");
+                }
+                catch (Exception ex)
+                {
+                    Print($"[BreakoutStrategy] SAR HTTP client init failed (non-fatal): {ex.Message}");
+                    _sarHttpClient = null;
+                }
+
                 _engine = new BridgeOrderEngine(
                     strategy: this,
                     symbolToBip: _symbolToBip,
@@ -1017,6 +1347,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                 _cnn = null;
                 _engine = null;
                 _states = null;
+                _sarStates = null;
+                try { _sarHttpClient?.Dispose(); } catch { }
+                _sarHttpClient = null;
+                _mtfBipBySymbol.Clear();
                 lock (_phaseLock)
                     _positionPhases.Clear();
             }
@@ -1034,6 +1368,45 @@ namespace NinjaTrader.NinjaScript.Strategies
             int quantity, int filled, double averageFillPrice, OrderState orderState,
             DateTime time, ErrorCode error, string nativeError)
         {
+            // ── SAR: close the ReversalState when a flatten or SL/TP fills ────
+            // This keeps the SAR direction in sync with NT8's actual position.
+            // We check for both the SAR flatten name prefix and the normal exit prefixes.
+            if (orderState == OrderState.Filled)
+            {
+                string instrName = order.Instrument?.MasterInstrument?.Name ?? "";
+                if (!string.IsNullOrEmpty(instrName) && _sarStates != null)
+                {
+                    bool isFlatOrder = order.Name != null && (
+                        order.Name.StartsWith("SAR-Flat-") ||
+                        order.Name.StartsWith("Flatten") ||
+                        order.Name.StartsWith("Phase3Exit-") ||
+                        order.Name.StartsWith("SL-") ||
+                        order.Name.StartsWith("TP1-") ||
+                        order.Name.StartsWith("TP2-"));
+
+                    if (isFlatOrder)
+                    {
+                        // Find the BIP for this instrument and close its SAR state
+                        // if NT8 shows the position as now flat.
+                        for (int sarBip = 0; sarBip < BarsArray.Length && sarBip < _sarStates.Length; sarBip++)
+                        {
+                            if (BarsArray[sarBip] != null &&
+                                BarsArray[sarBip].Instrument.MasterInstrument.Name == instrName)
+                            {
+                                try
+                                {
+                                    var ntPos = Positions[sarBip];
+                                    if (ntPos == null || ntPos.MarketPosition == MarketPosition.Flat)
+                                        _sarStates[sarBip]?.Close();
+                                }
+                                catch { /* Positions[] may throw on historical replay — harmless */ }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
             // ── Rejected orders: log and absorb instead of letting NT8 kill the strategy ──
             if (orderState == OrderState.Rejected)
             {
@@ -1167,6 +1540,9 @@ namespace NinjaTrader.NinjaScript.Strategies
                         if (ph != null && ph.Phase == BreakoutPhase.Phase2 && ph.Tp3Price > 0 && ph.Tp3Qty > 0)
                         {
                             ph.Phase = BreakoutPhase.Phase3;
+                            // Reset the ratchet so CheckPhase3Exits initialises it from the
+                            // live EMA9 on the very first bar it runs in Phase3.
+                            ph.Ema9TrailPrice = 0;
                             Print($"[Phase] TP2 HIT → Phase3 | id={signalId} TP3={ph.Tp3Price:F6} " +
                                   $"qty={ph.Tp3Qty}  EMA9 trailing active");
                             // Phase3 exit is handled by CheckPhase3Exits() on each bar.
@@ -1245,9 +1621,12 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         /// <summary>
         /// Called once per primary bar (BIP0) when EnableTp3Trailing is true.
-        /// For every position in Phase3, checks whether:
-        ///   (a) price has crossed EMA9 adversely → submit market exit immediately, or
-        ///   (b) price has reached or exceeded TP3 → submit limit exit at TP3.
+        /// For every position in Phase3:
+        ///   1. Ratchet Ema9TrailPrice forward (only in the favourable direction),
+        ///      mirroring Python PositionManager._update_bracket_phase(TRAILING).
+        ///   2. Check TP3 hit (hard cap) — checked FIRST, same as Python update_all.
+        ///   3. Check adverse EMA9 cross using the RATCHETED trail price (not raw EMA9),
+        ///      so a brief dip in EMA9 during a choppy trend cannot pull the stop back.
         /// Removes closed phases from the dictionary.
         /// </summary>
         private void CheckPhase3Exits()
@@ -1275,23 +1654,52 @@ namespace NinjaTrader.NinjaScript.Strategies
                     double close = bars.GetClose(last);
                     double ema9  = st.Ema9Value;
 
+                    // ── Step 1: Ratchet the trail price (mirrors Python ema9_trail_price) ──
+                    // Initialise on the first bar of Phase3 (Ema9TrailPrice == 0).
+                    if (ph.Ema9TrailPrice <= 0)
+                    {
+                        ph.Ema9TrailPrice = ema9;
+                        if (EnableDebugLogging)
+                            Print($"[Phase3] Trail INIT | id={ph.SignalId} EMA9={ema9:F6}");
+                    }
+                    else
+                    {
+                        bool shouldRatchet = ph.Direction == "long"
+                            ? ema9 > ph.Ema9TrailPrice   // long: only move trail UP
+                            : ema9 < ph.Ema9TrailPrice;  // short: only move trail DOWN
+                        if (shouldRatchet)
+                        {
+                            if (EnableDebugLogging)
+                                Print($"[Phase3] Trail ratchet | id={ph.SignalId} " +
+                                      $"{ph.Ema9TrailPrice:F6} → {ema9:F6}");
+                            ph.Ema9TrailPrice = ema9;
+                        }
+                    }
+
+                    double trailStop = ph.Ema9TrailPrice;
+
                     OrderAction exitAction = ph.Direction == "long"
                         ? OrderAction.Sell
                         : OrderAction.BuyToCover;
 
-                    bool ema9Stop = ph.Direction == "long"
-                        ? close < ema9          // long: exit when price drops below EMA9
-                        : close > ema9;         // short: exit when price rises above EMA9
-
+                    // ── Step 2: TP3 hard exit (checked before EMA9 stop, same as Python) ──
                     bool tp3Hit = ph.Tp3Price > 0 && (ph.Direction == "long"
                         ? close >= ph.Tp3Price
                         : close <= ph.Tp3Price);
+
+                    // ── Step 3: Adverse cross against the RATCHETED trail price ──
+                    // Using trailStop (not raw ema9) means a momentary EMA9 dip during
+                    // a choppy trend cannot pull the stop price backward, matching Python.
+                    bool ema9Stop = ph.Direction == "long"
+                        ? close < trailStop     // long: exit when close drops below trail
+                        : close > trailStop;    // short: exit when close rises above trail
 
                     if (tp3Hit && !ph.Tp3Submitted)
                     {
                         // Price reached TP3 — submit limit exit
                         ph.Tp3Submitted = true;
-                        Print($"[Phase3] TP3 REACHED | id={ph.SignalId} price={close:F6} TP3={ph.Tp3Price:F6} qty={ph.Tp3Qty}");
+                        Print($"[Phase3] TP3 REACHED | id={ph.SignalId} price={close:F6} " +
+                              $"TP3={ph.Tp3Price:F6} trail={trailStop:F6} qty={ph.Tp3Qty}");
                         try
                         {
                             SubmitOrderUnmanaged(ph.Bip, exitAction,
@@ -1310,9 +1718,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                     }
                     else if (ema9Stop)
                     {
-                        // Price crossed EMA9 adversely — trail stop triggered
+                        // Close crossed the ratcheted EMA9 trail adversely — market exit
                         ph.Ema9StopHit = true;
-                        Print($"[Phase3] EMA9 TRAIL STOP | id={ph.SignalId} price={close:F6} EMA9={ema9:F6} qty={ph.Tp3Qty}");
+                        Print($"[Phase3] EMA9 TRAIL STOP | id={ph.SignalId} price={close:F6} " +
+                              $"trail={trailStop:F6} (raw EMA9={ema9:F6}) qty={ph.Tp3Qty}");
                         try
                         {
                             SubmitOrderUnmanaged(ph.Bip, exitAction,
@@ -1463,6 +1872,31 @@ namespace NinjaTrader.NinjaScript.Strategies
 
             var st = _states[bip];
 
+            // ── SAR sync: detect external position closes (TP/SL fills) ─────
+            // OnOrderUpdate already handles fill-driven SAR.Close(), but as a
+            // belt-and-suspenders check we also reconcile with the live NT8
+            // Positions[] every bar.  This catches edge cases where the fill
+            // callback fires out of order or during historical replay.
+            if (_sarStates != null && bip < _sarStates.Length)
+            {
+                var sarSync = _sarStates[bip];
+                if (!sarSync.IsFlat)
+                {
+                    try
+                    {
+                        var ntPos = Positions[bip];
+                        if (ntPos == null || ntPos.MarketPosition == MarketPosition.Flat)
+                        {
+                            if (EnableDebugLogging)
+                                Print($"[SAR] BIP{bip} position closed externally — resetting SAR state " +
+                                      $"(was {sarSync.ActiveDirection})");
+                            sarSync.Close();
+                        }
+                    }
+                    catch { /* Positions[] may throw during historical replay */ }
+                }
+            }
+
             // ── First-bar log: fires once per BIP the first time OnBarUpdate
             // is called for it, confirming the data subscription is alive.
             if (EnableDebugLogging && st.LastBarProcessed == -1 && BarsArray[bip].Count > 0)
@@ -1494,6 +1928,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                     UpdateAtr(bip, st);
                     UpdateVolumeAvg(bip, st);
                     UpdateEma9(bip, st);
+                    // UpdateMtf is called separately for the 15m BIP below,
+                    // NOT here (this path only runs for 1m BIPs).
 
                     // ── Multi-range window accumulation ───────────────────────
                     if (Mode == BreakoutMode.BuiltIn || Mode == BreakoutMode.Both)
@@ -1515,6 +1951,42 @@ namespace NinjaTrader.NinjaScript.Strategies
                         UpdateRangeWindow(bip, st, BreakoutType.Fibonacci);
                     }
                 }
+            }
+
+            // ── 15m MTF update: if this BIP is a 15m series, update the
+            // corresponding 1m InstrumentState's MTF fields ──────────────────
+            if (_states != null)
+            {
+                try
+                {
+                    var thisBars = BarsArray[bip];
+                    if (thisBars != null)
+                    {
+                        var bp = thisBars.BarsPeriod;
+                        if (bp != null && bp.BarsPeriodType == BarsPeriodType.Minute && bp.Value == 15)
+                        {
+                            // Find the 1m InstrumentState for this symbol
+                            string mtfRoot = thisBars.Instrument.MasterInstrument.Name;
+                            int oneMBip;
+                            InstrumentState mtfSt = null;
+                            if (_symbolToBip.TryGetValue(mtfRoot, out oneMBip) && oneMBip < _states.Length)
+                                mtfSt = _states[oneMBip];
+                            else if (mtfRoot.Equals(
+                                    Instrument?.MasterInstrument?.Name ?? "",
+                                    StringComparison.OrdinalIgnoreCase) &&
+                                _states.Length > 0)
+                                mtfSt = _states[0];
+
+                            if (mtfSt != null)
+                            {
+                                int closedMtfIdx = thisBars.Count - 2;
+                                if (closedMtfIdx > 0 && closedMtfIdx > mtfSt.LastBarProcessed - 1)
+                                    UpdateMtf(bip, mtfSt);
+                            }
+                        }
+                    }
+                }
+                catch { /* non-fatal — MTF update never blocks bar processing */ }
             }
 
             // ── Primary-series-only logic ─────────────────────────────────────
@@ -1556,6 +2028,373 @@ namespace NinjaTrader.NinjaScript.Strategies
             // ── Breakout detection (runs for every BIP in built-in modes) ─────
             if (Mode == BreakoutMode.BuiltIn || Mode == BreakoutMode.Both)
                 CheckBreakout(bip, st);
+        }
+
+        #endregion
+
+        // =====================================================================
+        // Stop-and-reverse helpers
+        // =====================================================================
+        #region SAR helpers
+
+        /// <summary>
+        /// Evaluate reversal gates for an existing position.
+        /// Mirrors Python PositionManager._should_reverse().
+        ///
+        /// Gate 1 — Direction must be opposite.
+        /// Gate 2 — CNN probability ≥ threshold (higher bar for winning positions).
+        /// Gate 3 — Cooldown since last entry/reversal.
+        /// Gate 4 — MTF alignment score.
+        /// Gate 5 — Winning position at 1R+: need CNN ≥ 0.95.
+        /// </summary>
+        /// <summary>
+        /// Compute the real MTF score for a given instrument state and direction.
+        ///
+        /// UpdateMtf() stores two sentinel values in st.MtfScore:
+        ///   1.0   — EMA or MACD not yet warmed (< 50 bars seen); pass-through gate.
+        ///   -1.0  — Both EMA and MACD are warmed up; ComputeMtfScore() must be called
+        ///           with the caller's direction to get the true 0.0–1.0 score.
+        ///
+        /// Any other value should not appear but is treated as pass-through to be safe.
+        /// </summary>
+        private double GetMtfScore(InstrumentState st, string direction)
+        {
+            if (st == null) return 1.0;
+
+            // Sentinel -1: EMA+MACD warmed — compute the real directional score now.
+            if (st.MtfScore < 0) return ComputeMtfScore(st, direction);
+
+            // Sentinel 1.0 (or any positive value set during warm-up): pass-through.
+            // This covers the initial default (0.0 from field initialiser) and the
+            // explicit 1.0 written by UpdateMtf while bars are still accumulating.
+            return st.MtfScore > 0 ? st.MtfScore : 1.0;
+        }
+
+        private bool ShouldReverse(
+            ReversalState sar,
+            string newDirection,
+            double cnnProb,
+            double mtfScore,
+            double currentPrice,
+            DateTime barTime)
+        {
+            // Gate 1: must be opposite direction
+            if (newDirection == sar.ActiveDirection)
+                return false;
+
+            // Gate 2: CNN probability threshold
+            bool isWinning = sar.IsWinning(currentPrice);
+            double minProb = isWinning ? SarWinningCnnProb : SarMinCnnProb;
+            if (cnnProb < minProb)
+            {
+                if (EnableDebugLogging)
+                    Print($"[SAR] Gate2 FAIL: CNN={cnnProb:F3} < {minProb:F3} (winning={isWinning})");
+                return false;
+            }
+
+            // Gate 3: cooldown
+            if (sar.LastReversalTime != DateTime.MinValue)
+            {
+                double elapsedMin = (barTime - sar.LastReversalTime).TotalMinutes;
+                if (elapsedMin < SarCooldownMinutes)
+                {
+                    if (EnableDebugLogging)
+                        Print($"[SAR] Gate3 FAIL: cooldown {elapsedMin:F1}m < {SarCooldownMinutes}m");
+                    return false;
+                }
+            }
+
+            // Gate 4: MTF alignment
+            if (mtfScore < SarMinMtfScore)
+            {
+                if (EnableDebugLogging)
+                    Print($"[SAR] Gate4 FAIL: MTF={mtfScore:F2} < {SarMinMtfScore:F2}");
+                return false;
+            }
+
+            // Gate 5: winning position at 1R+ needs exceptional CNN conviction
+            if (isWinning && sar.RMultiple(currentPrice) > SarHighWinnerRMult && cnnProb < SarHighWinnerCnnProb)
+            {
+                if (EnableDebugLogging)
+                    Print($"[SAR] Gate5 FAIL: won't flip +{sar.RMultiple(currentPrice):F2}R winner " +
+                          $"without CNN ≥ {SarHighWinnerCnnProb:F2} (got {cnnProb:F3})");
+                return false;
+            }
+
+            Print($"[SAR] Gates PASSED: {sar.ActiveDirection} → {newDirection} " +
+                  $"CNN={cnnProb:F3} MTF={mtfScore:F2} R={sar.RMultiple(currentPrice):F2} " +
+                  $"reversal#{sar.ReversalCount + 1}");
+            return true;
+        }
+
+        /// <summary>
+        /// Decide whether to use a limit order at the range edge or a market
+        /// chase order.  Mirrors Python PositionManager._decide_entry_type().
+        ///
+        /// Returns:
+        ///   orderType = "limit"  + limitPrice set to entryTarget when price is
+        ///               below/above the trigger (haven't reached yet).
+        ///   orderType = "market" when price is past trigger but within
+        ///               SarChaseMaxAtrFraction × ATR AND cnnProb ≥ SarChaseMinCnnProb.
+        ///   orderType = "limit"  at trigger price when price has moved too far.
+        /// </summary>
+        private string DecideEntryType(
+            string direction,
+            double entryTarget,
+            double triggerPrice,
+            double currentPrice,
+            double atr,
+            double cnnProb,
+            out double resolvedPrice)
+        {
+            if (currentPrice <= 0 || atr <= 0)
+            {
+                resolvedPrice = triggerPrice;
+                return "market";
+            }
+
+            double overshoot = direction == "long"
+                ? currentPrice - triggerPrice
+                : triggerPrice - currentPrice;
+
+            double maxChase = SarChaseMaxAtrFraction * atr;
+
+            if (overshoot <= 0)
+            {
+                // Price hasn't reached the trigger yet — queue a limit at range edge
+                resolvedPrice = entryTarget;
+                return "limit";
+            }
+
+            if (overshoot <= maxChase && cnnProb >= SarChaseMinCnnProb)
+            {
+                // Within chase window with high conviction — market at current price
+                if (EnableDebugLogging)
+                    Print($"[SAR] Chase entry: {direction} overshoot={overshoot:F4} " +
+                          $"({(overshoot / atr * 100):F1}% ATR) CNN={cnnProb:F3} → MARKET");
+                resolvedPrice = currentPrice;
+                return "market";
+            }
+
+            if (overshoot > maxChase)
+            {
+                // Too far gone — limit at trigger (may not fill, better than chasing)
+                if (EnableDebugLogging)
+                    Print($"[SAR] Price moved too far ({(overshoot / atr * 100):F1}% ATR) " +
+                          $"— limit at trigger {triggerPrice:F4}");
+                resolvedPrice = triggerPrice;
+                return "limit";
+            }
+
+            // Default: limit at entry target
+            resolvedPrice = entryTarget;
+            return "limit";
+        }
+
+        /// <summary>
+        /// Attempt to reverse an existing position for <paramref name="instrName"/>
+        /// (identified by <paramref name="bip"/>).
+        ///
+        /// Steps (mirrors Python _reverse_position):
+        ///   1. Flatten the existing position with a market exit.
+        ///   2. Cancel all working bracket orders for the old signalId.
+        ///   3. Clean up _positionPhases.
+        ///   4. Reset per-range fired flags so the new signal can fire.
+        ///   5. Call FireEntry() for the new direction.
+        ///   6. Update ReversalState.
+        ///
+        /// Returns true if the reversal was submitted.
+        /// </summary>
+        private bool TryReversePosition(
+            string newDirection,
+            int bip,
+            InstrumentState st,
+            ReversalState sar,
+            double price,
+            double atr,
+            DateTime barTime,
+            string instrName,
+            BreakoutType breakoutType)
+        {
+            try
+            {
+                string oldSignalId = sar.ActiveSignalId;
+                string oldDirection = sar.ActiveDirection;
+
+                Print($"[SAR] REVERSE {oldDirection.ToUpper()} → {newDirection.ToUpper()} " +
+                      $"{instrName} BIP{bip} @ {price:F4} reversal#{sar.ReversalCount + 1}");
+
+                // Step 1: market-flatten the existing position
+                OrderAction flattenAction = oldDirection == "long"
+                    ? OrderAction.Sell
+                    : OrderAction.BuyToCover;
+
+                // Determine qty from the live NT8 position on this BIP
+                int flatQty = 1; // fallback
+                try
+                {
+                    var ntPos = Positions[bip];
+                    if (ntPos != null && ntPos.MarketPosition != MarketPosition.Flat)
+                        flatQty = Math.Abs(ntPos.Quantity);
+                }
+                catch { /* if Positions[bip] throws, fallback to 1 */ }
+
+                string flatId = "SAR-Flat-" + barTime.ToString("yyyyMMdd-HHmmss") +
+                                "-" + instrName + "-" + oldDirection[0];
+                try
+                {
+                    SubmitOrderUnmanaged(bip, flattenAction, OrderType.Market,
+                        flatQty, 0, 0, "", flatId);
+                    Print($"[SAR] Flatten submitted: {flatId} qty={flatQty}");
+                }
+                catch (Exception ex)
+                {
+                    Print($"[SAR] Flatten submit failed for {instrName}: {ex.Message}");
+                    return false;
+                }
+
+                // Step 2 & 3: clean up PositionPhase tracking for the old signal
+                if (!string.IsNullOrEmpty(oldSignalId))
+                {
+                    lock (_phaseLock)
+                    {
+                        if (_positionPhases.TryGetValue(oldSignalId, out var oldPh))
+                        {
+                            oldPh.Phase = BreakoutPhase.Closed;
+                            _positionPhases.Remove(oldSignalId);
+                        }
+                    }
+                }
+
+                // Step 4: reset per-range fired flags on ALL range types for this
+                // instrument so the reversal signal can fire normally through FireEntry.
+                foreach (var rsKv in st.Ranges)
+                {
+                    rsKv.Value.FiredLong  = false;
+                    rsKv.Value.FiredShort = false;
+                }
+                st.BreakoutFiredLong  = false;
+                st.BreakoutFiredShort = false;
+
+                // Active position count will be decremented by OnOrderUpdate when the
+                // flatten fill arrives.  We pre-decrement here so the MaxConcurrent
+                // gate in FireEntry doesn't block the reversal entry immediately.
+                lock (_activeInstruments)
+                {
+                    if (_activeInstruments.Remove(instrName))
+                        _activePositionCount = _activeInstruments.Count;
+                }
+
+                // Step 5: update ReversalState *before* FireEntry so the cooldown
+                // is stamped even if FireEntry fails (prevents rapid retries).
+                sar.ReversalCount++;
+                sar.LastReversalTime = barTime;
+                // Direction / signalId will be re-set by the Open() call inside
+                // the FireEntry → OnOrderUpdate fill path (handled in FireEntry wrapper).
+
+                // Step 6: fire new entry — FireEntry will stamp the new direction
+                // via the SAR open callback at the bottom of FireEntry.
+                FireEntry(newDirection, bip, st, price, atr, barTime, instrName, breakoutType);
+
+                // Step 7: push the reversal state to the Python engine on the Pi
+                // (100.100.84.48:8000) so PositionManager stays in sync.
+                // Fire-and-forget — never block the bar thread.
+                PushSarSyncAsync(instrName, newDirection, sar, barTime);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Print($"[SAR] TryReversePosition exception for {instrName}: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Fire-and-forget POST to the Python engine's /sar/sync endpoint.
+        /// Sends the new active direction + signalId + reversal count so the
+        /// Python PositionManager's ReversalState stays in sync with C#.
+        ///
+        /// Endpoint: POST http://100.100.84.48:8000/sar/sync
+        /// Body (JSON):
+        /// {
+        ///   "asset":          "MGC",
+        ///   "direction":      "long",
+        ///   "signal_id":      "brk-l-20250115-143022-MGC-ORB",
+        ///   "reversal_count": 1,
+        ///   "entry_price":    2650.5,
+        ///   "atr_at_entry":   8.4,
+        ///   "sl_price":       2637.9,
+        ///   "timestamp":      "2025-01-15T14:30:22Z",
+        ///   "source":         "NinjaTrader"
+        /// }
+        /// </summary>
+        private void PushSarSyncAsync(string instrName, string newDirection,
+                                      ReversalState sar, DateTime barTime)
+        {
+            var client = _sarHttpClient;
+            if (client == null) return;
+
+            try
+            {
+                // Build JSON manually — no LINQ/serializer dependency at call site
+                string ts = barTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ");
+                string signalId = sar?.ActiveSignalId ?? "";
+                int revCount = sar?.ReversalCount ?? 0;
+                double entryPrice = sar?.EntryPrice ?? 0;
+                double atrAtEntry = sar?.AtrAtEntry ?? 0;
+                double slPrice    = sar?.SlPrice    ?? 0;
+
+                string json =
+                    "{" +
+                    $"\"asset\":\"{SarEsc(instrName)}\"," +
+                    $"\"direction\":\"{SarEsc(newDirection)}\"," +
+                    $"\"signal_id\":\"{SarEsc(signalId)}\"," +
+                    $"\"reversal_count\":{revCount}," +
+                    $"\"entry_price\":{entryPrice:R}," +
+                    $"\"atr_at_entry\":{atrAtEntry:R}," +
+                    $"\"sl_price\":{slPrice:R}," +
+                    $"\"timestamp\":\"{ts}\"," +
+                    "\"source\":\"NinjaTrader\"" +
+                    "}";
+
+                var content = new System.Net.Http.StringContent(
+                    json, System.Text.Encoding.UTF8, "application/json");
+
+                client.PostAsync(CSarSyncUrl, content).ContinueWith(t =>
+                {
+                    if (t.IsFaulted || t.IsCanceled)
+                    {
+                        // Only log throttled — network glitches are expected when Pi is unreachable
+                        if (EnableDebugLogging)
+                            Print($"[SAR] Sync push failed for {instrName}: " +
+                                  $"{t.Exception?.GetBaseException()?.Message ?? "cancelled"}");
+                    }
+                    else
+                    {
+                        try
+                        {
+                            int code = (int)t.Result.StatusCode;
+                            if (EnableDebugLogging)
+                                Print($"[SAR] Sync pushed: {instrName} {newDirection} → HTTP {code}");
+                        }
+                        catch { }
+                        finally { t.Result?.Dispose(); content?.Dispose(); }
+                    }
+                }, System.Threading.Tasks.TaskContinuationOptions.None);
+            }
+            catch (Exception ex)
+            {
+                Print($"[SAR] PushSarSyncAsync exception (non-fatal): {ex.Message}");
+            }
+        }
+
+        /// <summary>Escape a string value for inline JSON (SAR sync payload).</summary>
+        private static string SarEsc(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            return s.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                    .Replace("\n", "\\n").Replace("\r", "\\r");
         }
 
         #endregion
@@ -1803,6 +2642,192 @@ namespace NinjaTrader.NinjaScript.Strategies
             catch (Exception ex) { Print($"[Breakout] UpdateEma9 BIP{bip}: {ex.Message}"); }
         }
 
+        /// <summary>
+        /// Update the MTF (15-minute) EMA-9/21/50 and MACD state for <paramref name="bip"/>.
+        /// Called from OnBarUpdate whenever the 15m BIP for this instrument closes a new bar.
+        ///
+        /// Mirrors Python MTFAnalyzer weights:
+        ///   +0.30  EMA fully stacked in breakout direction
+        ///   +0.15  EMA slow slope positive in direction (≥ 0.02% per bar)
+        ///   +0.25  MACD histogram polarity agrees
+        ///   +0.15  MACD histogram slope agrees
+        ///   +0.15  No opposing divergence (always granted — divergence detection omitted)
+        ///
+        /// Result is stored in st.MtfScore.  ShouldReverse() reads it as Gate 4.
+        /// </summary>
+        private void UpdateMtf(int mtfBip, InstrumentState st)
+        {
+            try
+            {
+                var bars = BarsArray[mtfBip];
+                if (bars == null || bars.Count < 2) return;
+
+                int last = bars.Count - 1;
+                double close = bars.GetClose(last);
+                if (close <= 0) return;
+
+                // ── EMA update (incremental, alpha = 2/(period+1)) ────────────
+                double alphaFast = 2.0 / (9  + 1);   // EMA-9
+                double alphaMid  = 2.0 / (21 + 1);   // EMA-21
+                double alphaSlow = 2.0 / (50 + 1);   // EMA-50
+
+                if (st.MtfEmaFilled == 0)
+                {
+                    // Seed all three EMAs on the very first bar
+                    st.MtfEmaFast = close;
+                    st.MtfEmaMid  = close;
+                    st.MtfEmaSlow = close;
+                }
+                else
+                {
+                    st.MtfEmaFast = alphaFast * close + (1.0 - alphaFast) * st.MtfEmaFast;
+                    st.MtfEmaMid  = alphaMid  * close + (1.0 - alphaMid)  * st.MtfEmaMid;
+                    st.MtfEmaSlow = alphaSlow * close + (1.0 - alphaSlow)  * st.MtfEmaSlow;
+                }
+                st.MtfEmaFilled++;
+                st.MtfEmaReady = st.MtfEmaFilled >= 50;
+
+                // ── EMA slow ring-buffer for slope (last 5 bars) ─────────────
+                st.MtfEmaSlowBuf[st.MtfEmaSlowIdx] = st.MtfEmaSlow;
+                st.MtfEmaSlowIdx = (st.MtfEmaSlowIdx + 1) % 5;
+                if (st.MtfEmaSlowFill < 5) st.MtfEmaSlowFill++;
+
+                if (st.MtfEmaSlowFill >= 5)
+                {
+                    // Oldest value is at current index (ring buffer wraps around)
+                    double oldest = st.MtfEmaSlowBuf[st.MtfEmaSlowIdx];
+                    if (oldest > 0)
+                        st.MtfEmaSlopePerBar = (st.MtfEmaSlow - oldest) / oldest / 5.0;
+                }
+
+                // ── MACD update ───────────────────────────────────────────────
+                double alphaM12 = 2.0 / (12 + 1);
+                double alphaM26 = 2.0 / (26 + 1);
+                double alphaSig = 2.0 / (9  + 1);
+
+                if (st.MtfMacdFilled == 0)
+                {
+                    st.MtfMacdFastEma = close;
+                    st.MtfMacdSlowEma = close;
+                    st.MtfMacdLine    = 0;
+                    st.MtfMacdSigEma  = 0;
+                }
+                else
+                {
+                    st.MtfMacdFastEma = alphaM12 * close + (1.0 - alphaM12) * st.MtfMacdFastEma;
+                    st.MtfMacdSlowEma = alphaM26 * close + (1.0 - alphaM26) * st.MtfMacdSlowEma;
+                    double macdLine = st.MtfMacdFastEma - st.MtfMacdSlowEma;
+                    st.MtfMacdLine   = macdLine;
+
+                    if (st.MtfMacdFilled < 26)
+                    {
+                        // Signal EMA not yet meaningful — seed it
+                        st.MtfMacdSigEma = macdLine;
+                    }
+                    else
+                    {
+                        st.MtfMacdSigEma = alphaSig * macdLine + (1.0 - alphaSig) * st.MtfMacdSigEma;
+                    }
+                }
+                st.MtfMacdFilled++;
+                double histogram = st.MtfMacdLine - st.MtfMacdSigEma;
+                st.MtfMacdHistogram = histogram;
+                st.MtfMacdReady = st.MtfMacdFilled >= 35; // 26 slow + 9 signal warm-up
+
+                // ── Histogram ring-buffer for slope ───────────────────────────
+                st.MtfHistBuf[st.MtfHistBufIdx] = histogram;
+                st.MtfHistBufIdx = (st.MtfHistBufIdx + 1) % 3;
+                if (st.MtfHistFilled < 3) st.MtfHistFilled++;
+
+                double histSlope = 0;
+                if (st.MtfHistFilled >= 3)
+                {
+                    double oldest = st.MtfHistBuf[st.MtfHistBufIdx]; // oldest in ring
+                    histSlope = histogram - oldest; // positive = histogram growing
+                }
+
+                // ── MTF score (direction-agnostic raw components) ─────────────
+                // We store the score as a direction-agnostic value here and
+                // then flip it in ComputeMtfScore(direction) at evaluation time.
+                // Store components for ComputeMtfScore — store in MtfScore as a
+                // placeholder (ComputeMtfScore will recompute with direction).
+                // We write the raw components to MtfScore so callers can read it
+                // without a direction.  Use 0.70 as the "warm-up pass-through" score
+                // (same as passing with stacked EMA + agreeing MACD but no divergence data).
+                if (!st.MtfEmaReady || !st.MtfMacdReady)
+                {
+                    // Not yet warmed — use conservative 1.0 pass-through
+                    // (same behaviour as the old stand-in) until enough bars.
+                    st.MtfScore = 1.0;
+                }
+                else
+                {
+                    // Compute a direction-agnostic intermediate score.
+                    // Actual directional score is computed in ComputeMtfScore().
+                    // Here we store -1 as a sentinel so ComputeMtfScore knows it
+                    // needs to be computed fresh with the caller's direction.
+                    st.MtfScore = -1; // sentinel: "ready but needs direction"
+                }
+            }
+            catch (Exception ex)
+            {
+                Print($"[MTF] UpdateMtf BIP{mtfBip}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Compute the directional MTF score (0.0–1.0) for a given direction using
+        /// the pre-computed EMA / MACD state in <paramref name="st"/>.
+        ///
+        /// Mirrors Python MTFAnalyzer score weights:
+        ///   +0.30  EMA fully stacked (fast>mid>slow for LONG, reversed for SHORT)
+        ///   +0.15  EMA slow slope direction agrees (≥ 0.02% per bar)
+        ///   +0.25  MACD histogram polarity agrees
+        ///   +0.15  MACD histogram slope agrees (growing in favourable direction)
+        ///   +0.15  No opposing divergence (always granted — divergence omitted)
+        /// </summary>
+        private double ComputeMtfScore(InstrumentState st, string direction)
+        {
+            if (!st.MtfEmaReady || !st.MtfMacdReady) return 1.0; // warm-up pass-through
+
+            bool isLong = direction == "long";
+
+            // +0.30 — EMA stacked
+            bool emaStacked = isLong
+                ? (st.MtfEmaFast > st.MtfEmaMid && st.MtfEmaMid > st.MtfEmaSlow)
+                : (st.MtfEmaFast < st.MtfEmaMid && st.MtfEmaMid < st.MtfEmaSlow);
+            double score = emaStacked ? 0.30 : 0.0;
+
+            // +0.15 — EMA slope direction agrees (threshold 0.0002 = 0.02% per bar)
+            const double minSlopePct = 0.0002;
+            bool slopeOk = isLong
+                ? st.MtfEmaSlopePerBar >= minSlopePct
+                : st.MtfEmaSlopePerBar <= -minSlopePct;
+            if (slopeOk) score += 0.15;
+
+            // +0.25 — MACD histogram polarity agrees
+            bool histOk = isLong
+                ? st.MtfMacdHistogram > 0
+                : st.MtfMacdHistogram < 0;
+            if (histOk) score += 0.25;
+
+            // +0.15 — MACD histogram slope agrees (histogram growing in favourable direction)
+            if (st.MtfHistFilled >= 3)
+            {
+                double oldest = st.MtfHistBuf[st.MtfHistBufIdx];
+                double histSlope = st.MtfMacdHistogram - oldest;
+                bool histSlopeOk = isLong ? histSlope > 0 : histSlope < 0;
+                if (histSlopeOk) score += 0.15;
+            }
+
+            // +0.15 — No opposing divergence (always granted in C# — divergence detection
+            // requires swing-point detection across many bars, which is omitted here to
+            // keep the per-bar update cost low.  The CNN filter provides a second opinion.)
+            score += 0.15;
+
+            return score;
+        }
+
         #endregion
 
         // =====================================================================
@@ -1814,6 +2839,124 @@ namespace NinjaTrader.NinjaScript.Strategies
         // tracking, GetStatusSummary) continues to work without any changes.
         // =====================================================================
         #region Range Window
+
+        // ── feature_contract.json helpers ────────────────────────────────────────
+
+        /// <summary>
+        /// Parse the "breakout_types" section of feature_contract.json and return
+        /// a mapping of BreakoutType → tp3_atr_mult for all 13 types.
+        /// Uses a hand-rolled parser so there's no System.Text.Json / Newtonsoft
+        /// dependency — NT8's embedded CLR only guarantees mscorlib + NT8 assemblies.
+        /// </summary>
+        private Dictionary<BreakoutType, double> ParseTp3MultsFromContract(string json)
+        {
+            var result = new Dictionary<BreakoutType, double>();
+
+            // Mapping from contract key names → BreakoutType enum values
+            var nameMap = new Dictionary<string, BreakoutType>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "ORB",             BreakoutType.ORB             },
+                { "PrevDay",         BreakoutType.PrevDay          },
+                { "InitialBalance",  BreakoutType.InitialBalance   },
+                { "Consolidation",   BreakoutType.Consolidation    },
+                { "Weekly",          BreakoutType.Weekly           },
+                { "Monthly",         BreakoutType.Monthly          },
+                { "Asian",           BreakoutType.Asian            },
+                { "BollingerSqueeze",BreakoutType.BollingerSqueeze },
+                { "ValueArea",       BreakoutType.ValueArea        },
+                { "InsideDay",       BreakoutType.InsideDay        },
+                { "GapRejection",    BreakoutType.GapRejection     },
+                { "PivotPoints",     BreakoutType.PivotPoints      },
+                { "Fibonacci",       BreakoutType.Fibonacci        },
+            };
+
+            // Find "breakout_types" object — locate its opening brace
+            int btIdx = json.IndexOf("\"breakout_types\"", StringComparison.Ordinal);
+            if (btIdx < 0) return result;
+            int startBrace = json.IndexOf('{', btIdx + 16);
+            if (startBrace < 0) return result;
+
+            // Walk type-level objects inside "breakout_types"
+            int pos = startBrace + 1;
+            int depth = 1;
+            while (pos < json.Length && depth > 0)
+            {
+                // Find the next quoted type name at depth==1
+                int nameStart = json.IndexOf('"', pos);
+                if (nameStart < 0) break;
+                int nameEnd   = json.IndexOf('"', nameStart + 1);
+                if (nameEnd < 0) break;
+                string typeName = json.Substring(nameStart + 1, nameEnd - nameStart - 1);
+                pos = nameEnd + 1;
+
+                // Skip to the opening brace of this type's object
+                int typeObjStart = json.IndexOf('{', pos);
+                if (typeObjStart < 0) break;
+
+                // Find the matching closing brace
+                int typeObjEnd = typeObjStart + 1;
+                int innerDepth = 1;
+                while (typeObjEnd < json.Length && innerDepth > 0)
+                {
+                    if (json[typeObjEnd] == '{') innerDepth++;
+                    else if (json[typeObjEnd] == '}') innerDepth--;
+                    typeObjEnd++;
+                }
+                string typeObj = json.Substring(typeObjStart, typeObjEnd - typeObjStart);
+
+                // Extract "tp3_atr_mult" value from typeObj
+                int tp3Idx = typeObj.IndexOf("\"tp3_atr_mult\"", StringComparison.Ordinal);
+                if (tp3Idx >= 0)
+                {
+                    int colonIdx = typeObj.IndexOf(':', tp3Idx + 14);
+                    if (colonIdx >= 0)
+                    {
+                        // Collect digits (including decimal point)
+                        int numStart = colonIdx + 1;
+                        while (numStart < typeObj.Length && (typeObj[numStart] == ' ' || typeObj[numStart] == '\t' || typeObj[numStart] == '\r' || typeObj[numStart] == '\n'))
+                            numStart++;
+                        int numEnd = numStart;
+                        while (numEnd < typeObj.Length && (char.IsDigit(typeObj[numEnd]) || typeObj[numEnd] == '.' || typeObj[numEnd] == '-'))
+                            numEnd++;
+                        string numStr = typeObj.Substring(numStart, numEnd - numStart);
+                        if (double.TryParse(numStr, System.Globalization.NumberStyles.Float,
+                                            System.Globalization.CultureInfo.InvariantCulture, out double mult))
+                        {
+                            if (nameMap.TryGetValue(typeName, out BreakoutType bt))
+                                result[bt] = mult;
+                        }
+                    }
+                }
+
+                pos = typeObjEnd;
+                // Update outer depth tracking
+                for (int i = typeObjStart; i < typeObjEnd; i++)
+                {
+                    if (json[i] == '{') depth++;
+                    else if (json[i] == '}') depth--;
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Write loaded per-type TP3 mults into every InstrumentState's RangeStates.
+        /// Called after _states is allocated and _tp3MultByType is populated.
+        /// </summary>
+        private void ApplyTp3MultsToStates()
+        {
+            if (_states == null || _tp3MultByType == null) return;
+            foreach (var st in _states)
+            {
+                if (st == null) continue;
+                foreach (var kv in _tp3MultByType)
+                {
+                    if (st.Ranges.TryGetValue(kv.Key, out var rs))
+                        rs.Tp3AtrMult = kv.Value;
+                }
+            }
+        }
 
         private RangeConfig GetRangeConfig(BreakoutType type)
         {
@@ -2283,29 +3426,511 @@ namespace NinjaTrader.NinjaScript.Strategies
                             break;
                         }
 
-                    // ── Weekly / Monthly / ValueArea / InsideDay / GapRejection / PivotPoints / Fibonacci ──
-                    // These types follow the same pattern as PrevDay: the range is
-                    // set once at session boundary from prior-period data, then held
-                    // fixed.  Full detection logic (reading weekly/monthly bars,
-                    // volume profile, pivot calculations, fib levels) is deferred to
-                    // the medium-term roadmap.  For now they remain as registered-but-
-                    // never-established placeholders so the enum, RangeConfig, and
-                    // InstrumentState are all consistent with the v6 feature contract.
+                    // ── Weekly: prior-week high/low ──────────────────────────────
                     case BreakoutType.Weekly:
+                        {
+                            // Strategy: accumulate a rolling 7-calendar-day window of H/L.
+                            // On every bar, walk back through BarsArray[bip] to find bars
+                            // whose date falls in the prior trading week (Mon–Fri before
+                            // this week's Monday).  This is O(lookback) but runs once per
+                            // 1-min bar and the window is capped at ~7*390 = ~2730 bars.
+                            // Mirrors Python _build_weekly_range().
+                            {
+                                DateTime today       = barTime.Date;
+                                int      weekday     = (int)today.DayOfWeek; // Sun=0..Sat=6
+                                // Convert to Mon=0 convention
+                                int      monOffset   = weekday == 0 ? 6 : weekday - 1;
+                                DateTime thisMonday  = today.AddDays(-monOffset);
+                                DateTime prevMonday  = thisMonday.AddDays(-7);
+
+                                double wHigh = 0, wLow = double.MaxValue;
+                                int    wBars = 0;
+
+                                for (int k = last; k >= 0 && k >= last - 2730; k--)
+                                {
+                                    DateTime kt = bars.GetTime(k).Date;
+                                    if (kt >= thisMonday) continue;  // this week — skip
+                                    if (kt < prevMonday)  break;     // older than prior week — stop
+                                    wHigh = Math.Max(wHigh, bars.GetHigh(k));
+                                    wLow  = Math.Min(wLow,  bars.GetLow(k));
+                                    wBars++;
+                                }
+
+                                if (wBars >= cfg.MinBarsRequired && wHigh > wLow)
+                                {
+                                    rs.RangeHigh       = wHigh;
+                                    rs.RangeLow        = wLow;
+                                    rs.RangeEstablished = true;
+                                    rs.BarsInRange     = wBars;
+
+                                    if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
+                                    {
+                                        string sym = bars.Instrument.MasterInstrument.Name;
+                                        Print($"[Breakout DEBUG] 📅 BIP{bip} {sym} WEEKLY " +
+                                              $"H={rs.RangeHigh:F4} L={rs.RangeLow:F4} " +
+                                              $"({wBars} prior-week bars, week starts {prevMonday:MM-dd})");
+                                    }
+                                }
+                                else
+                                {
+                                    rs.RangeEstablished = false;
+                                }
+                            }
+                            break;
+                        }
+
+                    // ── Monthly: prior-month high/low ─────────────────────────
                     case BreakoutType.Monthly:
+                        {
+                            // Walk back up to ~20*390 bars to find prior-month bars.
+                            // "Prior month" = any bar whose date falls before the 1st
+                            // of the current calendar month.  Mirrors Python _build_monthly_range().
+                            {
+                                DateTime firstOfMonth = new DateTime(barTime.Year, barTime.Month, 1);
+                                DateTime lookbackStart = firstOfMonth.AddDays(-(cfg.RangeBars > 0
+                                    ? cfg.RangeBars     // RangeBars repurposed as lookback days
+                                    : 31));             // default ~1 month
+
+                                double mHigh = 0, mLow = double.MaxValue;
+                                int    mBars = 0;
+
+                                for (int k = last; k >= 0 && k >= last - 12000; k--)
+                                {
+                                    DateTime kt = bars.GetTime(k).Date;
+                                    if (kt >= firstOfMonth)  continue;  // current month — skip
+                                    if (kt < lookbackStart)  break;     // beyond lookback — stop
+                                    mHigh = Math.Max(mHigh, bars.GetHigh(k));
+                                    mLow  = Math.Min(mLow,  bars.GetLow(k));
+                                    mBars++;
+                                }
+
+                                if (mBars >= cfg.MinBarsRequired && mHigh > mLow)
+                                {
+                                    rs.RangeHigh        = mHigh;
+                                    rs.RangeLow         = mLow;
+                                    rs.RangeEstablished = true;
+                                    rs.BarsInRange      = mBars;
+
+                                    if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
+                                    {
+                                        string sym = bars.Instrument.MasterInstrument.Name;
+                                        Print($"[Breakout DEBUG] 📆 BIP{bip} {sym} MONTHLY " +
+                                              $"H={rs.RangeHigh:F4} L={rs.RangeLow:F4} " +
+                                              $"({mBars} prior-month bars, cutoff {firstOfMonth:MM-dd})");
+                                    }
+                                }
+                                else
+                                {
+                                    rs.RangeEstablished = false;
+                                }
+                            }
+                            break;
+                        }
+
+                    // ── ValueArea: prior-session VAH/VAL via volume profile ────
                     case BreakoutType.ValueArea:
+                        {
+                            // Approximate VAH/VAL from prior session (18:00 ET boundary)
+                            // without a full volume profile library.  Strategy:
+                            //   1. Collect prior-session bars (from last 18:00 ET boundary
+                            //      backward until the one before that).
+                            //   2. Sort close prices by their associated volume.
+                            //   3. Value Area = price range covering the top 70% of volume.
+                            //   4. VAH = highest price in VA, VAL = lowest price in VA.
+                            // Mirrors Python _build_va_range() fallback (no volume profile lib).
+                            {
+                                // Find the most recent 18:00 ET session boundary
+                                int sessionBoundary = -1;
+                                int prevBoundary    = -1;
+                                for (int k = last; k >= 0 && k >= last - 2000; k--)
+                                {
+                                    DateTime kt = bars.GetTime(k);
+                                    if (kt.Hour == 18 && kt.Minute == 0)
+                                    {
+                                        if (sessionBoundary < 0) sessionBoundary = k;
+                                        else { prevBoundary = k; break; }
+                                    }
+                                }
+
+                                // Fall back: use calendar day boundary if no 18:00 found
+                                if (sessionBoundary < 0)
+                                {
+                                    DateTime today2 = bars.GetTime(last).Date;
+                                    for (int k = last; k >= 0; k--)
+                                        if (bars.GetTime(k).Date < today2) { sessionBoundary = k + 1; break; }
+                                    if (sessionBoundary < 0) { rs.RangeEstablished = false; break; }
+                                    for (int k = sessionBoundary - 1; k >= 0; k--)
+                                        if (bars.GetTime(k).Date < bars.GetTime(sessionBoundary).Date) { prevBoundary = k + 1; break; }
+                                }
+
+                                if (prevBoundary < 0 || sessionBoundary <= prevBoundary)
+                                {
+                                    rs.RangeEstablished = false;
+                                    break;
+                                }
+
+                                // Collect (close, volume) pairs for prior session bars
+                                var priceVol = new List<(double price, double vol)>();
+                                double totalVol = 0;
+                                for (int k = prevBoundary; k < sessionBoundary; k++)
+                                {
+                                    double v = bars.GetVolume(k);
+                                    double c = bars.GetClose(k);
+                                    priceVol.Add((c, v));
+                                    totalVol += v;
+                                }
+
+                                if (priceVol.Count < cfg.MinBarsRequired || totalVol <= 0)
+                                {
+                                    rs.RangeEstablished = false;
+                                    break;
+                                }
+
+                                // Sort by price descending, accumulate volume until 70% reached
+                                priceVol.Sort((a, b) => b.price.CompareTo(a.price));
+                                double vaTarget = totalVol * 0.70;
+                                double accumulated = 0;
+                                double vah = priceVol[0].price;
+                                double val = priceVol[priceVol.Count - 1].price;
+                                double poc = vah;
+                                double pocVol = 0;
+
+                                // Find POC (highest-volume price)
+                                foreach (var pv in priceVol)
+                                    if (pv.vol > pocVol) { pocVol = pv.vol; poc = pv.price; }
+
+                                // VA: prices from POC outward until 70% volume covered
+                                int hi = 0, lo = priceVol.Count - 1;
+                                // Find POC index in sorted list
+                                for (int k = 0; k < priceVol.Count; k++)
+                                    if (Math.Abs(priceVol[k].price - poc) < 1e-9) { hi = k; lo = k; break; }
+                                accumulated += priceVol[hi].vol;
+                                while (accumulated < vaTarget)
+                                {
+                                    bool canUp   = hi > 0;
+                                    bool canDown = lo < priceVol.Count - 1;
+                                    if (!canUp && !canDown) break;
+                                    double upVol   = canUp   ? priceVol[hi - 1].vol : 0;
+                                    double downVol = canDown ? priceVol[lo + 1].vol : 0;
+                                    if (canUp && (!canDown || upVol >= downVol)) { hi--; accumulated += priceVol[hi].vol; }
+                                    else                                         { lo++; accumulated += priceVol[lo].vol; }
+                                }
+                                vah = priceVol[hi].price;
+                                val = priceVol[lo].price;
+
+                                if (vah > val)
+                                {
+                                    rs.RangeHigh        = vah;
+                                    rs.RangeLow         = val;
+                                    rs.AuxValue         = poc;
+                                    rs.RangeEstablished = true;
+                                    rs.BarsInRange      = priceVol.Count;
+
+                                    if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
+                                    {
+                                        string sym = bars.Instrument.MasterInstrument.Name;
+                                        Print($"[Breakout DEBUG] 📊 BIP{bip} {sym} VALUE AREA " +
+                                              $"VAH={vah:F4} VAL={val:F4} POC={poc:F4} " +
+                                              $"({priceVol.Count} bars, {accumulated/totalVol*100:F0}% vol covered)");
+                                    }
+                                }
+                                else
+                                {
+                                    rs.RangeEstablished = false;
+                                }
+                            }
+                            break;
+                        }
+
+                    // ── InsideDay: mother bar H/L when today is inside yesterday ──
                     case BreakoutType.InsideDay:
+                        {
+                            // Mirrors Python _build_inside_day_range().
+                            // 1. Find the prior session boundary (18:00 ET).
+                            // 2. Compute today_high/low and yesterday_high/low.
+                            // 3. If today is fully inside yesterday, use yesterday's H/L as range.
+                            {
+                                int sessionBoundary2 = -1;
+                                int prevBoundary2    = -1;
+                                for (int k = last; k >= 0 && k >= last - 2000; k--)
+                                {
+                                    DateTime kt = bars.GetTime(k);
+                                    if (kt.Hour == 18 && kt.Minute == 0)
+                                    {
+                                        if (sessionBoundary2 < 0) sessionBoundary2 = k;
+                                        else { prevBoundary2 = k; break; }
+                                    }
+                                }
+                                if (sessionBoundary2 < 0)
+                                {
+                                    // Calendar-day fallback
+                                    DateTime today3 = bars.GetTime(last).Date;
+                                    for (int k = last; k >= 0; k--)
+                                        if (bars.GetTime(k).Date < today3) { sessionBoundary2 = k + 1; break; }
+                                    if (sessionBoundary2 < 0) { rs.RangeEstablished = false; break; }
+                                    for (int k = sessionBoundary2 - 1; k >= 0; k--)
+                                        if (bars.GetTime(k).Date < bars.GetTime(sessionBoundary2).Date)
+                                        { prevBoundary2 = k + 1; break; }
+                                }
+
+                                if (prevBoundary2 < 0 || sessionBoundary2 <= prevBoundary2)
+                                { rs.RangeEstablished = false; break; }
+
+                                // Today H/L (from session boundary to last bar)
+                                double todayH = double.MinValue, todayL = double.MaxValue;
+                                for (int k = sessionBoundary2; k <= last; k++)
+                                {
+                                    todayH = Math.Max(todayH, bars.GetHigh(k));
+                                    todayL = Math.Min(todayL, bars.GetLow(k));
+                                }
+
+                                // Yesterday H/L
+                                double yestH = double.MinValue, yestL = double.MaxValue;
+                                for (int k = prevBoundary2; k < sessionBoundary2; k++)
+                                {
+                                    yestH = Math.Max(yestH, bars.GetHigh(k));
+                                    yestL = Math.Min(yestL, bars.GetLow(k));
+                                }
+
+                                bool isInside = todayH != double.MinValue && yestH != double.MinValue
+                                             && todayH <= yestH && todayL >= yestL;
+
+                                if (!isInside)
+                                {
+                                    rs.RangeEstablished = false;
+                                    rs.FiredLong  = false;
+                                    rs.FiredShort = false;
+                                    break;
+                                }
+
+                                // Compression ratio guard (mirror Python 0.25–0.85)
+                                double yestRange  = yestH - yestL;
+                                double todayRange = todayH - todayL;
+                                double compression = yestRange > 0 ? todayRange / yestRange : 1.0;
+
+                                if (compression < 0.25 || compression > 0.85)
+                                { rs.RangeEstablished = false; break; }
+
+                                rs.RangeHigh        = yestH;
+                                rs.RangeLow         = yestL;
+                                rs.AuxHigh          = todayH;
+                                rs.AuxLow           = todayL;
+                                rs.RangeEstablished = true;
+                                rs.BarsInRange      = sessionBoundary2 - prevBoundary2;
+
+                                if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
+                                {
+                                    string sym = bars.Instrument.MasterInstrument.Name;
+                                    Print($"[Breakout DEBUG] 🔲 BIP{bip} {sym} INSIDE DAY " +
+                                          $"MotherH={yestH:F4} MotherL={yestL:F4} " +
+                                          $"TodayH={todayH:F4} TodayL={todayL:F4} " +
+                                          $"Compression={compression:P0}");
+                                }
+                            }
+                            break;
+                        }
+
+                    // ── GapRejection: overnight gap zone as range ─────────────
                     case BreakoutType.GapRejection:
+                        {
+                            // Mirrors Python _build_gap_rejection_range().
+                            // Gap = today_open vs yesterday_close, must be >= 0.25 × ATR.
+                            // Range = [min(yest_close, today_open), max(yest_close, today_open)].
+                            {
+                                double atr2 = st.AtrValue;
+                                if (atr2 <= 0) { rs.RangeEstablished = false; break; }
+
+                                // Find prior session boundary (18:00 ET)
+                                int sessionBoundary3 = -1;
+                                for (int k = last; k >= 0 && k >= last - 2000; k--)
+                                {
+                                    DateTime kt = bars.GetTime(k);
+                                    if (kt.Hour == 18 && kt.Minute == 0) { sessionBoundary3 = k; break; }
+                                }
+                                if (sessionBoundary3 < 0)
+                                {
+                                    DateTime today4 = bars.GetTime(last).Date;
+                                    for (int k = last; k >= 0; k--)
+                                        if (bars.GetTime(k).Date < today4) { sessionBoundary3 = k + 1; break; }
+                                }
+                                if (sessionBoundary3 < 0 || sessionBoundary3 >= last)
+                                { rs.RangeEstablished = false; break; }
+
+                                // yesterday_close = last bar before session boundary
+                                double yestClose  = bars.GetClose(sessionBoundary3 - 1);
+                                // today_open = first bar at/after boundary
+                                double todayOpen  = bars.GetOpen(sessionBoundary3);
+                                double gapSize    = todayOpen - yestClose;
+                                double minGap     = 0.25 * atr2;
+
+                                if (Math.Abs(gapSize) < minGap)
+                                { rs.RangeEstablished = false; rs.AuxTag = ""; break; }
+
+                                string gapDir  = gapSize > 0 ? "UP" : "DOWN";
+                                double rHigh   = Math.Max(yestClose, todayOpen);
+                                double rLow    = Math.Min(yestClose, todayOpen);
+
+                                rs.RangeHigh        = rHigh;
+                                rs.RangeLow         = rLow;
+                                rs.AuxValue         = gapSize;
+                                rs.AuxLow           = yestClose;
+                                rs.AuxTag           = gapDir;
+                                rs.RangeEstablished = true;
+                                rs.BarsInRange      = last - sessionBoundary3 + 1;
+
+                                if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
+                                {
+                                    string sym = bars.Instrument.MasterInstrument.Name;
+                                    Print($"[Breakout DEBUG] ⚡ BIP{bip} {sym} GAP {gapDir} " +
+                                          $"zone=[{rLow:F4},{rHigh:F4}] " +
+                                          $"gap={gapSize:F4} (ATR={atr2:F4} min={minGap:F4})");
+                                }
+                            }
+                            break;
+                        }
+
+                    // ── PivotPoints: classic floor pivots R1/S1 as range ───────
                     case BreakoutType.PivotPoints:
+                        {
+                            // Mirrors Python _build_pivot_range() — classic formula.
+                            // P = (H+L+C)/3,  R1 = 2P−L,  S1 = 2P−H.
+                            // Uses prior-session H/L/C (18:00 ET boundary).
+                            {
+                                int pivotBoundary = -1;
+                                for (int k = last; k >= 0 && k >= last - 2000; k--)
+                                {
+                                    DateTime kt = bars.GetTime(k);
+                                    if (kt.Hour == 18 && kt.Minute == 0) { pivotBoundary = k; break; }
+                                }
+                                if (pivotBoundary < 0)
+                                {
+                                    DateTime today5 = bars.GetTime(last).Date;
+                                    for (int k = last; k >= 0; k--)
+                                        if (bars.GetTime(k).Date < today5) { pivotBoundary = k + 1; break; }
+                                }
+                                if (pivotBoundary < 0) { rs.RangeEstablished = false; break; }
+
+                                // Prior session H/L/C
+                                double pH = double.MinValue, pL = double.MaxValue, pC = 0;
+                                for (int k = 0; k < pivotBoundary; k++)
+                                {
+                                    pH = Math.Max(pH, bars.GetHigh(k));
+                                    pL = Math.Min(pL, bars.GetLow(k));
+                                    pC = bars.GetClose(k);
+                                }
+                                // Better: walk only the prior session (previous 18:00 to current 18:00)
+                                int prevPivotBoundary = -1;
+                                for (int k = pivotBoundary - 1; k >= 0 && k >= pivotBoundary - 2000; k--)
+                                    if (bars.GetTime(k).Hour == 18 && bars.GetTime(k).Minute == 0)
+                                    { prevPivotBoundary = k; break; }
+
+                                if (prevPivotBoundary >= 0)
+                                {
+                                    pH = double.MinValue; pL = double.MaxValue;
+                                    for (int k = prevPivotBoundary; k < pivotBoundary; k++)
+                                    {
+                                        pH = Math.Max(pH, bars.GetHigh(k));
+                                        pL = Math.Min(pL, bars.GetLow(k));
+                                        pC = bars.GetClose(k);
+                                    }
+                                }
+
+                                if (pH == double.MinValue || pL == double.MaxValue || pH <= pL)
+                                { rs.RangeEstablished = false; break; }
+
+                                double pivot = (pH + pL + pC) / 3.0;
+                                double r1    = 2.0 * pivot - pL;
+                                double s1    = 2.0 * pivot - pH;
+
+                                if (r1 <= s1 || r1 <= 0)
+                                { rs.RangeEstablished = false; break; }
+
+                                rs.RangeHigh        = r1;
+                                rs.RangeLow         = s1;
+                                rs.AuxValue         = pivot;
+                                rs.AuxHigh          = pH;
+                                rs.AuxLow           = pL;
+                                rs.RangeEstablished = true;
+                                rs.BarsInRange      = pivotBoundary - (prevPivotBoundary >= 0 ? prevPivotBoundary : 0);
+
+                                if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
+                                {
+                                    string sym = bars.Instrument.MasterInstrument.Name;
+                                    Print($"[Breakout DEBUG] 🎯 BIP{bip} {sym} PIVOT " +
+                                          $"PP={pivot:F4} R1={r1:F4} S1={s1:F4}");
+                                }
+                            }
+                            break;
+                        }
+
+                    // ── Fibonacci: 38.2%–61.8% retracement zone of prior swing ─
                     case BreakoutType.Fibonacci:
                         {
-                            // Stub: these types are registered in InstrumentState.Ranges
-                            // but will never set RangeEstablished = true until their
-                            // detection logic is implemented.  CheckBreakout skips
-                            // any range where RangeEstablished == false, so this is safe.
-                            //
-                            // TODO: implement per-type detection logic matching Python
-                            //       engine detectors in rb/breakout_engine.py.
+                            // Mirrors Python _build_fibonacci_range().
+                            // Swing = highest high / lowest low over last 50 bars.
+                            // Swing must be >= 1.5 × ATR.
+                            // Retracement zone: [fib_618, fib_382] of that swing.
+                            {
+                                double atr3 = st.AtrValue;
+                                if (atr3 <= 0) { rs.RangeEstablished = false; break; }
+
+                                const int lookback = 50;
+                                int start = Math.Max(0, last - lookback + 1);
+
+                                double swingH = double.MinValue, swingL = double.MaxValue;
+                                int    swingHIdx = start, swingLIdx = start;
+                                for (int k = start; k <= last; k++)
+                                {
+                                    double kH = bars.GetHigh(k);
+                                    double kL = bars.GetLow(k);
+                                    if (kH > swingH) { swingH = kH; swingHIdx = k; }
+                                    if (kL < swingL) { swingL = kL; swingLIdx = k; }
+                                }
+
+                                double swingSize = swingH - swingL;
+                                const double minSwingMult = 1.5;
+
+                                if (swingSize < minSwingMult * atr3 || swingH <= swingL)
+                                { rs.RangeEstablished = false; break; }
+
+                                double rHigh, rLow, fib382, fib618;
+
+                                if (swingHIdx > swingLIdx)
+                                {
+                                    // Upswing — retrace down from high
+                                    fib382 = swingH - 0.382 * swingSize;
+                                    fib618 = swingH - 0.618 * swingSize;
+                                    rHigh  = fib382;
+                                    rLow   = fib618;
+                                }
+                                else
+                                {
+                                    // Downswing — retrace up from low
+                                    fib382 = swingL + 0.382 * swingSize;
+                                    fib618 = swingL + 0.618 * swingSize;
+                                    rHigh  = fib618;
+                                    rLow   = fib382;
+                                }
+
+                                if (rHigh <= rLow || rHigh <= 0)
+                                { rs.RangeEstablished = false; break; }
+
+                                rs.RangeHigh        = rHigh;
+                                rs.RangeLow         = rLow;
+                                rs.AuxHigh          = swingH;
+                                rs.AuxLow           = swingL;
+                                rs.AuxValue         = fib382;
+                                rs.RangeEstablished = true;
+                                rs.BarsInRange      = last - start + 1;
+
+                                if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
+                                {
+                                    string sym = bars.Instrument.MasterInstrument.Name;
+                                    Print($"[Breakout DEBUG] 🌀 BIP{bip} {sym} FIBONACCI " +
+                                          $"zone=[{rLow:F4},{rHigh:F4}] " +
+                                          $"swing=[{swingL:F4},{swingH:F4}] size={swingSize:F4}");
+                                }
+                            }
                             break;
                         }
                 }
@@ -2318,6 +3943,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         #endregion
 
+
         // =====================================================================
         // Breakout detection — evaluates all established ranges every bar
         // =====================================================================
@@ -2327,6 +3953,12 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             try
             {
+                // Defensive: ensure SAR state array is sized (should always be
+                // true after DataLoaded, but guard in case of early calls).
+                ReversalState sar = (_sarStates != null && bip < _sarStates.Length)
+                    ? _sarStates[bip]
+                    : null;
+
                 // Wait until at least the ORB is established (ensures ATR, VWAP,
                 // and volume avg are all warmed up before any signal fires).
                 var orbRs = st.Ranges[BreakoutType.ORB];
@@ -2410,7 +4042,6 @@ namespace NinjaTrader.NinjaScript.Strategies
                     var rs = kv.Value;
 
                     if (!rs.RangeEstablished) continue;
-                    if (rs.FiredLong && rs.FiredShort) continue;
 
                     // ── ATR range filter (ORB only — IB/PrevDay are intrinsically large) ──
                     if (type == BreakoutType.ORB && MinOrbAtrRatio > 0 && atr > 0)
@@ -2427,32 +4058,79 @@ namespace NinjaTrader.NinjaScript.Strategies
                         }
                     }
 
-                    bool longBreak = close > rs.RangeHigh;
+                    bool longBreak  = close > rs.RangeHigh;
                     bool shortBreak = close < rs.RangeLow;
 
                     // ── Long breakout ─────────────────────────────────────────
-                    if (!rs.FiredLong && longBreak)
+                    if (longBreak)
                     {
                         bool vwapOk = !RequireVwap || st.Vwap <= 0 || close > st.Vwap;
-                        if (vwapOk && PassesCnnFilter("long", bip, st, close, atr, barTime, instrName, type))
+
+                        if (!rs.FiredLong)
                         {
-                            FireEntry("long", bip, st, close, atr, barTime, instrName, type);
-                            rs.FiredLong = true;
-                            // Keep legacy ORB flags in sync
-                            if (type == BreakoutType.ORB) st.BreakoutFiredLong = true;
+                            // Fresh entry — standard path
+                            if (vwapOk && PassesCnnFilter("long", bip, st, close, atr, barTime, instrName, type))
+                            {
+                                FireEntry("long", bip, st, close, atr, barTime, instrName, type);
+                                rs.FiredLong = true;
+                                if (type == BreakoutType.ORB) st.BreakoutFiredLong = true;
+                            }
+                        }
+                        else if (sar != null && sar.IsShort)
+                        {
+                            // ── SAR path: existing SHORT position, new LONG breakout ──
+                            // Retrieve CNN score so the reversal gates can be evaluated.
+                            double cnnProb = 0;
+                            bool cnnPass = !EnableCnnFilter || PassesCnnFilter(
+                                "long", bip, st, close, atr, barTime, instrName, type,
+                                out cnnProb);
+
+                            // Real MTF score — computed from 15m EMA/MACD state.
+                            // Falls back to 1.0 pass-through during the 50-bar EMA warm-up.
+                            double mtfScore = GetMtfScore(st, "long");
+
+                            if (vwapOk && ShouldReverse(sar, "long", cnnProb, mtfScore, close, barTime))
+                            {
+                                TryReversePosition("long", bip, st, sar, close, atr, barTime, instrName, type);
+                                // FiredLong reset inside TryReversePosition; set it again after fire
+                                rs.FiredLong = true;
+                                if (type == BreakoutType.ORB) st.BreakoutFiredLong = true;
+                            }
                         }
                     }
 
                     // ── Short breakout ────────────────────────────────────────
-                    if (!rs.FiredShort && shortBreak)
+                    if (shortBreak)
                     {
                         bool vwapOk = !RequireVwap || st.Vwap <= 0 || close < st.Vwap;
-                        if (vwapOk && PassesCnnFilter("short", bip, st, close, atr, barTime, instrName, type))
+
+                        if (!rs.FiredShort)
                         {
-                            FireEntry("short", bip, st, close, atr, barTime, instrName, type);
-                            rs.FiredShort = true;
-                            // Keep legacy ORB flags in sync
-                            if (type == BreakoutType.ORB) st.BreakoutFiredShort = true;
+                            // Fresh entry — standard path
+                            if (vwapOk && PassesCnnFilter("short", bip, st, close, atr, barTime, instrName, type))
+                            {
+                                FireEntry("short", bip, st, close, atr, barTime, instrName, type);
+                                rs.FiredShort = true;
+                                if (type == BreakoutType.ORB) st.BreakoutFiredShort = true;
+                            }
+                        }
+                        else if (sar != null && sar.IsLong)
+                        {
+                            // ── SAR path: existing LONG position, new SHORT breakout ──
+                            double cnnProb = 0;
+                            bool cnnPass = !EnableCnnFilter || PassesCnnFilter(
+                                "short", bip, st, close, atr, barTime, instrName, type,
+                                out cnnProb);
+
+                            // Real MTF score — computed from 15m EMA/MACD state.
+                            double mtfScore = GetMtfScore(st, "short");
+
+                            if (vwapOk && ShouldReverse(sar, "short", cnnProb, mtfScore, close, barTime))
+                            {
+                                TryReversePosition("short", bip, st, sar, close, atr, barTime, instrName, type);
+                                rs.FiredShort = true;
+                                if (type == BreakoutType.ORB) st.BreakoutFiredShort = true;
+                            }
                         }
                     }
                 }
@@ -2469,6 +4147,59 @@ namespace NinjaTrader.NinjaScript.Strategies
         // CNN filter gate
         // =====================================================================
         #region CNN Filter
+
+        /// <summary>
+        /// PassesCnnFilter overload that also returns the raw CNN probability.
+        /// Used by the SAR reversal path so reversal gates can evaluate the
+        /// numeric score without running inference twice.
+        ///
+        /// Internally delegates to the original overload after running inference
+        /// directly so the probability is available.  When the CNN is disabled
+        /// or unavailable, returns (true, 1.0) so gates evaluate conservatively.
+        /// </summary>
+        private bool PassesCnnFilter(string direction, int bip, InstrumentState st,
+                                     double close, double atr, DateTime barTime,
+                                     string instrName, BreakoutType type,
+                                     out double cnnProbOut)
+        {
+            cnnProbOut = 1.0; // safe default: pass-through with full confidence
+
+            // CNN disabled or model not loaded — pass through
+            if (!EnableCnnFilter || _cnn == null)
+                return true;
+
+            // ATR not yet warmed — pass through (matches original fast path)
+            if (!st.AtrReady)
+                return true;
+
+            try
+            {
+                string detectedSession = DetectSessionKey(barTime);
+                float threshold = CnnThresholdOverride > 0
+                    ? (float)CnnThresholdOverride
+                    : GetSessionThreshold(detectedSession);
+
+                // Use the same helper methods as the original overload
+                float[] tabular = PrepareCnnTabular(bip, st, direction, close, atr, barTime,
+                                                    breakoutType: type);
+                if (tabular == null)
+                    return true; // can't build features — pass through
+
+                string snapshotPath = RenderCnnSnapshot(bip, st, direction, instrName, barTime, type);
+
+                var pred = _cnn.Predict(snapshotPath ?? "", tabular, threshold);
+                if (pred == null)
+                    return true;
+
+                cnnProbOut = pred.Probability;
+                return pred.Signal;
+            }
+            catch (Exception ex)
+            {
+                Print($"[CNN] SAR prob-overload exception for {instrName}: {ex.Message}");
+                return true; // fail-open
+            }
+        }
 
         /// <summary>
         /// Returns true if the breakout candidate passes the CNN filter (or if
@@ -2691,9 +4422,13 @@ namespace NinjaTrader.NinjaScript.Strategies
                 float hourOfDay = barTime.Hour / 23.0f;
 
                 // [17] tp3_atr_mult_norm — TP3 multiplier / 5.0
-                //      Default TP3 = 5.0 × ATR for ORB.  When per-type RangeConfig
-                //      gains a tp3_atr_mult field this will read from there.
-                float tp3AtrMultNorm = 5.0f / 5.0f; // 1.0 for now (ORB default)
+                //      Read the per-type value that was loaded from feature_contract.json
+                //      via ParseTp3MultsFromContract + ApplyTp3MultsToStates.
+                //      Falls back to 5.0 (ORB default) when the range state is missing.
+                double tp3AtrMult = 5.0;
+                if (st.Ranges.TryGetValue(breakoutType, out var tp3Rs))
+                    tp3AtrMult = tp3Rs.Tp3AtrMult;
+                float tp3AtrMultNorm = (float)(tp3AtrMult / 5.0);
 
                 return new float[]
                 {
@@ -3101,6 +4836,14 @@ namespace NinjaTrader.NinjaScript.Strategies
                                 double price, double atr, DateTime barTime, string instrName,
                                 BreakoutType breakoutType = BreakoutType.ORB)
         {
+            // ── SAR: stamp the new active direction on the ReversalState ─────
+            // We do this at the top of FireEntry (before any early returns) so
+            // TryReversePosition's pre-decremented active count is consistent
+            // and the cooldown is stamped even if the order later gets rejected.
+            ReversalState sarRef = (_sarStates != null && bip < _sarStates.Length)
+                ? _sarStates[bip]
+                : null;
+
             double tickSize = _engine.GetTickSize(bip);
 
             // ── Resolve the range that triggered this entry ───────────────────
@@ -3229,17 +4972,34 @@ namespace NinjaTrader.NinjaScript.Strategies
                     _positionPhases[signalId] = phase;
             }
 
+            // ── SAR: record the position in ReversalState ────────────────────
+            // Called after the PositionPhase is registered so sarRef.ActiveSignalId
+            // matches the key in _positionPhases.
+            sarRef?.Open(direction, signalId, price, atr, sl, barTime);
+
             Print($"[Breakout] {breakoutType} {direction.ToUpper()} {instrName} BIP{bip} " +
                   $"@ {price:F2} SL={sl:F2} TP1={tp1:F2} TP2={tp2:F2}" +
                   (tp3 > 0 ? $" TP3={tp3:F2}" : "") +
                   $" id={signalId}" +
-                  $" [positions: {_activePositionCount}/{MaxConcurrentPositions}]");
+                  $" [positions: {_activePositionCount}/{MaxConcurrentPositions}]" +
+                  (sarRef != null && !sarRef.IsFlat ? $" [SAR active={sarRef.ActiveDirection}]" : ""));
 
             // Execute directly (backtest) or queue (realtime)
             if (State == State.Historical)
                 _engine.ExecuteEntryDirect(sig);
             else
                 _engine.ProcessSignal(sig.ToJson());
+
+            // ── SAR sync: push every entry (fresh + reversal) to the Python engine ──
+            // TryReversePosition() calls PushSarSyncAsync after FireEntry for reversals.
+            // Here we handle fresh entries (new position, no existing SAR).
+            // Reversals are already pushed by TryReversePosition after FireEntry returns,
+            // so we only push here when this is NOT a reversal call (i.e. the ReversalState
+            // was flat before this entry — sarRef was IsFlat before sarRef.Open() above).
+            // We detect this by checking the reversal count: if ReversalCount == 0 and
+            // direction matches what we just opened, it's a fresh entry.
+            if (sarRef != null && sarRef.ReversalCount == 0 && State != State.Historical)
+                PushSarSyncAsync(instrName, direction, sarRef, barTime);
 
             // Cooldown is shared across all range types — one entry per window.
             // The per-range FiredLong/FiredShort flags (set by CheckBreakout) and

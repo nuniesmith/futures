@@ -2,7 +2,7 @@
   "total_windows": 149842,
   "total_trades": 28548,
   "total_images": 28548,
-  "skipped_existing": 0,
+  "skipped_existing": 28548,
   "render_failures": 0,
   "label_distribution": {
     "bad_long": 6981,
@@ -32,7 +32,7 @@
     "ZW"
   ],
   "csv_path": "/app/dataset/labels.csv",
-  "duration_seconds": 620.0,
+  "duration_seconds": 218.5,
   "errors": [
     "No bar data available for MHG \u2014 skipping",
     "No bar data available for MBT \u2014 skipping",
