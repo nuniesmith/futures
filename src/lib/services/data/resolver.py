@@ -66,12 +66,8 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
 
 import pandas as pd
-
-if TYPE_CHECKING:
-    pass
 
 # ---------------------------------------------------------------------------
 # Ticker resolution — inline copy to avoid import cycle with dataset_generator

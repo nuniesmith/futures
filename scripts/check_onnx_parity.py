@@ -27,13 +27,14 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
-
 # ---------------------------------------------------------------------------
 # Project root on sys.path so lib.* imports resolve when run from repo root
 # ---------------------------------------------------------------------------
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "src"))
+
+# isort: split
+import numpy as np  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -97,7 +98,7 @@ def _check_deps() -> bool:
 def _make_synthetic_batch(
     n: int,
     rng: np.random.Generator,
-) -> tuple["np.ndarray", "np.ndarray"]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Generate a batch of (image_tensor, tabular_tensor) with valid ranges.
 
     Images: uint8 RGB in [0, 255] — will be normalised to ImageNet stats.
@@ -149,7 +150,8 @@ def _make_synthetic_batch(
 def _load_pytorch_model(pt_path: Path, device: str) -> tuple[object, object]:
     """Load the .pt checkpoint and return (model, torch_module)."""
     import torch
-    from lib.analysis.breakout_cnn import _build_model_from_checkpoint
+
+    from lib.analysis.breakout_cnn import _build_model_from_checkpoint  # noqa: PLC0415
 
     info(f"Loading PyTorch model from {pt_path.name} ...")
     t0 = time.perf_counter()
@@ -192,10 +194,10 @@ def _load_onnx_session(onnx_path: Path) -> object:
 def _pt_infer_batch(
     model: object,
     torch_mod: object,
-    imgs: "np.ndarray",
-    tab: "np.ndarray",
+    imgs: np.ndarray,
+    tab: np.ndarray,
     device: str,
-) -> "np.ndarray":
+) -> np.ndarray:
     """Run a batch through PyTorch and return raw logit probabilities [N]."""
     torch = torch_mod
     with torch.no_grad():
@@ -203,18 +205,15 @@ def _pt_infer_batch(
         tab_t = torch.tensor(tab, dtype=torch.float32).to(device)
         logits = model(img_t, tab_t)
         # Model outputs raw logits (shape [N, 1] or [N, 2])
-        if logits.shape[-1] == 1:
-            probs = torch.sigmoid(logits).squeeze(-1)
-        else:
-            probs = torch.softmax(logits, dim=-1)[:, 1]
+        probs = torch.sigmoid(logits).squeeze(-1) if logits.shape[-1] == 1 else torch.softmax(logits, dim=-1)[:, 1]
         return probs.cpu().numpy().astype(np.float32)
 
 
 def _onnx_infer_batch(
     session: object,
-    imgs: "np.ndarray",
-    tab: "np.ndarray",
-) -> "np.ndarray":
+    imgs: np.ndarray,
+    tab: np.ndarray,
+) -> np.ndarray:
     """Run a batch through ONNX Runtime and return probabilities [N]."""
     import onnxruntime as ort  # noqa: F401
 
@@ -390,14 +389,14 @@ def _validate_contract(models_dir: Path, verbose: bool) -> bool:
 
     if verbose:
         try:
-            from lib.analysis.breakout_cnn import TABULAR_FEATURES
+            from lib.analysis.breakout_cnn import TABULAR_FEATURES  # noqa: PLC0415
 
             mismatches = []
-            for i, (cf, pf) in enumerate(zip(features, TABULAR_FEATURES)):
+            for i, (cf, pf) in enumerate(zip(features, TABULAR_FEATURES, strict=True)):
                 if cf != pf:
                     mismatches.append((i, cf, pf))
             if mismatches:
-                err(f"Feature name mismatches between contract and Python:")
+                err("Feature name mismatches between contract and Python:")
                 for idx, cf, pf in mismatches:
                     err(f"  [{idx}] contract='{cf}' != python='{pf}'")
                 return False
@@ -432,32 +431,31 @@ def main() -> int:
         "--threshold",
         type=float,
         default=PARITY_THRESHOLD,
-        help=f"Max allowed absolute difference (default: {PARITY_THRESHOLD})",
+        help=f"Max allowed absolute difference (default: {PARITY_THRESHOLD:.0e})",
     )
     parser.add_argument(
         "--device",
+        type=str,
         default="auto",
         choices=["auto", "cpu", "cuda", "mps"],
-        help="PyTorch device (default: auto — uses CUDA if available, else CPU)",
+        help="Torch device to use for PyTorch inference (default: auto)",
     )
     parser.add_argument(
         "--verbose",
-        "-v",
         action="store_true",
-        help="Print per-batch statistics",
+        help="Print per-batch statistics during the parity check",
     )
     parser.add_argument(
         "--skip-contract",
         action="store_true",
         help="Skip feature_contract.json validation",
     )
-
     args = parser.parse_args()
 
     print()
-    print("╔══════════════════════════════════════════════════════════╗")
-    print("║       ONNX ↔ PyTorch Parity Check  (v6 18-feature)      ║")
-    print("╚══════════════════════════════════════════════════════════╝")
+    print("═" * 60)
+    print("  ONNX ↔ PyTorch Parity Check")
+    print("═" * 60)
     print()
 
     # Dependency check
@@ -479,39 +477,38 @@ def main() -> int:
             device = "cpu"
     else:
         device = args.device
-    info(f"PyTorch device: {device}")
+    info(f"Using device: {device}")
+    print()
 
-    models_dir: Path = args.models_dir.resolve()
-    if not models_dir.exists():
-        err(f"Models directory not found: {models_dir}")
-        return 1
-
+    models_dir: Path = args.models_dir
     pt_path = models_dir / PT_FILENAME
-    pt_path   = models_dir / PT_FILENAME
     onnx_path = models_dir / ONNX_FILENAME
 
     # Verify files exist
-    all_ok = True
-    for path, label in [(pt_path, ".pt"), (onnx_path, ".onnx")]:
-        if not path.exists():
-            err(f"{label} model not found: {path}")
-            all_ok = False
-        else:
-            size_mb = path.stat().st_size / 1_048_576
-            ok(f"{path.name}  ({size_mb:.1f} MB)")
-    if not all_ok:
-        err("One or more model files missing — run: bash scripts/sync_models.sh")
+    missing_files = []
+    if not pt_path.exists():
+        missing_files.append(str(pt_path))
+    if not onnx_path.exists():
+        missing_files.append(str(onnx_path))
+
+    if missing_files:
+        for f in missing_files:
+            err(f"Model file not found: {f}")
+        err("Run training first or copy the champion model files into the models/ directory.")
         return 1
 
+    info(f"PT   model : {pt_path}")
+    info(f"ONNX model : {onnx_path}")
     print()
 
     # Feature contract validation
     if not args.skip_contract:
-        if not _validate_contract(models_dir, args.verbose):
-            return 1
+        contract_ok = _validate_contract(models_dir, args.verbose)
         print()
+        if not contract_ok:
+            return 1
 
-    # Run the actual parity check
+    # Main parity check
     passed = _run_parity_check(
         pt_path=pt_path,
         onnx_path=onnx_path,
@@ -520,16 +517,9 @@ def main() -> int:
         verbose=args.verbose,
         device=device,
     )
-
     print()
-    if passed:
-        ok("All checks passed — ONNX export is a faithful replica of the PyTorch model")
-        ok("Safe to deploy to NinjaTrader NT8")
-        return 0
-    else:
-        err("Parity check FAILED — re-export ONNX with: python -m lib.analysis.breakout_cnn export")
-        err("Then re-run this script to verify before deploying to NT8")
-        return 1
+
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

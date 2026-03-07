@@ -45,7 +45,6 @@ Tick sizes used (CME micro contracts):
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
@@ -56,7 +55,6 @@ import pytest
 from lib.services.engine.position_manager import (
     EMA_TRAIL_PERIOD,
     BracketPhase,
-    MicroPosition,
     PositionManager,
 )
 
@@ -412,10 +410,7 @@ def run_parity(
         cs_ema9 = cs.ema9_value()
         py_ema9 = py.ema9_trail_price if py.ema9_trail_price > 0 else None
 
-        if cs_ema9 is not None and py_ema9 is not None:
-            div_ticks = abs(cs_ema9 - py_ema9) / tick_size
-        else:
-            div_ticks = 0.0
+        div_ticks = abs(cs_ema9 - py_ema9) / tick_size if cs_ema9 is not None and py_ema9 is not None else 0.0
 
         results.append(
             ParityResult(
@@ -515,7 +510,7 @@ class TestEma9Formula:
 
         # Compare only bars after both are ready and after warm-up
         divergences = []
-        for cs_v, py_v in zip(cs_series[20:], py_full[20:]):
+        for cs_v, py_v in zip(cs_series[20:], py_full[20:], strict=False):
             if cs_v is not None and py_v is not None:
                 divergences.append(abs(cs_v - py_v) / tick)
 
@@ -742,7 +737,7 @@ class TestPhase3ExitParity:
         """
         entry = 2400.0
         tp3 = 2430.0
-        tick = TICK_MGC
+        _tick = TICK_MGC
         n_warmup = 40
 
         cs, py, _ = self._warmed_up_state("long", entry, tp3, 2410.0, n_warmup)
