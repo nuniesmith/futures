@@ -1,20 +1,20 @@
 {
-  "summary": "The 'nuniesmith/futures' monorepo is a mature, production-grade futures trading co-pilot with Python ML (87% acc CNN breakout detection), FastAPI/HTMX dashboard, NinjaTrader 8 C# integration via Bridge, Docker Compose orchestration, Redis/Postgres persistence, and Prometheus/Grafana monitoring. Strengths include 30+ pytest suite, excellent docs, CI/CD, and multi-repo consolidation. Critical gaps: missing TPT 4PM hard flatten risking account termination, unvalidated ONNX/PyTorch parity, committed DLLs supply-chain risk, and minor UI/security issues prevent live prop trading readiness.",
-  "overall_health": 88,
+  "summary": "The 'nuniesmith/futures' monorepo is a production-grade futures trading co-pilot featuring ML-driven breakout detection (87% acc CNN), FastAPI/HTMX dashboard, NinjaTrader 8 C# bridge, Docker orchestration, Redis/Postgres persistence, and full observability. Strengths include modular lib/services split, 30+ pytest suite, excellent docs, and CI/CD. Critical gaps: missing TPT 4PM hard flatten (account termination risk), unvalidated ONNX/PyTorch parity, committed DLLs supply-chain vulnerability, and incomplete FastAPI validation hinder live prop trading readiness.",
+  "overall_health": 87,
   "priority_actions": [
-    "Implement TPT 4PM ET hard flatten in BreakoutStrategy.cs with session-end risk block",
-    "Validate and automate ONNX/PyTorch inference parity in CI for v6 18-feature model",
-    "Secure committed DLLs with checksum verification in deploy_nt8.ps1 and add secret scanning to CI",
-    "Add Pydantic validation and rate limiting to all FastAPI data/api endpoints",
-    "Deploy/test NT8 full session verifying tabular dim=18, TP3 mults, and no errors"
+    "Implement TPT 4PM ET hard flatten in BreakoutStrategy.cs with risk block until 18:00 ET",
+    "Validate/automate ONNX \u2194 PyTorch parity test in CI for v6 18-feature model",
+    "Add SHA256 checksum verification for committed DLLs in deploy_nt8.ps1",
+    "Add Pydantic models and rate limiting to all FastAPI data/api endpoints",
+    "Deploy/test NT8 full session: verify tabular dim=18, TP3 mults loaded, no OCO/signal errors"
   ],
   "findings": [
     {
       "severity": "high",
       "category": "quality",
       "title": "Missing TPT 4PM Hard Flatten",
-      "description": "BreakoutStrategy.cs lacks time-based position flatten at 16:00 ET for Take Profit Trader compliance, risking overnight holds and account termination (todo.md emphasizes criticality).",
-      "recommendation": "Add OnBarUpdate guard: if TptMode && ET hour>=16 && positions>0, FlattenAll('TPT_HARD_STOP'); unblock at 18:00 ET. Test in sim/live.",
+      "description": "BreakoutStrategy.cs lacks 16:00 ET position flatten for Take Profit Trader compliance, risking overnight holds and account termination (todo.md critical).",
+      "recommendation": "Add OnBarUpdate() guard: if TptMode && ET hour>=16 && positions>0, FlattenAll('TPT_HARD_STOP'); unblock at 18:00 ET. Test sim/live.",
       "files": [
         "src/ninja/BreakoutStrategy.cs",
         "todo.md"
@@ -23,9 +23,9 @@
     {
       "severity": "high",
       "category": "quality",
-      "title": "Unvalidated ONNX/PyTorch Parity",
-      "description": "TODO pending parity check on models/breakout_cnn_best.* despite v6 18-features; risks Python engine/NT8 divergence.",
-      "recommendation": "Extend test_phase3_ema9_parity.py for batch inference; assert max abs diff <1e-4. Automate in CI via pytest.",
+      "title": "Unvalidated ONNX/PyTorch Inference Parity",
+      "description": "Pending parity check on models/breakout_cnn_best.* for v6 18-features risks Python/NT8 divergence (todo.md).",
+      "recommendation": "Extend test_phase3_ema9_parity.py for batch inference; assert max abs diff <1e-4. Automate in CI pytest.",
       "files": [
         "src/tests/test_phase3_ema9_parity.py",
         "models/breakout_cnn_best.onnx",
@@ -37,19 +37,20 @@
       "severity": "medium",
       "category": "security",
       "title": "Committed OnnxRuntime DLLs Without Checksums",
-      "description": "src/ninja/dll/ binaries risk supply-chain tampering; no verification in deploy_nt8.ps1.",
-      "recommendation": "Add SHA256 checksums in deploy_nt8.ps1; verify before copy to NT8 Custom/. Prefer NuGet restore if NT8 supports.",
+      "description": "src/ninja/dll/ binaries risk tampering; deploy_nt8.ps1 lacks verification.",
+      "recommendation": "Add SHA256 checksums in deploy_nt8.ps1; verify before NT8 copy. Consider NuGet restore isolation.",
       "files": [
         "src/ninja/dll/",
-        "scripts/deploy_nt8.ps1"
+        "scripts/deploy_nt8.ps1",
+        "src/ninja/dll/README.md"
       ]
     },
     {
       "severity": "medium",
       "category": "security",
-      "title": "FastAPI Endpoints Lack Input Validation",
-      "description": "data/api/*.py routers (e.g., positions, sar, trades) miss Pydantic models/Depends(rate_limit), exposing to injection/malformed requests.",
-      "recommendation": "Add strict Pydantic schemas and rate_limit dependency to all POST/PUT/DELETE; audit for SQLi/XSS.",
+      "title": "FastAPI Endpoints Lack Pydantic/Rate Limiting",
+      "description": "data/api/*.py (positions, sar, trades) miss input validation and rate_limit, vulnerable to injection/malformed requests.",
+      "recommendation": "Add Pydantic BaseModels and Depends(rate_limit) to all POST/PUT/DELETE; audit SQLi/XSS.",
       "files": [
         "src/lib/services/data/api/*.py"
       ]
@@ -57,22 +58,22 @@
     {
       "severity": "medium",
       "category": "architecture",
-      "title": "Monorepo Python+C# Complexity",
-      "description": "src/lib (Python) + src/ninja (C#/DLLs) mixes langs; pyproject.toml ignores C#, deploy patches csproj manually.",
-      "recommendation": "Add dotnet format/lint/test to .github/workflows/ci-cd.yml; document NT8 build isolation; consider ninja/ subrepo.",
+      "title": "Python+C# Monorepo Complexity",
+      "description": "Mixed langs; pyproject.toml ignores C#, manual csproj patches in deploy scripts complicate CI/testing.",
+      "recommendation": "Add dotnet format/lint/test to .github/workflows/ci-cd.yml; isolate NT8 build; consider ninja/ subrepo.",
       "files": [
         "src/ninja/",
         "scripts/deploy_nt8.ps1",
-        "pyproject.toml",
-        ".github/workflows/ci-cd.yml"
+        ".github/workflows/ci-cd.yml",
+        "pyproject.toml"
       ]
     },
     {
       "severity": "medium",
       "category": "security",
       "title": "Potential API Key Exposure in Docs/Env",
-      "description": "README.md/.env.example show placeholders; docker-compose.yml interpolates secrets without rotation guidance.",
-      "recommendation": "Confirm .env in .gitignore; add GitHub secret scanning; rotate MASSIVE/XAI/KRAKEN keys; use Vault in prod.",
+      "description": "README.md/.env.example placeholders; docker-compose.yml secrets lack rotation guidance.",
+      "recommendation": "Confirm .env in .gitignore; add GitHub secret scanning; rotate MASSIVE/XAI/KRAKEN keys quarterly.",
       "files": [
         "README.md",
         ".env.example",
@@ -82,9 +83,9 @@
     {
       "severity": "low",
       "category": "quality",
-      "title": "Forex Tick Precision in UI Asset Cards",
-      "description": "Low-ATR forex (6E) collapses entry/stop/TP due to 4-decimal rounding vs 5-decimal tick (todo.md).",
-      "recommendation": "In src/lib/services/web/main.py _compute_entry_zone(), use MICRO_CONTRACT_SPECS tick_size for precision.",
+      "title": "Forex Tick Precision Bug in UI",
+      "description": "6E asset cards collapse entry/stop/TP due to 4-decimal rounding vs 5-decimal tick (todo.md).",
+      "recommendation": "Use MICRO_CONTRACT_SPECS tick_size in web/main.py _compute_entry_zone() for dynamic precision.",
       "files": [
         "src/lib/services/web/main.py",
         "todo.md"
@@ -94,8 +95,8 @@
       "severity": "low",
       "category": "quality",
       "title": "No C# Unit Tests",
-      "description": "Python has 30+ tests; C# (BreakoutStrategy.cs) relies on manual NT8 Analyzer.",
-      "recommendation": "Add NUnit tests for range builders/phases/MTF; run dotnet test in CI.",
+      "description": "Python 30+ tests; C# relies on manual NT8 Analyzer (no NUnit).",
+      "recommendation": "Add NUnit for range builders/phases/MTF; integrate dotnet test in CI.",
       "files": [
         "src/ninja/BreakoutStrategy.cs"
       ]
@@ -104,8 +105,8 @@
       "severity": "low",
       "category": "performance",
       "title": "Duplicated Data Fetch Logic",
-      "description": "Cache\u2192DB\u2192API repeated across services/training; no unified DataResolver.",
-      "recommendation": "Implement DataResolver in src/lib/services/data/main.py for Redis\u2192Postgres\u2192Massive/Kraken with backfill.",
+      "description": "Cache\u2192DB\u2192API repeated; no unified resolver for services/training.",
+      "recommendation": "Implement DataResolver in services/data/main.py: Redis\u2192Postgres\u2192Massive/Kraken with backfill.",
       "files": [
         "src/lib/services/data/main.py",
         "src/lib/training/dataset_generator.py"
@@ -115,70 +116,47 @@
       "severity": "low",
       "category": "quality",
       "title": "No Trading/Review UI Modes",
-      "description": "Dashboard cluttered in trading; no toggle (todo.md).",
+      "description": "Dashboard cluttered during trading; no toggle (todo.md).",
       "recommendation": "Add localStorage toggle in web/main.py; CSS .mode-trading/.mode-review.",
       "files": [
         "src/lib/services/web/main.py",
         "todo.md"
       ]
-    },
-    {
-      "severity": "low",
-      "category": "quality",
-      "title": "No Trainer UI Separation",
-      "description": "Trainer UI proxied; should be /train page with API-only trainer_server.",
-      "recommendation": "Extract to web /train; remove trainer_ui endpoint.",
-      "files": [
-        "src/lib/training/trainer_server.py",
-        "src/lib/services/web/main.py"
-      ]
-    },
-    {
-      "severity": "low",
-      "category": "security",
-      "title": "Heavy Optional Deps Without Lockfile",
-      "description": "Torch/onnxruntime GPU-optional; pyproject.toml no lock.",
-      "recommendation": "Add uv/pip-compile lockfile; pin GPU deps in docker/trainer/Dockerfile.",
-      "files": [
-        "pyproject.toml",
-        "docker/trainer/Dockerfile"
-      ]
     }
   ],
   "strengths": [
-    "Comprehensive 30+ pytest suite covering ORB, ICT, risk, scheduler, integrations, parity",
-    "Modular architecture: lib/analysis/core/services separation; feature_contract.json enforces model parity",
-    "Production Docker Compose (7 services w/healthchecks), Tailscale CI/CD w/Discord notifies",
-    "Full observability: structlog, Prometheus/Grafana dashboards provisioned",
-    "Mature ML: 87.1% acc champion CNN, ONNX export, balanced dataset gen w/13 breakout types",
-    "Excellent docs: README/todo.md/STRATEGY_PLAN.md; monorepo w/all training/C#/deploys"
+    "Comprehensive 30+ pytest suite (ORB, ICT, risk, scheduler, integrations, parity tests)",
+    "Modular architecture: lib/analysis/core/services + feature_contract.json parity enforcement",
+    "Production Docker Compose (7 services, healthchecks), Tailscale CI/CD with Discord notifies",
+    "Full observability: structlog, Prometheus/Grafana (provisioned dashboards)",
+    "Mature ML: 87.1% acc CNN (v6 18-features, ONNX export, 13 breakout types, balanced datasets)",
+    "Excellent docs: README/todo/STRATEGY_PLAN + model sync/deploy scripts",
+    "Monorepo consolidation: Python engine/web/trainer + C# NT8 + models/DLLs"
   ],
   "weaknesses": [
-    "Mixed Python/C# langs complicate CI/testing; no C# linter/tests",
-    "Heavy deps (torch optional-GPU, onnxruntime); models/DLLs bloat repo (~80MB LFS)",
-    "UI noisy (Grok auto-poll, no modes); forex precision bug",
-    "Duplicated data resolver logic; Kraken training pending",
-    "No input validation on some APIs; committed binaries risk",
-    "TODO-heavy todo.md despite clean code (20+ items)"
+    "Mixed Python/C# increases CI/testing complexity; no C# linter/tests",
+    "Heavy deps (torch GPU-optional, onnxruntime); ~80MB LFS bloat from models/DLLs",
+    "UI noisy (Grok auto-poll, no trading/review modes); forex precision issues",
+    "Duplicated data resolvers; Kraken training integration pending",
+    "Incomplete FastAPI validation; committed binaries supply-chain risk",
+    "TODO backlog (20+ items) despite clean code and many completions"
   ],
   "tech_debt": [
-    "Trainer UI \u2192 /train page (API-only trainer_server)",
-    "Settings page (/settings) for toggles/API status",
-    "Kraken keys in CI secrets + full training integration",
-    "Unified DataResolver for cache/DB/API",
-    "Cross-asset signals (crypto \u2192 futures)",
-    "Per-type/session win-rate Grafana panels",
-    "Feature contract drift detection in C#",
-    "C# NUnit tests + dotnet lint in CI"
+    "Trainer UI \u2192 dedicated /train page (API-only trainer_server)",
+    "Settings page (/settings) for env toggles/API status/Tailscale IPs",
+    "Kraken keys in CI secrets + full training/data resolver integration",
+    "Cross-asset signals (crypto-futures correlation \u2192 CNN v7 feature)",
+    "C# NUnit tests + dotnet lint/format in CI",
+    "Per-type/session win-rate Grafana panels + feature contract drift detection"
   ],
   "next_steps": [
-    "Run full tests/lint: pytest src/tests/ && ruff check src/",
+    "Run full tests/lint: pytest src/tests/ -x --cov && ruff check src/",
     "Sync models: scripts/sync_models.sh --restart",
-    "NT8 deploy/test: scripts/deploy_nt8.bat -Launch; verify logs (dim=18, TP3 mults)",
-    "Docker up w/monitoring: docker compose --profile monitoring up; check localhost:8180",
-    "Fix high findings: TPT flatten, ONNX parity, DLL checksums",
-    "Kraken training: add keys to CI/.env; test dataset_generator w/Kraken",
-    "Live session test NT8/Python side-by-side; audit logs",
-    "Add C# tests/DataResolver; retrain if needed: scripts/smoke_test_trainer.py"
+    "NT8 deploy/test: scripts/deploy_nt8.bat -Launch; check logs (dim=18, TP3 mults)",
+    "Docker up monitoring: docker compose --profile monitoring up -d; verify localhost:8180",
+    "Fix high findings: TPT flatten, ONNX parity test, DLL checksums",
+    "Test Kraken training: add keys to .env/CI; run dataset_generator",
+    "Live NT8/Python side-by-side session; audit logs/performance",
+    "Add C# tests/DataResolver; retrain if parity fails"
   ]
 }

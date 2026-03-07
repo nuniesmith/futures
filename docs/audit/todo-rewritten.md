@@ -80,7 +80,7 @@ futures/
   - No `OCO ID cannot be reused` or `signal name longer than 50` errors
   - Run for a full session and review output logs
 - [ ] **Parity-test Phase 3 EMA9 trailing** — run Python engine + C# strategy side-by-side on same OHLCV data, compare Phase 3 trail stop levels and exit prices. Target: ≤ 1 tick divergence per bar.
-  - `test_phase3_ema9_parity.py` — 130 tests all green; warm-up sequences use trending bars ✅
+  - `test_phase3_ema9_parity.py` — 130 tests all green; warm-up sequences use trending bars
 
 ### NT8 Hard Stop (Take Profit Trader Safety)
 - [ ] **4:00 PM ET hard flatten** — add a time-based safety check in `OnBarUpdate()` (BIP0 path) that calls `FlattenAll("TPT_HARD_STOP_16:00")` if current ET time ≥ 16:00 and any positions are open
@@ -116,7 +116,7 @@ futures/
   - Fix: round to appropriate precision based on tick size (6E tick = 0.00005, needs 5 decimal places); or use tick-count display instead of raw price for forex pairs
   - Also: entry_low/entry_high/stop/tp1/tp2 all round to 4 decimals — forex needs at least 5
 - [ ] **Estimated dollar value on asset cards** — add `$risk` and `$reward` estimates next to stop/TP levels
-  - Already computing `position_size` and `risk_dollars` in `compute_asset_focus()` ✅
+  - Already computing `position_size` and `risk_dollars` in `compute_asset_focus()`
   - Add: `$target1` = `position_size × ticks_to_tp1 × dollar_per_tick`, same for TP2
   - Display in the Levels grid: "TP1: 1.0850 (~$45)" format
   - Helps quickly assess whether a trade is worth taking
@@ -150,8 +150,8 @@ futures/
 
 ### Kraken — Full Data Integration for Training
 - [ ] **Kraken API key/secret via CI/CD** — ensure `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` are injected as secrets in the CI/CD pipeline and `.env` on prod server
-  - Already wired in `docker-compose.yml`: `KRAKEN_API_KEY=${KRAKEN_API_KEY:-}` ✅
-  - Already wired in `KrakenDataProvider.__init__`: reads from env vars ✅
+  - Already wired in `docker-compose.yml`: `KRAKEN_API_KEY=${KRAKEN_API_KEY:-}`
+  - Already wired in `KrakenDataProvider.__init__`: reads from env vars
   - Need: add `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` to GitHub Actions secrets for deploy step
   - Need: ensure `.env` on Pi has the keys set
 - [ ] **Kraken data in training pipeline** — when training is triggered from the web UI, the dataset generator should automatically:
@@ -159,7 +159,7 @@ futures/
   2. Check Postgres for historical crypto bars (warm path)
   3. Fetch missing data from Kraken REST API (`get_ohlcv_period`) for any gaps (cold path)
   4. Feed crypto data through the same 13 breakout-type detection pipeline
-  - `dataset_generator.py` already supports Kraken symbols via `bars_source` config ✅
+  - `dataset_generator.py` already supports Kraken symbols via `bars_source` config
   - Need: wire the data service's cache-first logic into the training data fetch path
   - The data service already has this pattern in `lifespan()` with `startup_warm_caches()` — extend to training
 - [ ] **Unified data resolver for training** — create a `DataResolver` class in the data service that:
@@ -178,7 +178,7 @@ futures/
   - Start with correlation scoring (already in Kraken correlation panel on dashboard) → advance to signal generation
 - [ ] **Generalize model across asset classes** — the CNN is already trained on 22 symbols across 5 asset classes (indices, forex, metals, energy, crypto via MBT/MET)
   - Extend to include direct Kraken crypto pairs in training (BTC, ETH, SOL, etc.)
-  - The `feature_contract.json` already has `asset_class_map` entries for crypto ✅
+  - The `feature_contract.json` already has `asset_class_map` entries for crypto
   - Need: ensure `dataset_generator.py` can pull Kraken OHLCV and render chart images for crypto pairs
 
 ### Trade Copier (Future — Post First Funded Account)

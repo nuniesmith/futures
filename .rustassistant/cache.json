@@ -3,9 +3,9 @@
   "repo": "nuniesmith/futures",
   "base_branch": "main",
   "created_at": "2026-03-07T02:29:46Z",
-  "last_run_at": "2026-03-07T17:17:44Z",
-  "last_run_id": "22803521161",
-  "last_run_number": 6,
+  "last_run_at": "2026-03-07T17:29:57Z",
+  "last_run_id": "22803727184",
+  "last_run_number": 7,
   "runs": [
     {
       "run_id": "22791043831",
@@ -18,13 +18,19 @@
       "run_number": 6,
       "mode": "full",
       "started_at": "2026-03-07T17:17:44Z"
+    },
+    {
+      "run_id": "22803727184",
+      "run_number": 7,
+      "mode": "full",
+      "started_at": "2026-03-07T17:29:57Z"
     }
   ],
   "file_hashes": {
     "run.sh": "4bcc6222f4c3a197",
     "README.md": "e8fbde71fc103452",
     "docker-compose.yml": "d514920c8caa755c",
-    "todo.md": "020ff9bc81a75acb",
+    "todo.md": "ab2dcf19f148f751",
     "LICENSE": "5431e14895f9a207",
     ".dockerignore": "d5f6849e5e12e91c",
     ".gitattributes": "870293da69d3f0c0",
@@ -44,12 +50,13 @@
     "docker/monitoring/prometheus/Dockerfile": "310878c531ed2f48",
     "docker/web/Dockerfile": "fda858831fa2d526",
     "docs/STRATEGY_PLAN.md": "c8730bf18e24c32e",
-    "docs/audit/llm-analysis.json": "507017d036ce0f1c",
-    "docs/audit/LLM_AUDIT_REPORT.md": "6cb107440f9222e4",
+    "docs/audit/todo-rewritten.md": "ab2dcf19f148f751",
+    "docs/audit/llm-analysis.json": "e7959baea0c7c8f5",
+    "docs/audit/LLM_AUDIT_REPORT.md": "235c48050412c075",
     "docs/audit/todo-analysis-report.json": "d666e7f9f72d353b",
-    "docs/audit/TODO_ANALYSIS_REPORT.md": "ccdd2de9a29e03e4",
-    "docs/audit/GAMEPLAN.md": "6c5c19edd105ffe1",
-    "docs/audit/todo-plan.json": "ecd5aaf4a367fbbf",
+    "docs/audit/TODO_ANALYSIS_REPORT.md": "85a5514144be6743",
+    "docs/audit/GAMEPLAN.md": "a76c04369fc72da5",
+    "docs/audit/todo-plan.json": "d431dac179147cd8",
     "config/grafana/orb-trading-dashboard.json": "168e32a1ffb1176c",
     "config/grafana/grafana-dashboard.json": "e2752ed9fd7fc596",
     "config/grafana/trading-analytics-dashboard.json": "d3671f419002bf40",
@@ -192,20 +199,18 @@
   "active_batches": [],
   "completed_batches": [],
   "failed_batches": [],
-  "last_file_scan": "2026-03-07T17:17:44Z",
+  "last_file_scan": "2026-03-07T17:29:57Z",
   "files_changed": [
+    "todo.md",
+    "docs/audit/todo-rewritten.md",
     "docs/audit/llm-analysis.json",
     "docs/audit/LLM_AUDIT_REPORT.md",
-    "docs/audit/todo-analysis-report.json",
     "docs/audit/TODO_ANALYSIS_REPORT.md",
     "docs/audit/GAMEPLAN.md",
     "docs/audit/todo-plan.json"
   ],
   "files_added": [
-    "docs/audit/todo-analysis-report.json",
-    "docs/audit/TODO_ANALYSIS_REPORT.md",
-    "docs/audit/GAMEPLAN.md",
-    "docs/audit/todo-plan.json"
+    "docs/audit/todo-rewritten.md"
   ],
   "files_removed": []
 }
