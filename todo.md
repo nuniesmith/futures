@@ -1106,4 +1106,202 @@ trainer_server.py → _run_training_pipeline(TrainRequest)
   │    ├─ accuracy  ≥ min_acc (default ~80%)
   │    ├─ precision ≥ min_prec
   │    └─ recall    ≥ min_rec
-  │    All
+  │    All pass → candidate promoted to breakout_cnn_best.pt
+  │    Any fail → candidate rejected (unless force_promote=True)
+  │
+  │  ─── Step 5: Feature Contract Export ───
+  │    generate_feature_contract() → models/feature_contract.json
+  │    (tabular features, thresholds, ordinals, asset maps — consumed by engine + NT8)
+  │
+  │  ─── Step 6: ONNX Export ───
+  │    export_onnx_model(best.pt) → models/breakout_cnn_best.onnx
+  │    (consumed by NinjaTrader 8 via OnnxRuntime for live C# inference)
+  │
+  └─ ModelWatcher (filesystem watcher on models/ dir)
+       Detects new .pt files → invalidate_model_cache() → engine hot-reloads
+```
+
+**Key files to research:**
+- `src/lib/services/training/trainer_server.py` — `_run_training_pipeline()`, web API for training
+- `src/lib/services/training/dataset_generator.py` — `generate_dataset()`, `generate_dataset_for_symbol()`, `_run_simulators_for_breakout_type()`, `_build_row()`, `split_dataset()`
+- `src/lib/services/training/orb_simulator.py` — historical ORB simulation (bracket replay for labeling)
+- `src/lib/analysis/breakout_cnn.py` → `train_model()`, `evaluate_model()`, `BreakoutDataset`, `export_onnx_model()`
+- `src/lib/services/engine/model_watcher.py` — filesystem watcher for CNN hot-reload
+
+---
+
+### 8. Position Management & Execution
+
+```
+Signal passes all gates (filters + CNN + risk)
+  │
+  ▼
+PositionManager  (src/lib/services/engine/position_manager.py)
+  │
+  ├─ process_signal(signal, bars_1m, range_config)
+  │    ├─ _decide_entry_type()  ← new entry vs reverse vs skip
+  │    ├─ _should_reverse()     ← if opposite direction to current position
+  │    ├─ _open_position()      ← creates MicroPosition with bracket:
+  │    │    entry_price, stop_loss (SL), TP1, TP2, TP3
+  │    │    SL = range opposite side + sl_atr_mult × ATR
+  │    │    TP1/TP2/TP3 = entry ± tp1/tp2/tp3_atr_mult × ATR
+  │    └─ _reverse_position()   ← close current + open opposite (SAR)
+  │
+  ├─ update_all(bars_by_ticker)  — called every engine loop iteration
+  │    For each active MicroPosition:
+  │      ├─ _update_bracket_phase()
+  │      │    BracketPhase.INITIAL  → waiting for TP1
+  │      │    BracketPhase.TP1_HIT  → move stop to breakeven
+  │      │    BracketPhase.TP2_HIT  → engage EMA9 trailing stop
+  │      │    BracketPhase.TRAILING → trail stop on EMA9
+  │      ├─ _check_stop_hit()    → close if price hits stop
+  │      ├─ _check_tp3_hit()     → close if price hits TP3 (full target)
+  │      └─ _compute_ema9()      → EMA(9) for trailing stop calculation
+  │
+  ├─ close_for_session_end()  ← hard stop at session close (4:00 PM ET)
+  │
+  └─ Generates OrderCommand objects → published to Redis
+       → NT8 Bridge picks up orders via Redis pub/sub
+       → BreakoutStrategy.cs executes on NinjaTrader 8
+
+NT8 Execution (C#):
+  BreakoutStrategy.cs
+    ├─ Mode: BuiltIn / SignalBusRelay / Both
+    │    BuiltIn: runs its own ORB detection + CNN filter
+    │    SignalBusRelay: executes signals from Ruby indicator via SignalBus
+    │    Both: runs both simultaneously
+    ├─ BridgeOrderEngine: bracket order management (SL, TP1, TP2, TP3, EMA trail)
+    ├─ OrbCnnPredictor: ONNX inference with same 18-feature contract
+    ├─ OrbChartRenderer: renders same 224×224 chart for CNN input
+    └─ Risk: TPT funded account rules, 25% contract sizing, session hard stop
+```
+
+**Key files to research:**
+- `src/lib/services/engine/position_manager.py` — `PositionManager`, `MicroPosition`, `BracketPhase`, `OrderCommand`
+- `src/ninja/BreakoutStrategy.cs` — NT8 strategy: ORB detection, CNN gate, bracket orders, SAR
+- `src/ninja/RubyIndicator.cs` — Ruby indicator (SignalBus source)
+
+---
+
+### 9. Backtesting & Optimization (Strategies Layer)
+
+```
+ActionType.RUN_OPTIMIZATION / RUN_BACKTEST  (off-hours)
+  │
+  ▼
+trading/engine.py → run_optimization() / run_backtest()
+  │
+  ├─ 9 backtesting strategies (backtesting.py framework):
+  │    TrendEMACross    — dual EMA crossover with ADX filter
+  │    RSIReversal      — RSI oversold/overbought mean reversion
+  │    BreakoutStrategy — range breakout (20-bar high/low)
+  │    VWAPReversion    — VWAP + Bollinger Band mean reversion
+  │    ORBStrategy      — opening range breakout in backtest form
+  │    MACDMomentum     — MACD histogram momentum
+  │    PullbackEMA      — EMA pullback + engulfing / hammer patterns
+  │    EventReaction    — pre-event vol compression → post-event breakout
+  │    ICTTrendEMA      — EMA cross + ICT confluence (FVG, OB, liquidity sweeps)
+  │
+  ├─ run_optimization():
+  │    Uses Optuna to find best params per strategy per asset
+  │    Objective: score_backtest() — Sharpe, win rate, profit factor, drawdown
+  │    Results cached in Redis for dashboard display
+  │
+  └─ run_backtest():
+       Runs strategies with optimized params on fresh data
+       Stores results for web UI review
+```
+
+**Key files to research:**
+- `src/lib/trading/strategies.py` — all 9 strategy classes, `suggest_params()`, `score_backtest()`
+- `src/lib/trading/engine.py` — `run_optimization()`, `run_backtest()`, `DashboardEngine`
+- `src/lib/analysis/confluence.py` — multi-timeframe confluence scoring
+- `src/lib/analysis/ict.py` — ICT concepts (FVG, order blocks, liquidity sweeps)
+
+---
+
+### 10. Analysis Modules (Supporting)
+
+```
+analysis/
+  ├─ wave_analysis.py     — Elliott-inspired wave ratio, trend direction, market phase
+  ├─ volatility.py        — K-means ATR clustering (LOW/MEDIUM/HIGH), vol percentile
+  ├─ signal_quality.py    — composite quality score combining wave + vol + momentum
+  ├─ confluence.py        — HTF bias, entry setup, multi-TF filter (EMA/RSI/ATR alignment)
+  ├─ mtf_analyzer.py      — 15-min EMA slope + MACD histogram scoring for breakout enrichment
+  ├─ scorer.py            — PreMarketScorer: NATR, RVOL, gap, catalyst, momentum scores
+  ├─ regime.py            — market regime detection (trending/ranging/volatile)
+  ├─ cvd.py               — Cumulative Volume Delta calculation
+  ├─ volume_profile.py    — Volume profile, POC, Value Area (VAH/VAL)
+  ├─ ict.py               — ICT concepts: FVG, order blocks, liquidity sweeps, BOS/CHoCH
+  ├─ crypto_momentum.py   — Crypto-specific momentum indicators
+  ├─ chart_renderer.py    — mplfinance chart rendering (original)
+  └─ chart_renderer_parity.py — pixel-perfect Ruby-parity chart renderer (CNN training)
+```
+
+---
+
+### 11. Full Signal Flow Summary (Happy Path)
+
+```
+Yahoo/Kraken bars → Redis cache
+          │
+  Scheduler fires CHECK_ORB_US (09:30 ET, every 2 min)
+          │
+  Fetch 1m bars for each focus asset
+          │
+  detect_opening_range_breakout()  →  ORBResult (LONG breakout detected)
+          │
+  _persist_orb_event()  →  audit DB
+          │
+  apply_all_filters()  →  5/7 hard filters pass (majority gate)
+          │
+  predict_breakout()  →  P(good) = 0.87 ≥ 0.82 (US threshold) → signal=True
+          │
+  RiskManager.can_enter_trade()  →  allowed=True (within all 7 rules)
+          │
+  PositionManager.process_signal()  →  MicroPosition opened
+          │                              entry=5420.50, SL=5415.25, TP1=5428.00,
+          │                              TP2=5433.50, TP3=5441.75
+          │
+  _publish_pm_orders()  →  Redis pub/sub → NT8 Bridge
+          │
+  BreakoutStrategy.cs (NT8)  →  executes bracket order on live market
+          │
+  update_all() every 1 min:
+    TP1 hit → move stop to breakeven
+    TP2 hit → engage EMA9 trailing stop
+    TP3 hit or EMA9 trail stop → close position
+          │
+  register_close() → update daily P&L, publish risk state
+```
+
+---
+
+### 12. Infrastructure & Services
+
+```
+Docker Compose (3 containers + supporting services):
+  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐
+  │   :engine    │  │    :web      │  │   :trainer   │
+  │  main.py     │  │  FastAPI     │  │  FastAPI     │
+  │  scheduler   │  │  dashboard   │  │  train API   │
+  │  risk mgr    │  │  focus cards │  │  dataset gen │
+  │  position mgr│  │  settings    │  │  CNN train   │
+  │  all handlers│  │  review mode │  │  ONNX export │
+  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+         │                 │                  │
+         └────────┬────────┘                  │
+                  ▼                           │
+            ┌──────────┐                      │
+            │  Redis   │◄─────────────────────┘
+            └──────────┘
+            ┌──────────┐
+            │ Postgres │  (audit trail: risk_events, orb_events, daily_journal)
+            └──────────┘
+
+  Tailscale mesh:
+    Pi        → engine + web (always on, 24/7 scheduling)
+    GPU rig   → trainer (on-demand training runs)
+    Windows   → NinjaTrader 8 (BreakoutStrategy.cs, live execution)
+```
