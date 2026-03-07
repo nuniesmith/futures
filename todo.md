@@ -108,10 +108,19 @@ futures/
 
 ### NT8 Bridge Trading Tests
 - [ ] **Bridge `/flatten` from web UI** — ensure the Flatten All button in the dashboard triggers Bridge `FlattenAll` which closes every position across all instruments immediately (already wired, needs live test)
+  - Python-side wiring fully tested offline: `src/tests/test_bridge_trading.py` — TestFlattenAll (6 tests) covers heartbeat liveness gate, port resolution from heartbeat, proxy forwarding to Bridge `/flatten`, default reason, connection error handling (503/504)
+  - Dashboard HTML wiring verified: `_render_positions_panel()` in `dashboard.py` renders `hx-post="/api/positions/flatten"` button with `hx-confirm`, disabled when Bridge offline
+  - Live test script ready: `scripts/test_bridge_live.py` — run with `--bridge HOST:PORT --data URL` when NT8 is up on Sim (also `--local` for same-machine testing)
+  - **Remaining**: fire up NT8 on Sim, run `python scripts/test_bridge_live.py`, verify flatten closes all positions across all instruments
 - [ ] **Manual trade from dashboard** — when the strategy is always running and I place a manual entry from the web UI via `/execute_signal`, it should coexist with automated entries. Verify:
   - Manual entry gets its own `PositionPhase` tracking
   - Automated entries continue alongside manual positions
   - Both respect `MaxConcurrentPositions = 5`
+  - Python-side wiring fully tested offline: `src/tests/test_bridge_trading.py` — TestExecuteSignal (6 tests) covers market long, short with all fields, risk check enforcement, risk check bypass (enforce_risk=False), direction validation, connection errors
+  - C# wiring verified by code review: `Bridge.cs` `ListenLoop` parses `/execute_signal` POST → creates `SignalBus.Signal` → `SignalBus.Enqueue()` → `BreakoutStrategy.OnBarUpdate` calls `_engine.DrainSignalBus()` → `ProcessSignal()` → `SubmitOrderUnmanaged()` with unique signal name `Signal-{dir}-{id}` (capped at 49 chars)
+  - `FireEntry()` registers each entry in `_positionPhases[signalId]` with its own `PositionPhase` struct — manual Bridge entries use `signalId = "brg-{guid}"`, automated entries use `signalId = "brk-{dir}-{timestamp}-{instrument}-{type}"`
+  - `MaxConcurrentPositions` gate at top of `FireEntry()`: `if (_activePositionCount >= MaxConcurrentPositions) return;` — applies to both automated and manual entries
+  - **Remaining**: live test with NT8 on Sim — run `scripts/test_bridge_live.py --local` (or `--bridge HOST:PORT --data URL`), verify both entry types get PositionPhase in Output Window
 
 ---
 
@@ -124,14 +133,18 @@ futures/
   - `src/lib/services/data/main.py` — `trainer_router` registered; `/trainer*` paths added to `api_info`
   - `src/lib/services/web/main.py` — `/trainer` and `/trainer/*` now proxy to the **data service** (not directly to trainer); trainer client removed from web service lifespan; `TRAINER_SERVICE_URL` env var no longer needed in web service
   - Dashboard page: training status card, start/cancel buttons, symbol/epoch/days_back params, model list, ONNX export, validation metrics, log stream, dataset stats — all backed by `/trainer/api/*` → trainer service
-- [ ] **Settings page** — new `/settings` page in the web dashboard
-  - Configure service URLs (DATA_SERVICE_URL, TRAINER_SERVICE_URL, NT_BRIDGE_HOST)
-  - Toggle features: ENABLE_KRAKEN_CRYPTO, ORB_CNN_GATE, ORB_FILTER_GATE
-  - View/edit environment overrides (stored in Redis or a config table)
-  - Show current Tailscale IPs and connection status for all services
-  - Manage Kraken API key status (show if configured, don't show the actual key)
-  - Massive API key status
-  - Account settings: account size, risk %, max contracts
+- [x] **Settings page** — new `/settings` page in the web dashboard
+  - `src/lib/services/data/api/settings.py` — complete rewrite with 5 tabbed sections: Engine, Services, Features, Risk & Trading, API Keys
+  - **Engine tab**: account size pills ($50K/$100K/$150K), primary interval selector, lookback period, force refresh / optimize buttons, live feed start/stop/upgrade/downgrade, engine status panel, quick links, about card
+  - **Services tab**: editable service URLs (DATA_SERVICE_URL, TRAINER_SERVICE_URL, NT_BRIDGE_HOST, NT_BRIDGE_PORT), "Test Connectivity" button probes all services (data, trainer, Bridge, Redis, Postgres) with latency, NT8 Bridge heartbeat status card (connected/offline, account, version, port, risk blocked)
+  - **Features tab**: 11 toggle switches — Kraken Crypto Feed, Massive Autostart, Grok AI, CNN Gate, ORB Filter Gate, MTF Alignment, SAR, TPT Mode, TP3 Trailing, Auto Brackets, Debug Logging; saved to Redis immediately via `POST /settings/features/update`
+  - **Risk & Trading tab**: position sizing (risk %, max contracts, max concurrent positions), SL/TP ATR multiples (SL, TP1, TP2, TP3), entry cooldown, tick-based defaults, SAR parameters (min CNN prob, min MTF score, cooldown, chase ATR fraction, winning CNN prob, high winner R-mult), CNN filter settings (threshold override, session key, lookback bars), ORB quality filters (volume surge mult, volume avg period, min ATR ratio, ORB minutes, require VWAP toggle)
+  - **API Keys tab**: shows configured/missing status for MASSIVE_API_KEY, KRAKEN_API_KEY, KRAKEN_API_SECRET, GROK_API_KEY, DISCORD_WEBHOOK_URL, POSTGRES_DSN, REDIS_URL — values never exposed, only boolean "SET" / "MISSING" badges; security note card explains env var approach
+  - All settings persisted to Redis via `settings:overrides` key (JSON dict with `services`, `features`, `risk` sub-keys); `_load_persisted_settings()` / `_save_persisted_settings()` helpers
+  - Backend API endpoints: `GET/POST /settings/services/config|update`, `GET /settings/services/probe`, `GET /settings/services/bridge_status`, `GET/POST /settings/features/config|update`, `GET/POST /settings/risk/config|update`, `GET /settings/keys/status`
+  - `src/lib/services/web/main.py` — 9 new proxy routes added for all settings sub-endpoints
+  - Section tabs with `localStorage['settingsTab']` persistence; auto-loads section-specific data on tab switch
+  - Consistent dark/light theme support with existing dashboard styling
 
 ### Kraken — Full Data Integration for Training
 - [x] **Kraken API key/secret via CI/CD** — `KRAKEN_API_KEY` and `KRAKEN_API_SECRET` injected in both CI/CD and docker-compose
@@ -156,15 +169,54 @@ futures/
   - Used by: training pipeline `load_bars()` cold path, future engine focus computation
 
 ### Multi-Source Breakout Detection (Futures + Crypto)
-- [ ] **Cross-asset breakout signals** — use Kraken crypto data alongside Massive futures data to find correlated breakouts
+- [x] **Cross-asset breakout signals** — use Kraken crypto data alongside Massive futures data to find correlated breakouts
   - BTC/ETH breakout at Asian session → MES/MNQ follow at London/US open (known correlation)
   - Crypto 24/7 data provides overnight context for futures that only trade ~23h
   - Add crypto momentum as an additional CNN tabular feature (future v7 contract)
   - Start with correlation scoring (already in Kraken correlation panel on dashboard) → advance to signal generation
-- [ ] **Generalize model across asset classes** — the CNN is already trained on 22 symbols across 5 asset classes (indices, forex, metals, energy, crypto via MBT/MET)
-  - Extend to include direct Kraken crypto pairs in training (BTC, ETH, SOL, etc.)
-  - The `feature_contract.json` already has `asset_class_map` entries for crypto
-  - Need: ensure `dataset_generator.py` can pull Kraken OHLCV and render chart images for crypto pairs
+  - **DONE**: `src/lib/analysis/crypto_momentum.py` — full crypto momentum scorer module created
+    - `CryptoMomentumScorer` class: orchestrates momentum computation across BTC/SOL anchors → scores 5 futures targets (MES, MNQ, MGC, MCL, MYM)
+    - `compute_single_crypto_momentum()`: per-crypto metrics — EMA-9/21 spread & cross, RSI-14, ATR-14, session high/low breakout, volume surge ratio
+    - `score_futures_from_crypto()`: weighted composite scoring — 40% momentum strength, 25% correlation reliability, 20% session timing, 15% volume confirmation
+    - `CryptoMomentumSignal.to_tabular_feature()`: returns normalised [-1, +1] value ready for v7 feature contract (`crypto_momentum_score` as tabular feature #19)
+    - Session-aware scoring: Asian session signals get 0.8 session_score (4h lead time), London 0.5 (2h), US pre-open 0.3, RTH 0.15 (contemporaneous)
+    - Rolling Pearson correlation blended with base correlation config per futures instrument — trust increases with sample count
+    - `CRYPTO_ANCHORS`: BTC (weight 0.50), SOL (weight 0.15) — weighted composite direction
+    - `FUTURES_TARGETS`: MES (base_corr 0.55), MNQ (0.60), MYM (0.50), MGC (0.25), MCL (0.15)
+    - `detect_session()`: auto-detects Asian/London/US pre-open/RTH from ET time for lead-time scoring
+    - Pure computation functions (no I/O) for testability: `compute_ema`, `compute_rsi`, `compute_atr`, `compute_volume_ratio`, `pearson_correlation`, `log_returns`
+    - `score_with_data()` accepts pre-built DataFrames for offline testing; `score_all()` pulls live Kraken + futures data
+    - `crypto_momentum_to_tabular()` convenience: converts signal list → `{futures_symbol: float}` dict for CNN input
+  - **Tests**: `src/tests/test_crypto_momentum.py` — 109 tests all green
+    - `TestComputeEma`: empty, insufficient, exact period, trend tracking, length matching (5 tests)
+    - `TestComputeRsi`: insufficient data, pure uptrend/downtrend, flat market, range bounds (5 tests)
+    - `TestComputeAtr`: minimal data, two bars, positive ATR, volatility scaling (4 tests)
+    - `TestComputeVolumeRatio`: uniform, surge, empty, single (4 tests)
+    - `TestPearsonCorrelation`: perfect +/-, no correlation, insufficient, constant, mismatched (6 tests)
+    - `TestLogReturns`: basic, empty, zero prices (3 tests)
+    - `TestDetectSession`: all 4 sessions, boundaries, lead hours, gap period (10 tests)
+    - `TestComputeSessionHighLow`: empty, normal, overnight, missing columns (4 tests)
+    - `TestComputeSingleCryptoMomentum`: bullish/bearish/neutral, insufficient bars, EMA spread, RSI, ATR, volume surge, to_dict, lowercase cols, strength bounds (16 tests)
+    - `TestScoreFuturesFromCrypto`: bullish/bearish/neutral, unknown symbol, rolling corr, weak corr, session timing, volume, multi-anchor, bounds, confidence, thresholds, to_dict (17 tests)
+    - `TestTabularFeature`: bullish +, bearish -, neutral 0, not-actionable 0, clamped (5 tests)
+    - `TestCryptoMomentumToTabular`: basic, empty (2 tests)
+    - `TestCryptoMomentumScorer`: basic, all-bull, all-bear, no data, partial, with correlation, custom targets/anchors (8 tests)
+    - `TestConfiguration`: anchor fields, weights, target fields, sessions, thresholds, min_bars (6 tests)
+    - `TestEdgeCases`: single bar, exact min, large dataset, zero prices, constant prices, NaN, empty dicts/DFs, all targets scored, deterministic (10 tests)
+    - `TestRealisticScenarios`: BTC Asian breakout→MES, crypto selloff→equity, flat neutral, mixed signals, gold lower corr (5 tests)
+  - **Next**: wire `crypto_momentum_score` into engine scoring pipeline as an optional boost; add as v7 feature contract tabular feature #19 at next retrain
+- [x] **Generalize model across asset classes** — the CNN is already trained on 22 symbols across 5 asset classes (indices, forex, metals, energy, crypto via MBT/MET)
+  - Extend to include direct Kraken crypto pairs in training (BTC, ETH, SOL, etc.) — **DONE**: `trainer_server.py` `DEFAULT_SYMBOLS` includes `BTC,ETH,SOL` (25 symbols total)
+  - The `feature_contract.json` already has `asset_class_map` entries for crypto — **VERIFIED**: 42 total entries including all 9 Kraken pairs (short + internal ticker forms)
+  - `dataset_generator.py` can pull Kraken OHLCV and render chart images for crypto pairs — **VERIFIED**: full pipeline tested in `src/tests/test_kraken_training_pipeline.py` (67+ tests)
+    - `_SYMBOL_TO_TICKER`: all 9 Kraken pairs mapped with short alias (BTC), internal ticker (KRAKEN:XBTUSD), and pair alias (XBTUSD) — 27 entries
+    - `_is_kraken_symbol()`: correctly routes crypto to Kraken loader, CME futures (MBT/MET) to Massive
+    - `_load_bars_from_kraken()`: REST pagination via Kraken public OHLC endpoint, deduplication, zero-bar filtering, graceful error handling
+    - `load_bars()`: DataResolver three-tier fallback (Redis → Postgres → Kraken API) with auto-backfill for crypto
+    - Chart rendering: `generate_dataset_for_symbol()` is symbol-agnostic — works on any OHLCV DataFrame; both mplfinance and parity renderers accept crypto bars
+    - `_build_row()`: `get_asset_class_id()` returns 1.0 for all crypto, `get_asset_volatility_class()` returns 1.0 for all crypto
+    - `feature_contract.json` ↔ `breakout_cnn.py` consistency verified: `ASSET_CLASS_ORDINALS` and `ASSET_VOLATILITY_CLASS` match contract for all 42 symbols
+  - **Ready for retrain**: run trainer with `BTC,ETH,SOL` in symbol list — Kraken OHLCV will be fetched, chart images rendered, and tabular features built with correct asset_class_id=1.0
 
 ### Trade Copier (Future — Post First Funded Account)
 - [ ] **Simple trade copier for multiple TPT accounts** — once the first $50k account is funded and profitable:

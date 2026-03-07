@@ -636,10 +636,20 @@ async def proxy_trainer(request: Request, path: str):
 # ---------------------------------------------------------------------------
 # Settings proxy — forwards /settings to the DATA service
 #
-# The data service hosts the full settings page at GET /settings.
+# The data service hosts the full settings page at GET /settings and
+# sub-endpoints for services, features, risk, and API key status.
 #
 # Route map (web → data service):
-#   GET  /settings  → data service GET /settings  (HTML page)
+#   GET  /settings                       → data service GET /settings  (HTML page)
+#   GET  /settings/services/config       → service URL config
+#   POST /settings/services/update       → save service URLs
+#   GET  /settings/services/probe        → probe all service health
+#   GET  /settings/services/bridge_status → NT8 Bridge heartbeat
+#   GET  /settings/features/config       → feature toggle state
+#   POST /settings/features/update       → save feature toggles
+#   GET  /settings/risk/config           → risk parameter config
+#   POST /settings/risk/update           → save risk parameters
+#   GET  /settings/keys/status           → API key status (configured/missing)
 # ---------------------------------------------------------------------------
 
 
@@ -647,6 +657,51 @@ async def proxy_trainer(request: Request, path: str):
 async def settings_page(request: Request):
     """Serve the settings page from the data service."""
     return await _proxy_request(request, "/settings")
+
+
+@app.get("/settings/services/config")
+async def settings_services_config(request: Request):
+    return await _proxy_request(request, "/settings/services/config")
+
+
+@app.post("/settings/services/update")
+async def settings_services_update(request: Request):
+    return await _proxy_request(request, "/settings/services/update")
+
+
+@app.get("/settings/services/probe")
+async def settings_services_probe(request: Request):
+    return await _proxy_request(request, "/settings/services/probe")
+
+
+@app.get("/settings/services/bridge_status")
+async def settings_services_bridge_status(request: Request):
+    return await _proxy_request(request, "/settings/services/bridge_status")
+
+
+@app.get("/settings/features/config")
+async def settings_features_config(request: Request):
+    return await _proxy_request(request, "/settings/features/config")
+
+
+@app.post("/settings/features/update")
+async def settings_features_update(request: Request):
+    return await _proxy_request(request, "/settings/features/update")
+
+
+@app.get("/settings/risk/config")
+async def settings_risk_config(request: Request):
+    return await _proxy_request(request, "/settings/risk/config")
+
+
+@app.post("/settings/risk/update")
+async def settings_risk_update(request: Request):
+    return await _proxy_request(request, "/settings/risk/update")
+
+
+@app.get("/settings/keys/status")
+async def settings_keys_status(request: Request):
+    return await _proxy_request(request, "/settings/keys/status")
 
 
 # ---------------------------------------------------------------------------
