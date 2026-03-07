@@ -53,7 +53,7 @@ def _clear_position_cache():
 @pytest.fixture()
 def client():
     """FastAPI test client with the positions router mounted at /positions."""
-    from lib.services.data.api.positions import router as positions_router
+    from lib.services.engine.data.api.positions import router as positions_router
 
     app = FastAPI()
     app.include_router(positions_router, prefix="/positions")
@@ -63,8 +63,8 @@ def client():
 @pytest.fixture()
 def full_client():
     """FastAPI test client with positions + health routers (for regression tests)."""
-    from lib.services.data.api.health import router as health_router
-    from lib.services.data.api.positions import router as positions_router
+    from lib.services.engine.data.api.health import router as health_router
+    from lib.services.engine.data.api.positions import router as positions_router
 
     app = FastAPI()
     app.include_router(positions_router, prefix="/positions")
@@ -166,7 +166,7 @@ class TestUpdatePositions:
 
     def test_post_updates_cache(self, client, sample_payload):
         """Verify that POST actually writes to the cache."""
-        from lib.services.data.api.positions import get_live_positions
+        from lib.services.engine.data.api.positions import get_live_positions
 
         # Before: no positions
         before = get_live_positions()
@@ -183,7 +183,7 @@ class TestUpdatePositions:
 
     def test_post_overwrites_previous(self, client, sample_payload, single_position_payload):
         """A new POST replaces the previous positions snapshot."""
-        from lib.services.data.api.positions import get_live_positions
+        from lib.services.engine.data.api.positions import get_live_positions
 
         # First push: 2 positions
         client.post("/positions/update", json=sample_payload)
@@ -395,7 +395,7 @@ class TestClearPositions:
 
     def test_clear_removes_data(self, client, sample_payload):
         """DELETE removes cached positions."""
-        from lib.services.data.api.positions import get_live_positions
+        from lib.services.engine.data.api.positions import get_live_positions
 
         client.post("/positions/update", json=sample_payload)
         assert get_live_positions()["has_positions"] is True
@@ -424,7 +424,7 @@ class TestGetLivePositionsHelper:
 
     def test_no_data(self):
         """Returns empty dict structure when cache is empty."""
-        from lib.services.data.api.positions import get_live_positions
+        from lib.services.engine.data.api.positions import get_live_positions
 
         result = get_live_positions()
         assert result["has_positions"] is False
@@ -436,7 +436,7 @@ class TestGetLivePositionsHelper:
 
     def test_after_push(self, client, sample_payload):
         """Returns correct data after a push."""
-        from lib.services.data.api.positions import get_live_positions
+        from lib.services.engine.data.api.positions import get_live_positions
 
         client.post("/positions/update", json=sample_payload)
 
@@ -448,7 +448,7 @@ class TestGetLivePositionsHelper:
 
     def test_pnl_calculation(self, client):
         """Total unrealized PnL is computed correctly across positions."""
-        from lib.services.data.api.positions import get_live_positions
+        from lib.services.engine.data.api.positions import get_live_positions
 
         payload = {
             "account": "Test",
@@ -484,7 +484,7 @@ class TestGetLivePositionsHelper:
     def test_corrupt_cache_data(self):
         """Handles corrupt cache data gracefully."""
         from lib.core.cache import cache_set
-        from lib.services.data.api.positions import (
+        from lib.services.engine.data.api.positions import (
             _POSITIONS_CACHE_KEY,
             get_live_positions,
         )
@@ -498,7 +498,7 @@ class TestGetLivePositionsHelper:
     def test_partial_cache_data(self):
         """Handles cache data with missing fields gracefully."""
         from lib.core.cache import cache_set
-        from lib.services.data.api.positions import (
+        from lib.services.engine.data.api.positions import (
             _POSITIONS_CACHE_KEY,
             get_live_positions,
         )
@@ -694,7 +694,7 @@ class TestModelValidation:
 
     def test_nt_position_model(self):
         """NTPosition model accepts valid data."""
-        from lib.services.data.api.positions import NTPosition
+        from lib.services.engine.data.api.positions import NTPosition
 
         pos = NTPosition(
             symbol="MESZ5",
@@ -714,7 +714,7 @@ class TestModelValidation:
 
     def test_nt_position_defaults(self):
         """NTPosition model defaults for optional fields."""
-        from lib.services.data.api.positions import NTPosition
+        from lib.services.engine.data.api.positions import NTPosition
 
         pos = NTPosition(
             symbol="MESZ5",
@@ -732,7 +732,7 @@ class TestModelValidation:
 
     def test_nt_payload_model(self):
         """NTPositionsPayload model validates correctly."""
-        from lib.services.data.api.positions import NTPosition, NTPositionsPayload
+        from lib.services.engine.data.api.positions import NTPosition, NTPositionsPayload
 
         payload = NTPositionsPayload(
             account="Sim101",
@@ -762,7 +762,7 @@ class TestModelValidation:
 
     def test_nt_payload_empty_positions(self):
         """Payload with empty positions list is valid."""
-        from lib.services.data.api.positions import NTPositionsPayload
+        from lib.services.engine.data.api.positions import NTPositionsPayload
 
         payload = NTPositionsPayload(
             account="Sim101",
@@ -780,7 +780,7 @@ class TestModelValidation:
 
     def test_nt_response_model(self):
         """NTPositionsResponse model works with defaults."""
-        from lib.services.data.api.positions import NTPositionsResponse
+        from lib.services.engine.data.api.positions import NTPositionsResponse
 
         resp = NTPositionsResponse()
         assert resp.account == ""
@@ -822,7 +822,7 @@ class TestRapidUpdates:
 
     def test_rapid_position_updates(self, client):
         """Multiple rapid POSTs don't corrupt data."""
-        from lib.services.data.api.positions import get_live_positions
+        from lib.services.engine.data.api.positions import get_live_positions
 
         for i in range(10):
             payload = {
@@ -848,7 +848,7 @@ class TestRapidUpdates:
 
     def test_position_lifecycle(self, client):
         """Simulate: no positions → open → update PnL → close → clear."""
-        from lib.services.data.api.positions import get_live_positions
+        from lib.services.engine.data.api.positions import get_live_positions
 
         # 1. No positions initially
         assert get_live_positions()["has_positions"] is False

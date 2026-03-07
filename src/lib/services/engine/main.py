@@ -311,7 +311,7 @@ def _publish_regime_states() -> None:
 
         # Push into Prometheus gauges immediately (don't wait for scrape)
         try:
-            from lib.services.data.api.metrics import update_regime
+            from lib.services.engine.data.api.metrics import update_regime
 
             for sym, info in regime_map.items():
                 update_regime(
@@ -511,7 +511,7 @@ def _handle_check_risk_rules(engine, account_size: int = 50_000) -> None:
             raw = cache_get("positions:current")
             if not raw:
                 # Try the hashed key used by positions router
-                from lib.services.data.api.positions import (
+                from lib.services.engine.data.api.positions import (
                     _POSITIONS_CACHE_KEY,
                 )
 
@@ -1076,7 +1076,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                     pass
                                 # Prometheus: filter rejected
                                 try:
-                                    from lib.services.data.api.metrics import record_orb_filter_result
+                                    from lib.services.engine.data.api.metrics import record_orb_filter_result
 
                                     record_orb_filter_result("rejected")
                                 except Exception:
@@ -1090,7 +1090,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                 )
                                 # Prometheus: filter passed
                                 try:
-                                    from lib.services.data.api.metrics import record_orb_filter_result
+                                    from lib.services.engine.data.api.metrics import record_orb_filter_result
 
                                     record_orb_filter_result("passed")
                                 except Exception:
@@ -1106,7 +1106,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                             filter_passed = True
                             # Prometheus: filter error
                             try:
-                                from lib.services.data.api.metrics import record_orb_filter_result
+                                from lib.services.engine.data.api.metrics import record_orb_filter_result
 
                                 record_orb_filter_result("error")
                             except Exception:
@@ -1358,7 +1358,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                                         )
                                         # Prometheus: CNN probability + verdict
                                         try:
-                                            from lib.services.data.api.metrics import (
+                                            from lib.services.engine.data.api.metrics import (
                                                 record_orb_cnn_prob,
                                                 record_orb_cnn_signal,
                                             )
@@ -1375,7 +1375,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                         except ImportError:
                             logger.debug("CNN module not available — skipping inference")
                             try:
-                                from lib.services.data.api.metrics import record_orb_cnn_signal
+                                from lib.services.engine.data.api.metrics import record_orb_cnn_signal
 
                                 record_orb_cnn_signal("skipped")
                             except Exception:
@@ -1383,7 +1383,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
                         except Exception as cnn_exc:
                             logger.debug("CNN inference error (non-fatal): %s", cnn_exc)
                             try:
-                                from lib.services.data.api.metrics import record_orb_cnn_signal
+                                from lib.services.engine.data.api.metrics import record_orb_cnn_signal
 
                                 record_orb_cnn_signal("skipped")
                             except Exception:
@@ -2481,7 +2481,7 @@ def _handle_next_day_prep(engine) -> None:
 def _handle_generate_chart_dataset(engine) -> None:
     """No-op — dataset generation runs on the dedicated GPU trainer service.
 
-    Use the trainer service (lib.training.trainer_server) on the GPU machine:
+    Use the trainer service (lib.services.training.trainer_server) on the GPU machine:
         docker compose --profile training up -d
         curl -X POST http://trainer:8200/train
     """
@@ -2491,7 +2491,7 @@ def _handle_generate_chart_dataset(engine) -> None:
 def _handle_train_breakout_cnn(engine) -> None:
     """No-op — CNN training runs on the dedicated GPU trainer service.
 
-    The trainer server (lib.training.trainer_server) handles the full
+    The trainer server (lib.services.training.trainer_server) handles the full
     pipeline: dataset generation → training → evaluation → promotion.
         docker compose --profile training up -d
         curl -X POST http://trainer:8200/train
@@ -2607,7 +2607,7 @@ def _handle_daily_report(engine) -> None:
         # date object and queries the DB internally for that day's events.
         report: dict = {}
         try:
-            from lib.services.data.api.audit import _build_daily_report
+            from lib.services.engine.data.api.audit import _build_daily_report
 
             today = datetime.now(tz=_EST).date()
             report = _build_daily_report(today)

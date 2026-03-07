@@ -320,7 +320,7 @@ run_local() {
     log "Starting web service locally (http://${ts_ip}:8180) ..."
     log "  (data API on http://${ts_ip}:8100)"
     DATA_SERVICE_URL="http://${ts_ip}:8100" \
-    PYTHONPATH=src exec uvicorn lib.services.web.main:app \
+    PYTHONPATH=src exec uvicorn entrypoints.web.main:app \
         --host 0.0.0.0 --port 8180 --reload
 }
 

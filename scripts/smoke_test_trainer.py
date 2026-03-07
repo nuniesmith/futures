@@ -319,7 +319,7 @@ def run_smoke_test(args: argparse.Namespace) -> int:
     )
 
     server_proc = subprocess.Popen(
-        [sys.executable, "-m", "lib.training.trainer_server"],
+        [sys.executable, "-m", "lib.services.training.trainer_server"],
         cwd=str(SRC_DIR),
         env=env,
         stdout=subprocess.PIPE,

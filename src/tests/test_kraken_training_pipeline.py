@@ -72,48 +72,48 @@ class TestSymbolResolution:
     """Verify _SYMBOL_TO_TICKER maps and _resolve_ticker for crypto."""
 
     def test_short_alias_btc(self):
-        from lib.training.dataset_generator import _SYMBOL_TO_TICKER
+        from lib.services.training.dataset_generator import _SYMBOL_TO_TICKER
 
         assert _SYMBOL_TO_TICKER.get("BTC") == "KRAKEN:XBTUSD"
 
     def test_short_alias_eth(self):
-        from lib.training.dataset_generator import _SYMBOL_TO_TICKER
+        from lib.services.training.dataset_generator import _SYMBOL_TO_TICKER
 
         assert _SYMBOL_TO_TICKER.get("ETH") == "KRAKEN:ETHUSD"
 
     def test_short_alias_sol(self):
-        from lib.training.dataset_generator import _SYMBOL_TO_TICKER
+        from lib.services.training.dataset_generator import _SYMBOL_TO_TICKER
 
         assert _SYMBOL_TO_TICKER.get("SOL") == "KRAKEN:SOLUSD"
 
     def test_internal_ticker_passthrough(self):
-        from lib.training.dataset_generator import _SYMBOL_TO_TICKER
+        from lib.services.training.dataset_generator import _SYMBOL_TO_TICKER
 
         assert _SYMBOL_TO_TICKER.get("KRAKEN:XBTUSD") == "KRAKEN:XBTUSD"
         assert _SYMBOL_TO_TICKER.get("KRAKEN:ETHUSD") == "KRAKEN:ETHUSD"
         assert _SYMBOL_TO_TICKER.get("KRAKEN:SOLUSD") == "KRAKEN:SOLUSD"
 
     def test_pair_style_alias(self):
-        from lib.training.dataset_generator import _SYMBOL_TO_TICKER
+        from lib.services.training.dataset_generator import _SYMBOL_TO_TICKER
 
         assert _SYMBOL_TO_TICKER.get("XBTUSD") == "KRAKEN:XBTUSD"
         assert _SYMBOL_TO_TICKER.get("ETHUSD") == "KRAKEN:ETHUSD"
 
     def test_resolve_ticker_short(self):
-        from lib.training.dataset_generator import _resolve_ticker
+        from lib.services.training.dataset_generator import _resolve_ticker
 
         assert _resolve_ticker("BTC") == "KRAKEN:XBTUSD"
         assert _resolve_ticker("ETH") == "KRAKEN:ETHUSD"
         assert _resolve_ticker("SOL") == "KRAKEN:SOLUSD"
 
     def test_resolve_ticker_internal(self):
-        from lib.training.dataset_generator import _resolve_ticker
+        from lib.services.training.dataset_generator import _resolve_ticker
 
         assert _resolve_ticker("KRAKEN:XBTUSD") == "KRAKEN:XBTUSD"
 
     def test_resolve_ticker_futures_unchanged(self):
         """Futures symbols should resolve to their =F ticker, not Kraken."""
-        from lib.training.dataset_generator import _resolve_ticker
+        from lib.services.training.dataset_generator import _resolve_ticker
 
         assert _resolve_ticker("MES") == "MES=F"
         assert _resolve_ticker("MGC") == "MGC=F"
@@ -121,14 +121,14 @@ class TestSymbolResolution:
 
     def test_cme_crypto_futures_not_kraken(self):
         """CME micro crypto futures (MBT, MET) should NOT resolve to Kraken."""
-        from lib.training.dataset_generator import _resolve_ticker
+        from lib.services.training.dataset_generator import _resolve_ticker
 
         assert _resolve_ticker("MBT") == "MBT=F"
         assert _resolve_ticker("MET") == "MET=F"
 
     def test_all_kraken_aliases_present(self):
         """All 9 Kraken crypto pairs should have short, internal, and pair aliases."""
-        from lib.training.dataset_generator import _SYMBOL_TO_TICKER
+        from lib.services.training.dataset_generator import _SYMBOL_TO_TICKER
 
         expected_pairs = [
             ("BTC", "KRAKEN:XBTUSD"),
@@ -155,27 +155,27 @@ class TestKrakenDetection:
     """Verify _is_kraken_symbol correctly identifies crypto symbols."""
 
     def test_internal_ticker_detected(self):
-        from lib.training.dataset_generator import _is_kraken_symbol
+        from lib.services.training.dataset_generator import _is_kraken_symbol
 
         assert _is_kraken_symbol("KRAKEN:XBTUSD") is True
         assert _is_kraken_symbol("KRAKEN:ETHUSD") is True
         assert _is_kraken_symbol("KRAKEN:SOLUSD") is True
 
     def test_short_alias_detected(self):
-        from lib.training.dataset_generator import _is_kraken_symbol
+        from lib.services.training.dataset_generator import _is_kraken_symbol
 
         assert _is_kraken_symbol("BTC") is True
         assert _is_kraken_symbol("ETH") is True
         assert _is_kraken_symbol("SOL") is True
 
     def test_pair_alias_detected(self):
-        from lib.training.dataset_generator import _is_kraken_symbol
+        from lib.services.training.dataset_generator import _is_kraken_symbol
 
         assert _is_kraken_symbol("XBTUSD") is True
         assert _is_kraken_symbol("ETHUSD") is True
 
     def test_futures_not_detected(self):
-        from lib.training.dataset_generator import _is_kraken_symbol
+        from lib.services.training.dataset_generator import _is_kraken_symbol
 
         assert _is_kraken_symbol("MES") is False
         assert _is_kraken_symbol("MGC") is False
@@ -184,13 +184,13 @@ class TestKrakenDetection:
 
     def test_cme_crypto_not_kraken(self):
         """CME crypto futures should NOT be detected as Kraken."""
-        from lib.training.dataset_generator import _is_kraken_symbol
+        from lib.services.training.dataset_generator import _is_kraken_symbol
 
         assert _is_kraken_symbol("MBT") is False
         assert _is_kraken_symbol("MET") is False
 
     def test_case_insensitive(self):
-        from lib.training.dataset_generator import _is_kraken_symbol
+        from lib.services.training.dataset_generator import _is_kraken_symbol
 
         assert _is_kraken_symbol("kraken:xbtusd") is True
         assert _is_kraken_symbol("Kraken:ETHUSD") is True
@@ -419,7 +419,7 @@ class TestFeatureContract:
 class TestKrakenBarLoader:
     """Verify _load_bars_from_kraken produces correct DataFrame shape."""
 
-    @patch("lib.training.dataset_generator.requests")
+    @patch("lib.services.training.dataset_generator.requests")
     def test_load_bars_returns_dataframe(self, mock_requests):
         """Mocked Kraken API returns valid OHLCV → DataFrame with correct columns."""
         import pandas as pd
@@ -447,7 +447,7 @@ class TestKrakenBarLoader:
         fake_response.raise_for_status = MagicMock()
         mock_requests.get.return_value = fake_response
 
-        from lib.training.dataset_generator import _load_bars_from_kraken
+        from lib.services.training.dataset_generator import _load_bars_from_kraken
 
         df = _load_bars_from_kraken("BTC", days=1)
 
@@ -467,7 +467,7 @@ class TestKrakenBarLoader:
         assert df["Open"].dtype in ("float64", "float32")
         assert df["Close"].dtype in ("float64", "float32")
 
-    @patch("lib.training.dataset_generator.requests")
+    @patch("lib.services.training.dataset_generator.requests")
     def test_load_bars_strips_kraken_prefix(self, mock_requests):
         """Internal KRAKEN: prefix should be stripped when calling the API."""
         fake_response = MagicMock()
@@ -479,7 +479,7 @@ class TestKrakenBarLoader:
         fake_response.raise_for_status = MagicMock()
         mock_requests.get.return_value = fake_response
 
-        from lib.training.dataset_generator import _load_bars_from_kraken
+        from lib.services.training.dataset_generator import _load_bars_from_kraken
 
         _load_bars_from_kraken("KRAKEN:ETHUSD", days=1)
 
@@ -490,7 +490,7 @@ class TestKrakenBarLoader:
             pair = params.get("pair", "")
             assert "KRAKEN:" not in pair, f"API pair should not have KRAKEN: prefix, got: {pair}"
 
-    @patch("lib.training.dataset_generator.requests")
+    @patch("lib.services.training.dataset_generator.requests")
     def test_load_bars_handles_api_error(self, mock_requests):
         """Kraken API error should return None gracefully."""
         fake_response = MagicMock()
@@ -502,22 +502,22 @@ class TestKrakenBarLoader:
         fake_response.raise_for_status = MagicMock()
         mock_requests.get.return_value = fake_response
 
-        from lib.training.dataset_generator import _load_bars_from_kraken
+        from lib.services.training.dataset_generator import _load_bars_from_kraken
 
         df = _load_bars_from_kraken("KRAKEN:FAKEUSD", days=1)
         assert df is None
 
-    @patch("lib.training.dataset_generator.requests")
+    @patch("lib.services.training.dataset_generator.requests")
     def test_load_bars_handles_connection_error(self, mock_requests):
         """Network failure should return None, not raise."""
         mock_requests.get.side_effect = Exception("Connection refused")
 
-        from lib.training.dataset_generator import _load_bars_from_kraken
+        from lib.services.training.dataset_generator import _load_bars_from_kraken
 
         df = _load_bars_from_kraken("BTC", days=1)
         assert df is None
 
-    @patch("lib.training.dataset_generator.requests")
+    @patch("lib.services.training.dataset_generator.requests")
     def test_load_bars_deduplicates(self, mock_requests):
         """Duplicate timestamps should be removed."""
         now = int(datetime.now(tz=UTC).timestamp())
@@ -536,7 +536,7 @@ class TestKrakenBarLoader:
         fake_response.raise_for_status = MagicMock()
         mock_requests.get.return_value = fake_response
 
-        from lib.training.dataset_generator import _load_bars_from_kraken
+        from lib.services.training.dataset_generator import _load_bars_from_kraken
 
         df = _load_bars_from_kraken("BTC", days=1)
         assert df is not None
@@ -551,8 +551,8 @@ class TestKrakenBarLoader:
 class TestLoadBarsRouting:
     """Verify load_bars routes Kraken symbols to the Kraken loader."""
 
-    @patch("lib.training.dataset_generator._load_bars_from_kraken")
-    @patch("lib.training.dataset_generator._load_bars_from_db")
+    @patch("lib.services.training.dataset_generator._load_bars_from_kraken")
+    @patch("lib.services.training.dataset_generator._load_bars_from_db")
     def test_btc_routes_to_kraken(self, mock_db, mock_kraken):
         """BTC should attempt Kraken loader, not Massive."""
         import pandas as pd
@@ -563,17 +563,17 @@ class TestLoadBarsRouting:
         )
         mock_db.return_value = None
 
-        from lib.training.dataset_generator import load_bars
+        from lib.services.training.dataset_generator import load_bars
 
         # Patch DataResolver to not interfere
-        with patch("lib.services.data.resolver.DataResolver", side_effect=ImportError):
+        with patch("lib.services.engine.data.resolver.DataResolver", side_effect=ImportError):
             df = load_bars("BTC", source="kraken", days=1)
 
         assert df is not None
         assert mock_kraken.called
 
-    @patch("lib.training.dataset_generator._load_bars_from_kraken")
-    @patch("lib.training.dataset_generator._load_bars_from_db")
+    @patch("lib.services.training.dataset_generator._load_bars_from_kraken")
+    @patch("lib.services.training.dataset_generator._load_bars_from_db")
     def test_kraken_prefix_routes_to_kraken(self, mock_db, mock_kraken):
         """KRAKEN:XBTUSD should route to Kraken loader."""
         import pandas as pd
@@ -584,16 +584,16 @@ class TestLoadBarsRouting:
         )
         mock_db.return_value = None
 
-        from lib.training.dataset_generator import load_bars
+        from lib.services.training.dataset_generator import load_bars
 
-        with patch("lib.services.data.resolver.DataResolver", side_effect=ImportError):
+        with patch("lib.services.engine.data.resolver.DataResolver", side_effect=ImportError):
             df = load_bars("KRAKEN:XBTUSD", source="kraken", days=1)
 
         assert df is not None
         assert mock_kraken.called
 
-    @patch("lib.training.dataset_generator._load_bars_from_massive")
-    @patch("lib.training.dataset_generator._load_bars_from_db")
+    @patch("lib.services.training.dataset_generator._load_bars_from_massive")
+    @patch("lib.services.training.dataset_generator._load_bars_from_db")
     def test_futures_does_not_route_to_kraken(self, mock_db, mock_massive):
         """MES should NOT route to Kraken — should try db → massive → csv."""
         import pandas as pd
@@ -604,9 +604,9 @@ class TestLoadBarsRouting:
         )
         mock_db.return_value = None
 
-        from lib.training.dataset_generator import load_bars
+        from lib.services.training.dataset_generator import load_bars
 
-        with patch("lib.services.data.resolver.DataResolver", side_effect=ImportError):
+        with patch("lib.services.engine.data.resolver.DataResolver", side_effect=ImportError):
             df = load_bars("MES", source="massive", days=1)
 
         assert df is not None

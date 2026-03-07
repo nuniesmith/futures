@@ -641,7 +641,7 @@ def audit_app(tmp_db):
 
     app = FastAPI()
 
-    from lib.services.data.api.audit import router as audit_router
+    from lib.services.engine.data.api.audit import router as audit_router
 
     app.include_router(audit_router, prefix="/audit")
 
@@ -657,7 +657,7 @@ def populated_audit_app(populated_db):
 
     app = FastAPI()
 
-    from lib.services.data.api.audit import router as audit_router
+    from lib.services.engine.data.api.audit import router as audit_router
 
     app.include_router(audit_router, prefix="/audit")
 

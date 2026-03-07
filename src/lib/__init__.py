@@ -31,16 +31,14 @@ All business logic modules live under organised sub-packages:
     from lib.integrations.grok_helper import GrokSession
     from lib.integrations.massive_client import get_massive_provider
 
-    # Training (GPU-only — dataset generation, CNN training, simulation)
-    from lib.training.dataset_generator import generate_dataset, DatasetConfig
-    from lib.training.orb_simulator import simulate_batch, BracketConfig
+Services (engine, data, web, training) are sub-packages:
 
-Services (data-service, engine, web, trainer) are sub-packages:
-
-    from lib.services.data.main import app
     from lib.services.engine.focus import compute_daily_focus
+    from lib.services.engine.data.main import app
     from lib.services.web.main import app
-    from lib.training.trainer_server import app  # GPU training server
+    from lib.services.training.trainer_server import app
+    from lib.services.training.dataset_generator import generate_dataset, DatasetConfig
+    from lib.services.training.orb_simulator import simulate_batch, BracketConfig
 
 Install in editable mode for development:
 

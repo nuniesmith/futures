@@ -101,8 +101,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 # at import time, binding those names into its own __dict__.  We patch
 # them per-test via the _patch_cache autouse fixture below — no sys.modules
 # manipulation needed, and no bleed to other test files.
-import lib.services.data.api.positions as _positions_mod  # noqa: E402
-from lib.services.data.api.positions import router as positions_router  # noqa: E402
+import lib.services.engine.data.api.positions as _positions_mod  # noqa: E402
+from lib.services.engine.data.api.positions import router as positions_router  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Test app factory
@@ -185,13 +185,13 @@ def _patch_cache():
        any other module that does a fresh `from lib.core.cache import ...`
        inside a function body.
 
-    3. lib.services.data.api.risk.evaluate_position_risk /
+    3. lib.services.engine.data.api.risk.evaluate_position_risk /
        check_trade_entry_risk — imported inside function bodies in
        positions.py; patched on the real risk module so the stub is
        picked up regardless of import order.
     """
     import lib.core.cache as _cache_real
-    import lib.services.data.api.risk as _risk_mod_real
+    import lib.services.engine.data.api.risk as _risk_mod_real
 
     with (
         patch.object(_positions_mod, "cache_get", side_effect=_fake_cache_get),
@@ -247,7 +247,7 @@ class TestFlattenAll:
         )
         assert resp.status_code == 503
 
-    @patch("lib.services.data.api.positions.httpx")
+    @patch("lib.services.engine.data.api.positions.httpx")
     def test_flatten_forwards_to_bridge(self, mock_httpx, live_client):
         """When Bridge is alive, flatten should proxy POST to Bridge /flatten."""
         mock_response = MagicMock()
@@ -280,7 +280,7 @@ class TestFlattenAll:
         body = call_args[1].get("json", {})
         assert body.get("reason") == "dashboard_panic"
 
-    @patch("lib.services.data.api.positions.httpx")
+    @patch("lib.services.engine.data.api.positions.httpx")
     def test_flatten_uses_port_from_heartbeat(self, mock_httpx, client):
         """Bridge listener port comes from the heartbeat, not a hardcoded default."""
         _inject_heartbeat(port=9999)
@@ -305,7 +305,7 @@ class TestFlattenAll:
         call_url = mock_client_instance.post.call_args[0][0]
         assert ":9999" in call_url
 
-    @patch("lib.services.data.api.positions.httpx")
+    @patch("lib.services.engine.data.api.positions.httpx")
     def test_flatten_default_reason(self, mock_httpx, live_client):
         """Omitting `reason` defaults to 'dashboard'."""
         mock_response = MagicMock()
@@ -340,7 +340,7 @@ class TestExecuteSignal:
         )
         assert resp.status_code == 503
 
-    @patch("lib.services.data.api.positions.httpx")
+    @patch("lib.services.engine.data.api.positions.httpx")
     def test_execute_basic_market_long(self, mock_httpx, live_client):
         """A simple long market order should be forwarded to Bridge."""
         mock_response = MagicMock()
@@ -382,7 +382,7 @@ class TestExecuteSignal:
         assert payload["quantity"] == 2
         assert payload["asset"] == "MES"
 
-    @patch("lib.services.data.api.positions.httpx")
+    @patch("lib.services.engine.data.api.positions.httpx")
     def test_execute_short_with_all_fields(self, mock_httpx, live_client):
         """A short entry with SL, TP, TP2, limit price."""
         mock_response = MagicMock()
@@ -428,10 +428,10 @@ class TestExecuteSignal:
         )
         assert resp.status_code == 422  # Pydantic validation error
 
-    @patch("lib.services.data.api.positions.httpx")
+    @patch("lib.services.engine.data.api.positions.httpx")
     def test_execute_with_risk_check_failure(self, mock_httpx, live_client):
         """When pre-flight risk check denies entry, signal should be rejected."""
-        import lib.services.data.api.risk as _risk_mod_real
+        import lib.services.engine.data.api.risk as _risk_mod_real
 
         # Override the risk check to deny
         original_check = _risk_mod_real.check_trade_entry_risk
@@ -457,10 +457,10 @@ class TestExecuteSignal:
         finally:
             _risk_mod_real.check_trade_entry_risk = original_check
 
-    @patch("lib.services.data.api.positions.httpx")
+    @patch("lib.services.engine.data.api.positions.httpx")
     def test_execute_skip_risk_check(self, mock_httpx, live_client):
         """When enforce_risk=False, risk check should be skipped."""
-        import lib.services.data.api.risk as _risk_mod_real
+        import lib.services.engine.data.api.risk as _risk_mod_real
 
         original_check = _risk_mod_real.check_trade_entry_risk
 
@@ -513,7 +513,7 @@ class TestCancelOrders:
         resp = client.post("/positions/cancel_orders")
         assert resp.status_code == 503
 
-    @patch("lib.services.data.api.positions.httpx")
+    @patch("lib.services.engine.data.api.positions.httpx")
     def test_cancel_forwards_to_bridge(self, mock_httpx, live_client):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -765,7 +765,7 @@ class TestHeartbeat:
 class TestBridgeStatus:
     """Verify the GET /positions/bridge_status endpoint."""
 
-    @patch("lib.services.data.api.positions.httpx")
+    @patch("lib.services.engine.data.api.positions.httpx")
     def test_status_when_bridge_alive(self, mock_httpx, live_client):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -845,7 +845,7 @@ class TestGetPositions:
 class TestBridgeConnectionErrors:
     """Verify graceful handling of Bridge communication failures."""
 
-    @patch("lib.services.data.api.positions.httpx")
+    @patch("lib.services.engine.data.api.positions.httpx")
     def test_flatten_bridge_unreachable(self, mock_httpx, live_client):
         """When Bridge is unreachable, should return 503."""
         import httpx as real_httpx
@@ -864,7 +864,7 @@ class TestBridgeConnectionErrors:
         )
         assert resp.status_code == 503
 
-    @patch("lib.services.data.api.positions.httpx")
+    @patch("lib.services.engine.data.api.positions.httpx")
     def test_execute_bridge_timeout(self, mock_httpx, live_client):
         """When Bridge times out, should return 504."""
         import httpx as real_httpx
@@ -1060,7 +1060,7 @@ class TestDashboardBridgeContext:
         _inject_heartbeat(age_seconds=5)
 
         # Import the dashboard helper
-        from lib.services.data.api.dashboard import _get_bridge_info
+        from lib.services.engine.data.api.dashboard import _get_bridge_info
 
         info = _get_bridge_info()
         assert info["connected"] is True
@@ -1071,7 +1071,7 @@ class TestDashboardBridgeContext:
         """_get_bridge_info should return connected=False with no heartbeat."""
         _clear()
 
-        from lib.services.data.api.dashboard import _get_bridge_info
+        from lib.services.engine.data.api.dashboard import _get_bridge_info
 
         info = _get_bridge_info()
         assert info["connected"] is False
@@ -1080,7 +1080,7 @@ class TestDashboardBridgeContext:
         """_get_bridge_info should return connected=False when heartbeat > 60s old."""
         _inject_heartbeat(age_seconds=90)
 
-        from lib.services.data.api.dashboard import _get_bridge_info
+        from lib.services.engine.data.api.dashboard import _get_bridge_info
 
         info = _get_bridge_info()
         assert info["connected"] is False

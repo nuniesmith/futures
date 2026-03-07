@@ -110,4 +110,4 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["lib"]
+known-first-party = ["lib", "entrypoints"]

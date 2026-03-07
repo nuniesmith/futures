@@ -274,7 +274,7 @@ Training runs entirely within this repo — no external training service is need
 
 ```bash
 docker compose --profile training run --rm trainer \
-    python -m lib.training.trainer_server
+    python -m lib.services.training.trainer_server
 ```
 
 ### Model Files

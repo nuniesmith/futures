@@ -585,7 +585,7 @@ Key classes and functions:
 
 ```bash
 # 1. Generate dataset with all 13 types, all sessions, 10 assets
-python -m lib.training.dataset_generator generate \
+python -m lib.services.training.dataset_generator generate \
   --symbols MGC MCL MES MNQ M6E SIL M2K M6B MBT ZN \
   --session all \
   --breakout-type all \

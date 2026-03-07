@@ -1,5 +1,5 @@
 # ==============================================================================
-# deploy_nt8.ps1  —  NinjaTrader 8 Deploy Script
+# deploy_nt8.ps1  --  NinjaTrader 8 Deploy Script
 # ==============================================================================
 #
 # Pulls the latest CS source files, OnnxRuntime DLLs, and the champion ONNX
@@ -7,12 +7,12 @@
 # local NinjaTrader 8 installation.
 #
 # Source layout in repo:
-#   src/ninja/BreakoutStrategy.cs        → Strategies\
-#   src/ninja/RubyIndicator.cs           → Indicators\
-#   src/ninja/addons/Bridge.cs           → AddOns\
-#   src/ninja/addons/DataPreloader.cs    → AddOns\
-#   src/ninja/dll/*.dll                  → bin\Custom\  (root, beside .csproj)
-#   models/breakout_cnn_best.onnx        → bin\Custom\Models\
+#   src/ninja/BreakoutStrategy.cs        -> Strategies\
+#   src/ninja/RubyIndicator.cs           -> Indicators\
+#   src/ninja/addons/Bridge.cs           -> AddOns\
+#   src/ninja/addons/DataPreloader.cs    -> AddOns\
+#   src/ninja/dll/*.dll                  -> bin\Custom\  (root, beside .csproj)
+#   models/breakout_cnn_best.onnx        -> bin\Custom\Models\
 #
 # What the script does:
 #   1. Resolves the NT8 Custom directory (auto-detected or via -NtCustomDir)
@@ -86,12 +86,12 @@ $RepoSlug   = "$RepoOwner/$RepoName"
 $RawBase    = "https://raw.githubusercontent.com/$RepoSlug/$Branch"
 $LfsApiUrl  = "https://github.com/$RepoSlug.git/info/lfs/objects/batch"
 
-# OnnxRuntime version — must match src/ninja/dll/OnnxFetch.csproj
+# OnnxRuntime version -- must match src/ninja/dll/OnnxFetch.csproj
 $OnnxVersion = "1.24.2"
 
-# Files to deploy: each entry is [RepoPath, DestSubdir]
-#   RepoPath   — path inside the repo (relative to repo root)
-#   DestSubdir — subdirectory inside bin\Custom\ (empty string = root)
+# Files to deploy: each entry has RepoPath and DestSubdir keys.
+#   RepoPath   -- path inside the repo (relative to repo root)
+#   DestSubdir -- subdirectory inside bin\Custom\ (empty string = root)
 $SourceFiles = @(
     @{ Repo = "src/ninja/BreakoutStrategy.cs";     Dest = "Strategies" },
     @{ Repo = "src/ninja/RubyIndicator.cs";        Dest = "Indicators" },
@@ -110,7 +110,7 @@ $DllFiles = @(
 )
 
 # DLL names that need <Reference> entries in NinjaTrader.Custom.csproj
-# (managed DLLs only — native DLLs are loaded at runtime, not referenced)
+# (managed DLLs only -- native DLLs are loaded at runtime, not referenced)
 $ManagedDlls = @(
     "Microsoft.ML.OnnxRuntime",
     "System.Buffers",
@@ -135,12 +135,12 @@ function Write-Dim   ([string]$msg) { Write-Host "      $msg" -ForegroundColor D
 function Write-Banner {
     Write-Host ""
     Write-Host "  ============================================================" -ForegroundColor DarkCyan
-    Write-Host "   NinjaTrader 8 Deploy  —  github.com/$RepoSlug"              -ForegroundColor Cyan
-    Write-Host "   Branch : $Branch"                                           -ForegroundColor DarkCyan
+    Write-Host "   NinjaTrader 8 Deploy  --  github.com/$RepoSlug"              -ForegroundColor Cyan
+    Write-Host "   Branch : $Branch"                                             -ForegroundColor DarkCyan
     if ($DryRun) {
-    Write-Host "   Mode   : DRY RUN (no files will be written)"               -ForegroundColor Yellow
+        Write-Host "   Mode   : DRY RUN (no files will be written)"              -ForegroundColor Yellow
     } else {
-    Write-Host "   Mode   : LIVE"                                              -ForegroundColor DarkCyan
+        Write-Host "   Mode   : LIVE"                                            -ForegroundColor DarkCyan
     }
     Write-Host "  ============================================================" -ForegroundColor DarkCyan
     Write-Host ""
@@ -215,20 +215,20 @@ function Get-RepoFile([string]$repoPath, [string]$destPath) {
     }
 
     if ($LocalRepo) {
-        # ── Local repo copy ────────────────────────────────────────────────
+        # -- Local repo copy --------------------------------------------------
         $src = Join-Path $LocalRepo ($repoPath -replace "/", "\")
         if (-not (Test-Path $src)) {
             throw "Local file not found: $src"
         }
         if ($DryRun) {
-            Write-Dim "  [dry] copy $src  →  $destPath"
+            Write-Dim "  [dry] copy $src  ->  $destPath"
         } else {
             Copy-Item $src $destPath -Force
         }
         return
     }
 
-    # ── Download from GitHub raw ───────────────────────────────────────────
+    # -- Download from GitHub raw --------------------------------------------
     $url = "$RawBase/$repoPath"
     $tmp = "$destPath.tmp"
 
@@ -236,7 +236,7 @@ function Get-RepoFile([string]$repoPath, [string]$destPath) {
     if ($GitHubToken) { $dlHeaders["Authorization"] = "token $GitHubToken" }
 
     if ($DryRun) {
-        Write-Dim "  [dry] download $url  →  $destPath"
+        Write-Dim "  [dry] download $url  ->  $destPath"
         return
     }
 
@@ -287,7 +287,7 @@ function Get-RepoFile([string]$repoPath, [string]$destPath) {
 function Update-CsprojReferences([string]$csprojPath) {
     if (-not (Test-Path $csprojPath)) {
         Write-Warn "NinjaTrader.Custom.csproj not found at: $csprojPath"
-        Write-Warn "Skipping csproj patch — add <Reference> entries manually if needed"
+        Write-Warn "Skipping csproj patch -- add <Reference> entries manually if needed"
         return
     }
 
@@ -345,7 +345,7 @@ function Update-CsprojReferences([string]$csprojPath) {
         $xml.Save($csprojPath)
         Write-Ok "NinjaTrader.Custom.csproj patched"
     } elseif (-not $changed) {
-        Write-Ok "NinjaTrader.Custom.csproj — all references already present"
+        Write-Ok "NinjaTrader.Custom.csproj -- all references already present"
     } else {
         Write-Dim "  [dry] would save patched csproj"
     }
@@ -359,7 +359,7 @@ function Assert-NtNotRunning {
     $nt = Get-Process -Name "NinjaTrader" -ErrorAction SilentlyContinue
     if ($nt) {
         Write-Fail "NinjaTrader 8 is currently running."
-        Write-Fail "Please close it before deploying — NT8 holds a file lock on the OnnxRuntime DLLs."
+        Write-Fail "Please close it before deploying -- NT8 holds a file lock on the OnnxRuntime DLLs."
         Write-Host ""
         exit 1
     }
@@ -371,12 +371,12 @@ function Assert-NtNotRunning {
 
 Write-Banner
 
-# ── Check NT8 is not running ──────────────────────────────────────────────────
+# -- Check NT8 is not running -------------------------------------------------
 if (-not $DryRun) {
     Assert-NtNotRunning
 }
 
-# ── Resolve NT8 Custom dir ────────────────────────────────────────────────────
+# -- Resolve NT8 Custom dir ---------------------------------------------------
 if (-not $NtCustomDir) {
     $NtCustomDir = Find-NtCustomDir
 }
@@ -405,7 +405,7 @@ if ($LocalRepo) {
 }
 Write-Host ""
 
-# ── Temp download directory ───────────────────────────────────────────────────
+# -- Temp download directory --------------------------------------------------
 $TmpDir = Join-Path $env:TEMP "deploy_nt8_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
 if (-not $DryRun) {
     New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
@@ -415,7 +415,7 @@ $exitCode = 0
 
 try {
 
-    # ── Step 1: CS source files ───────────────────────────────────────────────
+    # -- Step 1: CS source files ----------------------------------------------
     if (-not $NoSource) {
         Write-Host "  [1/4] Deploying CS source files..." -ForegroundColor Cyan
 
@@ -427,7 +427,7 @@ try {
             $destPath  = Join-Path $destDir $fileName
             $tmpPath   = Join-Path $TmpDir $fileName
 
-            Write-Step "$fileName  →  $destSub\"
+            Write-Step "$fileName  ->  $destSub\"
 
             Get-RepoFile $repoPath $tmpPath
 
@@ -444,7 +444,7 @@ try {
         Write-Host ""
     }
 
-    # ── Step 2: OnnxRuntime DLLs ──────────────────────────────────────────────
+    # -- Step 2: OnnxRuntime DLLs ---------------------------------------------
     if (-not $NoDlls) {
         Write-Host "  [2/4] Deploying OnnxRuntime DLLs (v$OnnxVersion)..." -ForegroundColor Cyan
 
@@ -453,7 +453,7 @@ try {
             $destPath = Join-Path $NtCustomDir $fileName
             $tmpPath  = Join-Path $TmpDir $fileName
 
-            Write-Step "$fileName  →  bin\Custom\"
+            Write-Step "$fileName  ->  bin\Custom\"
 
             Get-RepoFile $repoPath $tmpPath
 
@@ -476,7 +476,7 @@ try {
         Write-Host ""
     }
 
-    # ── Step 3: ONNX model ────────────────────────────────────────────────────
+    # -- Step 3: ONNX model ---------------------------------------------------
     if (-not $NoModel) {
         Write-Host "  [3/4] Deploying ONNX model..." -ForegroundColor Cyan
 
@@ -484,7 +484,7 @@ try {
         $destPath  = Join-Path $modelsDir $ModelDestName
         $tmpPath   = Join-Path $TmpDir $ModelDestName
 
-        Write-Step "$ModelDestName  →  bin\Custom\Models\"
+        Write-Step "$ModelDestName  ->  bin\Custom\Models\"
 
         Get-RepoFile $ModelRepoPath $tmpPath
 
@@ -506,7 +506,7 @@ try {
         Write-Host ""
     }
 
-    # ── Step 4: Patch NinjaTrader.Custom.csproj ───────────────────────────────
+    # -- Step 4: Patch NinjaTrader.Custom.csproj ------------------------------
     if (-not $NoPatch) {
         Write-Host "  [4/4] Patching NinjaTrader.Custom.csproj..." -ForegroundColor Cyan
 
@@ -518,10 +518,10 @@ try {
         Write-Host ""
     }
 
-    # ── Summary ───────────────────────────────────────────────────────────────
+    # -- Summary --------------------------------------------------------------
     Write-Host "  ============================================================" -ForegroundColor DarkGreen
     if ($DryRun) {
-        Write-Host "   Dry run complete — no files were written." -ForegroundColor Yellow
+        Write-Host "   Dry run complete -- no files were written." -ForegroundColor Yellow
     } else {
         Write-Host "   Deploy complete!" -ForegroundColor Green
         Write-Host ""
@@ -530,14 +530,14 @@ try {
         Write-Host "   Next steps:" -ForegroundColor DarkGray
         Write-Host "     1. Open NinjaTrader 8" -ForegroundColor DarkGray
         Write-Host "     2. Tools > Edit NinjaScript > Strategy > BreakoutStrategy" -ForegroundColor DarkGray
-        Write-Host "     3. Compile (F5) — should show 0 errors" -ForegroundColor DarkGray
+        Write-Host "     3. Compile (F5) -- should show 0 errors" -ForegroundColor DarkGray
         Write-Host "     4. Enable EnableCnnFilter = true and set CCnnModelPath" -ForegroundColor DarkGray
         Write-Host "        to: bin\Custom\Models\$ModelDestName" -ForegroundColor DarkGray
     }
     Write-Host "  ============================================================" -ForegroundColor DarkGreen
     Write-Host ""
 
-    # ── Optional: launch NT8 ──────────────────────────────────────────────────
+    # -- Optional: launch NT8 -------------------------------------------------
     if ($Launch -and -not $DryRun) {
         $ntExe = @(
             "C:\Program Files\NinjaTrader 8\bin64\NinjaTrader.exe",

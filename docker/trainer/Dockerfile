@@ -120,5 +120,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # The server stays alive between runs and accepts POST /train requests.
 #
 # Override to run the one-shot pipeline directly:
-#   docker compose run --rm trainer python -m lib.training.trainer_server
-CMD ["python", "-m", "lib.training.trainer_server"]
+#   docker compose run --rm trainer python -m lib.services.training.trainer_server
+CMD ["python", "-m", "lib.services.training.trainer_server"]

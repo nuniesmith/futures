@@ -83,7 +83,7 @@ services:
     # Engine — FastAPI REST + SSE API (port 8100) + background computation worker
     #
     # Runs two processes via docker/engine/entrypoint.sh:
-    #   1. uvicorn  — serves REST API and SSE (lib.services.data.main)
+    #   1. uvicorn  — serves REST API and SSE (lib.services.engine.data.main)
     #   2. engine   — DashboardEngine, optimization, backtesting,
     #                 daily focus computation, session-aware scheduling
     #
@@ -283,8 +283,8 @@ services:
         #
         # Override to run a one-shot training run directly:
         #   docker compose --profile training run --rm trainer \
-        #       python -m lib.training.trainer_server
-        command: ["python", "-m", "lib.training.trainer_server"]
+        #       python -m lib.services.training.trainer_server
+        command: ["python", "-m", "lib.services.training.trainer_server"]
 
         healthcheck:
             test:
