@@ -1,0 +1,15 @@
+{
+  "audit_type": "todo-analyze",
+  "repo": "nuniesmith/futures",
+  "analyzed_count": 0,
+  "skipped_count": 0,
+  "total_todos_found": 0,
+  "errors": [],
+  "results": [],
+  "scan_summary": {
+    "total": 0,
+    "high_priority": 0,
+    "medium_priority": 0,
+    "low_priority": 0
+  }
+}
