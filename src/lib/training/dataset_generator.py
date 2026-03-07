@@ -57,6 +57,14 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
+# requests is optional (only needed for _load_bars_from_kraken).
+# Importing it at module level makes it patchable in tests via
+# `patch("lib.training.dataset_generator.requests", ...)`.
+try:
+    import requests
+except ImportError:
+    requests = None  # type: ignore[assignment]
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -574,9 +582,7 @@ def _load_bars_from_kraken(symbol: str, days: int = 90) -> pd.DataFrame | None:
         DataFrame with DatetimeIndex (UTC) and columns
         ``[Open, High, Low, Close, Volume]``, or ``None`` on failure.
     """
-    try:
-        import requests
-    except ImportError:
+    if requests is None:
         logger.debug("requests not installed — cannot load Kraken bars")
         return None
 

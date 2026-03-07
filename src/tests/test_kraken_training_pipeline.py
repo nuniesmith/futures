@@ -20,10 +20,9 @@ Run with:
 """
 
 import json
-import math
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -426,15 +425,15 @@ class TestKrakenBarLoader:
         import pandas as pd
 
         # Build fake Kraken OHLC response
-        now = int(datetime.now(tz=timezone.utc).timestamp())
+        now = int(datetime.now(tz=UTC).timestamp())
         candles = []
         for i in range(100):
             ts = now - (100 - i) * 60
             o = 95000.0 + i * 10
             h = o + 50
-            l = o - 30
+            lo = o - 30
             c = o + 20
-            candles.append([ts, str(o), str(h), str(l), str(c), "0", str(i * 0.5), 10])
+            candles.append([ts, str(o), str(h), str(lo), str(c), "0", str(i * 0.5), 10])
 
         fake_response = MagicMock()
         fake_response.status_code = 200
@@ -521,7 +520,7 @@ class TestKrakenBarLoader:
     @patch("lib.training.dataset_generator.requests")
     def test_load_bars_deduplicates(self, mock_requests):
         """Duplicate timestamps should be removed."""
-        now = int(datetime.now(tz=timezone.utc).timestamp())
+        now = int(datetime.now(tz=UTC).timestamp())
         ts = now - 120
         candles = [
             [ts, "95000", "95050", "94970", "95020", "0", "1.5", 10],
@@ -560,14 +559,14 @@ class TestLoadBarsRouting:
 
         mock_kraken.return_value = pd.DataFrame(
             {"Open": [100], "High": [101], "Low": [99], "Close": [100.5], "Volume": [10]},
-            index=pd.DatetimeIndex([datetime.now(tz=timezone.utc)], name="datetime"),
+            index=pd.DatetimeIndex([datetime.now(tz=UTC)], name="datetime"),
         )
         mock_db.return_value = None
 
         from lib.training.dataset_generator import load_bars
 
         # Patch DataResolver to not interfere
-        with patch("lib.training.dataset_generator.DataResolver", side_effect=ImportError):
+        with patch("lib.services.data.resolver.DataResolver", side_effect=ImportError):
             df = load_bars("BTC", source="kraken", days=1)
 
         assert df is not None
@@ -581,13 +580,13 @@ class TestLoadBarsRouting:
 
         mock_kraken.return_value = pd.DataFrame(
             {"Open": [100], "High": [101], "Low": [99], "Close": [100.5], "Volume": [10]},
-            index=pd.DatetimeIndex([datetime.now(tz=timezone.utc)], name="datetime"),
+            index=pd.DatetimeIndex([datetime.now(tz=UTC)], name="datetime"),
         )
         mock_db.return_value = None
 
         from lib.training.dataset_generator import load_bars
 
-        with patch("lib.training.dataset_generator.DataResolver", side_effect=ImportError):
+        with patch("lib.services.data.resolver.DataResolver", side_effect=ImportError):
             df = load_bars("KRAKEN:XBTUSD", source="kraken", days=1)
 
         assert df is not None
@@ -601,13 +600,13 @@ class TestLoadBarsRouting:
 
         mock_massive.return_value = pd.DataFrame(
             {"Open": [5900], "High": [5910], "Low": [5890], "Close": [5905], "Volume": [100]},
-            index=pd.DatetimeIndex([datetime.now(tz=timezone.utc)], name="datetime"),
+            index=pd.DatetimeIndex([datetime.now(tz=UTC)], name="datetime"),
         )
         mock_db.return_value = None
 
         from lib.training.dataset_generator import load_bars
 
-        with patch("lib.training.dataset_generator.DataResolver", side_effect=ImportError):
+        with patch("lib.services.data.resolver.DataResolver", side_effect=ImportError):
             df = load_bars("MES", source="massive", days=1)
 
         assert df is not None
@@ -685,14 +684,14 @@ class TestChartRenderingCompatibility:
         """If mplfinance renderer is available, verify it accepts crypto bars."""
         df = self._make_crypto_bars()
         try:
-            from lib.analysis.chart_renderer import RenderConfig, render_ruby_snapshot
-
             # Just verify the function can be called without crashing (don't save)
             # We pass save_path=None or a temp path to avoid writing files
             import tempfile
 
+            from lib.analysis.chart_renderer import render_ruby_snapshot
+
             with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmp:
-                result = render_ruby_snapshot(
+                render_ruby_snapshot(
                     bars=df,
                     symbol="BTC",
                     orb_high=df["High"].iloc[10],

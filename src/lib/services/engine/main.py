@@ -427,7 +427,7 @@ def _handle_grok_live_update(engine) -> None:
     """
     logger.info("▶ Grok live update (compact)...")
     try:
-        api_key = os.getenv("GROK_API_KEY", "")
+        api_key = os.getenv("XAI_API_KEY", "")
 
         # Try local compact format from focus data first (fast, free)
         from lib.core.cache import cache_get
@@ -449,7 +449,7 @@ def _handle_grok_live_update(engine) -> None:
         elif api_key:
             logger.debug("Grok API key present but no focus data for compact update")
         else:
-            logger.debug("No GROK_API_KEY — using local compact format only")
+            logger.debug("No XAI_API_KEY — using local compact format only")
 
         # Publish compact update to Redis for SSE grok-update event
         if compact_text:

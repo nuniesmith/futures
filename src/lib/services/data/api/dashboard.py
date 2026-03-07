@@ -2599,7 +2599,9 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 <nav class="co-nav">
     <a class="co-nav-brand" href="/">📈 Co-Pilot</a>
     <a class="co-nav-tab active" href="/">📊 Dashboard</a>
+    <a class="co-nav-tab" href="/orb-history">📅 ORB History</a>
     <a class="co-nav-tab" href="/trainer">🧠 Trainer</a>
+    <a class="co-nav-tab" href="/journal/page">📓 Journal</a>
     <a class="co-nav-tab" href="/settings">⚙️ Settings</a>
     <div class="co-nav-right">
         <span id="nav-sse-dot" style="font-size:10px;color:#52525b" title="SSE connection">●</span>
@@ -4374,3 +4376,227 @@ def get_no_trade():
             content=_render_no_trade_banner(str(focus_data.get("no_trade_reason", "Low-conviction day")))
         )
     return HTMLResponse(content='<div id="no-trade-banner"></div>')
+
+
+# ---------------------------------------------------------------------------
+# ORB History — standalone full-page view
+# ---------------------------------------------------------------------------
+
+_ORB_HISTORY_PAGE_HTML = """\
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+<title>ORB Signal History — Futures Co-Pilot</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📅</text></svg>"/>
+<script>(function(){{var t=localStorage.getItem('theme');if(t==='light')document.documentElement.classList.remove('dark');else document.documentElement.classList.add('dark');}})();</script>
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+<style>
+/* ── Reset & theme ── */
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+:root{{
+  --bg:#f4f4f5;--bg-panel:rgba(255,255,255,0.85);--bg-inner:rgba(244,244,245,0.6);
+  --bg-input:#e4e4e7;--border:#d4d4d8;--border-s:#e4e4e7;
+  --text:#18181b;--text2:#3f3f46;--muted:#71717a;--faint:#a1a1aa;
+}}
+.dark{{
+  --bg:#09090b;--bg-panel:rgba(24,24,27,0.7);--bg-inner:rgba(39,39,42,0.5);
+  --bg-input:#27272a;--border:#3f3f46;--border-s:#27272a;
+  --text:#f4f4f5;--text2:#d4d4d8;--muted:#71717a;--faint:#52525b;
+}}
+body{{font-family:ui-monospace,'Cascadia Code','Fira Code',monospace;background:var(--bg);color:var(--text);min-height:100vh;font-size:13px}}
+
+/* ── Nav bar ── */
+.nav{{display:flex;align-items:center;gap:0;padding:0 1rem;background:var(--bg-panel);
+     border-bottom:1px solid var(--border);height:44px;position:sticky;top:0;z-index:100;backdrop-filter:blur(10px)}}
+.nav-brand{{font-weight:700;font-size:0.9rem;color:var(--text);text-decoration:none;margin-right:1.5rem;letter-spacing:-0.02em}}
+.nav-tab{{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:6px;
+         text-decoration:none;color:var(--muted);font-size:0.78rem;font-weight:500;transition:all .15s;white-space:nowrap}}
+.nav-tab:hover{{background:var(--bg-inner);color:var(--text)}}
+.nav-tab.active{{background:var(--bg-input);color:var(--text);font-weight:600}}
+.nav-right{{margin-left:auto;display:flex;align-items:center;gap:8px}}
+.theme-btn{{background:none;border:1px solid var(--border);border-radius:6px;padding:4px 8px;
+           color:var(--muted);cursor:pointer;font-size:0.75rem;transition:all .15s;font-family:inherit}}
+.theme-btn:hover{{color:var(--text);border-color:var(--text)}}
+
+/* ── Layout ── */
+.page{{padding:1rem;max-width:1600px;margin:0 auto}}
+
+/* ── Tailwind-compatible utility shims for the HTMX fragment ── */
+.t-panel{{background:var(--bg-panel)}}
+.t-panel-inner{{background:var(--bg-inner)}}
+.t-border{{border-color:var(--border)}}
+.t-border-subtle{{border-color:var(--border-s)}}
+.t-text{{color:var(--text)}}
+.t-text-secondary{{color:var(--text2)}}
+.t-text-muted{{color:var(--muted)}}
+.t-text-faint{{color:var(--faint)}}
+.border{{border-width:1px;border-style:solid}}
+.rounded-lg{{border-radius:10px}}
+.rounded{{border-radius:6px}}
+.p-4{{padding:1rem}}
+.p-2{{padding:0.5rem}}
+.p-1.5{{padding:0.375rem}}
+.px-1.5{{padding-left:0.375rem;padding-right:0.375rem}}
+.py-1{{padding-top:0.25rem;padding-bottom:0.25rem}}
+.py-6{{padding-top:1.5rem;padding-bottom:1.5rem}}
+.mb-1.5{{margin-bottom:0.375rem}}
+.mb-2{{margin-bottom:0.5rem}}
+.mb-3{{margin-bottom:0.75rem}}
+.mt-1.5{{margin-top:0.375rem}}
+.flex{{display:flex}}
+.items-center{{align-items:center}}
+.justify-between{{justify-content:space-between}}
+.gap-1{{gap:0.25rem}}
+.gap-2{{gap:0.5rem}}
+.grid{{display:grid}}
+.grid-cols-4{{grid-template-columns:repeat(4,1fr)}}
+.text-center{{text-align:center}}
+.text-right{{text-align:right}}
+.text-left{{text-align:left}}
+.font-bold{{font-weight:700}}
+.font-semibold{{font-weight:600}}
+.font-mono{{font-family:ui-monospace,'Cascadia Code',monospace}}
+.uppercase{{text-transform:uppercase}}
+.tracking-wide{{letter-spacing:.05em}}
+.tracking-wider{{letter-spacing:.08em}}
+.whitespace-nowrap{{white-space:nowrap}}
+.overflow-x-auto{{overflow-x:auto}}
+.overflow-y-auto{{overflow-y:auto}}
+.max-h-72{{max-height:18rem}}
+.w-full{{width:100%}}
+.min-w-max{{min-width:max-content}}
+.pb-1.5{{padding-bottom:0.375rem}}
+.pl-2{{padding-left:0.5rem}}
+.ml-auto{{margin-left:auto}}
+.text-sm{{font-size:0.875rem}}
+.text-xs{{font-size:0.75rem}}
+.text-lg{{font-size:1.125rem}}
+.text-\\[10px\\]{{font-size:10px}}
+.text-\\[11px\\]{{font-size:11px}}
+.text-\\[9px\\]{{font-size:9px}}
+.text-\\[8px\\]{{font-size:8px}}
+.border-b{{border-bottom-width:1px;border-bottom-style:solid;border-bottom-color:var(--border)}}
+.border-b-2{{border-bottom-width:2px;border-bottom-style:solid}}
+.border-blue-500{{border-bottom-color:#3b82f6}}
+.cursor-pointer{{cursor:pointer}}
+.rounded{{border-radius:4px}}
+.text-green-400{{color:#4ade80}}
+.text-red-400{{color:#f87171}}
+.text-yellow-400{{color:#fbbf24}}
+.text-blue-400{{color:#60a5fa}}
+.text-emerald-400{{color:#34d399}}
+.text-indigo-400{{color:#818cf8}}
+.text-cyan-400{{color:#22d3ee}}
+.text-orange-400{{color:#fb923c}}
+.text-orange-300{{color:#fdba74}}
+.text-red-300{{color:#fca5a5}}
+.text-purple-400{{color:#c084fc}}
+.text-green-500{{color:#22c55e}}
+.text-red-500{{color:#ef4444}}
+.flex-wrap{{flex-wrap:wrap}}
+table{{width:100%;border-collapse:collapse}}
+th{{padding:4px 6px;text-align:left;border-bottom:1px solid var(--border);
+    font-weight:600;text-transform:uppercase;font-size:0.62rem;letter-spacing:.05em;color:var(--faint)}}
+td{{padding:4px 6px;border-bottom:1px solid var(--border-s)}}
+tr:last-child td{{border-bottom:none}}
+tr:hover td{{background:var(--bg-inner)}}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{{width:5px;height:5px}}
+::-webkit-scrollbar-track{{background:transparent}}
+::-webkit-scrollbar-thumb{{background:var(--border);border-radius:3px}}
+</style>
+</head>
+<body>
+
+<!-- Nav bar -->
+<nav class="nav">
+  <a class="nav-brand" href="/">📈 Co-Pilot</a>
+  <a class="nav-tab" href="/">📊 Dashboard</a>
+  <a class="nav-tab active" href="/orb-history">📅 ORB History</a>
+  <a class="nav-tab" href="/trainer">🧠 Trainer</a>
+  <a class="nav-tab" href="/journal/page">📓 Journal</a>
+  <a class="nav-tab" href="/settings">⚙️ Settings</a>
+  <div class="nav-right">
+    <button class="theme-btn" onclick="toggleTheme()">☀/🌙</button>
+  </div>
+</nav>
+
+<div class="page">
+
+  <!-- Days selector -->
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem">
+    <span style="font-size:0.75rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em">Lookback:</span>
+    <div style="display:flex;gap:4px" id="days-pills">
+      <a style="padding:3px 12px;border-radius:9999px;font-size:0.74rem;cursor:pointer;text-decoration:none;
+                background:var(--bg-input);border:1px solid var(--border);color:var(--text)"
+         hx-get="/api/orb/history/html?days=1" hx-target="#orb-history-container" hx-swap="innerHTML">1d</a>
+      <a style="padding:3px 12px;border-radius:9999px;font-size:0.74rem;cursor:pointer;text-decoration:none;
+                background:var(--bg-input);border:1px solid var(--border);color:var(--text)"
+         hx-get="/api/orb/history/html?days=3" hx-target="#orb-history-container" hx-swap="innerHTML">3d</a>
+      <a style="padding:3px 12px;border-radius:9999px;font-size:0.74rem;cursor:pointer;text-decoration:none;
+                background:#2563eb;border:1px solid #1d4ed8;color:#fff"
+         hx-get="/api/orb/history/html?days=7" hx-target="#orb-history-container" hx-swap="innerHTML">7d</a>
+      <a style="padding:3px 12px;border-radius:9999px;font-size:0.74rem;cursor:pointer;text-decoration:none;
+                background:var(--bg-input);border:1px solid var(--border);color:var(--text)"
+         hx-get="/api/orb/history/html?days=14" hx-target="#orb-history-container" hx-swap="innerHTML">14d</a>
+      <a style="padding:3px 12px;border-radius:9999px;font-size:0.74rem;cursor:pointer;text-decoration:none;
+                background:var(--bg-input);border:1px solid var(--border);color:var(--text)"
+         hx-get="/api/orb/history/html?days=30" hx-target="#orb-history-container" hx-swap="innerHTML">30d</a>
+    </div>
+  </div>
+
+  <!-- ORB history fragment — loaded on page reveal -->
+  <div id="orb-history-container"
+       hx-get="/api/orb/history/html?days=7"
+       hx-trigger="load"
+       hx-swap="innerHTML">
+    <div style="padding:2rem;text-align:center;color:var(--muted);font-size:0.8rem">Loading signal history…</div>
+  </div>
+
+</div>
+
+<script>
+function toggleTheme() {
+  var html = document.documentElement;
+  if (html.classList.contains('dark')) {
+    html.classList.remove('dark');
+    localStorage.setItem('theme', 'light');
+  } else {
+    html.classList.add('dark');
+    localStorage.setItem('theme', 'dark');
+  }
+}
+
+// Highlight the active days pill after HTMX swaps
+document.body.addEventListener('htmx:afterRequest', function(evt) {
+  var url = evt.detail.requestConfig && evt.detail.requestConfig.path;
+  if (!url) return;
+  var m = url.match(/days=(\\d+)/);
+  if (!m) return;
+  var days = m[1];
+  document.querySelectorAll('#days-pills a').forEach(function(a) {
+    var aMatch = (a.getAttribute('hx-get') || '').match(/days=(\\d+)/);
+    if (aMatch && aMatch[1] === days) {
+      a.style.background = '#2563eb';
+      a.style.borderColor = '#1d4ed8';
+      a.style.color = '#fff';
+    } else {
+      a.style.background = 'var(--bg-input)';
+      a.style.borderColor = 'var(--border)';
+      a.style.color = 'var(--text)';
+    }
+  });
+});
+</script>
+</body>
+</html>
+"""
+
+
+@router.get("/orb-history", response_class=HTMLResponse)
+def orb_history_page():
+    """Serve the standalone ORB Signal History full-page view."""
+    return HTMLResponse(content=_ORB_HISTORY_PAGE_HTML)

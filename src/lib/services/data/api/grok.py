@@ -96,7 +96,7 @@ def _get_engine():
 
 def _get_api_key() -> str:
     """Return the xAI / Grok API key from environment."""
-    key = os.environ.get("GROK_API_KEY", os.environ.get("XAI_API_KEY", ""))
+    key = os.environ.get("XAI_API_KEY", os.environ.get("XAI_API_KEY", ""))
     return key
 
 
@@ -484,7 +484,7 @@ async def sse_grok_briefing(request: Request):
     if not api_key:
         raise HTTPException(
             status_code=503,
-            detail="GROK_API_KEY / XAI_API_KEY environment variable not set",
+            detail="XAI_API_KEY / XAI_API_KEY environment variable not set",
         )
 
     engine = _get_engine()
@@ -524,7 +524,7 @@ async def sse_grok_update(request: Request, update_number: int = 1):
     if not api_key:
         raise HTTPException(
             status_code=503,
-            detail="GROK_API_KEY / XAI_API_KEY environment variable not set",
+            detail="XAI_API_KEY / XAI_API_KEY environment variable not set",
         )
 
     engine = _get_engine()
@@ -564,7 +564,7 @@ async def trigger_briefing():
     """
     api_key = _get_api_key()
     if not api_key:
-        raise HTTPException(status_code=503, detail="GROK_API_KEY not set")
+        raise HTTPException(status_code=503, detail="XAI_API_KEY not set")
 
     engine = _get_engine()
     context = _build_context(engine)
@@ -600,7 +600,7 @@ async def trigger_live_update(update_number: int = 1):
     """
     api_key = _get_api_key()
     if not api_key:
-        raise HTTPException(status_code=503, detail="GROK_API_KEY not set")
+        raise HTTPException(status_code=503, detail="XAI_API_KEY not set")
 
     engine = _get_engine()
     context = _build_context(engine)

@@ -587,6 +587,18 @@ async def proxy_openapi(request: Request):
     return await _proxy_request(request, "/openapi.json")
 
 
+@app.get("/orb-history", response_class=HTMLResponse)
+async def proxy_orb_history(request: Request):
+    """Proxy the standalone ORB Signal History page from the data service."""
+    return await _proxy_request(request, "/orb-history")
+
+
+@app.get("/journal/page", response_class=HTMLResponse)
+async def proxy_journal_page(request: Request):
+    """Proxy the standalone Journal full-page view from the data service."""
+    return await _proxy_request(request, "/journal/page")
+
+
 # ---------------------------------------------------------------------------
 # Trainer proxy — forwards /trainer/* to the DATA service (port 8000)
 #

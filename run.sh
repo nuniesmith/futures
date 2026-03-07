@@ -7,12 +7,21 @@ set -euo pipefail
 #
 # Usage:
 #   ./run.sh              Build, test, lint, then start Docker Compose
+#   ./run.sh all          Start everything: core services + trainer + monitoring
 #   ./run.sh --local      Run locally with a Python virtual environment
-#   ./run.sh --down       Stop Docker Compose services
+#   ./run.sh --down       Stop Docker Compose services (all profiles)
 #   ./run.sh --test       Run tests + lint only (no compose)
+#   ./run.sh --trainer    Include GPU trainer service (training profile)
 #   ./run.sh --sync-models Force re-pull CNN models from rb repo
 #   ./run.sh --monitoring Include Prometheus + Grafana
 #   ./run.sh --help       Show this help message
+#
+# Examples:
+#   ./run.sh                        # Core services only (engine + web + db)
+#   ./run.sh --trainer              # Core + GPU trainer
+#   ./run.sh --monitoring           # Core + Prometheus + Grafana
+#   ./run.sh --trainer --monitoring # Core + trainer + monitoring
+#   ./run.sh all                    # Everything (core + trainer + monitoring)
 #
 # =============================================================================
 
@@ -42,15 +51,27 @@ gen_secret() {
 }
 
 usage() {
-    echo "Usage: ./run.sh [--local | --down | --test | --sync-models | --monitoring | --help]"
+    echo "Usage: ./run.sh [command] [flags]"
     echo ""
-    echo "  (no args)       Build, test, lint, then start Docker Compose"
+    echo "Commands:"
+    echo "  (no args)       Build, test, lint, then start core Docker services"
+    echo "  all             Start everything: core + trainer (GPU) + monitoring"
+    echo ""
+    echo "Flags:"
     echo "  --local         Run locally with a Python virtual environment"
-    echo "  --down          Stop Docker Compose services"
+    echo "  --down          Stop all Docker Compose services (all profiles)"
     echo "  --test          Run tests + lint only (skip Docker build)"
+    echo "  --trainer       Include GPU trainer service (training profile)"
     echo "  --sync-models   Force re-pull CNN models from rb repo (even if present)"
     echo "  --monitoring    Include Prometheus + Grafana (monitoring profile)"
     echo "  --help          Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  ./run.sh                        # Core services only"
+    echo "  ./run.sh --trainer              # Core + GPU trainer"
+    echo "  ./run.sh --monitoring           # Core + Prometheus/Grafana"
+    echo "  ./run.sh --trainer --monitoring # Core + trainer + monitoring"
+    echo "  ./run.sh all                    # Everything (equivalent to --trainer --monitoring)"
 }
 
 # ---------------------------------------------------------------------------
@@ -141,6 +162,7 @@ EOF
     fi
 }
 
+
 # ---------------------------------------------------------------------------
 # Model sync — pull CNN model from rb repo if missing
 # ---------------------------------------------------------------------------
@@ -219,17 +241,42 @@ get_tailscale_ip() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# Build the docker compose profile args string
+# ---------------------------------------------------------------------------
+
+compose_profile_args() {
+    local trainer="$1"
+    local monitoring="$2"
+    local args=""
+    if [ "$trainer" = "true" ]; then
+        args="$args --profile training"
+    fi
+    if [ "$monitoring" = "true" ]; then
+        args="$args --profile monitoring"
+    fi
+    echo "$args"
+}
 
 # ---------------------------------------------------------------------------
 # Docker Compose
 # ---------------------------------------------------------------------------
 
 run_docker() {
+    local trainer="$1"
+    local monitoring="$2"
+
     log "Ensuring CNN model files are present ..."
     ensure_models
     echo ""
 
+    local profile_args
+    profile_args=$(compose_profile_args "$trainer" "$monitoring")
+
     log "Building and starting Docker Compose services ..."
+    if [ -n "$profile_args" ]; then
+        log "Active profiles:$([ "$trainer" = "true" ] && echo " training")$([ "$monitoring" = "true" ] && echo " monitoring")"
+    fi
 
     # Resolve Tailscale IP (prefer live lookup, fall back to hardcoded)
     local ts_ip
@@ -237,7 +284,7 @@ run_docker() {
     ts_ip="${ts_ip:-$TAILSCALE_IP}"
 
     # shellcheck disable=SC2086
-    docker compose up --build -d
+    docker compose $profile_args up --build -d
 
     echo ""
     ok "Services are running:"
@@ -245,8 +292,13 @@ run_docker() {
     echo "    Data API:    http://${ts_ip}:8100"
     echo "    Postgres:    ${ts_ip}:5433"
     echo "    Redis:       ${ts_ip}:6380"
-    echo "    Prometheus:  http://${ts_ip}:9095"
-    echo "    Grafana:     http://${ts_ip}:3010"
+    if [ "$trainer" = "true" ]; then
+        echo "    Trainer:     http://${ts_ip}:8200"
+    fi
+    if [ "$monitoring" = "true" ]; then
+        echo "    Prometheus:  http://${ts_ip}:9095"
+        echo "    Grafana:     http://${ts_ip}:3010"
+    fi
     echo ""
     echo "  Logs:  docker compose logs -f"
     echo "  Stop:  ./run.sh --down"
@@ -277,6 +329,7 @@ run_local() {
 # ---------------------------------------------------------------------------
 
 MONITORING="false"
+TRAINER="false"
 
 # Parse flags
 POSITIONAL=()
@@ -284,6 +337,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --monitoring)
             MONITORING="true"
+            shift
+            ;;
+        --trainer)
+            TRAINER="true"
             shift
             ;;
         --local)
@@ -306,6 +363,10 @@ while [[ $# -gt 0 ]]; do
             usage
             exit 0
             ;;
+        all)
+            POSITIONAL+=("all")
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
             usage
@@ -323,8 +384,8 @@ case "$ACTION" in
         run_local
         ;;
     down)
-        log "Stopping Docker Compose services ..."
-        docker compose --profile monitoring down
+        log "Stopping all Docker Compose services ..."
+        docker compose --profile training --profile monitoring down
         ok "All services stopped"
         ;;
     test)
@@ -336,8 +397,8 @@ case "$ACTION" in
     sync-models)
         force_sync_models
         ;;
-    docker)
-        # Full pipeline: venv → env → test → lint → build → up
+    all)
+        # Full pipeline + every profile: core + trainer + monitoring
         ensure_venv
         ensure_env
         echo ""
@@ -345,6 +406,18 @@ case "$ACTION" in
         echo ""
         run_lint
         echo ""
-        run_docker
+        run_docker "true" "true"
+        ;;
+    docker)
+        # Full pipeline: venv → env → test → lint → build → up
+        # Profiles (trainer / monitoring) activated by flags
+        ensure_venv
+        ensure_env
+        echo ""
+        run_tests
+        echo ""
+        run_lint
+        echo ""
+        run_docker "$TRAINER" "$MONITORING"
         ;;
 esac

@@ -18,6 +18,7 @@ Run with:
     python -m pytest src/tests/test_bridge_trading.py -v
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -41,7 +42,7 @@ _EST = ZoneInfo("America/New_York")
 # Stub out heavy dependencies that are not needed for these tests
 # ---------------------------------------------------------------------------
 
-# Redis / cache stubs
+# Redis / cache stubs — one shared dict for the whole file
 _fake_cache: dict[str, Any] = {}
 
 
@@ -53,31 +54,26 @@ def _fake_cache_set(key, value, ttl=0):
     _fake_cache[key] = value
 
 
-def _fake_cache_key(*parts):
-    return ":".join(str(p) for p in parts)
+def _fake_cache_key(*parts) -> str:
+    """Mirror the real _cache_key: 'futures:' + md5(joined parts)."""
+    raw = ":".join(str(p) for p in parts)
+    return "futures:" + hashlib.md5(raw.encode()).hexdigest()
 
 
 def _fake_flush_all():
     _fake_cache.clear()
 
 
-# Patch cache module before importing the router
-_cache_mod = MagicMock()
-_cache_mod.cache_get = _fake_cache_get
-_cache_mod.cache_set = _fake_cache_set
-_cache_mod._cache_key = _fake_cache_key
-_cache_mod.flush_all = _fake_flush_all
-_cache_mod.clear_cached_optimization = MagicMock()
-_cache_mod.REDIS_AVAILABLE = True
-sys.modules.setdefault("lib.core.cache", _cache_mod)
+# ---------------------------------------------------------------------------
+# Stub out models and risk modules before importing the router.
+# These are only set via setdefault — if already present (from a prior test
+# file that imported the real versions) we patch the relevant attributes
+# directly on the existing module objects instead.
+# ---------------------------------------------------------------------------
 
-# Stub out models (ASSETS dict)
 _models_mod = MagicMock()
 _models_mod.ASSETS = {"MGC": "GCZ5", "MES": "MESZ5", "MNQ": "MNQZ5"}
 sys.modules.setdefault("lib.core.models", _models_mod)
-
-# Stub out risk module
-_risk_mod = MagicMock()
 
 
 def _fake_evaluate_risk(positions):
@@ -95,16 +91,18 @@ def _fake_check_entry_risk(symbol="", side="", size=1):
     return (True, "", {})
 
 
-_risk_mod.evaluate_position_risk = _fake_evaluate_risk
-_risk_mod.check_trade_entry_risk = _fake_check_entry_risk
-sys.modules.setdefault("lib.services.data.api.risk", _risk_mod)
+# Now import FastAPI test machinery — these must come after the sys.path
+# setup above, hence the noqa: E402 suppression.
+from fastapi import FastAPI  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
-# Now import FastAPI test machinery
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
-# Import the positions router
-from lib.services.data.api.positions import router as positions_router
+# Import the positions module.  positions.py does:
+#   from lib.core.cache import cache_get, cache_set, ...
+# at import time, binding those names into its own __dict__.  We patch
+# them per-test via the _patch_cache autouse fixture below — no sys.modules
+# manipulation needed, and no bleed to other test files.
+import lib.services.data.api.positions as _positions_mod  # noqa: E402
+from lib.services.data.api.positions import router as positions_router  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Test app factory
@@ -170,10 +168,42 @@ def _inject_positions(positions: list[dict]):
 
 
 @pytest.fixture(autouse=True)
-def _clean_cache():
-    _clear()
-    yield
-    _clear()
+def _patch_cache():
+    """Patch cache_get / cache_set for every test, then restore afterwards.
+
+    This is fully isolated — it uses unittest.mock.patch to swap names
+    directly in module __dict__s and guarantees teardown even on failure.
+    No sys.modules manipulation means zero bleed to other test files.
+
+    Three layers are patched so that every code path in positions.py and
+    dashboard.py hits the fake in-memory dict:
+
+    1. _positions_mod.cache_get / cache_set  — the names bound at import
+       time in positions.py via `from lib.core.cache import ...`.
+
+    2. lib.core.cache.cache_get / _cache_key  — used by dashboard.py and
+       any other module that does a fresh `from lib.core.cache import ...`
+       inside a function body.
+
+    3. lib.services.data.api.risk.evaluate_position_risk /
+       check_trade_entry_risk — imported inside function bodies in
+       positions.py; patched on the real risk module so the stub is
+       picked up regardless of import order.
+    """
+    import lib.core.cache as _cache_real
+    import lib.services.data.api.risk as _risk_mod_real
+
+    with (
+        patch.object(_positions_mod, "cache_get", side_effect=_fake_cache_get),
+        patch.object(_positions_mod, "cache_set", side_effect=_fake_cache_set),
+        patch.object(_cache_real, "cache_get", side_effect=_fake_cache_get),
+        patch.object(_cache_real, "_cache_key", side_effect=_fake_cache_key),
+        patch.object(_risk_mod_real, "evaluate_position_risk", side_effect=_fake_evaluate_risk),
+        patch.object(_risk_mod_real, "check_trade_entry_risk", side_effect=_fake_check_entry_risk),
+    ):
+        _fake_cache.clear()
+        yield
+        _fake_cache.clear()
 
 
 @pytest.fixture
@@ -401,13 +431,15 @@ class TestExecuteSignal:
     @patch("lib.services.data.api.positions.httpx")
     def test_execute_with_risk_check_failure(self, mock_httpx, live_client):
         """When pre-flight risk check denies entry, signal should be rejected."""
+        import lib.services.data.api.risk as _risk_mod_real
+
         # Override the risk check to deny
-        original_check = _risk_mod.check_trade_entry_risk
+        original_check = _risk_mod_real.check_trade_entry_risk
 
         def _deny_entry(symbol="", side="", size=1):
             return (False, "daily_loss_limit_reached", {"daily_pnl": -2100})
 
-        _risk_mod.check_trade_entry_risk = _deny_entry
+        _risk_mod_real.check_trade_entry_risk = _deny_entry
 
         try:
             resp = live_client.post(
@@ -423,17 +455,19 @@ class TestExecuteSignal:
             assert data["status"] == "rejected"
             assert "risk" in data.get("reason", "").lower()
         finally:
-            _risk_mod.check_trade_entry_risk = original_check
+            _risk_mod_real.check_trade_entry_risk = original_check
 
     @patch("lib.services.data.api.positions.httpx")
     def test_execute_skip_risk_check(self, mock_httpx, live_client):
         """When enforce_risk=False, risk check should be skipped."""
-        original_check = _risk_mod.check_trade_entry_risk
+        import lib.services.data.api.risk as _risk_mod_real
+
+        original_check = _risk_mod_real.check_trade_entry_risk
 
         def _deny_entry(symbol="", side="", size=1):
             return (False, "should_not_reach", {})
 
-        _risk_mod.check_trade_entry_risk = _deny_entry
+        _risk_mod_real.check_trade_entry_risk = _deny_entry
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -464,7 +498,7 @@ class TestExecuteSignal:
             # Should succeed because risk check was skipped
             assert data["status"] == "queued"
         finally:
-            _risk_mod.check_trade_entry_risk = original_check
+            _risk_mod_real.check_trade_entry_risk = original_check
 
 
 # ═══════════════════════════════════════════════════════════════════════════

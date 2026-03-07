@@ -19,7 +19,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 
 logger = logging.getLogger("api.settings")
 
@@ -320,7 +320,9 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
 <nav class="nav">
   <a class="nav-brand" href="/">📈 Co-Pilot</a>
   <a class="nav-tab" href="/">📊 Dashboard</a>
+  <a class="nav-tab" href="/orb-history">📅 ORB History</a>
   <a class="nav-tab" href="/trainer">🧠 Trainer</a>
+  <a class="nav-tab" href="/journal/page">📓 Journal</a>
   <a class="nav-tab active" href="/settings">⚙️ Settings</a>
   <div class="nav-right">
     <button class="theme-btn" onclick="toggleTheme()">☀/🌙</button>
@@ -940,7 +942,7 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
               <span class="status-val" style="font-size:0.68rem">Kraken private endpoints</span>
             </div>
             <div class="status-row">
-              <span class="status-key">GROK_API_KEY</span>
+              <span class="status-key">XAI_API_KEY</span>
               <span class="status-val" style="font-size:0.68rem">xAI Grok AI analyst</span>
             </div>
             <div class="status-row">
@@ -948,8 +950,8 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
               <span class="status-val" style="font-size:0.68rem">CI/CD deploy notifications</span>
             </div>
             <div class="status-row" style="margin-bottom:0">
-              <span class="status-key">POSTGRES_DSN</span>
-              <span class="status-val" style="font-size:0.68rem">Historical bar storage</span>
+              <span class="status-key">DATABASE_URL</span>
+              <span class="status-val" style="font-size:0.68rem">Historical bar storage (Postgres)</span>
             </div>
           </div>
         </div>
@@ -1285,11 +1287,18 @@ async function probeAllServices() {
       const dot = svc.ok ? 'dot-green' : 'dot-red';
       const latency = svc.latency_ms > 0 ? svc.latency_ms + 'ms' : '—';
       const errHtml = svc.error ? '<div class="svc-detail" style="color:#f87171">' + svc.error + '</div>' : '';
+      // Show engine state badge or latency badge
+      let statusBadge = '<span style="font-size:0.7rem;color:var(--muted)">' + latency + '</span>';
+      if (svc.detail) {
+        const detailColor = svc.ok ? '#4ade80' : '#fbbf24';
+        statusBadge = '<span style="font-size:0.68rem;color:' + detailColor + ';font-weight:600">' + svc.detail + '</span>' +
+                      '<span style="font-size:0.68rem;color:var(--muted);margin-left:4px">' + latency + '</span>';
+      }
       html += '<div class="svc-card">' +
         '<div class="svc-header">' +
           '<span class="svc-name">' + svc.name + '</span>' +
           '<span style="display:flex;align-items:center;gap:6px"><span class="dot ' + dot + '"></span>' +
-          '<span style="font-size:0.7rem;color:var(--muted)">' + latency + '</span></span>' +
+          statusBadge + '</span>' +
         '</div>' +
         '<div class="svc-url">' + svc.url + '</div>' +
         errHtml +
@@ -1597,75 +1606,113 @@ async def update_service_config(body: dict):
 
 @router.get("/settings/services/probe")
 async def probe_services():
-    """Probe all configured services for health/connectivity."""
+    """Probe all configured services for health/connectivity.
+
+    Local services (Redis, Postgres, Engine) are checked in-process using
+    the same health functions the /health endpoint uses — no external HTTP
+    round-trips needed and no risk of firewall / NAT false negatives.
+
+    External services (Trainer, NT8 Bridge) are probed via HTTP because
+    they run in separate processes / machines.
+    """
+    import time
+
+    from lib.services.data.api.health import _check_postgres, _check_redis
+
     overrides = _load_persisted_settings()
     svc = overrides.get("services", {})
 
-    data_url = svc.get("data_service_url", os.getenv("DATA_SERVICE_URL", "http://100.100.84.48:8000"))
     trainer_url = svc.get("trainer_service_url", os.getenv("TRAINER_SERVICE_URL", "http://100.100.84.48:8200"))
     bridge_host = svc.get("bridge_host", os.getenv("NT_BRIDGE_HOST", "100.127.182.112"))
     bridge_port = svc.get("bridge_port", int(os.getenv("NT_BRIDGE_PORT", "5680")))
 
+    # Displayed URL for the engine — whatever the operator configured, for
+    # reference only (we don't HTTP-probe it since we *are* it).
+    data_url = svc.get("data_service_url", os.getenv("DATA_SERVICE_URL", "http://100.100.84.48:8000"))
+
     services = []
 
-    # Probe data service
-    result = _probe_service(data_url)
-    result["name"] = "Data Service (Engine)"
-    result["url"] = data_url
-    services.append(result)
+    # ── Engine / Data Service — in-process check ─────────────────────────
+    # We are the data service, so probe ourselves via the engine singleton
+    # and the health helpers rather than making an HTTP call to our own IP.
+    engine_status = "unknown"
+    engine_latency = -1.0
+    engine_error = ""
+    try:
+        from lib.trading.engine import get_engine
 
-    # Probe trainer
+        t0 = time.monotonic()
+        eng = get_engine()
+        if eng is not None:
+            st = eng.get_status()
+            engine_status = st.get("engine", "unknown")
+            engine_latency = round((time.monotonic() - t0) * 1000, 1)
+            if engine_status not in ("running", "idle"):
+                engine_error = f"engine state: {engine_status}"
+        else:
+            engine_error = "engine not initialised"
+    except Exception as exc:
+        engine_error = str(exc)[:120]
+
+    engine_ok = engine_status in ("running", "idle") and not engine_error
+    services.append(
+        {
+            "name": "Engine (Data Service)",
+            "url": data_url,
+            "ok": engine_ok,
+            "latency_ms": engine_latency,
+            "status": 200 if engine_ok else 0,
+            "error": engine_error,
+            "detail": engine_status,
+        }
+    )
+
+    # ── Trainer — external HTTP probe ────────────────────────────────────
     result = _probe_service(trainer_url)
     result["name"] = "Trainer Service (GPU)"
     result["url"] = trainer_url
     services.append(result)
 
-    # Probe NT8 Bridge
+    # ── NT8 Bridge — external HTTP probe ─────────────────────────────────
     bridge_url = f"http://{bridge_host}:{bridge_port}"
     result = _probe_service(bridge_url, timeout=3.0)
     result["name"] = "NT8 Bridge"
     result["url"] = bridge_url
     services.append(result)
 
-    # Probe Redis
-    redis_ok = False
-    try:
-        from lib.core.cache import REDIS_AVAILABLE
-
-        redis_ok = REDIS_AVAILABLE
-    except Exception:
-        pass
+    # ── Redis — in-process check (ping) ──────────────────────────────────
+    t0 = time.monotonic()
+    redis_result = _check_redis()
+    redis_latency = round((time.monotonic() - t0) * 1000, 1)
+    redis_ok = redis_result.get("connected", False)
+    _redis_url = os.getenv("REDIS_URL", os.getenv("REDIS_HOST", "redis://redis:6379/0"))
     services.append(
         {
             "name": "Redis",
-            "url": os.getenv("REDIS_URL", "redis://localhost:6379"),
+            "url": _redis_url,
             "ok": redis_ok,
-            "latency_ms": -1,
-            "error": "" if redis_ok else "Not available or not connected",
+            "latency_ms": redis_latency if redis_ok else -1,
+            "status": 200 if redis_ok else 0,
+            "error": redis_result.get("error", "") if not redis_ok else "",
         }
     )
 
-    # Probe Postgres
-    pg_ok = False
-    try:
-        from lib.core.cache import cache_get
-
-        # Simple check — if we can import cache that means basic infra is up
-        # For a real check we'd query Postgres, but this gives us a signal
-        pg_dsn = os.getenv("POSTGRES_DSN", "")
-        if pg_dsn:
-            pg_ok = True  # DSN is configured
-    except Exception:
-        pass
+    # ── PostgreSQL — in-process check (SELECT 1) ─────────────────────────
+    t0 = time.monotonic()
+    pg_result = _check_postgres()
+    pg_latency = round((time.monotonic() - t0) * 1000, 1)
+    pg_ok = pg_result.get("connected", False)
+    _db_url = os.getenv("DATABASE_URL", "")
+    # Strip credentials from the display URL  (user:pass@host/db → host/db)
+    _db_display = _db_url.split("@")[-1] if "@" in _db_url else (_db_url or "(not configured)")
     services.append(
         {
             "name": "PostgreSQL",
-            "url": os.getenv("POSTGRES_DSN", "(not configured)").split("@")[-1]
-            if os.getenv("POSTGRES_DSN")
-            else "(not configured)",
+            "url": _db_display,
             "ok": pg_ok,
-            "latency_ms": -1,
-            "error": "" if pg_ok else "DSN not configured",
+            "latency_ms": pg_latency if pg_ok else -1,
+            "status": 200 if pg_ok else 0,
+            "error": pg_result.get("error", "") if not pg_ok else "",
         }
     )
 
@@ -1855,9 +1902,9 @@ async def get_api_key_status():
         {"name": "MASSIVE_API_KEY", "configured": bool(os.getenv("MASSIVE_API_KEY", ""))},
         {"name": "KRAKEN_API_KEY", "configured": bool(os.getenv("KRAKEN_API_KEY", ""))},
         {"name": "KRAKEN_API_SECRET", "configured": bool(os.getenv("KRAKEN_API_SECRET", ""))},
-        {"name": "GROK_API_KEY", "configured": bool(os.getenv("GROK_API_KEY", ""))},
+        {"name": "XAI_API_KEY", "configured": bool(os.getenv("XAI_API_KEY", ""))},
         {"name": "DISCORD_WEBHOOK_URL", "configured": bool(os.getenv("DISCORD_WEBHOOK_URL", ""))},
-        {"name": "POSTGRES_DSN", "configured": bool(os.getenv("POSTGRES_DSN", ""))},
+        {"name": "DATABASE_URL", "configured": os.getenv("DATABASE_URL", "").startswith("postgresql")},
         {"name": "REDIS_URL", "configured": bool(os.getenv("REDIS_URL", ""))},
     ]
     return {"keys": keys}

@@ -116,9 +116,10 @@ def _get_bridge_status_from_cache() -> dict[str, Any] | None:
 def _probe_bridge_status() -> dict[str, Any] | None:
     """Actively probe the Bridge /status endpoint over the network.
 
-    Uses ``NT_BRIDGE_HOST`` / ``NT_BRIDGE_PORT`` env vars (same ones
-    passed to the Docker container via docker-compose.yml).  Returns
-    the parsed JSON dict on success, or None on any failure.
+    Resolves host/port in priority order:
+      1. Persisted Redis settings (saved via Settings → Services UI)
+      2. ``NT_BRIDGE_HOST`` / ``NT_BRIDGE_PORT`` environment variables
+      3. Hard-coded defaults (100.127.182.112 / 5680)
 
     The result is also written back to the Redis cache key
     ``futures:bridge_status:latest`` (TTL 30s) so that subsequent
@@ -127,8 +128,29 @@ def _probe_bridge_status() -> dict[str, Any] | None:
     import os
     import urllib.request
 
-    host = os.getenv("NT_BRIDGE_HOST", "")
-    port = os.getenv("NT_BRIDGE_PORT", "5680")
+    # --- resolve host/port from persisted settings first ---
+    host = ""
+    port = ""
+    try:
+        from lib.core.cache import cache_get
+
+        raw = cache_get("settings:overrides")
+        if raw:
+            import json as _json
+
+            data = _json.loads(raw)
+            svc = data.get("services", {})
+            host = svc.get("bridge_host", "")
+            port = str(svc.get("bridge_port", "")) if svc.get("bridge_port") else ""
+    except Exception:
+        pass
+
+    # Fall back to env vars, then hard-coded defaults
+    if not host:
+        host = os.getenv("NT_BRIDGE_HOST", "100.127.182.112")
+    if not port:
+        port = os.getenv("NT_BRIDGE_PORT", "5680")
+
     if not host:
         return None
 
@@ -169,21 +191,35 @@ def _get_positions_data() -> dict[str, Any] | None:
 
 
 def _cnn_model_on_disk() -> bool:
-    """Return True if the ONNX model file exists at the repo-relative path.
+    """Return True if a usable CNN model file exists on disk.
 
-    Checks ``models/orb_breakout_cnn.onnx`` relative to the project root
-    (two levels up from this file).  Also accepts an override via the
-    ``CNN_MODEL_PATH`` environment variable so staging/prod can point
-    elsewhere.
+    Checks (in priority order):
+      1. ``CNN_MODEL_PATH`` env var override (explicit path to any model file)
+      2. ``models/breakout_cnn_best.pt``  — champion PyTorch checkpoint
+         (written by the trainer after every successful promotion)
+      3. ``models/orb_breakout_cnn.onnx`` — exported ONNX model
+         (only present after an explicit ONNX export step)
+
+    The .pt file is the primary indicator because the engine hot-reloads
+    it directly; the ONNX is optional and only used by NinjaTrader.
     """
     import os
 
     override = os.getenv("CNN_MODEL_PATH", "")
     if override:
         return os.path.isfile(override)
+
     here = os.path.dirname(__file__)
-    model_path = os.path.normpath(os.path.join(here, "..", "..", "..", "..", "models", "orb_breakout_cnn.onnx"))
-    return os.path.isfile(model_path)
+    root = os.path.normpath(os.path.join(here, "..", "..", "..", "..", ".."))
+
+    # Primary: champion .pt checkpoint (always present after training)
+    pt_path = os.path.join(root, "models", "breakout_cnn_best.pt")
+    if os.path.isfile(pt_path):
+        return True
+
+    # Secondary: exported ONNX (present after explicit export)
+    onnx_path = os.path.join(root, "models", "breakout_cnn_best.onnx")
+    return os.path.isfile(onnx_path)
 
 
 def _compute_health() -> dict[str, Any]:

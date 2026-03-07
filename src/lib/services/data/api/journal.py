@@ -1,6 +1,16 @@
 """
 Journal API router — daily P&L journal endpoints.
 
+Endpoints:
+    GET /journal/html         — HTMX-swappable fragment (used by the dashboard panel)
+    GET /journal/page         — Standalone full-page view with dark theme + nav bar
+    GET /journal/entries      — JSON list of recent journal entries
+    GET /journal/stats        — JSON aggregated statistics
+    GET /journal/today        — JSON today's entry (if it exists)
+    GET /journal/tags         — JSON all unique tags with usage counts
+    POST /journal/save        — Save / upsert a daily journal entry
+    PUT  /journal/entry/{date} — Update fields on an existing entry
+
 Provides endpoints for saving end-of-day journal entries,
 retrieving journal history, computing journal statistics,
 and an improved HTMX-powered UI with inline editing and tag filtering.
@@ -673,6 +683,130 @@ def get_journal_html(
         return HTMLResponse(content=html)
     except Exception as exc:
         return HTMLResponse(content=f'<div style="color:#ef4444;font-size:10px;padding:8px">Journal error: {exc}</div>')
+
+
+# ---------------------------------------------------------------------------
+# Standalone full-page journal view
+# ---------------------------------------------------------------------------
+
+_JOURNAL_PAGE_SHELL = """\
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+<title>Trade Journal — Futures Co-Pilot</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📓</text></svg>"/>
+<script>(function(){{var t=localStorage.getItem('theme');if(t==='light')document.documentElement.classList.remove('dark');else document.documentElement.classList.add('dark');}})();</script>
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+<style>
+/* ── Reset & theme ── */
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+:root{{
+  --bg:#f4f4f5;--bg-panel:rgba(255,255,255,0.92);--bg-inner:rgba(244,244,245,0.7);
+  --bg-input:#e4e4e7;--border:#d4d4d8;--border-s:#e4e4e7;
+  --text:#18181b;--text2:#3f3f46;--muted:#71717a;--faint:#a1a1aa;
+  --text-secondary:#3f3f46;--text-muted:#71717a;--text-faint:#a1a1aa;
+  --border-panel:#d4d4d8;--border-subtle:#e4e4e7;
+}}
+.dark{{
+  --bg:#09090b;--bg-panel:rgba(24,24,27,0.85);--bg-inner:rgba(39,39,42,0.6);
+  --bg-input:#27272a;--border:#3f3f46;--border-s:#27272a;
+  --text:#f4f4f5;--text2:#d4d4d8;--muted:#71717a;--faint:#52525b;
+  --text-secondary:#d4d4d8;--text-muted:#71717a;--text-faint:#52525b;
+  --border-panel:#3f3f46;--border-subtle:#27272a;
+}}
+body{{font-family:ui-monospace,'Cascadia Code','Fira Code',monospace;
+      background:var(--bg);color:var(--text);min-height:100vh;font-size:13px}}
+
+/* ── Nav bar ── */
+.nav{{display:flex;align-items:center;gap:0;padding:0 1rem;background:var(--bg-panel);
+     border-bottom:1px solid var(--border);height:44px;position:sticky;top:0;z-index:100;
+     backdrop-filter:blur(10px)}}
+.nav-brand{{font-weight:700;font-size:0.9rem;color:var(--text);text-decoration:none;
+           margin-right:1.5rem;letter-spacing:-0.02em}}
+.nav-tab{{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:6px;
+         text-decoration:none;color:var(--muted);font-size:0.78rem;font-weight:500;
+         transition:all .15s;white-space:nowrap}}
+.nav-tab:hover{{background:var(--bg-inner);color:var(--text)}}
+.nav-tab.active{{background:var(--bg-input);color:var(--text);font-weight:600}}
+.nav-right{{margin-left:auto;display:flex;align-items:center;gap:8px}}
+.theme-btn{{background:none;border:1px solid var(--border);border-radius:6px;padding:4px 8px;
+           color:var(--muted);cursor:pointer;font-size:0.75rem;transition:all .15s;font-family:inherit}}
+.theme-btn:hover{{color:var(--text);border-color:var(--text)}}
+
+/* ── Page layout ── */
+.page{{padding:1.25rem;max-width:1200px;margin:0 auto}}
+
+/* ── Card wrapper ── */
+.journal-card{{background:var(--bg-panel);border:1px solid var(--border);border-radius:12px;
+               padding:1.25rem;min-height:calc(100vh - 90px)}}
+
+/* ── Expose CSS vars that the journal fragment uses ── */
+/* (the fragment uses inline var() references so these are inherited) */
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{{width:5px;height:5px}}
+::-webkit-scrollbar-track{{background:transparent}}
+::-webkit-scrollbar-thumb{{background:var(--border);border-radius:3px}}
+</style>
+</head>
+<body>
+
+<!-- Nav bar -->
+<nav class="nav">
+  <a class="nav-brand" href="/">&#x1F4C8; Co-Pilot</a>
+  <a class="nav-tab" href="/">&#x1F4CA; Dashboard</a>
+  <a class="nav-tab" href="/orb-history">&#x1F4C5; ORB History</a>
+  <a class="nav-tab" href="/trainer">&#x1F9E0; Trainer</a>
+  <a class="nav-tab active" href="/journal/page">&#x1F4D3; Journal</a>
+  <a class="nav-tab" href="/settings">&#x2699;&#xFE0F; Settings</a>
+  <div class="nav-right">
+    <button class="theme-btn" onclick="toggleTheme()">&#x2600;/&#x1F319;</button>
+  </div>
+</nav>
+
+<div class="page">
+  <div class="journal-card">
+    <!-- Journal fragment — loads immediately on page load -->
+    <div id="journal-panel-inner"
+         hx-get="/journal/html"
+         hx-trigger="load"
+         hx-swap="outerHTML">
+      <div style="padding:2rem;text-align:center;color:var(--text-faint);font-size:0.8rem">
+        Loading journal&hellip;
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleTheme() {{
+  var html = document.documentElement;
+  if (html.classList.contains('dark')) {{
+    html.classList.remove('dark');
+    localStorage.setItem('theme', 'light');
+  }} else {{
+    html.classList.add('dark');
+    localStorage.setItem('theme', 'dark');
+  }}
+}}
+</script>
+</body>
+</html>
+"""
+
+
+@router.get("/page", response_class=HTMLResponse)
+def get_journal_page():
+    """Serve the standalone full-page Journal view with dark theme and nav bar.
+
+    This is the page linked from the top nav across the dashboard, trainer,
+    settings, and ORB history pages.  It renders a full HTML shell and then
+    loads the HTMX journal fragment (GET /journal/html) on page load so the
+    inner panel can still be refreshed/swapped by HTMX interactions.
+    """
+    return HTMLResponse(content=_JOURNAL_PAGE_SHELL)
 
 
 @router.get("/entries")

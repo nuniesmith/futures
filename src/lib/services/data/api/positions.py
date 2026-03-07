@@ -59,10 +59,36 @@ _BRIDGE_STATUS_CACHE_KEY = _cache_key("bridge_status", "latest")
 _BRIDGE_STATUS_TTL = 30  # 30 seconds — refreshed on each probe or heartbeat
 
 # NinjaTrader Bridge listener URL (the Bridge runs an HttpListener on this port)
-_BRIDGE_HOST = os.getenv("NT_BRIDGE_HOST", "localhost")
-_BRIDGE_PORT = int(os.getenv("NT_BRIDGE_PORT", "8080"))
-_BRIDGE_BASE_URL = f"http://{_BRIDGE_HOST}:{_BRIDGE_PORT}"
+# Module-level defaults — overridden at call time by persisted Redis settings
+# (edited via the Settings → Services UI).  Env vars are the last fallback.
+_BRIDGE_HOST_DEFAULT = os.getenv("NT_BRIDGE_HOST", "100.127.182.112")
+_BRIDGE_PORT_DEFAULT = int(os.getenv("NT_BRIDGE_PORT", "5680"))
 _BRIDGE_TIMEOUT = 5.0  # seconds
+
+
+def _get_bridge_host_port() -> tuple[str, int]:
+    """Return (host, port) for the NinjaTrader Bridge.
+
+    Priority:
+      1. Persisted Redis settings (saved via Settings → Services UI)
+      2. ``NT_BRIDGE_HOST`` / ``NT_BRIDGE_PORT`` environment variables
+      3. Hard-coded defaults (100.127.182.112 / 5680)
+    """
+    try:
+        from lib.core.cache import cache_get
+
+        raw = cache_get("settings:overrides")
+        if raw:
+            import json as _json
+
+            data = _json.loads(raw)
+            svc = data.get("services", {})
+            host = svc.get("bridge_host") or _BRIDGE_HOST_DEFAULT
+            port = int(svc.get("bridge_port") or _BRIDGE_PORT_DEFAULT)
+            return host, port
+    except Exception:
+        pass
+    return _BRIDGE_HOST_DEFAULT, _BRIDGE_PORT_DEFAULT
 
 
 # ---------------------------------------------------------------------------
@@ -185,18 +211,20 @@ class FlattenRequest(BaseModel):
 def _get_bridge_url() -> str:
     """Return the base URL for the NinjaTrader Bridge HTTP listener.
 
-    Reads from the latest heartbeat (which includes the actual listener
-    port) or falls back to the environment variable / default.
+    Host is always resolved from persisted Redis settings (Settings UI) or
+    env-var fallback via ``_get_bridge_host_port()``.  Port is then
+    cross-checked against the ``listenerPort`` field in the latest heartbeat
+    so that a Bridge restart on a different port is picked up automatically.
     """
+    host, port = _get_bridge_host_port()
     try:
         raw = cache_get(_HEARTBEAT_CACHE_KEY)
         if raw:
             hb = json.loads(raw)
-            port = hb.get("listenerPort", _BRIDGE_PORT)
-            return f"http://{_BRIDGE_HOST}:{port}"
+            port = hb.get("listenerPort", port)
     except Exception:
         pass
-    return _BRIDGE_BASE_URL
+    return f"http://{host}:{port}"
 
 
 def _is_bridge_alive() -> bool:

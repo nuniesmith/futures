@@ -52,6 +52,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 from dataclasses import dataclass, field
@@ -366,7 +367,7 @@ def pearson_correlation(xs: list[float], ys: list[float]) -> float:
         return float("nan")
     mx = sum(xs) / n
     my = sum(ys) / n
-    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True))
     dx = math.sqrt(sum((x - mx) ** 2 for x in xs))
     dy = math.sqrt(sum((y - my) ** 2 for y in ys))
     if dx == 0 or dy == 0:
@@ -443,15 +444,11 @@ def compute_session_high_low(
     # Ensure index is timezone-aware in ET
     idx = df.index
     if hasattr(idx, "tz") and idx.tz is None:
-        try:
+        with contextlib.suppress(Exception):
             idx = idx.tz_localize("UTC").tz_convert(_EST)
-        except Exception:
-            pass
     elif hasattr(idx, "tz") and idx.tz is not None:
-        try:
+        with contextlib.suppress(Exception):
             idx = idx.tz_convert(_EST)
-        except Exception:
-            pass
 
     times = pd.Series(idx).dt.time.values if hasattr(idx, "time") else None
     if times is None:
@@ -543,8 +540,12 @@ def compute_single_crypto_momentum(
             cross_window = 3
             prev_fast = ema_f[-cross_window - 1 : -1]
             prev_slow = ema_s[-cross_window - 1 : -1]
-            was_below = any(f < s for f, s in zip(prev_fast, prev_slow) if not (np.isnan(f) or np.isnan(s)))
-            was_above = any(f > s for f, s in zip(prev_fast, prev_slow) if not (np.isnan(f) or np.isnan(s)))
+            was_below = any(
+                f < s for f, s in zip(prev_fast, prev_slow, strict=True) if not (np.isnan(f) or np.isnan(s))
+            )
+            was_above = any(
+                f > s for f, s in zip(prev_fast, prev_slow, strict=True) if not (np.isnan(f) or np.isnan(s))
+            )
             now_above = result.ema_fast > result.ema_slow
             now_below = result.ema_fast < result.ema_slow
 

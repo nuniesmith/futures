@@ -19,7 +19,6 @@ import os
 import sys
 from datetime import datetime, timedelta
 from datetime import time as dt_time
-from typing import Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -33,7 +32,7 @@ _SRC = os.path.join(os.path.dirname(__file__), "..")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from lib.analysis.crypto_momentum import (
+from lib.analysis.crypto_momentum import (  # noqa: E402
     ACTIONABLE_THRESHOLD,
     CRYPTO_ANCHORS,
     FUTURES_TARGETS,
@@ -254,9 +253,9 @@ class TestComputeAtr:
     def test_atr_positive(self):
         df = _make_ohlcv(n=50)
         h = df["High"].values
-        l = df["Low"].values
+        lo = df["Low"].values
         c = df["Close"].values
-        atr = compute_atr(h, l, c)
+        atr = compute_atr(h, lo, c)
         assert atr > 0
 
     def test_atr_increases_with_volatility(self):
@@ -956,14 +955,13 @@ class TestConfiguration:
             assert "weight" in anchor
 
     def test_crypto_anchor_weights_reasonable(self):
-        total = sum(float(a["weight"]) for a in CRYPTO_ANCHORS)
         # Weights don't have to sum to 1.0 (they're normalised at runtime)
         # but each should be positive
         for anchor in CRYPTO_ANCHORS:
             assert float(anchor["weight"]) > 0
 
     def test_futures_targets_have_required_fields(self):
-        for sym, cfg in FUTURES_TARGETS.items():
+        for _sym, cfg in FUTURES_TARGETS.items():
             assert "base_correlation" in cfg
             assert "primary_crypto" in cfg
             assert 0 <= cfg["base_correlation"] <= 1.0
@@ -1083,7 +1081,7 @@ class TestEdgeCases:
         signals1 = scorer.score_with_data(crypto_bars, now=now)
         signals2 = scorer.score_with_data(crypto_bars, now=now)
 
-        for s1, s2 in zip(signals1, signals2):
+        for s1, s2 in zip(signals1, signals2, strict=True):
             assert s1.score == s2.score
             assert s1.direction == s2.direction
             assert s1.momentum_score == s2.momentum_score

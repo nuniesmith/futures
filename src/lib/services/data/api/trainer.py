@@ -389,7 +389,7 @@ tr:hover td{background:var(--bg-inner)}
   <a class="nav-tab" href="/">📊 Dashboard</a>
   <a class="nav-tab" href="/orb-history">📅 ORB History</a>
   <a class="nav-tab active" href="/trainer">🧠 Trainer</a>
-  <a class="nav-tab" href="/journal/html">📓 Journal</a>
+  <a class="nav-tab" href="/journal/page">📓 Journal</a>
   <a class="nav-tab" href="/settings">⚙️ Settings</a>
   <div class="nav-right">
     <div id="nav-trainer-badge" class="badge b-unknown" style="font-size:0.65rem">trainer ···</div>
