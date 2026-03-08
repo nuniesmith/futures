@@ -40,6 +40,30 @@ futures/
 
 ---
 
+## 🎯 Current Focus — Manual Trading & Scaling
+
+The immediate goal is **manual trading with CNN signal support**, scaling from 1 TPT account to the full two-stage cap. No automation violations — the system informs manual entries, not executes them.
+
+**Two-stage scaling plan:**
+- **Stage 1 — TPT**: 5 × $150K accounts = $750K total buying power. Scale one account at a time as each passes eval and proves consistent.
+- **Stage 2 — Apex**: 20 × $300K accounts = ~$6M total buying power. 100% of first $25K/account, 90% after. Payout every 8 trading days per account — e.g. 10 × $50K accounts = $20K/cycle.
+- **Copy layer**: TradingView (manual entry) → PickMyTrade webhook → all accounts via Tradovate simultaneously. Own-accounts-only copy trading is explicitly allowed by both Apex and TPT. One manual entry, all accounts execute proportionally sized.
+- **No NinjaTrader/Windows Server required for this stack** — TradingView runs in browser, Tradovate is web-native, PickMyTrade handles copy. Eliminates Windows overhead entirely for the live trading workflow.
+
+**Priority reorder for unblocking manual trading (do these first):**
+1. **Phase 3A + 3B** — top-4 asset focus + dashboard focus mode. Stop staring at 25 symbols while trying to execute.
+2. **Phase 5C + 5E** — micro vs regular contract sizing side-by-side + risk strip (daily P&L, open positions, session time). Know exactly what to type into TradingView/Tradovate before you click.
+3. **Phase 2A + 2B** — daily bias analyzer + trade plan. Pre-market directional conviction is the foundation of every good manual entry.
+4. **TradingView Ruby Futures indicator** — draw engine levels (ORB, PDR, entry/stop/TP) directly on TV chart. CNN labels + futures contract sizing on every signal.
+5. **Phase 1E + 1F** — safe renames only (`orb_filters.py` → `breakout_filters.py`, `orb_simulator.py` → `rb_simulator.py`). Zero logic risk, do in parallel.
+
+**Defer until profitable/scaled:**
+- Phase 1A–1G (RB refactor) — correct architecture but zero trading benefit right now.
+- Phase 4/7/8 (CNN v7, per-asset distillation) — valuable, not blocking manual trading.
+- Phase 6 (Kraken portfolio) — when crypto capital grows.
+
+---
+
 ## Current State
 
 - **Monorepo**: All source — engine, web, trainer, lib, C# strategies, deploy scripts — lives here. No separate repos.
@@ -470,6 +494,77 @@ The CNN currently treats `asset_class_id` as a single flat ordinal — it knows 
 
 ---
 
+## 🟡 Medium Priority — Per-Asset Training + Knowledge Distillation Pipeline (v8+ Champion Model)
+
+The current training pipeline trains a single model on all assets combined. This phase trains one model per asset, then distills them into a single champion model exported as one clean `.onnx` file. The distilled student gets ~95% of the ensemble's accuracy at normal inference speed with no multi-model export complexity.
+
+### Overall Strategy
+
+```
+Asset 1 (MGC) → train → best_mgc.pt  ─┐
+Asset 2 (MNQ) → train → best_mnq.pt  ─┤
+Asset 3 (MES) → train → best_mes.pt  ─┼→ Distill → champ_combined.pt → .onnx
+Asset N (...)  → train → best_xxx.pt  ─┘
+```
+
+### Phase 8A: Per-Asset Training Loop (`train_per_asset.py`)
+- [ ] **Train one model per asset, save to `models/per_asset/`**
+  - Assets: `['MGC', 'MNQ', 'MES', 'MYM', 'M2K', 'MBT', 'MET']`
+  - Config: `epochs=60` (best_epoch was 24/25 on combined — give per-asset more room), `patience=12`, `lr=0.0001`, `days_back=180`, `bars_source='massive'`
+  - `min_accuracy=0.75` gate per asset (lower than combined gate — less data per asset)
+  - Save each model as `breakout_cnn_{asset.lower()}_best.pt`
+  - Write `models/per_asset/asset_results.json` manifest: accuracy, precision, recall, best_epoch, sample_count per asset
+  - Print ranked summary after all assets complete
+
+### Phase 8B: Knowledge Distillation (`distill_combined.py`)
+- [ ] **Train a single student model from all per-asset teacher models**
+  - `DistillationTrainer` class:
+    - Load all teacher `.pt` files, freeze weights (`requires_grad = False`)
+    - Student = same `BreakoutCNN(num_features=18)` architecture (or v7 if Phase 4 is done first)
+    - `temperature=4.0` — softens teacher probability distributions so student learns the *shape* of predictions, not just hard winners; critical for cross-asset generalization
+    - `alpha=0.7` — 70% distillation loss (KL divergence) + 30% hard label cross-entropy
+    - `get_ensemble_logits()` — average teacher logits across all qualified teachers (could weight by per-asset accuracy in future)
+    - `distillation_loss()` — KL divergence scaled by `T²` (standard distillation practice) + cross-entropy
+  - Training loop: `AdamW`, `CosineAnnealingLR`, gradient clipping at 1.0, early stopping with `patience=10`
+  - Input: `ConcatDataset` of all assets mixed together
+  - **Qualified teachers only** — gate at `min_teacher_accuracy=0.75`; assets that didn't hit the gate hurt distillation more than they help
+  - Save best student to `models/champ_combined.pt`
+
+### Phase 8C: ONNX Export (`export_onnx.py`)
+- [ ] **Export distilled champion model to `models/champ_combined.onnx`**
+  - Dummy input: `(1, 3, 224, 224)` matching EfficientNetV2-S input (adjust channel count if different)
+  - `opset_version=17`, `do_constant_folding=True` (optimization pass)
+  - `dynamic_axes` on both `chart_image` and `breakout_logits` — allows variable batch sizes at inference without re-export (matters for real-time tick scoring vs batch backtesting)
+  - Input name: `'chart_image'`, output name: `'breakout_logits'`
+  - **Verify with onnxruntime**: run dummy input through both PyTorch and ORT, assert `max_diff < 1e-4`
+  - Print warning if any non-exportable ops are detected (diff ≥ 1e-4)
+
+### Phase 8D: Master Orchestrator (`run_full_pipeline.py`)
+- [ ] **Single script that runs all four phases end-to-end**
+  - Phase 1: Per-asset training loop → `asset_results` dict
+  - Phase 2: Rank assets by accuracy, print bar chart, filter to qualified teachers
+  - Phase 3: Build `ConcatDataset`, run `DistillationTrainer`, save `champ_combined.pt`
+  - Phase 4: Call `export_to_onnx()`, verify output, save `champ_combined.onnx`
+  - Write `models/pipeline_summary.json`: assets_trained, teachers_qualified, ranked_assets, champ_model path, onnx_export path
+  - Entry point: `python run_full_pipeline.py` with hardcoded asset list and config dict
+  - Config:
+    ```
+    assets: ['MGC', 'MNQ', 'MES', 'MYM', 'M2K', 'MBT', 'MET']
+    epochs: 60
+    learning_rate: 0.0001
+    patience: 12
+    days_back: 180
+    min_teacher_accuracy: 0.75
+    ```
+
+### Key Design Decisions (reference)
+- **Distillation over ensemble**: an ensemble of 6 models = 6x inference cost and a nightmare to export cleanly to ONNX. Distillation gives ~95% of the accuracy in one clean `.onnx` file at normal speed.
+- **Temperature=4.0**: softer probability distributions let the student learn cross-asset generalization from the shape of predictions, not just which class won.
+- **Qualified teacher gate**: per-asset models that underperform (e.g., 72% acc) hurt distillation more than they help — filter them out automatically via `min_teacher_accuracy`.
+- **`dynamic_axes` in ONNX export**: variable batch size at inference time without re-exporting — critical for real-time tick scoring vs batch backtesting.
+
+---
+
 ## 🟡 Medium Priority — Existing Tasks
 
 ### NT8 Validation
@@ -500,15 +595,132 @@ The CNN currently treats `asset_class_id` as a single flat ordinal — it knows 
 
 ---
 
+## 🔴 High Priority — TradingView Ruby Futures Indicator (`src/pine/ruby_futures.pine`)
+
+The TradingView Pine Script indicator that draws engine signal levels directly on your TV chart. This is the primary live trading UI — your Python dashboard runs alongside TV for real-time CNN context, and Tradovate is connected in TV for execution. No NinjaTrader required for this workflow.
+
+**Architecture:**
+```
+Python Engine (Pi)
+    ├── Computes: ORB levels, PDR, IB, CNN signal, entry/stop/TP
+    ├── Writes → GitHub repo (nuniesmith/futures-signals) on every signal fire
+    │           └── signals.csv  ← request.seed() reads this (2-5 min lag)
+    │
+    └── FastAPI endpoint ← TradingView webhooks POST here (outbound from TV)
+
+TradingView (browser, Linux-native)
+    ├── Ruby Futures indicator (Pine Script)
+    │   ├── Pure price calculations: ORB box, PDR, IB, Asian range — zero delay
+    │   ├── request.seed() reads signals.csv → draws entry/stop/TP lines + CNN label
+    │   └── Futures contract sizing (micro + regular) on every signal label
+    │
+    ├── Tradovate broker connected → positions show natively in TV
+    └── Python dashboard tiled alongside (real-time CNN + risk strip)
+```
+
+**Key Pine Script constraints:**
+- Pine Script cannot make external HTTP requests — but CAN send webhooks outbound and reference `request.seed()` data
+- `request.seed()` reads from a GitHub repo (`nuniesmith/futures-signals`) — 2-5 minute delay, good enough for levels display
+- Pure price calculations (ORB box, ranges, S/R) run at zero delay — only engine signal overlay has the lag
+- TradingView alerts/webhooks fire outbound to the Python engine FastAPI endpoint on user-defined conditions
+
+### Phase TV-A: `signals.csv` GitHub Publisher (Python Engine)
+- [ ] **Create `nuniesmith/futures-signals` GitHub repo** — public, updated by the engine on every signal fire
+  - `signals.csv` schema: `timestamp, asset, breakout_type, direction, entry, stop, tp1, tp2, tp3, cnn_prob, atr, session`
+  - Engine writes via GitHub REST API (authenticated with a fine-grained PAT scoped to just this repo)
+  - Triggered from `publish_breakout_result()` in `handlers.py` (or `main.py` until Phase 1D) — runs after CNN inference completes
+  - Keep last N signals (e.g. 50 rows) — rotate oldest out on each write so the CSV stays small and `request.seed()` loads fast
+  - Store PAT in env var `GITHUB_SIGNALS_TOKEN` — never committed
+
+### Phase TV-B: Ruby Futures Indicator — Engine Signal Overlay
+- [ ] **Extend `src/pine/ruby_futures.pine` with `request.seed()` engine signal layer**
+  - `request.seed("nuniesmith/futures-signals", "signals.csv", ...)` call to pull latest signal rows
+  - Parse columns: entry, stop, tp1, tp2, tp3, cnn_prob, direction, breakout_type
+  - Draw horizontal lines for current asset's most recent signal: entry (blue), stop (red), TP1/TP2/TP3 (green gradient)
+  - Label each line with dollar value per contract: `"TP1  5182.50  +$312 micro / +$3,125 reg"`
+  - CNN probability badge: `"CNN 91.2% LONG  ORB"` label pinned near entry line
+  - Auto-filter by current chart symbol — only show signals matching the active TV instrument
+  - Lines auto-expire after the signal's session closes (use timestamp + session duration to determine expiry)
+  - Toggle via input: `show_engine_signals = input.bool(true, "Show Engine Signals", group="Engine")`
+
+### Phase TV-C: Ruby Futures Indicator — Core Futures Layer
+- [ ] **Complete `src/pine/ruby_futures.pine` base futures features** (already partially built per file header)
+  - Contract specs table: `MGC, MES, MNQ, MYM, M2K, 6E, 6B, 6J, MBT, MET` — tick size, tick value, micro multiplier, regular multiplier
+  - Micro + regular sizing on every signal label: `"LONG  1 MGC = $12.40 risk  |  1 GC = $124.00"`
+  - Asian range box (19:00–02:00 ET) — already in file header, verify drawing logic
+  - Prev Day Mid line — thin dashed line at midpoint of prior day's range
+  - ORB box drawn in pure Pine from price data (zero delay) — session-configurable open time
+  - Daily P&L / risk strip in dashboard: consecutive losses, daily loss %, contracts used vs max
+  - Live position tracker: entry price, contract count, bracket phase (1/2/3), unrealised P&L in dollars
+
+### Phase TV-D: TradingView → Python Engine Webhook
+- [ ] **Add FastAPI endpoint to receive TradingView outbound webhooks**
+  - `POST /api/tv/alert` — receives TV alert JSON payload
+  - TV alert message format: `{"symbol": "MGC", "action": "LONG_ENTRY", "price": 2891.5, "note": "ORB breakout"}`
+  - Engine logs the alert, optionally triggers a fresh CNN inference on that symbol, pushes result to dashboard via SSE
+  - This is informational only — no order execution. Keeps you in the loop when TV fires an alert while you're watching the dashboard.
+  - Auth: shared secret in `TV_WEBHOOK_SECRET` env var, passed as query param or header from TV alert URL
+
+### Phase TV-E: Dashboard + TradingView Side-by-Side Workflow
+- [ ] **Document and test the full manual trading workflow**
+  - Left monitor: TradingView with Ruby Futures indicator + Tradovate connected
+  - Right monitor: Python dashboard (focus mode, 3-4 assets, risk strip)
+  - Pre-market: dashboard shows daily bias + Grok brief → informs TV watchlist
+  - During session: TV draws engine levels (via `request.seed()`) → you execute manually in Tradovate
+  - PickMyTrade copies your Tradovate fill to all other accounts simultaneously
+  - Dashboard tracks positions (via Bridge or manual position entry) + updates P&L strip
+  - Goal: zero dependency on NinjaTrader or Windows Server for live trading
+
+---
+
 ## 🟢 Low Priority
 
-### Trade Copier (Future — Post First Funded Account)
-- [ ] **Simple trade copier for multiple TPT accounts** — once the first $50k account is funded and profitable:
-  - Mirror all fills from Account 1 → Accounts 2–5
-  - Use Bridge AddOn's position push to detect fills on the primary account
-  - Fire identical orders on secondary accounts via their own Bridge instances (or a shared copier service)
-  - Respect per-account contract limits (each TPT tier has its own max)
-  - Scale up to 5 accounts max
+### Two-Stage Scaling Strategy (Manual Trading → Copy to All Accounts)
+
+**The overall goal:** trade manually with CNN signal support, copy one trade to all funded accounts simultaneously. No automation violations — this is copying your own trades to your own accounts, which is explicitly allowed by both Apex and TPT.
+
+**Stage 1 — TPT (current focus):**
+- Max 5 funded PAs at $150K each → $750K total buying power
+- Scale one account at a time as each passes evaluation and proves consistent
+
+**Stage 2 — Apex (longer term):**
+- Max 20 funded PAs per household across all platforms (Rithmic, Tradovate, WealthCharts combined)
+- Max account size $300K → up to ~$6M total buying power across 20 accounts
+- 100% of first $25K profit per account, 90% after — payout every 8 trading days per account
+- Example at scale: 10 × $50K accounts → $2,000 withdrawal per account every 8 trading days = $20,000/cycle
+
+**Copy trading stack — TradingView + PickMyTrade + Tradovate:**
+```
+You trade manually on TradingView
+        ↓
+TradingView webhook fires on your trade
+        ↓
+PickMyTrade receives signal
+        ↓
+Copies to all Apex accounts via Tradovate simultaneously
+        ↓
+Position sized proportionally per account (quantity multipliers)
+```
+- PickMyTrade connects TradingView → Tradovate with real-time replication and proper per-account sizing
+- One manual entry executes across all accounts simultaneously — that's the multiplier
+- **No NinjaTrader, no Windows Server, no Wine** — TradingView runs in browser, Tradovate is web/Linux-friendly, PickMyTrade handles the copy layer. Eliminates the expensive Windows Server overhead entirely.
+
+**Key Apex/TPT rules to stay compliant:**
+- All positions closed before 4:59 PM ET — no overnight holds
+- No swing trading — no holds over session breaks or weekends
+- No hedging — can't be long on one account and short on another across correlated instruments simultaneously
+- Consistency rule — keep sizing consistent across days; don't open max size day 1 then drop to micros (triggers disqualification review)
+- Copy trading your own accounts = allowed. Copying another trader's signals or letting others copy yours = banned.
+
+- [ ] **Evaluate PickMyTrade** — sign up, test TradingView → Tradovate copy on a single Apex eval account before scaling
+  - Verify webhook latency (TradingView alert → fill) is acceptable for intraday futures
+  - Test quantity multiplier config for different account sizes
+  - Confirm all 20 Apex accounts can be connected simultaneously
+- [ ] **TradingView setup** — configure alerts/webhooks on breakout signals to trigger PickMyTrade
+  - CNN dashboard signals should inform manual entries on TradingView (dashboard + TV side by side)
+  - Alerts fire the copy, not an automated strategy — stays compliant
+- [ ] **Scale TPT to 5 accounts** — pass eval on each, connect via PickMyTrade copy layer
+- [ ] **Scale Apex to 20 accounts** — evaluate progressively, connect each to PickMyTrade as funded
 
 ### Multi-Source Breakout Detection Enhancements
 - [ ] **Wire `crypto_momentum_score` into engine scoring pipeline** — currently computed but not fed into live decisions
