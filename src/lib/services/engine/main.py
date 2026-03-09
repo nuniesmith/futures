@@ -415,6 +415,7 @@ def _handle_publish_focus_update(engine, account_size: int) -> None:
     except Exception as exc:
         logger.debug("Focus publish error (non-fatal): %s", exc)
 
+
 def _handle_check_no_trade(engine, account_size: int) -> None:
     """Check should-not-trade conditions using the full detector."""
     from lib.core.cache import cache_get
@@ -1375,8 +1376,8 @@ def _handle_check_breakout_multi(engine, session_key: str = "us", types: list[st
                "GAP", "PIVOT", "FIB").
                Defaults to ["PDR", "CONS"] if not specified.
     """
-    from lib.services.engine.rb.breakout import breakout_type_from_short_name
     from lib.services.engine.handlers import handle_breakout_multi
+    from lib.services.engine.rb.breakout import breakout_type_from_short_name
 
     if types is None:
         types = ["PDR", "CONS"]

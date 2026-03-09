@@ -681,13 +681,12 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                             else:
                                 yield _format_sse(data=data, event="orb-update")
 
-                        elif channel == "dashboard:swing_update":
+                        elif channel == "dashboard:swing_update" and not _should_throttle("swing-update"):
                             # Swing detector state/signal update (Phase 3D)
                             # Pushed when swing signals are detected, states are
                             # created/updated/closed, or manual actions (accept/
                             # ignore/close/stop-to-BE) are performed.
-                            if not _should_throttle("swing-update"):
-                                yield _format_sse(data=data, event="swing-update")
+                            yield _format_sse(data=data, event="swing-update")
 
                 except Exception as exc:
                     pubsub_errors += 1

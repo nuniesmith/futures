@@ -52,13 +52,6 @@ from lib.core.breakout_types import (
 )
 
 # ---------------------------------------------------------------------------
-# Re-exports from engine (detection + result — kept for backward compat)
-# ---------------------------------------------------------------------------
-from lib.services.engine.rb.breakout import (
-    DEFAULT_CONFIGS,
-)
-
-# ---------------------------------------------------------------------------
 # Re-exports from handlers (orchestration pipeline)
 # ---------------------------------------------------------------------------
 from lib.services.engine.handlers import (
@@ -69,6 +62,13 @@ from lib.services.engine.handlers import (
     handle_breakout_multi,
     handle_orb_check,
     run_mtf_on_result,
+)
+
+# ---------------------------------------------------------------------------
+# Re-exports from engine (detection + result — kept for backward compat)
+# ---------------------------------------------------------------------------
+from lib.services.engine.rb.breakout import (
+    DEFAULT_CONFIGS,
 )
 
 # ---------------------------------------------------------------------------
