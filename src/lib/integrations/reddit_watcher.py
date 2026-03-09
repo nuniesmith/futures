@@ -22,11 +22,12 @@ Dependencies (add to pyproject.toml):
 from __future__ import annotations
 
 import asyncio
+import datetime as dt_module
 import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import lru_cache
 
 import praw
@@ -206,7 +207,7 @@ def _normalise(submission, asset: str, is_comment: bool = False) -> dict:
         "sentiment_score": round(compound, 4),
         "sentiment_label": label,
         "upvote_ratio": ratio,
-        "created_utc": datetime.fromtimestamp(submission.created_utc, tz=timezone.utc),
+        "created_utc": datetime.fromtimestamp(submission.created_utc, tz=dt_module.UTC),
     }
 
 
