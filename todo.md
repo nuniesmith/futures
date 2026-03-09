@@ -36,35 +36,38 @@ futures/
 
 ---
 
-## 🎯 Goal — Python Co-Pilot + TradingView Live Trading
+## 🎯 Goal — Python Co-Pilot + Manual Live Trading
 
-The system is a **manual trading co-pilot**. It informs entries, it doesn't execute them. The live trading workflow is entirely browser-native — no Windows, no NinjaTrader required.
+The system is a **manual trading co-pilot**. It informs entries, it doesn't execute them. The live trading workflow is Python dashboard + TradingView side-by-side — no Windows, no NinjaTrader required.
 
 ```
-Python Engine (Pi)
+Python Engine (Ubuntu Server)
     ├── Computes: daily bias, ORB levels, PDR, IB, CNN signals, entry/stop/TP
     ├── Dashboard: focus mode cards, risk strip, swing actions, Grok brief
+    ├── Reddit Sentiment: live pulse from futures-relevant subreddits
 
 TradingView (browser, Linux-native)
-    ├── Ruby Futures indicator (Pine Script)
-    │   ├── Draws engine levels: ORB box, PDR, IB, entry/stop/TP lines
-    │   ├── CNN signal labels + futures contract sizing on every signal
-    │   └── Tradovate broker connected → fills show natively in TV
-    └── PickMyTrade webhook → copies fills to all accounts simultaneously
+    ├── Ruby Futures indicator (Pine Script) — reference for live price action
+    ├── NOT used for position sendback — manual trading only for now
 
 Python Dashboard (tiled alongside TV)
-    └── Real-time CNN probabilities, risk strip, focus cards, swing signals
+    └── Real-time CNN probabilities, risk strip, focus cards, swing signals, sentiment
+
+Tradovate Bridge (future — JavaScript)
+    └── Direct API connection for 1st account → PickMyTrade copies to remaining accounts
 ```
+
+> **TradingView Live Positions — DEFERRED**: Sending live positions back from TradingView is not straightforward and not worth the complexity right now. The Ruby Pine Script indicator is used as a **reference overlay for live market movements** only. All actual trading is manual via Tradovate, informed by the Python dashboard. A Tradovate JavaScript bridge is the preferred path for future automation (see Phase TBRIDGE below).
 
 **Two-stage scaling plan:**
 - **Stage 1 — TPT**: 5 × $150K accounts = $750K total buying power.
 - **Stage 2 — Apex**: 20 × $300K accounts = ~$6M total buying power.
-- **Copy layer**: TradingView manual entry → PickMyTrade webhook → all accounts via Tradovate simultaneously. Own-accounts-only copy trading is explicitly allowed by both Apex and TPT.
+- **Copy layer**: Tradovate JS bridge (1st account) → PickMyTrade webhook → all remaining accounts simultaneously. Own-accounts-only copy trading is explicitly allowed by both Apex and TPT.
 
 **Milestone before going live on demo funds:**
-1. Codebase cleanup (Phase 1 refactors — reduce complexity before retraining)
-2. CNN v7.1 retrain (28 features, targeting ≥89% accuracy)
-3. TradingView `signals.csv` publisher + Ruby Futures indicator wired end-to-end
+1. ~~Codebase cleanup (Phase 1 refactors — reduce complexity before retraining)~~ ✅
+2. CNN v8 retrain (37 features + embeddings, targeting ≥89% accuracy)
+3. Dashboard tiled alongside TradingView for manual trading
 4. Full workflow test on Tradovate demo
 
 ---
@@ -348,9 +351,9 @@ Step 3: Compare
 
 ---
 
-## 🔴 TradingView Integration — Live Trading UI *(deferred — after v8 champion)*
+## 🔴 TradingView Integration — Reference Overlay Only *(deferred — after v8 champion)*
 
-The Pine Script indicator is the primary live trading chart. The Python dashboard runs alongside it for CNN context and risk management.
+> **Decision**: TradingView is used as a **reference overlay for live price action** only. Position sendback from TV is not practical. The Ruby Pine Script indicator shows ORB boxes, PDR levels, session separators, and engine signals — but all trading decisions and execution happen manually via Tradovate, informed by the Python dashboard. Future automation will use the Tradovate JavaScript bridge (Phase TBRIDGE), not TradingView webhooks.
 
 ### Phase TV-B: Ruby Futures Indicator — Engine Signal Overlay
   - Parse the CSV: filter to current chart symbol + recent timestamps (last 5 bars)
@@ -380,11 +383,116 @@ The Pine Script indicator is the primary live trading chart. The Python dashboar
 
 ### Phase TV-E: Dashboard + TradingView Side-by-Side Workflow
 - [ ] **Document and validate the full manual trading workflow**
-  - Left monitor: TradingView with Ruby Futures indicator + Tradovate demo connected
-  - Right monitor: Python dashboard (focus mode, risk strip, swing signals)
-  - Pre-market: dashboard daily bias + Grok brief → informs TV watchlist
+  - Left monitor: TradingView with Ruby Futures indicator (reference only — no position sendback)
+  - Right monitor: Python dashboard (focus mode, risk strip, swing signals, sentiment)
+  - Pre-market: dashboard daily bias + Grok brief + Reddit sentiment → informs watchlist
   - Dashboard tracks signals + updates risk strip
+  - All execution is manual via Tradovate, informed by dashboard
   - Zero dependency on NinjaTrader or Windows for live trading
+
+---
+
+## 🔴 Tradovate JavaScript Bridge — Direct API Execution *(Phase TBRIDGE)*
+
+> Tradovate exposes a REST + WebSocket API that accepts JavaScript. We only need one bridge connection to our primary Tradovate account — PickMyTrade copies all trades to remaining accounts. This replaces the TradingView position sendback approach entirely.
+
+### Phase TBRIDGE-A: Tradovate API Client (JavaScript/Node.js)
+- [ ] **Research Tradovate API docs** — REST endpoints for order placement, position query, account info
+  - Auth flow: OAuth2 token → WebSocket session → order commands
+  - Rate limits and order types supported (market, limit, stop-market, bracket)
+- [ ] **`bridge/tradovate_client.js`** — Node.js client for Tradovate REST + WebSocket
+  - `authenticate(credentials)` → access token
+  - `placeOrder({symbol, action, qty, orderType, price?, stopPrice?})` → order ID
+  - `getPositions()` → open positions array
+  - `cancelOrder(orderId)` → confirmation
+  - `flattenAll()` → close all positions
+  - WebSocket: real-time fill notifications, position updates, P&L streaming
+- [ ] **Environment config**: `TRADOVATE_USERNAME`, `TRADOVATE_PASSWORD`, `TRADOVATE_APP_ID`, `TRADOVATE_CID`, `TRADOVATE_SECRET` — all via env vars, never hardcoded
+
+### Phase TBRIDGE-B: Python ↔ Node.js Bridge
+- [ ] **`POST /api/bridge/order`** — Python engine sends order intent to Node.js bridge
+  - Bridge runs as a sidecar container or subprocess
+  - Communication via HTTP (localhost) or Redis pub/sub
+  - Python publishes `OrderCommand` → bridge translates to Tradovate API call
+  - Bridge publishes fill confirmations back → Python `PositionManager` updates
+- [ ] **Position sync**: bridge polls Tradovate positions every 5s → publishes to `engine:live_positions` Redis key
+  - Dashboard live position overlay reads from this key (already wired for broker-agnostic positions)
+- [ ] **Health monitoring**: bridge heartbeat → `broker_heartbeat` Redis key (existing positions.py already reads this)
+
+### Phase TBRIDGE-C: PickMyTrade Integration
+- [ ] **Wire bridge to 1st Tradovate account only** — this is the "leader" account
+- [ ] **PickMyTrade config**: connect all remaining TPT/Apex accounts as "followers"
+  - Verify webhook latency (bridge fill → PickMyTrade copy → follower fill)
+  - Test quantity multiplier config for different account sizes ($150K vs $300K)
+  - Confirm simultaneous connection of all follower accounts
+- [ ] **Failsafe**: if bridge disconnects, dashboard shows alert + blocks new signals
+  - Manual trading via Tradovate UI remains available as fallback
+
+---
+
+## 🔴 Reddit Sentiment Integration — Futures Market Pulse *(Phase REDDIT)*
+
+> Monitor futures-relevant subreddits for crowd sentiment, unusual activity spikes, and contrarian signals. This feeds into the dashboard as an additional metric layer and can optionally influence CNN feature weighting in v9+.
+
+### Phase REDDIT-A: Reddit Data Collector
+- [ ] **`src/lib/integrations/reddit_client.py`** — Reddit API client using PRAW (Python Reddit API Wrapper)
+  - Add `praw>=7.7.0` to `pyproject.toml` dependencies
+  - Auth: `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USER_AGENT` env vars
+  - Target subreddits:
+    - `r/FuturesTrading` — direct futures discussion (gold, NQ, ES, 6E)
+    - `r/Daytrading` — general day trading sentiment + setups
+    - `r/wallstreetbets` — crowd euphoria/panic indicator (contrarian signal)
+    - `r/InnerCircleTraders` — ICT/SMC methodology discussion (confluence with our ICT analysis)
+  - Methods:
+    - `fetch_hot_posts(subreddit, limit=25)` → list of posts with title, score, num_comments, created_utc
+    - `fetch_new_posts(subreddit, limit=50)` → newest posts for velocity tracking
+    - `fetch_comments(post_id, limit=100)` → top comments for deeper sentiment analysis
+    - `search_posts(subreddit, query, time_filter="day")` → search for specific tickers/terms
+
+### Phase REDDIT-B: Sentiment Analysis Engine
+- [ ] **`src/lib/analysis/reddit_sentiment.py`** — NLP sentiment scoring
+  - Keyword extraction for futures tickers: `MGC`, `gold`, `GC`, `NQ`, `MNQ`, `ES`, `MES`, `6E`, `euro`, `BTC`, `ETH`, `SOL`
+  - Sentiment classification per post/comment:
+    - Rule-based first pass: bullish/bearish keyword lists + emoji patterns (🚀, 🐻, 💎🙌, etc.)
+    - Optional: lightweight transformer (FinBERT or distilbert-base-uncased-finetuned-sst-2-english) for more nuanced scoring — gated behind `ENABLE_REDDIT_NLP=1` env var
+  - Aggregate metrics per asset per subreddit:
+    - `mention_count_1h` — how many times ticker mentioned in last hour
+    - `mention_velocity` — rate of change in mentions (spike detection)
+    - `avg_sentiment` — mean sentiment score [-1.0, +1.0]
+    - `sentiment_skew` — bullish vs bearish ratio (extreme = contrarian signal)
+    - `engagement_score` — weighted by upvotes + comment count (high engagement = conviction)
+    - `wsb_euphoria_index` — WSB-specific: extreme bullishness = potential top signal (contrarian)
+  - `compute_reddit_sentiment(symbol)` → `RedditSentiment` dataclass with all metrics
+  - `compute_all_reddit_sentiments()` → dict of symbol → RedditSentiment for focus assets
+
+### Phase REDDIT-C: Scheduler Integration + Caching
+- [ ] **Engine scheduler**: poll Reddit every 15 minutes during ACTIVE + EVENING session modes
+  - `CHECK_REDDIT_SENTIMENT` action in scheduler dispatch table
+  - Results cached in Redis: `engine:reddit_sentiment:<SYMBOL>` (30-min TTL)
+  - Rate limit aware: Reddit API allows ~60 requests/min with OAuth — budget across 4 subreddits
+- [ ] **Spike detection**: if `mention_velocity` exceeds 3× rolling average → publish `engine:reddit_spike` SSE event
+  - Dashboard shows "🔥 Reddit Spike: MGC mentioned 47 times in last hour (3.2× normal)" alert
+- [ ] **Historical tracking**: store daily aggregates in Postgres `reddit_sentiment_history` table
+  - Enables backtesting correlation between Reddit spikes and breakout outcomes
+
+### Phase REDDIT-D: Dashboard Integration
+- [ ] **Reddit Sentiment Panel** on dashboard
+  - Per-asset sentiment bar (green=bullish, red=bearish, grey=neutral) with mention count
+  - "Reddit Pulse" strip alongside risk strip — shows top 4 focus assets' sentiment
+  - Subreddit breakdown: hover to see which sub is driving sentiment
+  - Spike alerts in market events feed (SSE `reddit-spike` listener)
+  - Historical sentiment chart (7-day rolling) on focus cards
+- [ ] **Focus card integration**: sentiment badge on each focus card
+  - 🟢 "Reddit Bullish (0.72)" / 🔴 "Reddit Bearish (-0.45)" / ⚪ "Quiet"
+  - Contrarian warning when WSB euphoria is extreme: "⚠️ WSB extremely bullish — consider fade"
+
+### Phase REDDIT-E: CNN Feature Integration (v9+ — optional)
+- [ ] **2 new tabular features** for future v9 model:
+  - `reddit_mention_velocity_norm` — normalized mention spike score [0, 1]
+  - `reddit_sentiment_score` — aggregated sentiment across all tracked subs [0, 1]
+- [ ] **Correlation study**: backtest Reddit sentiment vs breakout outcomes over 90 days before adding to model
+  - Only add to CNN if sentiment features show >2% lift in validation accuracy
+  - Otherwise keep as dashboard-only informational metric
 
 ---
 
@@ -429,12 +537,12 @@ Deferred until v8 champion is live and profitable. Nice-to-have market regime ov
 ## 🟢 Low Priority — Scaling & Copy Trading
 
 ### PickMyTrade + Account Scaling
-- [ ] Sign up for PickMyTrade, test TradingView → Tradovate copy on a single Apex eval account
-  - Verify webhook latency (TV alert → fill) for intraday futures
-  - Test quantity multiplier config for different account sizes
+- [ ] Sign up for PickMyTrade, test Tradovate bridge → PickMyTrade copy on a single Apex eval account
+  - Verify webhook latency (bridge fill → PickMyTrade copy → follower fill) for intraday futures
+  - Test quantity multiplier config for different account sizes ($150K vs $300K)
   - Confirm all 20 Apex accounts can be connected simultaneously
-- [ ] Configure TV alerts/webhooks to trigger PickMyTrade on manual entries
-- [ ] Scale TPT to 5 accounts (pass eval on each, connect via PickMyTrade)
+- [ ] Wire Tradovate JS bridge (Phase TBRIDGE-B) as the leader account signal source
+- [ ] Scale TPT to 5 accounts (pass eval on each, connect via PickMyTrade as followers)
 - [ ] Scale Apex to 20 accounts progressively
 
 ### Kraken Spot Portfolio Management (Phase 6)
@@ -450,51 +558,85 @@ Deferred until v8 champion is live and profitable. Nice-to-have market regime ov
 
 ---
 
+## 🔍 Pre-Retrain Readiness Review
+
+> **Reviewed: full codebase audit of model, training pipeline, dataset generator, feature contract, and engine.**
+> **Verdict: v8 code is READY TO TRAIN. All feature plumbing is wired end-to-end.**
+
+### ✅ What's Confirmed Working
+- **Feature contract** (`models/feature_contract.json`): v8, 37 tabular features, `asset_class_lookup` + `asset_id_lookup` tables, embedding dims (4+8=12), v8 training recipe with gate checks — all present and correct
+- **`HybridBreakoutCNN`** (`breakout_cnn.py` L1456–1579): v8 architecture with `nn.Embedding(5,4)` + `nn.Embedding(25,8)`, wider tabular head (37→256→128→64 with GELU+BN), classifier (1280+64+12→512→128→2) — matches contract exactly
+- **`_normalise_tabular_for_inference()`** (`breakout_cnn.py` L2280–2519): handles v5(8)→v4(14)→v6(18)→v7(24)→v7.1(28)→v8(37) backward compat padding — all slots documented with correct neutral defaults
+- **`_build_row()`** (`dataset_generator.py` L1801–2263): computes all 37 features with real data + neutral fallbacks — v8-B cross-asset features use `_bars_by_ticker`, v8-C fingerprint features use `_daily_bars` + `_bars_1m`
+- **`train_model()`** (`breakout_cnn.py` L1666–1970): v8 recipe wired — gradient accumulation (2×), mixup α=0.2, label smoothing 0.10, cosine warmup (5 epochs), separate LR groups (backbone 2e-4, head+embeddings 1e-3), early stopping patience=15, NaN guard, gradient clipping
+- **`BreakoutDataset.__getitem__()`**: passes `asset_class_ids` and `asset_ids` as integer tensors alongside float tabular vector
+- **`_run_training_pipeline()`** (`trainer_server.py` L338–640): generates dataset → stratified split → trains → evaluates → gate check → promotes → exports feature contract + ONNX — full pipeline intact
+- **`DatasetConfig`**: defaults already set for v8 — `breakout_type="all"`, `orb_session="all"`, `max_samples_per_type_label=800`, `max_samples_per_session_label=400`
+- **`split_dataset()`**: stratifies by `(label, breakout_type, session)` triple — correct for balanced eval
+- **Peer bar loading**: `generate_dataset()` → `_resolve_peer_tickers()` → `bars_by_ticker` dict attached to each result — v8-B cross-asset features will compute real correlations
+- **Tests**: 2552 passed, 0 failed, 1 skipped — clean baseline
+
+### ⚠️ Blocking Before Training (must fix)
+- [ ] **Smoke-test training loop** — run 2-epoch training on tiny synthetic dataset to verify v8 changes don't crash at runtime (mixup, grad accumulation, cosine warmup, separate LR groups, embedding layers all interacting)
+- [ ] **Generate v8 dataset** — `generate_dataset(symbols=ALL_25, days_back=120)` with v8 `DatasetConfig` defaults
+- [ ] **Verify CI/CD secrets** — `TRAINER_TAILSCALE_IP` = `100.113.72.63`, `PROD_TAILSCALE_IP` = Ubuntu Server IP
+
+### ℹ️ Non-Blocking (cosmetic / post-train)
+- [ ] `breakout_cnn.py` comments still reference "NinjaTrader", "C#", "OrbCnnPredictor" — update to generic language
+- [ ] `chart_renderer.py` / `chart_renderer_parity.py` comments reference "Ruby NinjaTrader indicator" — update
+- [ ] Dashboard still has `_get_bridge_info()` / `bridge-status` naming — rename to `_get_broker_info()` / `broker-status`
+- [ ] `orb.py` still has `detect_opening_range_breakout()` and `ORBResult` — deprecate after v8 validates unified path
+- [ ] `ORBSession` → `RBSession` bulk rename in callers (alias works, non-breaking)
+- [ ] Cross-attention fusion (Phase v8-D optional) — test on small dataset after initial v8 train
+- [ ] "Asset DNA" radar chart on focus cards (Phase v8-C dashboard, low priority)
+
+---
+
 ## Execution Order (3-Week Sprint → TPT $150K Account)
 
-> Focus: Docker + Python services only. TradingView is good enough for manual trading right now.
+> Focus: Docker + Python services only. TradingView is reference-only for live price action.
 > Strategy: 1 asset per day with a good breakout setup, done trading for the day.
 > After TPT account 1, get account 2 and wire PickMyTrade to copy trades from Tradovate.
+> Reddit sentiment is a parallel track — can be built during Week 2 while GPU trains.
 
 **✅ Step 1 — Codebase cleanup (DONE):**
 - Phase 1A–1H — all complete, unified RB system, 2552 tests passing
 - NinjaTrader bridge code removed from Python codebase — positions API is now broker-agnostic
+- v8 feature code all shipped: embeddings, cross-asset correlation, asset fingerprints, architecture upgrades, training recipe
 
 **Step 2 — CNN v8 Champion (THE milestone, do once, do it right):**
 
-  *Week 1: Code the upgrades (no GPU needed yet)* ✅
-  - Phase v8-A — hierarchical asset embeddings (replace flat ordinals) ✅
-  - Phase v8-B — cross-asset correlation features (+3 features) ✅
-  - Phase v8-C — asset fingerprint features (+6 features) ✅
-  - Phase v8-D — architecture upgrades (wider tabular head, GELU, mixup, warmup) ✅
-  - Phase v8-E — lock down training recipe & hyperparameters ✅
-  - **Remaining**: fix immediate issues (see "Immediate Fixes" section above), smoke-test training loop
+  *Week 1: Final pre-train verification* 🔜
+  - Smoke-test training loop (2 epochs, tiny dataset) — verify all v8 changes work together
+  - Verify CI/CD secrets (trainer IP, prod IP)
+  - Generate v8 dataset (~50K–80K samples, all 25 symbols × 13 types × 9 sessions)
 
   *Week 2: Train (GPU rig at 100.113.72.63:8200, mostly hands-off)*
-  - Generate v8 dataset (~50K–80K samples, all 25 symbols × 13 types × 9 sessions)
   - Train unified v8 model (80 epochs, ~6–10 hours on GPU)
+  - **Parallel track**: build Reddit sentiment integration (Phase REDDIT-A/B/C) while GPU trains
   - Optionally: train 7 per-asset specialists + distill → compare vs unified
   - Gate check: ≥89% acc, ≥87% prec, ≥84% rec
   - Promote winner → `breakout_cnn_best.pt` + deploy to Ubuntu Server
 
   *Week 3: Validate + Go Live on Demo*
   - Phase v8-G — smoke test on live breakouts, verify inference
-  - Manual trading on TradingView demo (Tradovate connected)
-  - Dashboard tiled alongside TV — CNN probabilities, risk strip, focus cards
+  - Manual trading via Tradovate, dashboard tiled alongside TradingView (reference only)
+  - Dashboard: CNN probabilities, risk strip, focus cards, Reddit sentiment panel
   - Tune session thresholds based on live signal quality
   - Document the workflow end-to-end
 
 **Step 3 — TPT $150K account goes live:**
 - Trade 1 asset/day with best breakout setup
 - CNN co-pilot for entry confirmation (≥0.85 probability gate)
-- Risk strip + position sizing on dashboard
+- Risk strip + position sizing + Reddit sentiment on dashboard
 
 **Step 4 — Scale (when consistent):**
-- Get 2nd TPT account → PickMyTrade copies from 1st Tradovate account
-- Phase TV-D — TV → Python webhook (if needed for automation)
+- Phase TBRIDGE — Tradovate JavaScript bridge for 1st account automation
+- PickMyTrade copies from 1st Tradovate account to all followers
 - Scale to 5 TPT accounts → then Apex 20 accounts
 - Phase 9A — correlation anomalies (nice-to-have overlay)
 - Phase 6 — Kraken portfolio (separate from futures)
+- Phase REDDIT-E — Reddit features in CNN v9 (if backtesting shows >2% lift)
 
 ---
 
@@ -615,7 +757,7 @@ LiveRiskPublisher (ticked every engine loop, force-publish on position change)
   └─ Focus cards: dual micro/regular sizing reflects remaining_risk_budget
 ```
 
-### 7. Dashboard → TradingView Signal Flow
+### 7. Dashboard → Manual Trading Signal Flow
 
 ```
 Engine fires CNN-gated signal
@@ -624,10 +766,18 @@ Engine fires CNN-gated signal
   │    → signals.csv committed to nuniesmith/futures-signals (GitHub API)
   │    → SSE push to dashboard
   │
-  └─ TradingView (ruby_futures.pine)
-       → Parses signals.csv, matches current chart symbol
-       → Draws entry/stop/TP lines + CNN label + dual contract sizing
-       → Trader sees the level, decides manually whether to execute in Tradovate
+  ├─ Dashboard (primary decision surface)
+  │    → Focus cards with CNN probability, entry/stop/TP, dual sizing, risk strip
+  │    → Reddit sentiment badge + spike alerts
+  │    → Trader decides whether to execute manually in Tradovate
+  │
+  ├─ TradingView (reference overlay — no position sendback)
+  │    → Ruby Futures indicator shows levels on chart for visual confirmation
+  │    → NOT used for order execution or position management
+  │
+  └─ Tradovate JS Bridge (future — Phase TBRIDGE)
+       → Direct API execution on leader account
+       → PickMyTrade copies to follower accounts
 ```
 
 ### 8. Training Pipeline
@@ -663,6 +813,7 @@ Docker Compose:
   │  risk mgr    │  │  focus cards │      │  CNN train   │
   │  position mgr│  │  settings    │      │  promote .pt │
   │  all handlers│  │  risk strip  │      │  CUDA GPU    │
+  │  reddit poll │  │  sentiment   │      │              │
   └──────┬───────┘  └──────┬───────┘      └──────┬───────┘
          └──────────────────┤                     │
                             ↓                     │
@@ -674,9 +825,36 @@ Docker Compose:
   └─────────────┘  └──────────┘                   │
          └────────── Tailscale mesh ──────────────┘
 
+  (Future) Tradovate JS Bridge:
+  ┌────────────────────┐
+  │  Node.js sidecar   │ ← runs alongside engine on Ubuntu Server
+  │  Tradovate REST+WS │ ← leader account execution
+  │  → PickMyTrade     │ ← follower accounts via webhook
+  └────────────────────┘
+
 Tailscale mesh:
-  Ubuntu Server → engine + web + postgres + redis + monitoring (always on, 24/7)
+  Ubuntu Server → engine + web + postgres + redis + monitoring + bridge (always on, 24/7)
   Home Laptop   → trainer (on-demand, CUDA GPU, port 8200)
+```
+
+### 10. Reddit Sentiment Pipeline (Phase REDDIT)
+
+```
+Engine Scheduler (every 15 min during ACTIVE + EVENING)
+  │
+  ├─ reddit_client.py → PRAW OAuth → fetch hot/new posts from 4 subreddits
+  │    r/FuturesTrading, r/Daytrading, r/wallstreetbets, r/InnerCircleTraders
+  │
+  ├─ reddit_sentiment.py → per-asset scoring
+  │    mention_count, velocity, avg_sentiment, engagement, wsb_euphoria
+  │
+  ├─ Cache: Redis engine:reddit_sentiment:<SYMBOL> (30-min TTL)
+  ├─ History: Postgres reddit_sentiment_history (daily aggregates)
+  │
+  ├─ Spike detection: mention_velocity > 3× rolling avg
+  │    → SSE engine:reddit_spike → dashboard alert
+  │
+  └─ Dashboard: sentiment badges on focus cards + Reddit Pulse strip
 ```
 
 ---

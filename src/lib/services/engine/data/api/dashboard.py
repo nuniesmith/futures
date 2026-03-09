@@ -1891,6 +1891,29 @@ def _render_no_trade_banner(reason: str = "Low-conviction day") -> str:
     """
 
 
+def _render_positions_disabled_placeholder() -> str:
+    """Render a compact placeholder when live positions are disabled in settings."""
+    return """
+    <div id="positions-panel" class="t-panel border t-border rounded-lg p-3"
+         hx-swap-oob="true">
+        <div class="flex items-center justify-between mb-2">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">Positions &amp; P&amp;L</h3>
+            <span style="color:#71717a;font-size:9px" title="Live positions disabled — enable in Settings → Features">○ Off</span>
+        </div>
+        <div class="text-xs t-text-faint" style="text-align:center;padding:12px 0">
+            <div style="font-size:1.2rem;margin-bottom:4px">📡</div>
+            <div>Live positions disabled</div>
+            <div style="margin-top:4px;color:var(--muted, #71717a)">
+                Enable in <a href="/settings" style="color:#3b82f6;text-decoration:underline">⚙️ Settings</a> → Features → Live Positions Panel
+            </div>
+            <div style="margin-top:6px;font-size:0.65rem;color:var(--faint, #52525b)">
+                Requires Tradovate bridge connection (Bridge.js)
+            </div>
+        </div>
+    </div>
+    """
+
+
 def _render_positions_panel(
     positions: list[dict[str, Any]],
     risk_status: dict[str, Any] | None = None,
@@ -3406,16 +3429,29 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         no_trade_html = _render_no_trade_banner(str(focus_data.get("no_trade_reason", "Low-conviction day")))
 
     # Positions panel with risk status + broker liveness
-    positions = _get_positions()
-    risk_status = _get_risk_status()
-    _bridge_info = _get_bridge_info()
-    positions_html = _render_positions_panel(
-        positions,
-        risk_status=risk_status,
-        bridge_connected=_bridge_info["connected"],
-        bridge_age_seconds=_bridge_info["age_seconds"],
-        bridge_account=_bridge_info["account"],
-    )
+    # Check if live positions feature is enabled in settings
+    _live_positions_enabled = False
+    try:
+        from lib.services.engine.data.api.settings import _load_persisted_settings
+
+        _feat = _load_persisted_settings().get("features", {})
+        _live_positions_enabled = _feat.get("enable_live_positions", False)
+    except Exception:
+        pass
+
+    if _live_positions_enabled:
+        positions = _get_positions()
+        risk_status = _get_risk_status()
+        _bridge_info = _get_bridge_info()
+        positions_html = _render_positions_panel(
+            positions,
+            risk_status=risk_status,
+            bridge_connected=_bridge_info["connected"],
+            bridge_age_seconds=_bridge_info["age_seconds"],
+            bridge_account=_bridge_info["account"],
+        )
+    else:
+        positions_html = _render_positions_disabled_placeholder()
 
     # Risk panel
     risk_html = _render_risk_panel(risk_status)
@@ -4973,8 +5009,22 @@ def get_positions_html():
     """Return live positions panel with risk status and broker state as HTML fragment.
 
     Always returns content (positions panel renders even when empty),
-    so no 204 guard needed here.
+    so no 204 guard needed here.  Respects the ``enable_live_positions``
+    feature toggle — returns a disabled placeholder when off.
     """
+    # Check feature toggle
+    _live_positions_enabled = False
+    try:
+        from lib.services.engine.data.api.settings import _load_persisted_settings
+
+        _feat = _load_persisted_settings().get("features", {})
+        _live_positions_enabled = _feat.get("enable_live_positions", False)
+    except Exception:
+        pass
+
+    if not _live_positions_enabled:
+        return HTMLResponse(content=_render_positions_disabled_placeholder())
+
     positions = _get_positions()
     risk_status = _get_risk_status()
     bridge_info = _get_bridge_info()

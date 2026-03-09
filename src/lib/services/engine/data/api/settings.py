@@ -521,14 +521,14 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
             <div class="field-hint">GPU training server</div>
           </div>
           <div class="field">
-            <label class="lbl">NT8 Bridge Host</label>
-            <input type="text" id="svc-bridge-host" placeholder="100.127.182.112"/>
-            <div class="field-hint">NinjaTrader machine (Tailscale IP)</div>
+            <label class="lbl">Broker Bridge Host</label>
+            <input type="text" id="svc-bridge-host" placeholder="localhost"/>
+            <div class="field-hint">Tradovate bridge machine (Tailscale IP or localhost)</div>
           </div>
           <div class="field">
-            <label class="lbl">NT8 Bridge Port</label>
-            <input type="number" id="svc-bridge-port" value="5680" min="1024" max="65535"/>
-            <div class="field-hint">Bridge HTTP listener port (default: 5680)</div>
+            <label class="lbl">Broker Bridge Port</label>
+            <input type="number" id="svc-bridge-port" value="5681" min="1024" max="65535"/>
+            <div class="field-hint">Bridge HTTP listener port (default: 5681 for Tradovate bridge)</div>
           </div>
           <div class="btn-row">
             <button class="btn btn-primary btn-sm" onclick="saveServiceUrls()">💾 Save URLs</button>
@@ -550,9 +550,9 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
           </div>
         </div>
 
-        <!-- NT8 Bridge status -->
+        <!-- Broker Bridge status -->
         <div class="card">
-          <div class="card-title">NT8 Bridge</div>
+          <div class="card-title">Broker Bridge (Tradovate)</div>
           <div id="bridge-status-panel">
             <div style="color:var(--faint);font-size:0.8rem;text-align:center;padding:20px 0">Loading…</div>
           </div>
@@ -569,6 +569,17 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
       <div>
         <div class="card">
           <div class="card-title">Data & Integration</div>
+
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Live Positions Panel</div>
+              <div class="toggle-desc">Show live positions, P&L, and broker status on dashboard. Requires Tradovate bridge connection.</div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="feat-live-positions" onchange="saveFeatures()"/>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
 
           <div class="toggle-row">
             <div>
@@ -692,8 +703,8 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
 
           <div class="toggle-row">
             <div>
-              <div class="toggle-label">Debug Logging (NT8)</div>
-              <div class="toggle-desc">Verbose per-bar debug output in NinjaTrader Output window</div>
+              <div class="toggle-label">Debug Logging</div>
+              <div class="toggle-desc">Verbose debug output in engine logs</div>
             </div>
             <label class="toggle-switch">
               <input type="checkbox" id="feat-debug-log" onchange="saveFeatures()"/>
@@ -708,7 +719,7 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
           <div style="font-size:0.68rem;color:var(--faint)">
             Toggle changes are saved to Redis immediately. Engine-side toggles
             (CNN gate, ORB filter, TPT mode) are read by the engine on next refresh cycle.
-            NT8-side toggles (SAR, debug logging) require strategy parameter changes in NinjaTrader.
+            Live Positions panel is hidden until the Tradovate bridge is connected and the toggle is enabled.
           </div>
         </div>
       </div>
@@ -1345,6 +1356,7 @@ async function loadFeatures() {
     if (!r.ok) return;
     const d = await r.json();
     const fields = {
+      'feat-live-positions': 'enable_live_positions',
       'feat-kraken': 'enable_kraken_crypto',
       'feat-massive-autostart': 'massive_autostart',
       'feat-grok': 'enable_grok',
@@ -1366,6 +1378,7 @@ async function loadFeatures() {
 
 async function saveFeatures() {
   const body = {
+    enable_live_positions: document.getElementById('feat-live-positions').checked,
     enable_kraken_crypto: document.getElementById('feat-kraken').checked,
     massive_autostart: document.getElementById('feat-massive-autostart').checked,
     enable_grok: document.getElementById('feat-grok').checked,
@@ -1738,6 +1751,7 @@ async def get_features_config():
 
     # Defaults sourced from env vars and known defaults
     return {
+        "enable_live_positions": feat.get("enable_live_positions", os.getenv("ENABLE_LIVE_POSITIONS", "0") == "1"),
         "enable_kraken_crypto": feat.get("enable_kraken_crypto", os.getenv("ENABLE_KRAKEN_CRYPTO", "0") == "1"),
         "massive_autostart": feat.get("massive_autostart", os.getenv("MASSIVE_AUTOSTART", "0") == "1"),
         "enable_grok": feat.get("enable_grok", os.getenv("ENABLE_GROK", "1") == "1"),
@@ -1759,6 +1773,7 @@ async def update_features(body: dict):
     feat = overrides.get("features", {})
 
     allowed_keys = {
+        "enable_live_positions",
         "enable_kraken_crypto",
         "massive_autostart",
         "enable_grok",
