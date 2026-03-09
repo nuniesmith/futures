@@ -282,14 +282,12 @@ run_docker() {
     ok "Services are running:"
     echo "    Dashboard:   http://${ts_ip}:8180"
     echo "    Data API:    http://${ts_ip}:8100"
-    echo "    Postgres:    ${ts_ip}:5433"
-    echo "    Redis:       ${ts_ip}:6380"
+    echo "    Postgres:    http://${ts_ip}:5433"
+    echo "    Redis:       http://${ts_ip}:6380"
+    echo "    Prometheus:  http://${ts_ip}:9095"
+    echo "    Grafana:     http://${ts_ip}:3010"
     if [ "$trainer" = "true" ]; then
         echo "    Trainer:     http://${ts_ip}:8200"
-    fi
-    if [ "$monitoring" = "true" ]; then
-        echo "    Prometheus:  http://${ts_ip}:9095"
-        echo "    Grafana:     http://${ts_ip}:3010"
     fi
     echo ""
     echo "  Logs:  docker compose logs -f"

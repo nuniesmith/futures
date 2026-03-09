@@ -8,8 +8,8 @@
 #   engine     — FastAPI REST + SSE (port 8100) + background computation worker
 #   web        — HTMX dashboard frontend; reverse-proxies to engine (port 8180)
 #   trainer    — GPU CNN training server (port 8200)  [training profile]
-#   prometheus — metrics collection & alerting        [monitoring profile]
-#   grafana    — dashboards & visualization           [monitoring profile]
+#   prometheus — metrics collection & alerting
+#   grafana    — dashboards & visualization
 #
 # Docker Hub repo (built by CI/CD):
 #   nuniesmith/futures:engine   — engine + data API (arm64 + amd64)
@@ -20,7 +20,6 @@
 # Usage:
 #   docker compose up -d --build                            # Pi services
 #   docker compose --profile training up -d --build         # + trainer (GPU rig)
-#   docker compose --profile monitoring up -d --build       # + Prometheus/Grafana
 #   docker compose logs -f engine
 #   docker compose logs -f web
 #   docker compose ps
@@ -304,12 +303,11 @@ services:
             retries: 3
 
     # -------------------------------------------------------------------------
-    # Prometheus — Metrics collection & alerting     [monitoring profile]
+    # Prometheus — Metrics collection & alerting
     # Config is baked into the image via docker/monitoring/prometheus/Dockerfile.
     # UI at http://localhost:9095
     # -------------------------------------------------------------------------
     prometheus:
-        profiles: [monitoring]
         build:
             context: .
             dockerfile: docker/monitoring/prometheus/Dockerfile
@@ -331,13 +329,12 @@ services:
                 condition: service_healthy
 
     # -------------------------------------------------------------------------
-    # Grafana — Dashboards & visualization           [monitoring profile]
+    # Grafana — Dashboards & visualization
     # Provisioning configs and dashboards are baked into the image via
     # docker/monitoring/grafana/Dockerfile.
     # UI at http://localhost:3010  (admin / admin on first login)
     # -------------------------------------------------------------------------
     grafana:
-        profiles: [monitoring]
         build:
             context: .
             dockerfile: docker/monitoring/grafana/Dockerfile
