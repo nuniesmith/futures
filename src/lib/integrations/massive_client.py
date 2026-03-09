@@ -32,7 +32,7 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -224,7 +224,7 @@ class MassiveDataProvider:
     CONTRACT_CACHE_TTL = 3600
 
     def __init__(self, api_key: str | None = None):
-        self._api_key = api_key or os.getenv("MASSIVE_API_KEY", "")
+        self._api_key: str = api_key or os.getenv("MASSIVE_API_KEY", "") or ""
         self._client = None
         self._is_available = False
         self._contract_cache: dict[str, tuple[str, float]] = {}  # product → (ticker, timestamp)
@@ -623,7 +623,7 @@ class MassiveDataProvider:
 
         Returns dict: yahoo_ticker → snapshot_dict (only successful fetches).
         """
-        results = {}
+        results: dict[str, dict] = {}
         # Batch by product code to reduce API calls
         product_codes = set()
         ticker_to_product = {}
@@ -1289,7 +1289,7 @@ class MassiveFeedManager:
         subscribe_second_aggs: bool = False,
         use_broad_subscriptions: bool = True,
     ):
-        self._api_key = api_key or os.getenv("MASSIVE_API_KEY", "")
+        self._api_key: str = api_key or os.getenv("MASSIVE_API_KEY", "") or ""
         self._provider = provider
         self._yahoo_tickers = yahoo_tickers or []
         self._subscribe_trades = subscribe_trades
@@ -1297,7 +1297,7 @@ class MassiveFeedManager:
         self._subscribe_second_aggs = subscribe_second_aggs
         self._use_broad_subscriptions = use_broad_subscriptions
 
-        self._ws = None  # raw websockets connection or SDK client
+        self._ws: Any = None  # raw websockets connection or SDK client
         self._thread: threading.Thread | None = None
         self._running = False
         self._connected = False
@@ -1720,7 +1720,7 @@ class MassiveFeedManager:
                 auth_items = auth_resp if isinstance(auth_resp, list) else [auth_resp]
                 auth_ok = any(item.get("status") == "auth_success" for item in auth_items)
                 if not auth_ok:
-                    error_msg = f"WS auth failed: {auth_resp_raw[:300]}"
+                    error_msg = f"WS auth failed: {auth_resp_raw[:300].decode() if isinstance(auth_resp_raw, bytes) else auth_resp_raw[:300]}"
                     logger.error(error_msg)
                     self.errors.append(error_msg)
                     await ws.close()

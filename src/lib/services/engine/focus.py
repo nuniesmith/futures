@@ -667,9 +667,11 @@ def compute_daily_focus(
       - swing_candidate_names: list[str] — swing candidate asset names
     """
     try:
-        from lib.core.models import ASSETS as assets_map
+        from lib.core.models import ASSETS as _imported_assets
+
+        assets_map: dict[str, str] = dict(_imported_assets)
     except ImportError:
-        assets_map: dict[str, str] = {}
+        assets_map = {}
 
     if symbols is None:
         symbols = list(assets_map.keys())

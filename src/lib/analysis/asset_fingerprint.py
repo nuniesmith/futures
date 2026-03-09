@@ -367,10 +367,10 @@ def _compute_session_concentration(
         if len(dates) > lookback_days:
             dates = dates[-lookback_days:]
 
-        overnight_ranges = []
-        london_ranges = []
-        us_ranges = []
-        settle_ranges = []
+        overnight_ranges: list[float] = []
+        london_ranges: list[float] = []
+        us_ranges: list[float] = []
+        settle_ranges: list[float] = []
 
         for date in dates:
             day_bars = df[df["date"] == date]

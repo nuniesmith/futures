@@ -296,6 +296,7 @@ class ModelWatcher:
     """
 
     def __init__(self, model_dir: Path | str | None = None) -> None:
+        self._model_dir: Path | None
         if model_dir is not None:
             self._model_dir = Path(model_dir)
         else:

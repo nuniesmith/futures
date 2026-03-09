@@ -26,6 +26,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Project root on sys.path so lib.* imports resolve when run from repo root
@@ -147,7 +148,7 @@ def _make_synthetic_batch(
     return imgs, tab
 
 
-def _load_pytorch_model(pt_path: Path, device: str) -> tuple[object, object]:
+def _load_pytorch_model(pt_path: Path, device: str) -> tuple[Any, Any]:
     """Load the .pt checkpoint and return (model, torch_module)."""
     import torch
 
@@ -155,7 +156,9 @@ def _load_pytorch_model(pt_path: Path, device: str) -> tuple[object, object]:
 
     info(f"Loading PyTorch model from {pt_path.name} ...")
     t0 = time.perf_counter()
-    model = _build_model_from_checkpoint(str(pt_path), device=device)
+    checkpoint = torch.load(str(pt_path), map_location=device)
+    state_dict = checkpoint.get("model_state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+    model = _build_model_from_checkpoint(state_dict)  # type: ignore[arg-type]
     if model is None:
         raise RuntimeError(f"_build_model_from_checkpoint returned None for {pt_path}")
     model.eval()
@@ -164,7 +167,7 @@ def _load_pytorch_model(pt_path: Path, device: str) -> tuple[object, object]:
     return model, torch
 
 
-def _load_onnx_session(onnx_path: Path) -> object:
+def _load_onnx_session(onnx_path: Path) -> Any:
     """Load the ONNX model via onnxruntime and return the InferenceSession."""
     import onnxruntime as ort
 
@@ -192,8 +195,8 @@ def _load_onnx_session(onnx_path: Path) -> object:
 
 
 def _pt_infer_batch(
-    model: object,
-    torch_mod: object,
+    model: Any,
+    torch_mod: Any,
     imgs: np.ndarray,
     tab: np.ndarray,
     device: str,
@@ -210,7 +213,7 @@ def _pt_infer_batch(
 
 
 def _onnx_infer_batch(
-    session: object,
+    session: Any,
     imgs: np.ndarray,
     tab: np.ndarray,
 ) -> np.ndarray:

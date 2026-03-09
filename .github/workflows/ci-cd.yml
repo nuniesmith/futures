@@ -47,7 +47,8 @@
 #   - XAI_API_KEY: xAI (Grok) API key
 #   - MASSIVE_API_KEY: Massive API key
 #   - KRAKEN_API_KEY: Kraken API key
-#   - API_KEY: Shared secret for inter-service auth (engine ↔ trainer)
+#   - API_KEY: Shared secret for web ↔ engine auth (X-API-Key header)
+#   - TRAINER_API_KEY: Shared secret for engine ↔ trainer auth (Bearer token)
 # =============================================================================
 
 name: 🚀 CI/CD Pipeline
@@ -129,7 +130,7 @@ jobs:
             - name: 📦 Install linting tools
               run: |
                   python -m pip install --upgrade pip
-                  pip install ruff mypy
+                  pip install ruff mypy types-requests
 
             - name: ✨ Run Ruff linting
               run: |
@@ -137,11 +138,14 @@ jobs:
                   ruff check . --output-format=github
                   ruff format --check .
 
+            - name: 📦 Install project (for mypy to resolve imports)
+              run: |
+                  pip install -e ".[dev]" --no-deps 2>/dev/null || pip install -e . --no-deps 2>/dev/null || true
+
             - name: 🔍 Run mypy type check
               run: |
                   echo "🔍 Running mypy type checker..."
-                  if [ -f pyproject.toml ]; then pip install -e ".[dev]" 2>/dev/null || pip install -e . 2>/dev/null || true; fi
-                  mypy . --ignore-missing-imports || true
+                  mypy src scripts
 
     # =========================================================================
     # Stage 2: Test
@@ -306,8 +310,9 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 15
         if: |
-            github.event_name == 'push' && github.ref == 'refs/heads/main'
-            && (github.event_name != 'workflow_dispatch' || inputs.skip_deploy != true)
+            github.ref == 'refs/heads/main'
+            && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+            && inputs.skip_deploy != true
         steps:
             - name: 📥 Checkout code
               uses: actions/checkout@v4
@@ -413,6 +418,8 @@ jobs:
                       upsert_env "KRAKEN_API_KEY"      "${{ secrets.KRAKEN_API_KEY }}"
                       upsert_env "KRAKEN_API_SECRET"   "${{ secrets.KRAKEN_API_SECRET }}"
                       upsert_env "API_KEY"             "${{ secrets.API_KEY }}"
+                      upsert_env "TRAINER_API_KEY"     "${{ secrets.TRAINER_API_KEY }}"
+                      upsert_env "TRAINER_SERVICE_URL" "http://${{ secrets.TRAINER_TAILSCALE_IP }}:8200"
 
                       chmod 600 .env
                       echo "✅ API keys injected"
@@ -526,8 +533,9 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 15
         if: |
-            github.event_name == 'push' && github.ref == 'refs/heads/main'
-            && (github.event_name != 'workflow_dispatch' || inputs.skip_deploy != true)
+            github.ref == 'refs/heads/main'
+            && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+            && inputs.skip_deploy != true
         steps:
             - name: 📥 Checkout code
               uses: actions/checkout@v4

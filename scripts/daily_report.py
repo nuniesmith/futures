@@ -261,7 +261,7 @@ def build_daily_report(target_date: date) -> dict:
     # Model file info
     model_info = _get_model_info()
 
-    report = {
+    report: dict[str, Any] = {
         "date": target_date.isoformat(),
         "day_of_week": target_date.strftime("%A"),
         "generated_at": datetime.now(tz=_EST).isoformat(),

@@ -1744,7 +1744,9 @@ def train_model(
         n = len(train_dataset)
         n_val = max(1, int(n * 0.15))
         n_train = n - n_val
-        train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [n_train, n_val])
+        split_train, split_val = torch.utils.data.random_split(train_dataset, [n_train, n_val])
+        train_dataset = split_train  # type: ignore[assignment]
+        val_dataset = split_val  # type: ignore[assignment]
         logger.info("Auto-split: %d train / %d val", n_train, n_val)
 
     train_loader = DataLoader(

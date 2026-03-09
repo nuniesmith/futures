@@ -805,7 +805,25 @@ async def train(params: TrainRequest | None = None) -> JSONResponse:
         )
 
     _state.reset()
-    request_params = params or TrainRequest()
+    request_params = (
+        params
+        if params is not None
+        else TrainRequest(  # type: ignore[call-arg]
+            symbols=None,
+            days_back=None,
+            breakout_type="all",
+            orb_session=None,
+            bars_source=None,
+            epochs=None,
+            batch_size=None,
+            learning_rate=None,
+            patience=None,
+            min_accuracy=None,
+            min_precision=None,
+            min_recall=None,
+            force_promote=False,
+        )
+    )
 
     thread = threading.Thread(
         target=_run_training_pipeline,

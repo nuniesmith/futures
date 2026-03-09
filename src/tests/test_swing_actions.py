@@ -159,7 +159,7 @@ def _make_signal(name: str = "Gold", direction: str = "LONG", **kwargs) -> _Swin
         "detected_at": datetime.now(tz=_EST).isoformat(),
     }
     defaults.update(kwargs)
-    return _SwingSignal(**defaults)
+    return _SwingSignal(**defaults)  # type: ignore[call-arg, arg-type]
 
 
 def _make_state(
@@ -187,7 +187,7 @@ def _make_state(
         "last_update": datetime.now(tz=_EST).isoformat(),
     }
     defaults.update(kwargs)
-    return _SwingState(**defaults)
+    return _SwingState(**defaults)  # type: ignore[call-arg, arg-type]
 
 
 # ---------------------------------------------------------------------------

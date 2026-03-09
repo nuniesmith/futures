@@ -52,6 +52,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data:8000").rstrip("/")
 
+# Shared secret for authenticating with the data service.
+# Must match the API_KEY set on the data service container.
+# When empty, no header is injected (data service auth is also disabled).
+_DATA_SERVICE_API_KEY: str = os.getenv("API_KEY", "").strip()
+
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
@@ -196,6 +201,9 @@ def _proxy_headers(request: Request) -> dict[str, str]:
     """Build headers to forward to the data service.
 
     Strips hop-by-hop headers and adds X-Forwarded-* headers.
+    Always injects the server-side API_KEY as X-API-Key so the data
+    service authenticates the web service regardless of what the
+    browser sends.
     """
     # Headers that should NOT be forwarded (hop-by-hop)
     skip = {
@@ -208,6 +216,9 @@ def _proxy_headers(request: Request) -> dict[str, str]:
         "upgrade",
         "proxy-authorization",
         "proxy-authenticate",
+        # Strip any key the browser may have sent — we always use the
+        # server-side key so a missing/wrong browser key can't bypass auth.
+        "x-api-key",
     }
 
     headers = {}
@@ -220,6 +231,10 @@ def _proxy_headers(request: Request) -> dict[str, str]:
     headers["X-Forwarded-For"] = client_host
     headers["X-Forwarded-Proto"] = request.url.scheme
     headers["X-Forwarded-Host"] = request.headers.get("host", "")
+
+    # Inject the server-side API key so the data service accepts the request.
+    if _DATA_SERVICE_API_KEY:
+        headers["X-API-Key"] = _DATA_SERVICE_API_KEY
 
     return headers
 

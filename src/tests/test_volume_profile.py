@@ -70,10 +70,10 @@ def _make_ohlcv(
     n_bars = len(dates)
 
     actual_bars = n_bars
-    closes = [base_price]
+    closes_list = [base_price]
     for _ in range(actual_bars - 1):
-        closes.append(closes[-1] + rng.normal(0, volatility))
-    closes = np.array(closes)
+        closes_list.append(closes_list[-1] + rng.normal(0, volatility))
+    closes = np.array(closes_list)
 
     highs = closes + rng.uniform(0.5, volatility, actual_bars)
     lows = closes - rng.uniform(0.5, volatility, actual_bars)
@@ -110,14 +110,14 @@ def _make_bimodal_ohlcv(
     rng = np.random.RandomState(seed)
     start = datetime(2025, 1, 15, 9, 30)
 
-    closes = []
+    closes_list = []
     for i in range(n_bars):
         if i < n_bars // 2:
-            closes.append(center1 + rng.normal(0, 2.0))
+            closes_list.append(center1 + rng.normal(0, 2.0))
         else:
-            closes.append(center2 + rng.normal(0, 2.0))
+            closes_list.append(center2 + rng.normal(0, 2.0))
 
-    closes = np.array(closes)
+    closes = np.array(closes_list)
     highs = closes + rng.uniform(0.5, 3.0, n_bars)
     lows = closes - rng.uniform(0.5, 3.0, n_bars)
     opens = closes + rng.normal(0, 1.0, n_bars)

@@ -44,6 +44,7 @@ Endpoints:
 """
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -159,7 +160,7 @@ def get_ohlcv_bulk(request: OHLCVBulkRequest):
     Avoids N sequential HTTP round-trips from the client.
     Returns a dict keyed by ticker.
     """
-    results = {}
+    results: dict[str, Any] = {}
     for ticker in request.tickers:
         try:
             df = get_data(ticker, request.interval, request.period)
@@ -209,7 +210,7 @@ def get_daily_bars(
 @router.post("/daily/bulk")
 def get_daily_bulk(request: DailyBulkRequest):
     """Fetch daily bars for multiple tickers in a single call."""
-    results = {}
+    results: dict[str, Any] = {}
     for ticker in request.tickers:
         try:
             df = get_daily(ticker, period=request.period)

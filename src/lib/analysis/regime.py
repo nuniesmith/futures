@@ -137,8 +137,8 @@ class RegimeDetector:
         self.persistence_bars = persistence_bars
         self.n_seeds = n_seeds
 
-        self.model = None
-        self.scaler = None
+        self.model: Any = None
+        self.scaler: Any = None
         self.state_mapping: dict[int, str] = {}
         self.is_fitted = False
         self._persistence_count = 0
@@ -235,7 +235,7 @@ class RegimeDetector:
             logger.debug("HMM predict_proba failed: %s", exc)
             return None
 
-        result = {}
+        result: dict[str, float] = {}
         for state_idx, prob in enumerate(latest):
             label = self.state_mapping.get(state_idx, "choppy")
             result[label] = result.get(label, 0.0) + float(prob)

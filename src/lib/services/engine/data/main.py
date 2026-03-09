@@ -165,7 +165,7 @@ from lib.services.engine.data.api.trainer import (  # noqa: E402
 # ---------------------------------------------------------------------------
 _ENGINE_MODE = os.getenv("ENGINE_MODE", "embedded")  # "embedded" or "remote"
 
-_engine = None
+_engine: Any = None
 
 
 class _RemoteEngineProxy:

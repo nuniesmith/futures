@@ -38,8 +38,20 @@ router = APIRouter(tags=["Trainer"])
 _DEFAULT_TRAINER_URL = os.getenv("TRAINER_SERVICE_URL", "http://100.113.72.63:8200").rstrip("/")
 _TRAINER_URL_REDIS_KEY = "futures:trainer_service_url"
 
+# Shared secret for authenticating with the trainer service.
+# Must match TRAINER_API_KEY set on the trainer container.
+# When empty, no Authorization header is injected (trainer auth also disabled).
+_TRAINER_API_KEY: str = os.getenv("TRAINER_API_KEY", "").strip()
+
 # Module-level httpx client — reused across requests
 _trainer_http_client: httpx.AsyncClient | None = None
+
+
+def _trainer_auth_headers() -> dict[str, str]:
+    """Return Authorization header dict for trainer requests, or empty dict."""
+    if _TRAINER_API_KEY:
+        return {"Authorization": f"Bearer {_TRAINER_API_KEY}"}
+    return {}
 
 
 def _get_trainer_url() -> str:
@@ -89,7 +101,7 @@ async def _probe_trainer(url: str) -> dict[str, Any]:
     """Quick health probe of the trainer service. Returns status dict."""
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=3.0)) as c:
-            r = await c.get(f"{url.rstrip('/')}/health")
+            r = await c.get(f"{url.rstrip('/')}/health", headers=_trainer_auth_headers())
             if r.status_code == 200:
                 data = r.json()
                 return {"online": True, "uptime_seconds": data.get("uptime_seconds"), "url": url}
@@ -140,7 +152,7 @@ async def trainer_service_status() -> JSONResponse:
     if probe.get("online"):
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as c:
-                r = await c.get(f"{url}/status")
+                r = await c.get(f"{url}/status", headers=_trainer_auth_headers())
                 if r.status_code == 200:
                     probe["status"] = r.json()
         except Exception:
@@ -177,9 +189,23 @@ async def proxy_trainer_api(request: Request, path: str) -> Response:
 
     try:
         body = await request.body()
-        # Forward the request — strip hop-by-hop headers
-        skip = {"host", "connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "content-length"}
+        # Forward the request — strip hop-by-hop headers and any
+        # Authorization the browser may have sent so we always use the
+        # server-side TRAINER_API_KEY instead.
+        skip = {
+            "host",
+            "connection",
+            "keep-alive",
+            "transfer-encoding",
+            "te",
+            "trailer",
+            "upgrade",
+            "content-length",
+            "authorization",
+        }
         fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
+        # Inject the server-side Bearer token so the trainer authenticates us.
+        fwd_headers.update(_trainer_auth_headers())
 
         resp = await client.request(
             method=request.method,

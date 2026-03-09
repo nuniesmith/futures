@@ -25,9 +25,10 @@ Usage:
 import logging
 import time
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
-import requests
+import requests  # type: ignore[import-untyped]
 
 _EST = ZoneInfo("America/New_York")
 logger = logging.getLogger("grok_helper")
@@ -1129,7 +1130,7 @@ def _validate_grok_plan_response(data: dict) -> dict:
     Ensures all expected keys exist with correct types, fills defaults
     for missing fields.
     """
-    result = {
+    result: dict[str, Any] = {
         "macro_bias": "mixed",
         "macro_summary": "",
         "top_assets": [],

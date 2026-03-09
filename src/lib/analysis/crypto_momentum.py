@@ -112,7 +112,7 @@ FUTURES_TARGETS: dict[str, dict[str, Any]] = {
 
 # Session definitions (ET) — crypto breakouts in these windows have
 # different predictive power for futures follow-through
-SESSIONS = {
+SESSIONS: dict[str, dict[str, Any]] = {
     "asian": {"start": dt_time(19, 0), "end": dt_time(2, 0), "lead_hours": 4.0},
     "london": {"start": dt_time(2, 0), "end": dt_time(8, 0), "lead_hours": 2.0},
     "us_preopen": {"start": dt_time(8, 0), "end": dt_time(9, 30), "lead_hours": 0.5},
@@ -318,7 +318,7 @@ def compute_rsi(closes: np.ndarray, period: int = RSI_PERIOD) -> float:
     if avg_loss == 0:
         return 100.0
     rs = avg_gain / avg_loss
-    return 100.0 - (100.0 / (1.0 + rs))
+    return float(100.0 - (100.0 / (1.0 + rs)))
 
 
 def compute_atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = ATR_PERIOD) -> float:
@@ -403,8 +403,8 @@ def detect_session(now: datetime | None = None) -> tuple[str, dict[str, Any]]:
     t = now.time()
 
     for name, cfg in SESSIONS.items():
-        start = cfg["start"]
-        end = cfg["end"]
+        start: dt_time = cfg["start"]
+        end: dt_time = cfg["end"]
 
         if start <= end:
             # Normal range (e.g., 08:00 – 16:00)

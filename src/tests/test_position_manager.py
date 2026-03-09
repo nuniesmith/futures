@@ -98,12 +98,11 @@ class MockSignal:
 
 def _make_pm(**kwargs: Any) -> PositionManager:
     """Create a PositionManager with core tickers defaulting to {MGC=F}."""
-    defaults = {
-        "account_size": 50_000.0,
-        "core_tickers": frozenset({"MGC=F", "MCL=F", "MES=F", "MNQ=F", "M6E=F"}),
-    }
-    defaults.update(kwargs)
-    return PositionManager(**defaults)
+    account_size: float = kwargs.get("account_size", 50_000.0)
+    core_tickers: frozenset[str] | None = kwargs.get(
+        "core_tickers", frozenset({"MGC=F", "MCL=F", "MES=F", "MNQ=F", "M6E=F"})
+    )
+    return PositionManager(account_size=account_size, core_tickers=core_tickers)
 
 
 # ===========================================================================

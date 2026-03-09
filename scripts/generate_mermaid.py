@@ -1,7 +1,7 @@
 import base64
 from pathlib import Path
 
-import requests
+import requests  # type: ignore[import-untyped]
 
 # =============================================================================
 # FUTURES TRADING SYSTEM — FULL LOGIC FLOW (v5)

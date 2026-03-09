@@ -31,7 +31,7 @@ import os
 import signal
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
@@ -1222,10 +1222,10 @@ def _publish_pm_orders(orders: list) -> None:  # type: ignore[type-arg]
 
 
 def _dispatch_to_position_manager(
-    result: object,
+    result: "Any",
     bars_1m: "pd.DataFrame | None" = None,
     session_key: str = "us",
-    range_config: object = None,
+    range_config: "Any" = None,
 ) -> None:
     """Forward a published breakout signal to the PositionManager.
 
@@ -1378,7 +1378,7 @@ def _persist_breakout_result(result: "BreakoutResult", session_key: str = "") ->
             breakout_type=result.breakout_type.name,
             mtf_score=result.mtf_score,
             macd_slope=result.macd_slope,
-            divergence=result.divergence_type or "",
+            divergence=getattr(result, "divergence_type", None) or "",
         )
         return row_id
     except Exception as exc:

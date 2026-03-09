@@ -402,7 +402,7 @@ class PositionManager:
 
             for ticker, pos in self._positions.items():
                 key = f"{REDIS_KEY_PREFIX}{ticker}"
-                cache_set(key, json.dumps(pos.to_dict()), ttl=86400)  # 24h TTL
+                cache_set(key, json.dumps(pos.to_dict()).encode(), ttl=86400)  # 24h TTL
         except ImportError:
             logger.debug("Redis not available — cannot persist position state")
         except Exception as exc:
@@ -414,7 +414,7 @@ class PositionManager:
             from lib.core.cache import cache_set
 
             key = f"{REDIS_KEY_PREFIX}{ticker}"
-            cache_set(key, "", ttl=1)  # effectively delete by setting tiny TTL
+            cache_set(key, b"", ttl=1)  # effectively delete by setting tiny TTL
         except Exception:
             pass
 
@@ -672,10 +672,10 @@ class PositionManager:
         new_orders = self._open_position(signal, bars_1m, range_config)
         if new_orders:
             # Update reversal count on the new position
-            new_pos = self.get_position(ticker)
-            if new_pos is not None:
-                new_pos.reversal_count = existing.reversal_count + 1
-                new_pos.last_reversal_time = datetime.now(UTC).isoformat()
+            new_pos_or_none = self.get_position(ticker)
+            if new_pos_or_none is not None:
+                new_pos_or_none.reversal_count = existing.reversal_count + 1
+                new_pos_or_none.last_reversal_time = datetime.now(UTC).isoformat()
 
         orders.extend(new_orders)
 
@@ -777,9 +777,10 @@ class PositionManager:
 
         # Process closures
         for ticker, reason, price in tickers_to_close:
-            pos = self._positions.get(ticker)
-            if pos is None:
+            closing_pos = self._positions.get(ticker)
+            if closing_pos is None:
                 continue
+            pos = closing_pos
 
             close_action = OrderAction.SELL if pos.is_long else OrderAction.BUY
             orders.append(

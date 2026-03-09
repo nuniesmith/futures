@@ -64,6 +64,7 @@ dev = [
     "pytest-asyncio>=0.20.0",
     "httpx>=0.27.0",
     "ruff>=0.4.0",
+    "types-requests>=2.31.0",
 ]
 gpu = [
     # --- GPU training (CUDA 12.8) — trainer image only ---
@@ -111,3 +112,22 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["lib", "entrypoints"]
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+files = ["src", "scripts"]
+
+# Error reporting — fail on real type errors
+ignore_missing_imports = true
+warn_unused_ignores = false
+warn_redundant_casts = true
+warn_return_any = false
+
+# Don't require full annotations everywhere, but check what is annotated
+check_untyped_defs = false
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+# Silence noise from unannotated third-party code
+follow_imports = "silent"

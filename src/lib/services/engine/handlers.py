@@ -51,7 +51,7 @@ import logging
 import os
 from datetime import datetime
 from datetime import time as dt_time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
@@ -570,6 +570,10 @@ def build_cnn_tabular_features(
         List of 18 floats in the canonical TABULAR_FEATURES order.
     """
     # Lazy-import CNN helpers — graceful fallback if not available
+    _get_btype_ord: Callable[[str], float] = lambda t: 0.0  # noqa: E731
+    _get_vol_class: Callable[[str], float] = lambda t: 0.5  # noqa: E731
+    _get_asset_cls: Callable[[str], float] = lambda t: 0.0  # noqa: E731
+    _session_enc: float = 0.875
     try:
         from lib.analysis.breakout_cnn import (
             get_asset_class_id as _get_asset_cls,
@@ -586,10 +590,7 @@ def build_cnn_tabular_features(
 
         _session_enc = _get_session_ordinal(session_key)
     except ImportError:
-        _get_btype_ord = lambda t: 0.0  # noqa: E731
-        _get_vol_class = lambda t: 0.5  # noqa: E731
-        _get_asset_cls = lambda t: 0.0  # noqa: E731
-        _session_enc = 0.875
+        pass
 
     # --- [0] quality_pct_norm ---
     _quality_norm = getattr(result, "quality_pct", 0) / 100.0

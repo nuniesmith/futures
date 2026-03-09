@@ -245,8 +245,8 @@ class KrakenDataProvider:
         api_key: str | None = None,
         api_secret: str | None = None,
     ) -> None:
-        self._api_key = api_key or os.getenv("KRAKEN_API_KEY", "")
-        self._api_secret = api_secret or os.getenv("KRAKEN_API_SECRET", "")
+        self._api_key: str = api_key or os.getenv("KRAKEN_API_KEY", "") or ""
+        self._api_secret: str = api_secret or os.getenv("KRAKEN_API_SECRET", "") or ""
         self._session: Any = None
         self._lock = threading.Lock()
         self._last_public_call: float = 0.0
@@ -257,7 +257,7 @@ class KrakenDataProvider:
     def _init_session(self) -> None:
         """Lazily create a requests session with connection pooling."""
         try:
-            import requests
+            import requests  # type: ignore[import-untyped]
 
             self._session = requests.Session()
             self._session.headers.update(

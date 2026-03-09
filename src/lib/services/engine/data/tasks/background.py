@@ -8,6 +8,7 @@ and periodic background tasks (data refresh, optimization, backtesting).
 
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
 logger = logging.getLogger("data_service.tasks")
 logger.setLevel(logging.INFO)
@@ -116,7 +117,7 @@ class BackgroundManager:
         period: str | None = None,
     ) -> dict:
         """Update engine settings at runtime."""
-        changed = {}
+        changed: dict[str, Any] = {}
         if account_size is not None and account_size != self.account_size:
             self.account_size = account_size
             changed["account_size"] = account_size

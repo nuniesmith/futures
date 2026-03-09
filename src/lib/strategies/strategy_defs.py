@@ -21,6 +21,7 @@ here for unified optimizer access.
 
 import logging
 import math
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -1018,7 +1019,7 @@ def _compute_ict_confluence(
 
     Returns a dict with boolean flags and optional SL/TP refinements.
     """
-    result = {
+    result: dict[str, Any] = {
         "ob_aligned": False,
         "fvg_aligned": False,
         "ob_sl": None,

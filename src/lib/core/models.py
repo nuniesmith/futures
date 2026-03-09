@@ -19,6 +19,7 @@ import logging
 import os
 import sqlite3
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -198,7 +199,7 @@ CONTRACT_MODE = os.getenv("CONTRACT_MODE", "micro").lower()
 # ---------------------------------------------------------------------------
 # Account profiles – 50k is 1/3 of 150k, 100k is 2/3
 # ---------------------------------------------------------------------------
-ACCOUNT_PROFILES = {
+ACCOUNT_PROFILES: dict[str, dict[str, Any]] = {
     "50k": {
         "size": 50_000,
         "risk_pct": 0.01,
@@ -246,7 +247,7 @@ ACCOUNT_PROFILES = {
 # ---------------------------------------------------------------------------
 # Contract specifications — Full-size CME contracts
 # ---------------------------------------------------------------------------
-FULL_CONTRACT_SPECS = {
+FULL_CONTRACT_SPECS: dict[str, dict[str, Any]] = {
     "Gold": {"ticker": "GC=F", "point": 100, "tick": 0.10, "margin": 11_000},
     "Silver": {"ticker": "SI=F", "point": 5_000, "tick": 0.005, "margin": 9_000},
     "Copper": {"ticker": "HG=F", "point": 25_000, "tick": 0.0005, "margin": 6_000},
@@ -280,7 +281,7 @@ FULL_CONTRACT_SPECS = {
 # Micro contracts are 1/10 of full size (except Silver 1/5, FX 1/10).
 # These give more granularity for position sizing and scaling.
 # ---------------------------------------------------------------------------
-MICRO_CONTRACT_SPECS = {
+MICRO_CONTRACT_SPECS: dict[str, dict[str, Any]] = {
     # ── Metals ──────────────────────────────────────────────────────────────
     "Gold": {
         "ticker": "MGC=F",
@@ -466,7 +467,7 @@ MICRO_CONTRACT_SPECS = {
 # ---------------------------------------------------------------------------
 ENABLE_KRAKEN_CRYPTO = os.getenv("ENABLE_KRAKEN_CRYPTO", "1").strip().lower() in ("1", "true", "yes")
 
-KRAKEN_CONTRACT_SPECS: dict[str, dict] = {
+KRAKEN_CONTRACT_SPECS: dict[str, dict[str, Any]] = {
     "BTC/USD": {
         "ticker": "KRAKEN:XBTUSD",
         "data_ticker": "KRAKEN:XBTUSD",
@@ -690,10 +691,10 @@ def set_contract_mode(mode: str) -> dict:
     CONTRACT_SPECS.update(source)
 
     ASSETS.clear()
-    ASSETS.update({name: spec.get("data_ticker", spec["ticker"]) for name, spec in CONTRACT_SPECS.items()})
+    ASSETS.update({name: str(spec.get("data_ticker", spec["ticker"])) for name, spec in CONTRACT_SPECS.items()})
 
     TICKER_TO_NAME.clear()
-    TICKER_TO_NAME.update({spec.get("data_ticker", spec["ticker"]): name for name, spec in CONTRACT_SPECS.items()})
+    TICKER_TO_NAME.update({str(spec.get("data_ticker", spec["ticker"])): name for name, spec in CONTRACT_SPECS.items()})
 
     return CONTRACT_SPECS
 
@@ -1186,7 +1187,7 @@ def close_trade(trade_id: int, close_price: float) -> dict:
     contracts = row["contracts"]
 
     spec = CONTRACT_SPECS.get(asset)
-    point_value = spec["point"] if spec else 1.0
+    point_value = float(spec["point"]) if spec else 1.0
 
     if direction.upper() == "LONG":
         pnl = (close_price - entry) * point_value * contracts
@@ -1370,7 +1371,7 @@ def calc_max_contracts(
     spec = CONTRACT_SPECS.get(asset)
     if spec is None:
         return 1
-    risk_per_contract = abs(entry - sl) * spec["point"]
+    risk_per_contract = abs(entry - sl) * float(spec["point"])
     if risk_per_contract <= 0:
         return 1
     raw = int(risk_dollars // risk_per_contract)
@@ -1383,8 +1384,8 @@ def get_max_contracts_for_profile(profile_key: str) -> int:
     if profile is None:
         return 4
     if CONTRACT_MODE == "micro":
-        return profile.get("max_contracts_micro", profile["max_contracts"])
-    return profile["max_contracts"]
+        return int(profile.get("max_contracts_micro", profile["max_contracts"]))
+    return int(profile["max_contracts"])
 
 
 def calc_pnl(
@@ -1396,7 +1397,7 @@ def calc_pnl(
 ) -> float:
     """Calculate P&L for a given trade."""
     spec = CONTRACT_SPECS.get(asset)
-    point_value = spec["point"] if spec else 1.0
+    point_value = float(spec["point"]) if spec else 1.0
     if direction.upper() == "LONG":
         return (close_price - entry) * point_value * contracts
     else:
@@ -1701,8 +1702,8 @@ def get_risk_events(
         List of event dicts, most recent first.
     """
     ph = "%s" if _USE_POSTGRES else "?"
-    conditions = []
-    params = []
+    conditions: list[str] = []
+    params: list[Any] = []
 
     if event_type:
         conditions.append(f"event_type = {ph}")
@@ -1872,8 +1873,8 @@ def get_orb_events(
         List of event dicts, most recent first.
     """
     ph = "%s" if _USE_POSTGRES else "?"
-    conditions = []
-    params = []
+    conditions: list[str] = []
+    params: list[Any] = []
 
     if symbol:
         conditions.append(f"symbol = {ph}")
@@ -1916,7 +1917,7 @@ def get_audit_summary(days_back: int = 7) -> dict:
     cutoff = (datetime.now(tz=_EST) - timedelta(days=days_back)).isoformat()
     ph = "%s" if _USE_POSTGRES else "?"
 
-    summary = {
+    summary: dict[str, Any] = {
         "days_back": days_back,
         "cutoff": cutoff,
         "risk_events": {"total": 0, "blocks": 0, "warnings": 0, "by_symbol": {}},
@@ -1935,7 +1936,7 @@ def get_audit_summary(days_back: int = 7) -> dict:
         )
         for row in cur.fetchall():
             d = _row_to_dict(row)
-            cnt = d.get("cnt", 0)
+            cnt = int(d.get("cnt", 0))
             summary["risk_events"]["total"] += cnt
             et = d.get("event_type", "")
             sym = d.get("symbol", "")
@@ -1944,7 +1945,8 @@ def get_audit_summary(days_back: int = 7) -> dict:
             elif et == "warning":
                 summary["risk_events"]["warnings"] += cnt
             if sym:
-                summary["risk_events"]["by_symbol"][sym] = summary["risk_events"]["by_symbol"].get(sym, 0) + cnt
+                by_sym: dict[str, int] = summary["risk_events"]["by_symbol"]
+                by_sym[sym] = by_sym.get(sym, 0) + cnt
 
         # ORB events summary
         cur = conn.execute(
@@ -1955,13 +1957,14 @@ def get_audit_summary(days_back: int = 7) -> dict:
         )
         for row in cur.fetchall():
             d = _row_to_dict(row)
-            cnt = d.get("cnt", 0)
+            cnt = int(d.get("cnt", 0))
             summary["orb_events"]["total"] += cnt
             if d.get("breakout_detected", 0) == 1:
                 summary["orb_events"]["breakouts"] += cnt
             sym = d.get("symbol", "")
             if sym:
-                summary["orb_events"]["by_symbol"][sym] = summary["orb_events"]["by_symbol"].get(sym, 0) + cnt
+                by_sym_orb: dict[str, int] = summary["orb_events"]["by_symbol"]
+                by_sym_orb[sym] = by_sym_orb.get(sym, 0) + cnt
 
         conn.close()
     except Exception as exc:
@@ -2000,7 +2003,7 @@ def migrate_sqlite_to_postgres(
     src_conn = _sqlite3.connect(src_path)
     src_conn.row_factory = _sqlite3.Row
 
-    result = {"trades": 0, "journal": 0, "errors": []}
+    result: dict[str, Any] = {"trades": 0, "journal": 0, "errors": []}
 
     # Check source tables
     tables = [r[0] for r in src_conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]

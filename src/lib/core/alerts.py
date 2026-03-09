@@ -45,10 +45,10 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-import requests
+import requests  # type: ignore[import-untyped]
 
 logger = logging.getLogger("alerts")
 
@@ -180,7 +180,7 @@ class _AlertStore:
                                 "datetime": datetime.fromtimestamp(ts_val, tz=_EST).strftime("%H:%M:%S"),
                             }
                         )
-                return sorted(alerts, key=lambda x: x["timestamp"], reverse=True)[:limit]
+                return sorted(alerts, key=lambda x: cast(float, x["timestamp"]), reverse=True)[:limit]
             except Exception:
                 pass
 
@@ -193,7 +193,7 @@ class _AlertStore:
             }
             for k, v in self._memory_store.items()
         ]
-        return sorted(alerts, key=lambda x: x["timestamp"], reverse=True)[:limit]
+        return sorted(alerts, key=lambda x: cast(float, x["timestamp"]), reverse=True)[:limit]
 
     def clear(self) -> None:
         """Clear all stored alert timestamps."""
@@ -222,7 +222,7 @@ def _send_slack(webhook_url: str, title: str, message: str, fields: dict | None 
     if not webhook_url:
         return False
 
-    blocks = [
+    blocks: list[dict[str, Any]] = [
         {
             "type": "header",
             "text": {"type": "plain_text", "text": title[:150], "emoji": True},
@@ -234,7 +234,7 @@ def _send_slack(webhook_url: str, title: str, message: str, fields: dict | None 
     ]
 
     if fields:
-        field_blocks = []
+        field_blocks: list[dict[str, str]] = []
         for k, v in fields.items():
             field_blocks.append({"type": "mrkdwn", "text": f"*{k}*\n{v}"})
         if field_blocks:

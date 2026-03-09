@@ -61,7 +61,7 @@ import numpy as np
 # _load_bars_from_engine).  Importing it at module level makes it patchable
 # in tests via `patch("lib.services.training.dataset_generator.requests", ...)`.
 try:
-    import requests
+    import requests  # type: ignore[import-untyped]
 except ImportError:
     requests = None  # type: ignore[assignment]
 
@@ -260,7 +260,9 @@ class DatasetStats:
 # default docker-compose service name.
 # ---------------------------------------------------------------------------
 
-_ENGINE_DATA_URL: str = (os.getenv("ENGINE_DATA_URL") or os.getenv("DATA_SERVICE_URL", "http://data:8000")).rstrip("/")
+_ENGINE_DATA_URL: str = (os.getenv("ENGINE_DATA_URL") or os.getenv("DATA_SERVICE_URL") or "http://data:8000").rstrip(
+    "/"
+)
 
 # Shared secret for inter-service authentication.
 # When set, sent as X-API-Key header on all engine HTTP requests.
@@ -706,9 +708,10 @@ def _load_bars_from_kraken(symbol: str, days: int = 90) -> pd.DataFrame | None:
 
     for _page in range(max_pages):
         try:
+            req_params: dict[str, str | int] = {"pair": pair, "interval": _INTERVAL, "since": since_ts}
             resp = requests.get(
                 _KRAKEN_OHLC_URL,
-                params={"pair": pair, "interval": _INTERVAL, "since": since_ts},
+                params=req_params,
                 timeout=15,
             )
             resp.raise_for_status()
@@ -1891,13 +1894,12 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     # BreakoutDataset divides by 1380 to normalise to [0, 1].
     bar_of_day_minutes = 0
     try:
-        bt = result.breakout_time
-        if bt is not None:
+        bt_raw = result.breakout_time
+        if bt_raw is not None:
             # breakout_time may be a datetime or an ISO string
-            if isinstance(bt, str):
-                from datetime import datetime as _dt
+            from datetime import datetime as _dt
 
-                bt = _dt.fromisoformat(bt)
+            bt: _dt = _dt.fromisoformat(bt_raw) if isinstance(bt_raw, str) else bt_raw
             # Normalise to a naive ET-local time if tz-aware
             if bt.tzinfo is not None:
                 from zoneinfo import ZoneInfo as _ZI
@@ -1912,14 +1914,13 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     # ── [11] day_of_week_norm — Mon=0..Fri=4 scaled to [0, 1] ────────────
     day_of_week_norm = 0.5  # default midweek
     try:
-        bt = result.breakout_time
-        if bt is not None:
-            if isinstance(bt, str):
-                from datetime import datetime as _dt
+        bt_raw2 = result.breakout_time
+        if bt_raw2 is not None:
+            from datetime import datetime as _dt
 
-                bt = _dt.fromisoformat(bt)
+            bt2: _dt = _dt.fromisoformat(bt_raw2) if isinstance(bt_raw2, str) else bt_raw2
             # weekday(): Mon=0 .. Sun=6; clamp to trading days Mon-Fri
-            dow = bt.weekday()  # 0=Mon, 4=Fri, 5/6=weekend
+            dow = bt2.weekday()  # 0=Mon, 4=Fri, 5/6=weekend
             day_of_week_norm = dow / 4.0 if 0 <= dow <= 4 else 0.5  # fallback for weekend bars (rare)
     except Exception:
         day_of_week_norm = 0.5
@@ -1954,17 +1955,16 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     # ── [16] hour_of_day — ET hour / 23 → [0, 1] ─────────────────────────
     hour_of_day_norm = 0.5
     try:
-        bt = result.breakout_time
-        if bt is not None:
-            if isinstance(bt, str):
-                from datetime import datetime as _dt
+        bt_raw3 = result.breakout_time
+        if bt_raw3 is not None:
+            from datetime import datetime as _dt
 
-                bt = _dt.fromisoformat(bt)
-            if bt.tzinfo is not None:
+            bt3: _dt = _dt.fromisoformat(bt_raw3) if isinstance(bt_raw3, str) else bt_raw3
+            if bt3.tzinfo is not None:
                 from zoneinfo import ZoneInfo as _ZI
 
-                bt = bt.astimezone(_ZI("America/New_York")).replace(tzinfo=None)
-            hour_of_day_norm = max(0.0, min(1.0, bt.hour / 23.0))
+                bt3 = bt3.astimezone(_ZI("America/New_York")).replace(tzinfo=None)
+            hour_of_day_norm = max(0.0, min(1.0, bt3.hour / 23.0))
     except Exception:
         hour_of_day_norm = 0.5
 
@@ -2079,17 +2079,16 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
         # Also check the bar hour for overlap detection
         _bar_hour_et = None
         try:
-            bt = result.breakout_time
-            if bt is not None:
-                if isinstance(bt, str):
-                    from datetime import datetime as _dt
+            bt_raw4 = result.breakout_time
+            if bt_raw4 is not None:
+                from datetime import datetime as _dt
 
-                    bt = _dt.fromisoformat(bt)
-                if bt.tzinfo is not None:
+                bt4: _dt = _dt.fromisoformat(bt_raw4) if isinstance(bt_raw4, str) else bt_raw4
+                if bt4.tzinfo is not None:
                     from zoneinfo import ZoneInfo as _ZI
 
-                    bt = bt.astimezone(_ZI("America/New_York"))
-                _bar_hour_et = bt.hour
+                    bt4 = bt4.astimezone(_ZI("America/New_York"))
+                _bar_hour_et = bt4.hour
         except Exception:
             pass
         session_overlap = get_session_overlap_flag(_session_key, bar_hour_et=_bar_hour_et)
@@ -2407,8 +2406,9 @@ def generate_dataset(
         for pt in peer_tickers:
             # Check the cache first
             if pt in _bars_cache:
-                if _bars_cache[pt] is not None and not _bars_cache[pt].empty:
-                    bars_by_ticker[pt] = _bars_cache[pt]
+                _cached_bars = _bars_cache[pt]
+                if _cached_bars is not None and not _cached_bars.empty:
+                    bars_by_ticker[pt] = _cached_bars
             else:
                 # Peer wasn't pre-loaded (e.g. not in PEER_MAP at planning
                 # time, or newly discovered).  Try loading now.

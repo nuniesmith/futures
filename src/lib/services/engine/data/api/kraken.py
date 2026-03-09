@@ -1063,10 +1063,10 @@ def _render_corr_bar(corr: float, label: str) -> str:
     # Bar: center at 50%; positive bars go right, negative go left
     bar_pct = abs_c * 48  # max 48% of half-width
     if corr >= 0:
-        bar_x = 50
+        bar_x: float = 50.0
         bar_w = bar_pct
     else:
-        bar_x = 50 - bar_pct
+        bar_x = 50.0 - bar_pct
         bar_w = bar_pct
 
     return (

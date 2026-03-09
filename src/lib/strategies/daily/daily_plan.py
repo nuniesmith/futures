@@ -500,7 +500,7 @@ def _compute_rb_setup_density_score(
             return 30.0  # No data — not necessarily bad, might be quiet
 
         now = datetime.now(tz=_EST)
-        active_count = 0
+        active_count = 0.0
         _ = 13  # All breakout types (unused; count for reference only)
 
         for _type_name, raw_val in state.items():

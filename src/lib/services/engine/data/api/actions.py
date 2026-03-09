@@ -14,6 +14,7 @@ Endpoints:
 import contextlib
 import logging
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
@@ -134,9 +135,9 @@ def update_settings(req: UpdateSettingsRequest):
     the new parameters immediately.
     """
     engine = _get_engine()
-    changed = {}
+    changed: dict[str, Any] = {}
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if req.account_size is not None:
         if req.account_size not in (50_000, 100_000, 150_000):
             raise HTTPException(
