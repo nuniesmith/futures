@@ -126,7 +126,7 @@ class TestComputeATR:
     """Test the compute_atr function."""
 
     def test_basic_atr(self):
-        from lib.services.engine.orb import compute_atr
+        from lib.services.engine.rb.orb import compute_atr
 
         bars = _make_1m_bars(n=30, start_price=100.0, volatility=0.005)
         atr = compute_atr(bars["High"].values, bars["Low"].values, bars["Close"].values, period=14)
@@ -134,7 +134,7 @@ class TestComputeATR:
         assert isinstance(atr, float)
 
     def test_atr_with_small_data(self):
-        from lib.services.engine.orb import compute_atr
+        from lib.services.engine.rb.orb import compute_atr
 
         # Only 3 bars — less than period, should still return something
         bars = _make_1m_bars(n=3, start_price=100.0)
@@ -142,7 +142,7 @@ class TestComputeATR:
         assert atr >= 0
 
     def test_atr_single_bar(self):
-        from lib.services.engine.orb import compute_atr
+        from lib.services.engine.rb.orb import compute_atr
 
         bars = _make_1m_bars(n=1, start_price=100.0)
         atr = compute_atr(bars["High"].values, bars["Low"].values, bars["Close"].values, period=14)
@@ -151,7 +151,7 @@ class TestComputeATR:
 
     def test_atr_zero_range(self):
         """Flat bars should produce near-zero ATR."""
-        from lib.services.engine.orb import compute_atr
+        from lib.services.engine.rb.orb import compute_atr
 
         n = 20
         prices = np.full(n, 100.0)
@@ -159,7 +159,7 @@ class TestComputeATR:
         assert atr == 0.0
 
     def test_atr_increases_with_volatility(self):
-        from lib.services.engine.orb import compute_atr
+        from lib.services.engine.rb.orb import compute_atr
 
         low_vol = _make_1m_bars(n=30, start_price=100.0, volatility=0.001, seed=10)
         high_vol = _make_1m_bars(n=30, start_price=100.0, volatility=0.01, seed=10)
@@ -178,7 +178,7 @@ class TestComputeOpeningRange:
     """Test the compute_opening_range function."""
 
     def test_basic_opening_range(self):
-        from lib.services.engine.orb import compute_opening_range
+        from lib.services.engine.rb.orb import compute_opening_range
 
         bars = _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00")
         or_high, or_low, count, complete = compute_opening_range(bars)
@@ -189,7 +189,7 @@ class TestComputeOpeningRange:
         assert count > 0  # Should have bars in the 09:30–10:00 window
 
     def test_empty_dataframe(self):
-        from lib.services.engine.orb import compute_opening_range
+        from lib.services.engine.rb.orb import compute_opening_range
 
         empty = pd.DataFrame(columns=["High", "Low", "Close"])
         or_high, or_low, count, complete = compute_opening_range(empty)
@@ -199,14 +199,14 @@ class TestComputeOpeningRange:
         assert complete is False
 
     def test_none_input(self):
-        from lib.services.engine.orb import compute_opening_range
+        from lib.services.engine.rb.orb import compute_opening_range
 
         or_high, or_low, count, complete = compute_opening_range(None)
         assert count == 0
 
     def test_no_bars_in_or_window(self):
         """Bars outside 09:30–10:00 should produce empty OR."""
-        from lib.services.engine.orb import compute_opening_range
+        from lib.services.engine.rb.orb import compute_opening_range
 
         # Bars starting at 10:30 — all after OR window
         bars = _make_1m_bars(n=30, start_price=2700.0, start_time="2026-02-27 10:30:00")
@@ -215,7 +215,7 @@ class TestComputeOpeningRange:
 
     def test_or_complete_flag(self):
         """is_complete should be True only when bars exist past 10:00 ET."""
-        from lib.services.engine.orb import compute_opening_range
+        from lib.services.engine.rb.orb import compute_opening_range
 
         # Bars from 09:30 to 09:50 — OR not complete
         bars_early = _make_1m_bars(n=20, start_price=2700.0, start_time="2026-02-27 09:30:00")
@@ -229,7 +229,7 @@ class TestComputeOpeningRange:
 
     def test_or_bar_count(self):
         """Bar count should match the number of bars in 09:30–10:00 window."""
-        from lib.services.engine.orb import compute_opening_range
+        from lib.services.engine.rb.orb import compute_opening_range
 
         # 30 bars starting at 09:30 — all are in OR window
         bars = _make_1m_bars(n=30, start_price=2700.0, start_time="2026-02-27 09:30:00")
@@ -238,7 +238,7 @@ class TestComputeOpeningRange:
 
     def test_naive_index_assumed_eastern(self):
         """Bars with naive (no tz) index should be treated as Eastern."""
-        from lib.services.engine.orb import compute_opening_range
+        from lib.services.engine.rb.orb import compute_opening_range
 
         bars = _make_1m_bars(n=40, start_price=2700.0, start_time="2026-02-27 09:25:00")
         # Remove timezone
@@ -259,7 +259,7 @@ class TestDetectOpeningRangeBreakout:
 
     def test_no_breakout(self):
         """When post-OR bars stay within the range, no breakout should be detected."""
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
 
         # Tight bars that stay within OR range
         bars = _make_1m_bars(
@@ -279,7 +279,7 @@ class TestDetectOpeningRangeBreakout:
 
     def test_long_breakout(self):
         """Clear upward breakout should be detected as LONG."""
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
 
         bars = _make_breakout_bars(direction="LONG", or_price=2700.0, breakout_magnitude=20.0)
         result = detect_opening_range_breakout(bars, symbol="MGC")
@@ -297,7 +297,7 @@ class TestDetectOpeningRangeBreakout:
 
     def test_short_breakout(self):
         """Clear downward breakout should be detected as SHORT."""
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
 
         bars = _make_breakout_bars(direction="SHORT", or_price=2700.0, breakout_magnitude=20.0)
         result = detect_opening_range_breakout(bars, symbol="MGC")
@@ -308,7 +308,7 @@ class TestDetectOpeningRangeBreakout:
             assert result.trigger_price < result.short_trigger
 
     def test_empty_bars(self):
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
 
         empty = pd.DataFrame(columns=["High", "Low", "Close"])
         result = detect_opening_range_breakout(empty, symbol="TEST")
@@ -316,14 +316,14 @@ class TestDetectOpeningRangeBreakout:
         assert result.error != ""
 
     def test_none_bars(self):
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
 
         result = detect_opening_range_breakout(None, symbol="TEST")
         assert result.breakout_detected is False
         assert "No bar data" in result.error
 
     def test_insufficient_bars(self):
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
 
         bars = _make_1m_bars(n=3, start_price=2700.0, start_time="2026-02-27 09:30:00")
         result = detect_opening_range_breakout(bars, symbol="TEST")
@@ -331,7 +331,7 @@ class TestDetectOpeningRangeBreakout:
         assert "Insufficient" in result.error or "Opening range has only" in result.error
 
     def test_missing_columns(self):
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
 
         bars = pd.DataFrame({"Open": [1, 2, 3, 4, 5, 6], "Volume": [100] * 6})
         result = detect_opening_range_breakout(bars, symbol="TEST")
@@ -340,7 +340,7 @@ class TestDetectOpeningRangeBreakout:
 
     def test_or_not_complete_returns_levels_only(self):
         """If OR window hasn't finished, return levels but no breakout scan."""
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
 
         # Only bars in the OR window, no post-OR bars
         bars = _make_1m_bars(n=25, start_price=2700.0, start_time="2026-02-27 09:30:00")
@@ -352,14 +352,14 @@ class TestDetectOpeningRangeBreakout:
         assert result.long_trigger > 0 or result.error != ""
 
     def test_custom_atr_period(self):
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
 
         bars = _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00")
         result = detect_opening_range_breakout(bars, symbol="MGC", atr_period=5)
         assert result.atr_value > 0
 
     def test_custom_breakout_multiplier(self):
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
 
         bars = _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00")
 
@@ -371,7 +371,7 @@ class TestDetectOpeningRangeBreakout:
         assert result_high.long_trigger > result_low.long_trigger
 
     def test_evaluated_at_timestamp(self):
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
 
         fixed_time = datetime(2026, 2, 27, 10, 30, 0, tzinfo=_EST)
         bars = _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00")
@@ -388,7 +388,7 @@ class TestORBResult:
     """Test ORBResult data class and serialization."""
 
     def test_to_dict_structure(self):
-        from lib.services.engine.orb import ORBResult
+        from lib.services.engine.rb.orb import ORBResult
 
         result = ORBResult(
             symbol="MGC",
@@ -411,7 +411,7 @@ class TestORBResult:
         assert d["trigger_price"] == 2712.25
 
     def test_to_dict_json_serializable(self):
-        from lib.services.engine.orb import ORBResult
+        from lib.services.engine.rb.orb import ORBResult
 
         result = ORBResult(symbol="MNQ", or_high=20100.5, or_low=20050.0)
         d = result.to_dict()
@@ -421,7 +421,7 @@ class TestORBResult:
         assert parsed["symbol"] == "MNQ"
 
     def test_default_values(self):
-        from lib.services.engine.orb import ORBResult
+        from lib.services.engine.rb.orb import ORBResult
 
         result = ORBResult()
         assert result.symbol == ""
@@ -430,7 +430,7 @@ class TestORBResult:
         assert result.or_high == 0.0
 
     def test_to_dict_rounds_values(self):
-        from lib.services.engine.orb import ORBResult
+        from lib.services.engine.rb.orb import ORBResult
 
         result = ORBResult(or_high=2710.123456789, atr_value=3.987654321)
         d = result.to_dict()
@@ -447,7 +447,7 @@ class TestScanORBAllAssets:
     """Test the scan_orb_all_assets function."""
 
     def test_multiple_symbols(self):
-        from lib.services.engine.orb import scan_orb_all_assets
+        from lib.services.engine.rb.orb import scan_orb_all_assets
 
         bars_by_symbol = {
             "MGC": _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00", seed=1),
@@ -460,13 +460,13 @@ class TestScanORBAllAssets:
         assert "MNQ" in symbols
 
     def test_empty_dict(self):
-        from lib.services.engine.orb import scan_orb_all_assets
+        from lib.services.engine.rb.orb import scan_orb_all_assets
 
         results = scan_orb_all_assets({})
         assert results == []
 
     def test_handles_bad_data(self):
-        from lib.services.engine.orb import scan_orb_all_assets
+        from lib.services.engine.rb.orb import scan_orb_all_assets
 
         bars_by_symbol = {
             "MGC": _make_1m_bars(n=70, start_price=2700.0, start_time="2026-02-27 09:20:00"),
@@ -485,7 +485,7 @@ class TestORBPublishing:
     """Test publish_orb_alert and clear_orb_alert."""
 
     def test_publish_success(self):
-        from lib.services.engine.orb import ORBResult, publish_orb_alert
+        from lib.services.engine.rb.orb import ORBResult, publish_orb_alert
 
         result = ORBResult(
             symbol="MGC",
@@ -506,7 +506,7 @@ class TestORBPublishing:
             assert mock_cache.cache_set.call_count >= 1
 
     def test_publish_with_redis_pubsub(self):
-        from lib.services.engine.orb import ORBResult, publish_orb_alert
+        from lib.services.engine.rb.orb import ORBResult, publish_orb_alert
 
         mock_r = MagicMock()
         mock_cache = MagicMock()
@@ -514,16 +514,12 @@ class TestORBPublishing:
         mock_cache._r = mock_r
         mock_cache.cache_set = MagicMock()
 
-        mock_tv_module = MagicMock()
-        mock_tv_module.publish_signal_to_tv_sync = MagicMock(return_value=True)
-
         result = ORBResult(symbol="MGC", breakout_detected=True, direction="LONG")
 
         with patch.dict(
             sys.modules,
             {
                 "lib.core.cache": mock_cache,
-                "lib.services.data.api.tradingview": mock_tv_module,
             },
         ):
             success = publish_orb_alert(result)
@@ -531,7 +527,7 @@ class TestORBPublishing:
             mock_r.publish.assert_called()
 
     def test_clear_orb_alert(self):
-        from lib.services.engine.orb import clear_orb_alert
+        from lib.services.engine.rb.orb import clear_orb_alert
 
         mock_cache = MagicMock()
         mock_cache.cache_set = MagicMock()
@@ -1441,7 +1437,7 @@ class TestORBRiskIntegration:
 
     def test_orb_breakout_with_risk_check(self):
         """After detecting an ORB breakout, a risk check should evaluate the trade."""
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
         from lib.services.engine.risk import RiskManager
 
         bars = _make_breakout_bars(direction="LONG", or_price=2700.0, breakout_magnitude=20.0)
@@ -1464,7 +1460,7 @@ class TestORBRiskIntegration:
 
     def test_orb_detection_then_position_update(self):
         """ORB detection followed by position update should track risk correctly."""
-        from lib.services.engine.orb import detect_opening_range_breakout
+        from lib.services.engine.rb.orb import detect_opening_range_breakout
         from lib.services.engine.risk import RiskManager
 
         bars = _make_breakout_bars(direction="LONG", or_price=2700.0, breakout_magnitude=20.0)
@@ -1499,30 +1495,30 @@ class TestORBConstants:
     """Verify ORB constants are sensible."""
 
     def test_or_window(self):
-        from lib.services.engine.orb import OR_END, OR_START
+        from lib.services.engine.rb.orb import OR_END, OR_START
 
         assert dt_time(9, 30) == OR_START
         assert dt_time(10, 0) == OR_END
 
     def test_atr_period(self):
-        from lib.services.engine.orb import ATR_PERIOD
+        from lib.services.engine.rb.orb import ATR_PERIOD
 
         assert ATR_PERIOD > 0
         assert ATR_PERIOD <= 30
 
     def test_breakout_multiplier(self):
-        from lib.services.engine.orb import BREAKOUT_ATR_MULTIPLIER
+        from lib.services.engine.rb.orb import BREAKOUT_ATR_MULTIPLIER
 
         assert BREAKOUT_ATR_MULTIPLIER > 0
         assert BREAKOUT_ATR_MULTIPLIER <= 2.0
 
     def test_min_or_bars(self):
-        from lib.services.engine.orb import MIN_OR_BARS
+        from lib.services.engine.rb.orb import MIN_OR_BARS
 
         assert MIN_OR_BARS >= 3
 
     def test_redis_keys(self):
-        from lib.services.engine.orb import REDIS_KEY_ORB, REDIS_PUBSUB_ORB
+        from lib.services.engine.rb.orb import REDIS_KEY_ORB, REDIS_PUBSUB_ORB
 
         assert "orb" in REDIS_KEY_ORB.lower()
         assert "orb" in REDIS_PUBSUB_ORB.lower()
@@ -1596,7 +1592,7 @@ class TestMultiSessionORB:
     """Test multi-session ORB detection."""
 
     def test_detect_all_sessions(self):
-        from lib.services.engine.orb import detect_all_sessions
+        from lib.services.engine.rb.orb import detect_all_sessions
 
         # Use bars that span enough time to cover both session windows
         bars = _make_1m_bars(n=60, start_price=2700.0, start_time="2026-02-27 09:20:00")
@@ -1606,7 +1602,7 @@ class TestMultiSessionORB:
         assert multi.symbol == "MGC"
 
     def test_multi_session_result_properties(self):
-        from lib.services.engine.orb import MultiSessionORBResult, ORBResult
+        from lib.services.engine.rb.orb import MultiSessionORBResult, ORBResult
 
         r1 = ORBResult(symbol="MGC", session_key="london", breakout_detected=True, or_range=10.0)
         r2 = ORBResult(symbol="MGC", session_key="us", breakout_detected=False, or_range=5.0)
@@ -1617,7 +1613,7 @@ class TestMultiSessionORB:
         assert multi.best_breakout.session_key == "london"
 
     def test_session_helpers(self):
-        from lib.services.engine.orb import get_active_sessions, get_session_status
+        from lib.services.engine.rb.orb import get_active_sessions, get_session_status
 
         # 03:15 ET — London should be active (forming)
         now_london = datetime(2025, 1, 15, 3, 15, tzinfo=ZoneInfo("America/New_York"))
@@ -1638,7 +1634,7 @@ class TestMultiSessionORB:
         assert statuses["us"] == "forming"
 
     def test_orb_result_includes_session_info(self):
-        from lib.services.engine.orb import LONDON_SESSION, detect_opening_range_breakout
+        from lib.services.engine.rb.orb import LONDON_SESSION, detect_opening_range_breakout
 
         bars = _make_1m_bars()
         result = detect_opening_range_breakout(bars, symbol="MGC", session=LONDON_SESSION)

@@ -237,7 +237,7 @@ def _resample_to_15m(df: pd.DataFrame) -> pd.DataFrame | None:
             df.index = pd.to_datetime(df.index)
 
         # Standard OHLCV column names
-        ohlcv_map = {}
+        ohlcv_map: dict[str, str] = {}
         for col in df.columns:
             cl = col.lower()
             if cl == "open":
@@ -254,19 +254,17 @@ def _resample_to_15m(df: pd.DataFrame) -> pd.DataFrame | None:
         if not all(k in ohlcv_map for k in ("Open", "High", "Low", "Close")):
             return df  # Can't resample, return as-is
 
-        resampled = (
-            df.resample("15min")
-            .agg(
-                {
-                    ohlcv_map["Open"]: "first",
-                    ohlcv_map["High"]: "max",
-                    ohlcv_map["Low"]: "min",
-                    ohlcv_map["Close"]: "last",
-                    **({ohlcv_map["Volume"]: "sum"} if "Volume" in ohlcv_map else {}),
-                }
-            )
-            .dropna()
-        )
+        agg_dict: dict[str, str] = {
+            ohlcv_map["Open"]: "first",
+            ohlcv_map["High"]: "max",
+            ohlcv_map["Low"]: "min",
+            ohlcv_map["Close"]: "last",
+        }
+        if "Volume" in ohlcv_map:
+            agg_dict[ohlcv_map["Volume"]] = "sum"
+
+        result = df.resample("15min").agg(agg_dict).dropna()
+        resampled = pd.DataFrame(result)
 
         return resampled if not resampled.empty else None
     except Exception as exc:
@@ -615,64 +613,6 @@ def _archive_closed_state(name: str, state: Any) -> None:
         logger.debug("Failed to archive swing state: %s", exc)
 
 
-def _publish_swing_to_tv(signals: list[Any]) -> None:
-    """Publish swing signals to the TradingView signal store for signals.csv.
-
-    Converts SwingSignal objects into the TV signal format and pushes them
-    via ``publish_signal_to_tv_sync()`` which handles:
-      1. In-memory _SignalStore insertion (immediate)
-      2. Redis PubSub for dashboard SSE (immediate)
-      3. Redis cache for quick GET reads (immediate)
-      4. Debounced push to GitHub signals.csv (at most 1/min)
-
-    This enables TradingView's ``request.seed()`` to auto-draw engine
-    swing entry/stop/TP lines on the chart within 2-5 minutes of detection.
-    """
-    if not signals:
-        return
-
-    try:
-        from lib.services.data.api.tradingview import (
-            publish_signal_to_tv_sync,
-        )
-
-        now = datetime.now(tz=_EST)
-        published = 0
-
-        for sig in signals:
-            # Only publish high-confidence ENTRY_READY signals
-            from lib.strategies.daily.swing_detector import SwingPhase
-
-            if sig.phase not in (SwingPhase.ENTRY_READY, SwingPhase.ACTIVE):
-                continue
-
-            tv_signal = {
-                "timestamp": sig.detected_at or now.isoformat(),
-                "asset": sig.asset_name,
-                "breakout_type": f"SWING_{sig.entry_style.value.upper()}",
-                "direction": sig.direction,
-                "entry": sig.entry_price,
-                "stop": sig.stop_loss,
-                "tp1": sig.tp1,
-                "tp2": sig.tp2,
-                "tp3": 0,  # Swings use TP2 as final target
-                "cnn_prob": sig.confidence,  # Use confidence as "probability"
-                "atr": sig.atr,
-                "session": "swing",
-                "quality": round(sig.confidence * 100, 1),
-                "mtf": sig.key_level_used or "swing",
-            }
-            publish_signal_to_tv_sync(tv_signal, source="swing")
-            published += 1
-
-        logger.debug("Published %d swing signal(s) to TV signal store + GitHub", published)
-
-    except ImportError:
-        logger.debug("TradingView module not available — skipping TV signal publish")
-    except Exception as exc:
-        logger.debug("Failed to publish swing signals to TV: %s", exc)
-
-
 # ---------------------------------------------------------------------------
 # Main tick function — called by the engine on CHECK_SWING
 # ---------------------------------------------------------------------------
@@ -853,7 +793,6 @@ def tick_swing_detector(engine: Any, account_size: int) -> dict[str, Any]:
                 _pending_swing_signals[sig_name] = sig
 
         _publish_swing_signals_to_redis(all_new_signals)
-        _publish_swing_to_tv(all_new_signals)
 
     _last_scan_ts = now_ts
 

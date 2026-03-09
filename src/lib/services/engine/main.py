@@ -37,7 +37,7 @@ from zoneinfo import ZoneInfo
 if TYPE_CHECKING:
     import pandas as pd
 
-    from lib.services.engine.breakout import BreakoutResult
+    from lib.services.engine.rb.breakout import BreakoutResult
 
 from lib.core.logging_config import get_logger, setup_logging
 
@@ -414,26 +414,6 @@ def _handle_publish_focus_update(engine, account_size: int) -> None:
         logger.debug("Focus update published to Redis%s", " (with live risk)" if live_risk else "")
     except Exception as exc:
         logger.debug("Focus publish error (non-fatal): %s", exc)
-
-    # ── Phase TV-A: Flush debounced GitHub signals.csv if dirty ────────
-    # This runs every ~2 min via PUBLISH_FOCUS_UPDATE, ensuring that any
-    # signals published within the debounce window eventually reach GitHub.
-    try:
-        import asyncio
-
-        from lib.services.data.api.tradingview import flush_github_if_dirty
-
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(flush_github_if_dirty())
-        except RuntimeError:
-            # No event loop — skip (will catch up next tick)
-            pass
-    except ImportError:
-        pass
-    except Exception as exc:
-        logger.debug("GitHub flush error (non-fatal): %s", exc)
-
 
 def _handle_check_no_trade(engine, account_size: int) -> None:
     """Check should-not-trade conditions using the full detector."""
@@ -818,7 +798,7 @@ def _persist_risk_event(
 def _handle_check_orb_london(engine) -> None:
     """Check for London Open ORB patterns (03:00–03:30 ET / 08:00–08:30 UTC)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.orb import LONDON_SESSION
+    from lib.services.engine.rb.orb import LONDON_SESSION
 
     handle_orb_check(engine, orb_session=LONDON_SESSION)
 
@@ -826,7 +806,7 @@ def _handle_check_orb_london(engine) -> None:
 def _handle_check_orb_london_ny(engine) -> None:
     """Check for London-NY Crossover ORB patterns (08:00–08:30 ET)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.orb import LONDON_NY_SESSION
+    from lib.services.engine.rb.orb import LONDON_NY_SESSION
 
     handle_orb_check(engine, orb_session=LONDON_NY_SESSION)
 
@@ -834,7 +814,7 @@ def _handle_check_orb_london_ny(engine) -> None:
 def _handle_check_orb_frankfurt(engine) -> None:
     """Check for Frankfurt/Xetra Open ORB patterns (03:00–03:30 ET / 08:00 CET)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.orb import FRANKFURT_SESSION
+    from lib.services.engine.rb.orb import FRANKFURT_SESSION
 
     handle_orb_check(engine, orb_session=FRANKFURT_SESSION)
 
@@ -842,7 +822,7 @@ def _handle_check_orb_frankfurt(engine) -> None:
 def _handle_check_orb_sydney(engine) -> None:
     """Check for Sydney/ASX Open ORB patterns (18:30–19:00 ET, overnight)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.orb import SYDNEY_SESSION
+    from lib.services.engine.rb.orb import SYDNEY_SESSION
 
     handle_orb_check(engine, orb_session=SYDNEY_SESSION)
 
@@ -850,7 +830,7 @@ def _handle_check_orb_sydney(engine) -> None:
 def _handle_check_orb_cme(engine) -> None:
     """Check for CME Globex Re-Open ORB patterns (18:00–18:30 ET, overnight)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.orb import CME_OPEN_SESSION
+    from lib.services.engine.rb.orb import CME_OPEN_SESSION
 
     handle_orb_check(engine, orb_session=CME_OPEN_SESSION)
 
@@ -858,7 +838,7 @@ def _handle_check_orb_cme(engine) -> None:
 def _handle_check_orb_tokyo(engine) -> None:
     """Check for Tokyo/TSE Open ORB patterns (19:00–19:30 ET, overnight)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.orb import TOKYO_SESSION
+    from lib.services.engine.rb.orb import TOKYO_SESSION
 
     handle_orb_check(engine, orb_session=TOKYO_SESSION)
 
@@ -866,7 +846,7 @@ def _handle_check_orb_tokyo(engine) -> None:
 def _handle_check_orb_shanghai(engine) -> None:
     """Check for Shanghai/HK Open ORB patterns (21:00–21:30 ET, overnight)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.orb import SHANGHAI_SESSION
+    from lib.services.engine.rb.orb import SHANGHAI_SESSION
 
     handle_orb_check(engine, orb_session=SHANGHAI_SESSION)
 
@@ -874,7 +854,7 @@ def _handle_check_orb_shanghai(engine) -> None:
 def _handle_check_orb_cme_settle(engine) -> None:
     """Check for CME Settlement ORB patterns (14:00–14:30 ET)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.orb import CME_SETTLEMENT_SESSION
+    from lib.services.engine.rb.orb import CME_SETTLEMENT_SESSION
 
     handle_orb_check(engine, orb_session=CME_SETTLEMENT_SESSION)
 
@@ -882,7 +862,7 @@ def _handle_check_orb_cme_settle(engine) -> None:
 def _handle_check_orb_crypto_utc0(engine) -> None:
     """Check for Crypto UTC-midnight ORB patterns (19:00–19:30 ET EST / 00:00 UTC)."""
     try:
-        from lib.services.engine.orb import CRYPTO_UTC_MIDNIGHT_SESSION
+        from lib.services.engine.rb.orb import CRYPTO_UTC_MIDNIGHT_SESSION
     except ImportError:
         logger.warning("CRYPTO_UTC_MIDNIGHT_SESSION not available — crypto ORB disabled")
         return
@@ -895,7 +875,7 @@ def _handle_check_orb_crypto_utc0(engine) -> None:
 def _handle_check_orb_crypto_utc12(engine) -> None:
     """Check for Crypto UTC-noon ORB patterns (07:00–07:30 ET EST / 12:00 UTC)."""
     try:
-        from lib.services.engine.orb import CRYPTO_UTC_NOON_SESSION
+        from lib.services.engine.rb.orb import CRYPTO_UTC_NOON_SESSION
     except ImportError:
         logger.warning("CRYPTO_UTC_NOON_SESSION not available — crypto ORB disabled")
         return
@@ -917,7 +897,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
         orb_session: ORBSession to check. Defaults to US_SESSION if None.
     """
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.orb import US_SESSION
+    from lib.services.engine.rb.orb import US_SESSION
 
     if orb_session is None:
         orb_session = US_SESSION
@@ -1004,7 +984,7 @@ def _get_assets_for_session_key(session_key: str) -> list[dict]:
     """
     try:
         from lib.core.cache import cache_get
-        from lib.services.engine.orb import SESSION_ASSETS
+        from lib.services.engine.rb.orb import SESSION_ASSETS
 
         raw_focus = cache_get("engine:daily_focus")
         if not raw_focus:
@@ -1081,65 +1061,6 @@ def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "u
             result.range_low,
             result.range_high,
         )
-
-        # ── Phase TV-A: Push to TradingView signal store + GitHub ──────
-        # Convert BreakoutResult → TV signal dict and publish via the
-        # debounced publisher so signals.csv auto-updates for request.seed().
-        if result.breakout_detected and result.direction:
-            try:
-                from lib.services.data.api.tradingview import (
-                    publish_signal_to_tv_sync,
-                )
-
-                # Resolve asset name from ticker
-                asset_name = result.symbol
-                try:
-                    from lib.core.asset_registry import get_asset_name_by_ticker
-
-                    asset_name = get_asset_name_by_ticker(result.symbol) or result.symbol
-                except ImportError:
-                    pass
-
-                # Compute entry/stop/TP from the breakout result
-                # Entry = trigger price, Stop = opposite side of range
-                entry = result.trigger_price
-                if result.direction == "LONG":
-                    stop = result.range_low
-                    tp1 = entry + (entry - stop) * 1.0  # 1R
-                    tp2 = entry + (entry - stop) * 2.0  # 2R
-                    tp3 = entry + (entry - stop) * 3.0  # 3R
-                else:
-                    stop = result.range_high
-                    tp1 = entry - (stop - entry) * 1.0
-                    tp2 = entry - (stop - entry) * 2.0
-                    tp3 = entry - (stop - entry) * 3.0
-
-                tv_signal = {
-                    "timestamp": datetime.now(tz=ZoneInfo("America/New_York")).isoformat(),
-                    "asset": asset_name,
-                    "breakout_type": result.breakout_type.name
-                    if hasattr(result.breakout_type, "name")
-                    else str(result.breakout_type),
-                    "direction": result.direction,
-                    "entry": round(entry, 4),
-                    "stop": round(stop, 4),
-                    "tp1": round(tp1, 4),
-                    "tp2": round(tp2, 4),
-                    "tp3": round(tp3, 4),
-                    "cnn_prob": result.cnn_prob if result.cnn_prob is not None else 0.0,
-                    "atr": result.atr_value,
-                    "session": orb_session_key,
-                    "quality": round(result.mtf_score or 0, 3),
-                    "mtf": result.mtf_direction or "",
-                }
-                publish_signal_to_tv_sync(
-                    tv_signal,
-                    source=result.breakout_type.name.lower() if hasattr(result.breakout_type, "name") else "breakout",
-                )
-            except ImportError:
-                logger.debug("TradingView module not available — skipping TV signal publish for breakout")
-            except Exception as exc:
-                logger.debug("TV signal publish for breakout failed (non-fatal): %s", exc)
 
     except Exception as exc:
         logger.debug("_publish_breakout_result error: %s", exc)
@@ -1454,7 +1375,7 @@ def _handle_check_breakout_multi(engine, session_key: str = "us", types: list[st
                "GAP", "PIVOT", "FIB").
                Defaults to ["PDR", "CONS"] if not specified.
     """
-    from lib.services.engine.breakout import breakout_type_from_short_name
+    from lib.services.engine.rb.breakout import breakout_type_from_short_name
     from lib.services.engine.handlers import handle_breakout_multi
 
     if types is None:

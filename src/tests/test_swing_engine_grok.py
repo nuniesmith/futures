@@ -8,7 +8,7 @@ Covers:
     - _load_swing_states_from_redis() round-trip
     - _persist_swing_states() serialization
     - _publish_swing_signals_to_redis() Redis + PubSub
-    - _publish_swing_to_tv() TradingView signal store integration
+
     - _get_asset_bias() DailyBias reconstruction from dict
     - _resample_to_15m() OHLCV resampling
     - get_active_swing_states() / get_swing_summary() / reset_swing_states()
@@ -746,85 +746,9 @@ class TestPublishSwingSignalsToRedis:
 
 
 class TestPublishSwingToTV:
-    """Test TradingView signal store integration."""
+    """TradingView signal integration removed — no tests."""
 
-    def test_publishes_entry_ready_signals(self):
-        from lib.services.engine.swing import _publish_swing_to_tv
-        from lib.strategies.daily.swing_detector import (
-            SwingEntryStyle,
-            SwingPhase,
-            SwingSignal,
-        )
-
-        signals = [
-            SwingSignal(
-                asset_name="Gold",
-                entry_style=SwingEntryStyle.PULLBACK,
-                direction="LONG",
-                confidence=0.8,
-                entry_price=2720.0,
-                stop_loss=2698.0,
-                tp1=2745.0,
-                tp2=2763.0,
-                atr=12.5,
-                phase=SwingPhase.ENTRY_READY,
-                detected_at="2025-01-15T10:00:00",
-            ),
-            SwingSignal(
-                asset_name="Silver",
-                entry_style=SwingEntryStyle.BREAKOUT,
-                direction="LONG",
-                confidence=0.6,
-                phase=SwingPhase.WATCHING,  # Should be SKIPPED
-            ),
-        ]
-
-        mock_publish_sync = MagicMock(return_value=True)
-        with patch(
-            "lib.services.data.api.tradingview.publish_signal_to_tv_sync",
-            mock_publish_sync,
-        ):
-            _publish_swing_to_tv(signals)
-
-        # Only ENTRY_READY signal should be published (WATCHING is skipped)
-        assert mock_publish_sync.call_count == 1
-        published = mock_publish_sync.call_args[0][0]
-        assert published["asset"] == "Gold"
-        assert published["direction"] == "LONG"
-        assert "SWING_" in published["breakout_type"]
-
-    def test_watching_signals_skipped(self):
-        from lib.services.engine.swing import _publish_swing_to_tv
-        from lib.strategies.daily.swing_detector import (
-            SwingEntryStyle,
-            SwingPhase,
-            SwingSignal,
-        )
-
-        signals = [
-            SwingSignal(
-                asset_name="Silver",
-                entry_style=SwingEntryStyle.BREAKOUT,
-                direction="LONG",
-                confidence=0.6,
-                phase=SwingPhase.WATCHING,
-            ),
-        ]
-
-        mock_publish_sync = MagicMock(return_value=True)
-        with patch(
-            "lib.services.data.api.tradingview.publish_signal_to_tv_sync",
-            mock_publish_sync,
-        ):
-            _publish_swing_to_tv(signals)
-
-        mock_publish_sync.assert_not_called()
-
-    def test_empty_signals_noop(self):
-        from lib.services.engine.swing import _publish_swing_to_tv
-
-        # Should not raise
-        _publish_swing_to_tv([])
+    pass
 
 
 class TestGetSwingSummary:
@@ -969,7 +893,6 @@ class TestTickSwingDetector:
                 patch("lib.services.engine.swing._fetch_bars_5m", return_value=bars),
                 patch("lib.services.engine.swing._get_session_open_price", return_value=2715.0),
                 patch("lib.services.engine.swing._publish_swing_signals_to_redis"),
-                patch("lib.services.engine.swing._publish_swing_to_tv"),
                 patch("lib.services.engine.swing._persist_swing_states"),
                 patch("lib.services.engine.swing._publish_swing_states_to_redis"),
             ):

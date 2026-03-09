@@ -170,9 +170,6 @@ from lib.services.data.api.swing_actions import (  # noqa: E402
 from lib.services.data.api.trades import (  # noqa: E402
     router as trades_router,
 )
-from lib.services.data.api.tradingview import (  # noqa: E402
-    router as tradingview_router,
-)
 from lib.services.data.api.trainer import (  # noqa: E402
     router as trainer_router,
 )
@@ -653,12 +650,6 @@ app.include_router(trainer_router, tags=["Trainer"])
 # NOTE: settings_router is mounted WITHOUT a prefix — route is defined with /settings path.
 app.include_router(settings_router, tags=["Settings"])
 
-# TradingView: /api/tv/alert, /api/tv/signals, /api/tv/positions, /api/tv/metrics,
-#              /api/tv/status, /api/tv/health
-# Webhook receiver for TradingView outbound alerts, signal publisher for Ruby Futures
-# Pine Script indicator, Tradovate position sync, and engine metrics push.
-# NOTE: tradingview_router is mounted WITHOUT a prefix — routes are defined with /api/tv/ paths.
-app.include_router(tradingview_router, tags=["TradingView"])
 
 # Live Risk: /api/live-risk, /api/live-risk/html, /api/live-risk/summary,
 #            /api/live-risk/refresh, /api/live-risk/position/{asset_name}/html
@@ -736,12 +727,6 @@ def api_info():
             "trainer_config": "/trainer/config",
             "trainer_service_status": "/trainer/service_status",
             "trainer_api": "/trainer/api/{path}",
-            "tv_alert": "/api/tv/alert",
-            "tv_signals": "/api/tv/signals",
-            "tv_positions": "/api/tv/positions",
-            "tv_metrics": "/api/tv/metrics",
-            "tv_status": "/api/tv/status",
-            "tv_health": "/api/tv/health",
             "live_risk": "/api/live-risk",
             "live_risk_html": "/api/live-risk/html",
             "live_risk_summary": "/api/live-risk/summary",

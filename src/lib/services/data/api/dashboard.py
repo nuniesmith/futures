@@ -4731,24 +4731,7 @@ function toggleTheme() {{
             }}
         }});
 
-        // TradingView alert — Phase TV-D: show TV webhook alerts in market events
-        _es.addEventListener('tv-alert', function(e) {{
-            try {{
-                var tv = JSON.parse(e.data);
-                var action = tv.action || '';
-                var symbol = tv.symbol || tv.asset_name || '';
-                var price  = tv.price ? tv.price.toFixed(2) : '';
-                var note   = tv.note || '';
-                var color  = action.indexOf('LONG') >= 0 ? '#4ade80' : action.indexOf('SHORT') >= 0 ? '#f87171' : '#60a5fa';
-                var emoji  = action.indexOf('LONG') >= 0 ? '🟢' : action.indexOf('SHORT') >= 0 ? '🔴' : '📺';
-                var msg = 'TV: ' + action + ' ' + symbol;
-                if (price) msg += ' @ ' + price;
-                if (note) msg += ' — ' + note;
-                _pushEvent(emoji, msg, color);
-            }} catch(err) {{
-                _pushEvent('📺', 'TradingView alert received', '#60a5fa');
-            }}
-        }});
+
 
         _es.onmessage = function(e) {{}};
     }}

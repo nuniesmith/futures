@@ -5,8 +5,7 @@ Provides live health indicators for core services (Data, Engine, Redis,
 Postgres, CNN model) displayed in the dashboard header bar.
 
 The NT8/NinjaTrader-specific deployment, installer generation, and Bridge
-health-probing code has been removed.  TradingView integration is handled
-by the ``tradingview.py`` router instead.
+health-probing code has been removed.
 
 Endpoints:
     GET  /api/nt8/panel/html     — Empty placeholder (legacy HTMX target)

@@ -163,7 +163,7 @@ def get_assets_for_session_key(session_key: str) -> list[dict[str, Any]]:
     """
     try:
         from lib.core.cache import cache_get
-        from lib.services.engine.orb import SESSION_ASSETS
+        from lib.services.engine.rb.orb import SESSION_ASSETS
 
         raw_focus = cache_get("engine:daily_focus")
         if not raw_focus:
@@ -923,7 +923,7 @@ def _publish_orb_result(result: Any, session_key: str = "us") -> None:
     Falls back to the generic publisher if the ORB module is not available.
     """
     try:
-        from lib.services.engine.orb import ORB_SESSIONS, publish_orb_alert
+        from lib.services.engine.rb.orb import ORB_SESSIONS, publish_orb_alert
 
         # Build a lightweight ORB-compat shim so publish_orb_alert can consume it
         class _ORBShim:
@@ -1074,7 +1074,7 @@ def handle_breakout_check(
         enable_filters: If True, run ``apply_all_filters()`` before publishing.
         enable_cnn: If True, run CNN inference and optionally gate by threshold.
     """
-    from lib.services.engine.breakout import (
+    from lib.services.engine.rb.breakout import (
         DEFAULT_CONFIGS,
         detect_range_breakout,
     )

@@ -50,7 +50,7 @@ CONS  Consolidation / Squeeze — uses a Bollinger Band / ATR contraction
 
 Public API
 ----------
-    from lib.services.engine.breakout import (
+    from lib.services.engine.rb.breakout import (
         BreakoutType,
         RangeConfig,
         BreakoutResult,
@@ -99,7 +99,7 @@ _UTC = ZoneInfo("UTC")
 # ``get_range_config(bt).breakout_type_ord`` directly.
 # ===========================================================================
 
-# Re-export so existing ``from lib.services.engine.breakout import BreakoutType``
+# Re-export so existing ``from lib.services.engine.rb.breakout import BreakoutType``
 # keeps working — it now IS the core IntEnum.
 __all__ = ["BreakoutType", "RangeConfig", "BreakoutResult", "detect_range_breakout", "DEFAULT_CONFIGS"]
 

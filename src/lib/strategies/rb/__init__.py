@@ -54,7 +54,7 @@ from lib.core.breakout_types import (
 # ---------------------------------------------------------------------------
 # Re-exports from engine (detection + result — kept for backward compat)
 # ---------------------------------------------------------------------------
-from lib.services.engine.breakout import (
+from lib.services.engine.rb.breakout import (
     DEFAULT_CONFIGS,
 )
 
