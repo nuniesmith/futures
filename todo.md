@@ -51,14 +51,20 @@ The immediate goal is **manual trading with CNN signal support**, scaling from 1
 - **No NinjaTrader/Windows Server required for this stack** — TradingView runs in browser, Tradovate is web-native, PickMyTrade handles copy. Eliminates Windows overhead entirely for the live trading workflow.
 
 **Priority reorder for unblocking manual trading (do these first):**
-1. **Phase 3A + 3B** — top-4 asset focus + dashboard focus mode. Stop staring at 25 symbols while trying to execute.
-2. **Phase 5C + 5E** — micro vs regular contract sizing side-by-side + risk strip (daily P&L, open positions, session time). Know exactly what to type into TradingView/Tradovate before you click.
-3. **Phase 2A + 2B** — daily bias analyzer + trade plan. Pre-market directional conviction is the foundation of every good manual entry.
+1. ~~**Phase 3A + 3B** — top-4 asset focus + dashboard focus mode.~~ **3A ✅ done** — `select_daily_focus_assets()` composite ranking. **3B next** — dashboard UI update.
+2. ~~**Phase 5C + 5E** — micro vs regular contract sizing side-by-side + risk strip.~~ **✅ done** — dual sizing, live risk strip, position overlays all shipped.
+3. ~~**Phase 2A + 2B** — daily bias analyzer + trade plan.~~ **✅ done** — `bias_analyzer.py` + `daily_plan.py` + 66 tests.
 4. **TradingView Ruby Futures indicator** — draw engine levels (ORB, PDR, entry/stop/TP) directly on TV chart. CNN labels + futures contract sizing on every signal.
-5. **Phase 1E + 1F** — safe renames only (`orb_filters.py` → `breakout_filters.py`, `orb_simulator.py` → `rb_simulator.py`). Zero logic risk, do in parallel.
+5. ~~**Phase 1E + 1F** — safe renames.~~ **✅ done** — backward-compat shims in place.
+
+**Remaining priority (updated):**
+1. **Phase 3B** — Dashboard focus mode. Wire the daily plan into the HTMX UI: focused asset cards (large), swing candidate cards, background collapse. This is the highest-impact UI change remaining.
+2. **Phase 2C** — Swing detector. Pullback/breakout/gap entry logic + 15:30 ET time stop. Completes the daily strategy layer.
+3. **Phase 3C** — Grok integration for daily selection. Optional macro brief in pre-market plan.
+4. **Phase TV-A → TV-E** — TradingView Ruby Futures indicator + signals.csv publisher. The live trading chart UI.
 
 **Defer until profitable/scaled:**
-- Phase 1A–1G (RB refactor) — correct architecture but zero trading benefit right now.
+- Phase 1A–1D, 1G (RB refactor) — correct architecture but zero trading benefit right now.
 - Phase 4/7/8 (CNN v7, per-asset distillation) — valuable, not blocking manual trading.
 - Phase 6 (Kraken portfolio) — when crypto capital grows.
 
@@ -250,8 +256,8 @@ The core architectural change: **ORB becomes a sub-type of RB (Range Breakout)**
 
 ## 🔴 High Priority — Daily Strategy Layer
 
-### Phase 2A: Daily Bias Analyzer
-- [ ] **Create `lib/strategies/daily/bias_analyzer.py`** — "what direction for today?" per asset
+### Phase 2A: Daily Bias Analyzer ✅
+- [x] **Create `lib/strategies/daily/bias_analyzer.py`** — "what direction for today?" per asset
   - Inputs: prior day's OHLCV, prior week's OHLCV, monthly trend, ATR regime
   - Prior day candle classification: inside day, outside day, doji, bullish engulfing, bearish engulfing, hammer, shooting star, strong close (upper/lower 25% of range)
   - Weekly range position: where price closed relative to the prior week's high/low (0.0 = at low, 1.0 = at high)
@@ -260,22 +266,24 @@ The core architectural change: **ORB becomes a sub-type of RB (Range Breakout)**
   - Overnight gap context: gap direction and size relative to ATR (from Globex open vs prior close)
   - Output: `DailyBias` dataclass per asset — direction (LONG/SHORT/NEUTRAL), confidence (0-1), reasoning string, key levels (support/resistance derived from prior day H/L, weekly H/L)
   - Pure computation — no side effects, fully testable
+  - **Implemented:** `src/lib/strategies/daily/bias_analyzer.py` — `BiasDirection`, `CandlePattern`, `KeyLevels`, `DailyBias` dataclasses, `compute_daily_bias()`, `compute_all_daily_biases()`, `rank_assets_by_conviction()`. 6 component scoring: candle pattern (25%), weekly position (20%), monthly trend (25%), volume (10%), overnight gap (10%), ATR trend (10%). Direction threshold ±0.15 with ATR expansion multiplier. CNN feature helpers: `direction_feature`, `confidence_feature`, `candle_pattern_feature`, `weekly_range_feature`, `monthly_trend_feature`. Fully tested.
 
-### Phase 2B: Daily Trade Plan Generator
-- [ ] **Create `lib/strategies/daily/daily_plan.py`** — orchestrates daily trade selection
+### Phase 2B: Daily Trade Plan Generator ✅
+- [x] **Create `lib/strategies/daily/daily_plan.py`** — orchestrates daily trade selection
   - Morning routine (runs at pre-market, ~05:00-06:00 ET):
     1. Run `bias_analyzer` on all 10+ tracked assets
     2. Optionally call Grok for macro context (economic calendar, overnight news, sector rotation)
     3. Score each asset for daily swing potential: bias confidence × ATR opportunity × volume regime × catalyst presence
     4. Select 1-2 daily swing candidates (biggest expected move, highest conviction direction)
-    5. Compute entry zone, stop, TP for daily swing (wider than scalp: SL at 1.5-2× ATR, TP at 3-5× ATR)
-    6. Position size: small (1 micro contract) — these are "big move, small risk" trades
+    5. Compute entry zone, stop, TP for daily swing (wider than scalp: SL at 1.75× ATR, TP1 at 2.5×, TP2 at 4×, TP3 at 5.5× ATR)
+    6. Position size: small (1-3 micro contracts, capped) — these are "big move, small risk" trades
   - Output: `DailyPlan` dataclass — swing_candidates (1-2 assets), scalp_focus (3-4 assets for RB system), market_context from Grok, no_trade_flags
   - Persist to Redis key `engine:daily_plan` for dashboard consumption
   - Separate from the RB scalping system — daily trades run on different timeframe and risk profile
+  - **Implemented:** `src/lib/strategies/daily/daily_plan.py` — `DailyPlan`, `SwingCandidate`, `ScalpFocusAsset` dataclasses. `generate_daily_plan()` orchestrator: fetches daily/weekly data → runs `compute_all_daily_biases()` → optional Grok context via `_call_grok`/`run_morning_briefing` → `select_daily_focus_assets()` composite ranking → swing candidate level computation with wider SL/TP. `generate_and_publish_daily_plan()` convenience wrapper. `DailyPlan.publish_to_redis()` writes `engine:daily_plan`, `engine:focus_assets`, `engine:swing_assets` keys with 18h TTL + PubSub event. `DailyPlan.load_from_redis()` round-trip reconstruction. `_build_swing_candidate()` computes entry zones, SL, TP1-TP3 using asset registry for tick-aware rounding and dual sizing. Entry styles: pullback, gap continuation, breakout. `_fetch_grok_context()` with `run_morning_briefing` primary and `_call_grok` fallback. 66 tests passing.
 
-### Phase 2C: Swing Detector
-- [ ] **Create `lib/strategies/daily/swing_detector.py`** — entry/exit logic for daily trades
+### Phase 2C: Swing Detector ✅
+- [x] **Create `lib/strategies/daily/swing_detector.py`** — entry/exit logic for daily trades
   - Uses the daily bias + key levels from `bias_analyzer` to define trade parameters
   - Entry styles:
     - **Pullback entry**: wait for price to pull back to a key level (prior day H/L, VWAP, EMA) in the direction of the daily bias, then enter on confirmation bar
@@ -287,13 +295,14 @@ The core architectural change: **ORB becomes a sub-type of RB (Range Breakout)**
     - Time stop: close by 15:30 ET if neither TP nor SL hit (no overnight holds)
   - These trades coexist with the always-running RB scalping system — different position tracking, different risk budget
   - Daily trades use a separate risk allocation (e.g., 0.5% of account vs 0.75% for scalps)
+  - **Implemented:** `src/lib/strategies/daily/swing_detector.py` — Three entry detectors: `detect_pullback_entry()` (key level proximity + retrace depth 25–75% + confirmation bar with body ≥ 50%), `detect_breakout_entry()` (prior day H/L break + volume ≥ 1.3× avg + bar close quality), `detect_gap_continuation()` (gap ≥ 0.3× ATR + unfilled + 6-bar settle + pullback resumption). Combined `detect_swing_entries()` orchestrator with time-stop gate (no new entries after 15:30 ET) and configurable `enabled_styles`. Exit engine `evaluate_swing_exits()`: stop loss → TP1 scale-out 50% → TP2 close remainder → EMA-21 trailing (with ATR-based fallback) → time stop. `SwingSignal`, `SwingExitSignal`, `SwingState` dataclasses with full serialization. State management: `create_swing_state()`, `update_swing_state()` with phase transitions (WATCHING → ENTRY_READY → ACTIVE → TP1_HIT → TRAILING → CLOSED), breakeven stop on TP1, one-directional trailing stop tightening. Multi-asset `scan_swing_entries_all_assets()` and `enrich_swing_candidates()` for DailyPlan integration. Redis publish/load: `engine:swing_signals`, `engine:swing_states` keys + `dashboard:swing_update` PubSub. Constants: SL 1.5× ATR, TP1 2× ATR, TP2 3.5× ATR, risk 0.5%, max 3 micros, EMA-21 trail. Exported via `__init__.py`. 150 tests passing, 0 regressions on existing 148 tests (daily plan + dashboard focus mode).
 
 ---
 
 ## 🔴 High Priority — Web UI Focus Narrowing & Live Risk
 
-### Phase 3A: Top-4 Asset Selection for Live Trading
-- [ ] **Add `select_daily_focus_assets()` to `focus.py`** — narrows the full asset list to 3-4 per day
+### Phase 3A: Top-4 Asset Selection for Live Trading ✅
+- [x] **Add `select_daily_focus_assets()` to `focus.py`** — narrows the full asset list to 3-4 per day
   - Composite ranking score (0-100) per asset:
     - Signal quality weight (30%): from existing `compute_signal_quality()`
     - ATR opportunity (25%): normalized ATR as % of price — higher = more tradeable
@@ -304,9 +313,10 @@ The core architectural change: **ORB becomes a sub-type of RB (Range Breakout)**
   - The daily swing candidates (from Phase 2B) may be different from the scalp focus assets
   - Persist to Redis: `engine:focus_assets` (list of 3-4 tickers for scalping) + `engine:swing_assets` (1-2 for daily)
   - The full watchlist still runs in the background (signals fire, CNN infers, data flows) — but the UI only shows the focused set
+  - **Implemented:** `select_daily_focus_assets()` in `src/lib/strategies/daily/daily_plan.py` — composite ranking with 5 weighted factors, `_compute_session_fit_score()` (maps 30+ assets to asian/london/us sessions, scores primary=100, secondary=70, mismatch=20), `_compute_atr_opportunity_score()` (NATR-based 0-100 with piecewise scaling), `_compute_rb_setup_density_score()` (reads `engine:breakout_state:{asset}` from Redis, falls back to 40 without Redis), `_compute_catalyst_score()` (reads `engine:catalyst_scores` hash), `_compute_signal_quality_for_asset()` (runs wave + volatility + signal quality analysis from cache). Swing scoring: conviction 35%, ATR 30%, volume 15%, catalyst 10%, weekly position 10%. Min thresholds: scalp ≥ 20, swing ≥ 30. `get_daily_plan_focus_assets()` added to `focus.py` — loads from Redis or generates fresh plan. `compute_daily_focus()` extended with `use_daily_plan=True` flag: tags assets as `scalp_focus`/`swing`/`background` with `focus_rank`, sorts focused first. 66 tests passing.
 
-### Phase 3B: Dashboard Focus Mode
-- [ ] **Update web UI to show focused assets prominently** — simplify live trading view
+### Phase 3B: Dashboard Focus Mode ✅
+- [x] **Update web UI to show focused assets prominently** — simplify live trading view
   - Top section: 3-4 focused asset cards (large, prominent, with live price + RB signals + bias)
   - Each focused card shows:
     - Current price + direction bias (from daily plan)
@@ -318,6 +328,19 @@ The core architectural change: **ORB becomes a sub-type of RB (Range Breakout)**
   - Collapsed/minimized section: remaining assets from the full watchlist (expandable if needed)
   - "Why these assets?" tooltip/section explaining the composite score ranking
   - Live trading mode auto-hides review panels (already implemented) — now also auto-focuses on the selected assets
+  - **Implemented:** Focus mode grid in `src/lib/services/engine/data/api/dashboard.py`:
+    - `_render_focus_mode_grid()` — tiered layout: scalp focus cards (prominent, 2-col), swing candidate cards (amber/gold styling), collapsed background assets in `<details>` element
+    - `_render_daily_plan_header()` — Grok morning brief card (LIVE/CACHED badge) + focus chip summary strip with ranked scalp chips and swing chips, formatted plan time
+    - `_render_why_these_assets()` — collapsible `<details>` panel showing composite score breakdown table (Signal 30%, ATR 25%, RB Density 20%, Session 15%, Catalyst 10%) with mini score bars per asset, swing candidate rows with direction/confidence/reasoning/entry styles
+    - `_render_swing_card()` — amber-bordered card with TP1/TP2/TP3 (wider than scalp), entry style chips, swing score + confidence badge, reasoning line, "DAILY SWING" label; supports live position overlay
+    - `_render_asset_card()` extended: focus category badge (#N FOCUS for scalp, 🕐 SWING for swing), `data-focus-category` attribute
+    - `_get_daily_plan_data()` — reads `engine:daily_plan` from Redis for dashboard display
+    - `get_daily_plan_html()` — new `GET /api/daily-plan/html` endpoint returning plan header + "Why these assets?" panel
+    - `get_focus_html()` updated to use `_render_focus_mode_grid()` when focus mode active
+    - `_render_full_dashboard()` updated: uses focus mode grid, 🎯 Focus Mode badge in summary bar
+    - SSE: `daily-plan-update` event listener added to JS — triggers focus grid refresh + market event feed entry
+    - `publish_focus_to_redis()` in `focus.py` extended: publishes `dashboard:daily_plan` PubSub event when `focus_mode_active=True`
+    - 82 new tests in `src/tests/test_dashboard_focus_mode.py` (all passing): `_get_daily_plan_data`, `_render_daily_plan_header`, `_render_why_these_assets`, `_render_swing_card`, `_render_asset_card` focus badges, `_render_focus_mode_grid`, `publish_focus_to_redis` daily plan event, `get_daily_plan_html` endpoint, `get_focus_html` focus mode, full dashboard integration, edge cases (all-scalp, all-background, singular labels, zero TP3, no entry styles, rank 999)
 
 ### Phase 3C: Grok Integration for Daily Selection
 - [ ] **Add Grok analysis call during daily plan generation** — optional but valuable
@@ -335,8 +358,8 @@ The core architectural change: **ORB becomes a sub-type of RB (Range Breakout)**
 
 The goal: when you're live trading for a few hours in the morning, everything is real-time, fast, and always keeping you up to date. Position sizes adjust dynamically based on current risk exposure. You see micro AND regular contract values side by side so you know exactly what to type into NinjaTrader. The strategy runs itself — you poke in when you see something good. Helps manage emotions.
 
-### Phase 5A: Generalized Asset Model
-- [ ] **Create `lib/core/asset_registry.py`** — unified asset abstraction that links micro, regular, and spot variants
+### Phase 5A: Generalized Asset Model ✅
+- [x] **Create `lib/core/asset_registry.py`** — unified asset abstraction that links micro, regular, and spot variants
   - `Asset` dataclass: generalized name ("Gold", "S&P", "Bitcoin"), asset_class (metals, equity_index, fx, energy, treasuries, ags, crypto)
   - Each `Asset` holds a dict of `ContractVariant` objects:
     - `micro`: ticker="MGC=F", point_value=10, tick=0.10, margin=1100
@@ -348,9 +371,10 @@ The goal: when you're live trading for a few hours in the morning, everything is
   - `get_variants("Gold")` → `{"micro": ContractVariant(...), "full": ContractVariant(...)}` — for dashboard display
   - Backward-compat: `CONTRACT_SPECS`, `ASSETS`, `TICKER_TO_NAME` still work but delegate to the registry
   - Asset class grouping: `get_asset_group("metals")` → `["Gold", "Silver", "Copper"]` — for cross-referencing
+  - **Implemented:** `src/lib/core/asset_registry.py` — `Asset`, `ContractVariant`, `AssetClass`, `ASSET_REGISTRY`, `_TICKER_TO_NAME` reverse lookup, `dual_sizing()`, `compute_position_size()`, `get_asset()`, `get_asset_by_ticker()`, `get_asset_group()`, `get_micro_spec()`, `get_full_spec()`, Tradovate/training short aliases. Tested: Gold MGC=F→Gold, GC=F→Gold, KRAKEN:XBTUSD→Bitcoin lookups all pass.
 
-### Phase 5B: Real-Time Risk Budget Integration
-- [ ] **Wire `RiskManager` ↔ `PositionManager` into a unified live risk state** — published to Redis every tick
+### Phase 5B: Real-Time Risk Budget Integration ✅
+- [x] **Wire `RiskManager` ↔ `PositionManager` into a unified live risk state** — published to Redis every tick
   - New `LiveRiskState` dataclass that merges:
     - From `RiskManager`: account_size, daily_pnl, max_daily_loss, can_trade, block_reason, consecutive_losses
     - From `PositionManager`: all active `MicroPosition` objects with current P&L, bracket phase, R-multiple
@@ -359,9 +383,10 @@ The goal: when you're live trading for a few hours in the morning, everything is
   - SSE channel `dashboard:live_risk` for real-time push to web UI
   - `RiskManager.sync_positions()` already receives Bridge position updates — enhance to recompute `LiveRiskState` on every sync
   - When a position is opened/closed, immediately recompute and publish — don't wait for the next 5s interval
+  - **Implemented:** `src/lib/services/engine/live_risk.py` — `LiveRiskState`, `PositionSnapshot`, `compute_live_risk()`, `LiveRiskPublisher`, `load_from_redis()`. `src/lib/services/engine/data/api/live_risk.py` — API endpoints `/api/live-risk`, `/api/live-risk/html`, `/api/live-risk/summary`, `/api/live-risk/refresh`. Publisher wired into `engine/main.py` via `_get_live_risk_publisher()`, ticked every loop iteration, force-publishes on position changes. Also wired into data-service `lifespan` for embedded mode. Tested: compute, serialize, publish all pass.
 
-### Phase 5C: Dynamic Position Sizing on Focus Cards
-- [ ] **Focus cards update in real time based on live risk state** — not just the morning pre-market computation
+### Phase 5C: Dynamic Position Sizing on Focus Cards ✅
+- [x] **Focus cards update in real time based on live risk state** — not just the morning pre-market computation
   - `compute_asset_focus()` gets a new optional param: `live_risk: LiveRiskState | None`
   - When `live_risk` is provided:
     - `remaining_risk_budget` replaces static `max_risk_per_trade` for position sizing
@@ -371,30 +396,33 @@ The goal: when you're live trading for a few hours in the morning, everything is
   - **Show both micro and regular contract sizing side by side:**
     - "📏 Micro: 3× MGC @ $330 risk" / "📏 Full: 1× GC @ $1,100 risk" — computed from the same stop distance
     - Use `Asset.micro` and `Asset.full` from the registry to compute both simultaneously
-    - Trader knows which to use based on their account tier — just reads the number and types it into NT8
+    - Trader knows which to use based on their account tier — just reads the number and types it into TradingView/Tradovate
   - Dollar P&L estimates for TP1/TP2 shown for BOTH contract sizes:
     - "TP1: +$660 (micro 3×) / +$2,200 (full 1×)"
   - Card refreshes via SSE `dashboard:live_risk` — no page reload, no polling, instant updates
   - When Bridge pushes a position update, the relevant asset card flips from "setup" mode to "live position" mode within 1-2 seconds
+  - **Implemented:** `src/lib/services/engine/focus.py` — `compute_asset_focus()` accepts `live_risk: LiveRiskState | None`, `_compute_dual_sizing()` uses asset registry `dual_sizing()`, `_build_live_position_overlay()` builds position overlay dict. `compute_daily_focus()` also accepts `live_risk`. Engine handlers `_handle_compute_daily_focus` and `_handle_publish_focus_update` pass `_live_risk_publisher.last_state` into focus computation. Dashboard `_render_dual_sizing_row()` renders micro/full side-by-side with TP dollar estimates. Focus payload includes `dual_sizing`, `risk_blocked`, `max_positions_reached`, `has_live_position`, `live_position` fields. Tested: Gold 11× MGC=$1,100 / 1× GC=$1,000 dual sizing verified.
 
-### Phase 5D: Live Position Overlay on Focus Cards
-- [ ] **When in a trade, the focus card becomes a position management card** — real-time P&L and bracket status
-  - Header changes from "🟢 LONG setup" to "🟢 LONG LIVE — Phase 2 (Breakeven)" with green/red pulse animation
+### Phase 5D: Live Position Overlay on Focus Cards ✅
+- [x] **When in a trade, the focus card becomes a position management card** — real-time P&L and bracket status
+  - Header changes from "🟢 LONG setup" to "🟢 LONG LIVE" with red pulse animation badge
   - Shows: entry price, current price, unrealized P&L ($), R-multiple, hold duration, bracket phase
-  - Bracket progress bar: `[ENTRY]---[TP1 ✓]---[TP2]---[TP3]` with current price marker
-  - Stop loss level shown with distance in ticks and dollars
-  - "Close Position" button (fires Bridge `/flatten` for that instrument)
-  - "Move to Breakeven" manual override button (fires Bridge stop modification)
-  - When position closes (TP hit, SL hit, or manual close): card flips back to "setup" mode with a brief P&L summary flash (+$X or -$X)
-  - All updates driven by Bridge position push → Redis → SSE — no polling
+  - Bracket progress bar: `[Entry]---[TP1 ✓]---[TP2 ✓]---[Trail]` with color-coded current phase
+  - Stop loss level shown with entry/current/stop row
+  - "Close Position" button (fires Bridge `/flatten` for that instrument) — TODO: wire button action
+  - "Move to Breakeven" manual override button (fires Bridge stop modification) — TODO: wire button action
+  - When position closes (TP hit, SL hit, or manual close): card flips back to "setup" mode automatically (position disappears from LiveRiskState)
+  - All updates driven by position push → Redis → SSE/HTMX polling — 5s latency via HTMX, instant via SSE
+  - **Implemented:** `src/lib/services/engine/data/api/dashboard.py` — `_render_live_position_overlay()` renders LIVE badge, P&L with color, R-multiple badge, bracket progress bar, entry/current/stop row. `_render_asset_card()` swaps levels section for live position overlay when `has_live_position=True`. Card border color changes to match position side. Header shows "● LIVE" / "🚫 BLOCKED" / "⚠️ MAX POS" badges. Opacity override: live position cards are never dimmed even if quality < 55%. Tested: overlay renders with correct P&L, R-multiple, bracket phase progress.
 
-### Phase 5E: Risk Dashboard Strip
-- [ ] **Add a persistent risk strip at the top of the trading dashboard** — always visible, always current
+### Phase 5E: Risk Dashboard Strip ✅
+- [x] **Add a persistent risk strip at the top of the trading dashboard** — always visible, always current
   - Horizontal bar showing: Daily P&L ($), Open Positions (N/max), Risk Exposure (%), Margin Used/Available, Consecutive Losses, Session Time Remaining
   - Color-coded: green (healthy) → yellow (approaching limits) → red (blocked)
   - Flashes/pulses when a risk state changes (new position opened, loss taken, limit approaching)
   - "RISK BLOCKED" full-width red banner when `can_trade` is false — hard to miss
-  - Updates via same `dashboard:live_risk` SSE channel — 1-2 second latency from NT8 to screen
+  - Updates via HTMX polling every 5s + SSE channel `dashboard:live_risk` for real-time push
+  - **Implemented:** `src/lib/services/engine/data/api/live_risk.py` — `get_live_risk_html()` renders full risk strip HTML with health-colored background (green/yellow/red), Daily P&L, Open Positions, Risk Budget, Margin, Consecutive Losses, Session Time. `get_position_html()` renders per-position overlays. Dashboard HTML includes `<div hx-get="/api/live-risk/html" hx-trigger="load, every 5s">` container. `LiveRiskState.publish_to_redis()` pushes to `dashboard:live_risk` PubSub channel and `dashboard:risk_warning` on block. Engine `_tick_live_risk_publisher()` called every loop iteration, `force_publish()` on position changes for 1-2s latency.
 
 ---
 
@@ -751,6 +779,75 @@ Position sized proportionally per account (quantity multipliers)
 
 ## Completed
 
+### Daily Bias Analyzer (`src/lib/strategies/daily/bias_analyzer.py`)
+- [x] `BiasDirection`, `CandlePattern`, `KeyLevels`, `DailyBias` dataclasses
+- [x] `compute_daily_bias()` — 6-component weighted scoring: candle pattern (25%), weekly position (20%), monthly trend (25%), volume (10%), overnight gap (10%), ATR trend (10%)
+- [x] `compute_all_daily_biases()` — batch analysis for all assets
+- [x] `rank_assets_by_conviction()` — Phase 3A helper
+- [x] CNN feature helpers: `direction_feature`, `confidence_feature`, `candle_pattern_feature`, `weekly_range_feature`, `monthly_trend_feature`
+
+### Daily Plan Generator + Focus Asset Selection (`src/lib/strategies/daily/daily_plan.py`, `src/lib/services/engine/focus.py`)
+- [x] `DailyPlan`, `SwingCandidate`, `ScalpFocusAsset` dataclasses with full `to_dict()` serialization
+- [x] `generate_daily_plan()` orchestrator: fetches data → bias analysis → optional Grok → composite ranking → swing levels
+- [x] `select_daily_focus_assets()` — 5-factor composite ranking (signal quality 30%, ATR opportunity 25%, RB density 20%, session fit 15%, catalyst 10%)
+- [x] `_compute_session_fit_score()` — 30+ assets mapped to asian/london/us sessions
+- [x] `_compute_atr_opportunity_score()` — NATR-based piecewise 0–100 scoring
+- [x] `_build_swing_candidate()` — wider SL/TP (1.75×/2.5×/4×/5.5× ATR), tick-aware rounding, entry style detection
+- [x] `DailyPlan.publish_to_redis()` / `load_from_redis()` — `engine:daily_plan`, `engine:focus_assets`, `engine:swing_assets` with 18h TTL
+- [x] `get_daily_plan_focus_assets()` in `focus.py` — loads from Redis or generates fresh plan
+- [x] `compute_daily_focus(use_daily_plan=True)` — tags assets as `scalp_focus`/`swing`/`background`, sorts focused first
+- [x] `generate_and_publish_daily_plan()` convenience wrapper for engine scheduler
+- [x] 66 tests passing (`tests/test_daily_plan.py`)
+
+### Dashboard Focus Mode (`src/lib/services/engine/data/api/dashboard.py`, `src/lib/services/engine/focus.py`)
+- [x] `_render_focus_mode_grid()` — tiered layout replacing flat asset grid: scalp focus cards (prominent, 2-col), swing candidate cards (amber/gold styling), collapsed background assets in `<details>` element
+- [x] `_render_daily_plan_header()` — Grok morning brief card (LIVE/CACHED badge) + focus chip summary strip with ranked scalp chips (#1, #2, #3) and swing chips (🕐), formatted plan time
+- [x] `_render_why_these_assets()` — collapsible `<details>` panel: composite score breakdown table (Signal 30%, ATR 25%, RB Density 20%, Session 15%, Catalyst 10%) with mini score bars per asset; swing candidate rows with direction/confidence/reasoning/entry styles
+- [x] `_render_swing_card()` — amber-bordered card with TP1/TP2/TP3 (wider than scalp), entry style chips, swing score + confidence badge, reasoning line, "DAILY SWING" label; supports live position overlay
+- [x] `_render_asset_card()` extended: `#N FOCUS` badge for scalp_focus, `🕐 SWING` badge for swing, `data-focus-category` data attribute
+- [x] `_get_daily_plan_data()` — reads `engine:daily_plan` from Redis for dashboard display
+- [x] `get_daily_plan_html()` — new `GET /api/daily-plan/html` endpoint returning plan header + "Why these assets?" panel
+- [x] `get_focus_html()` updated to use `_render_focus_mode_grid()` when focus mode active
+- [x] `_render_full_dashboard()` updated: uses focus mode grid, 🎯 Focus Mode badge in summary bar
+- [x] SSE: `daily-plan-update` event listener in JS — triggers focus grid refresh + market event feed entry
+- [x] `publish_focus_to_redis()` in `focus.py` extended: publishes `dashboard:daily_plan` PubSub event when `focus_mode_active=True`
+- [x] 82 tests passing (`tests/test_dashboard_focus_mode.py`)
+
+### Swing Action Buttons & API (`src/lib/services/engine/data/api/swing_actions.py`, `src/lib/services/engine/swing.py`)
+- [x] **Phase 3D: HTMX action buttons on swing cards** — Accept Signal / Ignore / Close Position / Move Stop to BE
+- [x] Swing state mutation functions in `swing.py`: `accept_swing_signal()`, `ignore_swing_signal()`, `close_swing_position()`, `move_stop_to_breakeven()`, `update_swing_stop()`, `get_swing_state_detail()`, `get_swing_history()`, `get_pending_signals()`
+- [x] Pending signal management: signals detected during `tick_swing_detector()` Phase A are cached in `_pending_swing_signals` dict for dashboard display; accepted signals are promoted to active `SwingState`, ignored signals are removed
+- [x] New API router `swing_actions.py` with 10 endpoints: `POST /api/swing/accept/{asset}`, `POST /api/swing/ignore/{asset}`, `POST /api/swing/close/{asset}`, `POST /api/swing/stop-to-be/{asset}`, `POST /api/swing/update-stop/{asset}`, `GET /api/swing/pending`, `GET /api/swing/active`, `GET /api/swing/detail/{asset}`, `GET /api/swing/history`, `GET /api/swing/status-badge/{asset}`
+- [x] All POST endpoints return HTML fragments (success/error toasts + updated action buttons) for HTMX in-place swap — no full page reload needed
+- [x] Dashboard `_render_swing_card()` updated: action buttons rendered via `render_swing_action_buttons_for_card()`, live status badge polls `/api/swing/status-badge/{asset}` every 30s via `hx-trigger="load, every 30s"`
+- [x] `_render_focus_mode_grid()` fetches active states + pending signals once and passes to all swing cards for efficient rendering
+- [x] SSE handler in `sse.py` now explicitly handles `dashboard:swing_update` pub/sub channel → emits `swing-update` SSE event
+- [x] Router registered in `data/main.py` as `swing_actions_router` under `"Swing Actions"` tag
+- [x] Signal lifecycle: detect → pending → accept/ignore → active → manage (stop-to-BE, update-stop) → close → archive to Redis history (last 100, 7-day TTL)
+- [x] Safety: concurrent swing limit enforced on accept (max 3), phase validation on stop moves (must be active/tp1_hit/trailing), stop price validation (correct side of entry, not zero/negative)
+- [x] 88 tests passing (`tests/test_swing_actions.py`): state mutations, API endpoints via TestClient, HTML fragment rendering, dashboard integration, SSE handling, router registration, full signal lifecycle, edge cases
+
+### SSE Swing + TV Alert Wiring (`dashboard.py`, `sse.py`, `swing.py`)
+- [x] **Dashboard JS `swing-update` SSE listener** — auto-refreshes focus grid when swing signals are detected, states are created/updated/closed, or manual actions (accept/ignore/close/stop-to-BE) are performed; parses structured action metadata to show rich messages in market events feed (✅ accepted, 🏁 closed, ⏭️ ignored, 🔒 stop→BE, ⚡ signal detected, 📊 exit)
+- [x] **Dashboard JS `tv-alert` SSE listener** — shows TradingView webhook alerts in the market events feed in real-time; parses action/symbol/price/note from payload, color-codes LONG (green) / SHORT (red) / other (blue)
+- [x] **SSE server `dashboard:tv_alert` channel handler** in `sse.py` — forwards TV webhook alerts from Redis PubSub to dashboard clients as `tv-alert` SSE events (TV alert endpoint already publishes to `dashboard:tv_alert` via `_publish_to_redis()`)
+- [x] **Structured swing action publishing** via `_publish_swing_action()` helper in `swing.py` — every swing mutation (accept, ignore, close, stop-to-BE, stop update, signal detection, exit) now publishes a structured JSON event to `dashboard:swing_update` with action type, asset name, direction, phase, and relevant metadata so the JS listener can show contextual messages
+- [x] All 397 tests passing across swing actions (88), dashboard focus mode (82), swing detector (150), grok integration (77)
+
+### Swing Detector (`src/lib/strategies/daily/swing_detector.py`)
+- [x] Three entry detectors: `detect_pullback_entry()` (key level proximity within 0.3× ATR + retrace depth 25–75% of impulse + confirmation bar with body ≥ 50% closing in bias direction), `detect_breakout_entry()` (prior day H/L break + volume ≥ 1.3× 20-bar avg + bar close in top/bottom 60% of range), `detect_gap_continuation()` (gap ≥ 0.3× ATR aligned with bias + unfilled at 50% threshold + 6-bar settle period + pullback into gap zone with resumption bar)
+- [x] Combined `detect_swing_entries()` orchestrator — runs all three detectors, time-stop gate (no new entries after 15:30 ET), configurable `enabled_styles` filter, results sorted by confidence descending
+- [x] Exit engine `evaluate_swing_exits()` — priority-ordered checks: stop loss (terminal) → TP1 scale-out 50% (ACTIVE phase only) → TP2 close remainder (TP1_HIT/TRAILING phase) → EMA-21 trailing stop (with ATR-based fallback when bars insufficient) → time stop (15:30 ET, no overnight holds)
+- [x] `SwingSignal` dataclass — entry style, direction, confidence, entry zone, stop/TP levels, R:R ratios, position size, reasoning, key level used, confirmation bar index, phase
+- [x] `SwingExitSignal` dataclass — reason, exit price, P&L estimate, R-multiple, scale fraction, trailing stop price
+- [x] `SwingState` dataclass — tracks active/pending swing trade lifecycle with highest/lowest price tracking
+- [x] State management: `create_swing_state()` from confirmed signal, `update_swing_state()` with phase transitions (WATCHING → ENTRY_READY → ACTIVE → TP1_HIT → TRAILING → CLOSED), breakeven stop on TP1 hit, one-directional trailing stop tightening
+- [x] Multi-asset scanning: `scan_swing_entries_all_assets()` (top-N signals across all assets), `enrich_swing_candidates()` (enriches DailyPlan swing candidates with live entry signals)
+- [x] Redis integration: `publish_swing_signals()` / `load_swing_signals()` round-trip via `engine:swing_signals` key, `publish_swing_states()` via `engine:swing_states` key, `dashboard:swing_update` PubSub channel, 18h TTL
+- [x] Constants per spec: SL 1.5× ATR, TP1 2× ATR, TP2 3.5× ATR, risk 0.5% of account, max 3 micro contracts, EMA-21 trail period, pullback retrace bounds 25–75%, breakout volume threshold 1.3×, gap minimum 0.3× ATR
+- [x] Exported via `lib/strategies/daily/__init__.py` — `SwingSignal`, `SwingExitSignal`, `SwingState`, `SwingEntryStyle`, `SwingExitReason`, `SwingPhase`, all detection/exit/state functions
+- [x] 150 tests passing (`tests/test_swing_detector.py`), 0 regressions on existing 148 tests
+
 ### Trainer UI Separation (`src/lib/training/trainer_server.py`, `src/lib/services/data/api/trainer.py`, `src/lib/services/web/main.py`)
 - [x] `trainer_server.py` HTML endpoint (`trainer_ui`) removed — trainer is now pure API server
 - [x] `src/lib/services/data/api/trainer.py` created — full HTML trainer dashboard page at `GET /trainer`, config endpoints, `/trainer/api/*` proxy
@@ -851,46 +948,56 @@ Position sized proportionally per account (quantity multipliers)
 
 The refactor phases are ordered by dependency and risk:
 
-**Immediate (safe renames, no logic changes):**
-1. **Phase 1E** — Rename `orb_filters.py` → `breakout_filters.py`
-2. **Phase 1F** — Rename `orb_simulator.py` → `rb_simulator.py`
+**✅ Completed (safe renames, no logic changes):**
+1. ~~**Phase 1E**~~ ✅ — Renamed `orb_filters.py` → `breakout_filters.py` (shim in place)
+2. ~~**Phase 1F**~~ ✅ — Renamed `orb_simulator.py` → `rb_simulator.py` (shim in place)
 
-**RB System Merge (core refactor, sequential):**
+**RB System Merge (core refactor, sequential — deferred):**
 3. **Phase 1D** — Extract generic handler pipeline from `main.py` (biggest immediate LOC reduction, ~400 lines eliminated)
 4. **Phase 1A** — Merge BreakoutType enums (foundational for everything else)
 5. **Phase 1B** — Merge RangeConfig dataclasses (depends on 1A)
 6. **Phase 1C** — Merge ORB detection into unified RB detector (depends on 1A + 1B)
 7. **Phase 1G** — Create `lib/strategies/` package (depends on 1C, moves files into new structure)
 
-**Daily Strategy + Focus (can start in parallel with RB merge):**
-8. **Phase 2A** — Daily bias analyzer (independent of Phase 1)
-9. **Phase 5A** — Generalized asset model / asset registry (independent, enables 5C)
-10. **Phase 2B** — Daily plan generator (depends on 2A)
-11. **Phase 2C** — Swing detector (depends on 2B)
-12. **Phase 3A** — Top-4 asset selection (depends on 2B for swing vs scalp split)
+**✅ Completed (Daily Strategy + Focus + Live Risk):**
+8. ~~**Phase 2A**~~ ✅ — Daily bias analyzer (`bias_analyzer.py`, 6-component scoring, CNN feature helpers)
+9. ~~**Phase 5A**~~ ✅ — Generalized asset model (`asset_registry.py`, `Asset`, `ContractVariant`, `dual_sizing()`)
+10. ~~**Phase 2B**~~ ✅ — Daily plan generator (`daily_plan.py`, `generate_daily_plan()`, `SwingCandidate`, `ScalpFocusAsset`, Redis persistence, 66 tests)
+11. ~~**Phase 3A**~~ ✅ — Top-4 asset selection (`select_daily_focus_assets()`, composite ranking, session fit, ATR opportunity, RB density, catalyst scoring)
+12. ~~**Phase 5B**~~ ✅ — Real-time risk budget integration (`live_risk.py`, `LiveRiskState`, `LiveRiskPublisher`)
+13. ~~**Phase 5C**~~ ✅ — Dynamic position sizing with micro/regular dual display on focus cards
+14. ~~**Phase 5D**~~ ✅ — Live position overlay on focus cards (bracket progress, R-multiple, P&L)
+15. ~~**Phase 5E**~~ ✅ — Risk dashboard strip (health-colored, HTMX polling + SSE)
 
-**Live Risk & Dashboard (depends on asset registry + focus selection):**
-13. **Phase 5B** — Real-time risk budget integration (depends on 5A)
-14. **Phase 5C** — Dynamic position sizing on focus cards with micro/regular dual display (depends on 5A + 5B)
-15. **Phase 5D** — Live position overlay on focus cards (depends on 5C)
-16. **Phase 5E** — Risk dashboard strip (depends on 5B)
-17. **Phase 3B** — Dashboard focus mode (depends on 3A + 5C + 5D)
-18. **Phase 3C** — Grok integration for daily selection (depends on 2B)
+**✅ Completed (Dashboard Focus Mode):**
+16. ~~**Phase 3B**~~ ✅ — Dashboard focus mode (`_render_focus_mode_grid()` tiered layout, `_render_daily_plan_header()` Grok brief + focus chips, `_render_why_these_assets()` scoring breakdown, `_render_swing_card()` amber-styled swing cards, SSE `daily-plan-update` event, `GET /api/daily-plan/html` endpoint, 82 tests)
 
-**CNN Intelligence (depends on daily strategy layer being complete):**
-19. **Phase 4A** — CNN v7 features from daily strategy layer (depends on 2A)
-20. **Phase 4B** — Sub-features and richer encoding (depends on 4A)
-21. **Phase 4C** — Retrain on v7 contract (depends on 4A + 4B)
-22. **Phase 7A** — Hierarchical asset embedding (depends on 5A for asset registry)
-23. **Phase 7B** — Cross-asset correlation features (depends on 7A)
-24. **Phase 7C** — Asset fingerprint analysis (independent, can start with 7A)
-25. **Phase 7D** — Correlation anomaly detection (depends on 7B + 7C)
+**✅ Completed (Swing Detector + Grok + Action Buttons):**
+17. ~~**Phase 2C**~~ ✅ — Swing detector (`swing_detector.py`, 3 entry styles, exit engine, state management, 150 tests)
+18. ~~**Phase 3C**~~ ✅ — Grok structured daily-plan analysis (`grok_helper.py`, parsed JSON → DailyPlan, dashboard rendering)
+19. ~~**Phase 3D**~~ ✅ — Swing action buttons (`swing_actions.py`, Accept/Ignore/Close/Stop→BE HTMX endpoints, pending signal management, SSE `swing-update` event, 88 tests)
+
+**Next up (unblocks manual trading):**
+20. **Phase TV-A** — `signals.csv` GitHub publisher (independent)
+21. **Phase TV-B** — Ruby Futures indicator — engine signal overlay (depends on TV-A)
+22. **Phase TV-C** — Ruby Futures indicator — core futures layer (independent, partially built)
+23. **Phase TV-D** — TradingView → Python engine webhook (independent)
+24. **Phase TV-E** — Dashboard + TradingView side-by-side workflow (depends on TV-B + 3B)
+
+**CNN Intelligence (depends on daily strategy layer — now complete):**
+25. **Phase 4A** — CNN v7 features from daily strategy layer (depends on 2A ✅ — **dep met**)
+26. **Phase 4B** — Sub-features and richer encoding (depends on 4A)
+27. **Phase 4C** — Retrain on v7 contract (depends on 4A + 4B)
+28. **Phase 7A** — Hierarchical asset embedding (depends on 5A ✅ — **dep met**)
+29. **Phase 7B** — Cross-asset correlation features (depends on 7A)
+30. **Phase 7C** — Asset fingerprint analysis (independent, can start with 7A)
+31. **Phase 7D** — Correlation anomaly detection (depends on 7B + 7C)
 
 **Low Priority / When Profitable:**
-26. **Phase 6** — Kraken spot portfolio management (independent, needs `add_order` in Kraken client)
-27. **Trade Copier** — post first funded account
+32. **Phase 6** — Kraken spot portfolio management (independent, needs `add_order` in Kraken client)
+33. **Trade Copier** — post first funded account
 
-Phases 1E/1F, 2A, 5A, and 7C can start immediately and in parallel. Phase 1D is the highest-value single change. Phase 5B-5E is the highest-value *user experience* change — making live trading feel real-time and risk-aware.
+Phase TV-A is the next high-impact step — wiring the GitHub `signals.csv` publisher end-to-end so TradingView can overlay engine signals. The swing action buttons (Phase 3D) complete the manual trading workflow for swing trades. Phase 4A (CNN v7 features) can start in parallel.
 
 ---
 

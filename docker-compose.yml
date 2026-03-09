@@ -118,6 +118,10 @@ services:
             - KRAKEN_API_KEY=${KRAKEN_API_KEY:-}
             - KRAKEN_API_SECRET=${KRAKEN_API_SECRET:-}
             - ENABLE_KRAKEN_CRYPTO=${ENABLE_KRAKEN_CRYPTO:-1}
+            # TradingView integration (Phase TV-D)
+            - TV_WEBHOOK_SECRET=${TV_WEBHOOK_SECRET:-}
+            - GITHUB_SIGNALS_TOKEN=${GITHUB_SIGNALS_TOKEN:-}
+            - GITHUB_SIGNALS_REPO=${GITHUB_SIGNALS_REPO:-nuniesmith/futures-signals}
             - LOG_LEVEL=info
             - PYTHONPATH=/app/src
             - PYTHONUNBUFFERED=1

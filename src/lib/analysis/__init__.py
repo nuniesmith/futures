@@ -7,6 +7,21 @@ Re-exports the public API from each sub-module so callers can do:
     from lib.analysis import apply_all_filters, predict_breakout
 """
 
+from lib.analysis.breakout_filters import (
+    BreakoutFilterResult,
+    FilterVerdict,
+    ORBFilterResult,  # backward-compat alias
+    apply_all_filters,
+    check_lunch_filter,
+    check_mtf_analyzer,
+    check_multi_tf_bias,
+    check_nr7,
+    check_premarket_range,
+    check_session_window,
+    check_vwap_confluence,
+    compute_session_vwap,
+    extract_premarket_range,
+)
 from lib.analysis.confluence import (
     MultiTimeframeFilter,
     check_confluence,
@@ -23,17 +38,6 @@ from lib.analysis.ict import (
     detect_fvgs,
     detect_order_blocks,
     ict_summary,
-)
-from lib.analysis.orb_filters import (
-    ORBFilterResult,
-    apply_all_filters,
-    check_lunch_filter,
-    check_multi_tf_bias,
-    check_nr7,
-    check_premarket_range,
-    check_session_window,
-    check_vwap_confluence,
-    extract_premarket_range,
 )
 from lib.analysis.regime import (
     RegimeDetector,
@@ -142,16 +146,21 @@ __all__ = [
     "detect_fvgs",
     "detect_order_blocks",
     "ict_summary",
-    # orb_filters
-    "ORBFilterResult",
+    # breakout_filters (new canonical name)
+    "BreakoutFilterResult",
+    "FilterVerdict",
     "apply_all_filters",
     "check_lunch_filter",
+    "check_mtf_analyzer",
     "check_multi_tf_bias",
     "check_nr7",
     "check_premarket_range",
     "check_session_window",
     "check_vwap_confluence",
+    "compute_session_vwap",
     "extract_premarket_range",
+    # orb_filters backward-compat alias
+    "ORBFilterResult",
     # regime
     "RegimeDetector",
     "detect_regime_hmm",

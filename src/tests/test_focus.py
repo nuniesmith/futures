@@ -414,7 +414,7 @@ class TestComputeDailyFocusPayload:
         """Assets should be sorted by quality (best first)."""
         from lib.services.engine.focus import compute_daily_focus
 
-        def side_effect(name, account_size=50_000):
+        def side_effect(name, account_size=50_000, **kwargs):
             qualities = {"Gold": 0.8, "Nasdaq": 0.6, "S&P": 0.9}
             q = qualities.get(name, 0.5)
             return {

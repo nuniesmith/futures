@@ -13,13 +13,14 @@ Sub-modules:
 
 Usage::
 
-    from lib.services.training.orb_simulator import (
+    from lib.services.training.rb_simulator import (
         simulate_batch,
         simulate_batch_prev_day,
         simulate_batch_ib,
         simulate_batch_consolidation,
         BracketConfig,
-        ORBSimResult,
+        RBSimResult,
+        ORBSimResult,  # backward-compat alias
     )
 
     from lib.services.training.dataset_generator import (

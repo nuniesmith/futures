@@ -555,6 +555,41 @@ async def proxy_kraken(request: Request, path: str):
 
 
 @app.api_route(
+    "/bars/{path:path}",
+    methods=["GET", "POST"],
+)
+async def proxy_bars(request: Request, path: str):
+    """Proxy all /bars/* requests to the data service (historical bar store).
+
+    Endpoints:
+        GET  /bars/{symbol}       — Historical bars for a symbol
+        GET  /bars/bulk           — Bulk bar fetch for multiple symbols
+        GET  /bars/status         — Bar store status + coverage summary
+        GET  /bars/assets         — Available assets in the bar store
+        GET  /bars/{symbol}/gaps  — Gap analysis for a symbol
+        POST /bars/{symbol}/fill  — Trigger gap-fill for a symbol
+        POST /bars/fill/all       — Trigger gap-fill for all symbols
+        GET  /bars/fill/status    — Gap-fill job status
+    """
+    return await _proxy_request(request, f"/bars/{path}")
+
+
+@app.api_route(
+    "/sar/{path:path}",
+    methods=["GET", "POST"],
+)
+async def proxy_sar(request: Request, path: str):
+    """Proxy all /sar/* requests to the data service (SAR sync).
+
+    Endpoints:
+        POST /sar/sync          — Receive SAR reversal events from NinjaTrader
+        GET  /sar/state         — Current SAR direction for all instruments
+        GET  /sar/state/{asset} — Current SAR direction for a single instrument
+    """
+    return await _proxy_request(request, f"/sar/{path}")
+
+
+@app.api_route(
     "/data/{path:path}",
     methods=["GET"],
 )
@@ -714,6 +749,125 @@ async def settings_risk_update(request: Request):
 @app.get("/settings/keys/status")
 async def settings_keys_status(request: Request):
     return await _proxy_request(request, "/settings/keys/status")
+
+
+# ---------------------------------------------------------------------------
+# TradingView integration proxy routes
+# Phase TV-D: Webhook receiver, signal publisher, Tradovate position sync
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/tv/alert")
+async def proxy_tv_alert(request: Request):
+    """Proxy TradingView webhook alert to engine."""
+    return await _proxy_request(request, "/api/tv/alert")
+
+
+@app.get("/api/tv/alerts")
+async def proxy_tv_alerts(request: Request):
+    return await _proxy_request(request, "/api/tv/alerts")
+
+
+@app.post("/api/tv/signals/publish")
+async def proxy_tv_signals_publish(request: Request):
+    return await _proxy_request(request, "/api/tv/signals/publish")
+
+
+@app.get("/api/tv/signals")
+async def proxy_tv_signals(request: Request):
+    return await _proxy_request(request, "/api/tv/signals")
+
+
+@app.get("/api/tv/signals/history")
+async def proxy_tv_signals_history(request: Request):
+    return await _proxy_request(request, "/api/tv/signals/history")
+
+
+@app.post("/api/tv/signals/clear")
+async def proxy_tv_signals_clear(request: Request):
+    return await _proxy_request(request, "/api/tv/signals/clear")
+
+
+@app.post("/api/tv/signals/push-github")
+async def proxy_tv_push_github(request: Request):
+    return await _proxy_request(request, "/api/tv/signals/push-github")
+
+
+@app.post("/api/tv/positions")
+async def proxy_tv_positions_update(request: Request):
+    return await _proxy_request(request, "/api/tv/positions")
+
+
+@app.post("/api/tv/positions/single")
+async def proxy_tv_position_single(request: Request):
+    return await _proxy_request(request, "/api/tv/positions/single")
+
+
+@app.post("/api/tv/positions/close")
+async def proxy_tv_position_close(request: Request):
+    return await _proxy_request(request, "/api/tv/positions/close")
+
+
+@app.get("/api/tv/positions")
+async def proxy_tv_positions_get(request: Request):
+    return await _proxy_request(request, "/api/tv/positions")
+
+
+@app.get("/api/tv/positions/history")
+async def proxy_tv_positions_history(request: Request):
+    return await _proxy_request(request, "/api/tv/positions/history")
+
+
+@app.post("/api/tv/metrics")
+async def proxy_tv_metrics_push(request: Request):
+    return await _proxy_request(request, "/api/tv/metrics")
+
+
+@app.get("/api/tv/metrics")
+async def proxy_tv_metrics_get(request: Request):
+    return await _proxy_request(request, "/api/tv/metrics")
+
+
+@app.get("/api/tv/status")
+async def proxy_tv_status(request: Request):
+    return await _proxy_request(request, "/api/tv/status")
+
+
+@app.get("/api/tv/health")
+async def proxy_tv_health(request: Request):
+    return await _proxy_request(request, "/api/tv/health")
+
+
+# ---------------------------------------------------------------------------
+# Live Risk proxy routes
+# Phase 5B/5E: Real-time risk budget + persistent risk dashboard strip
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/live-risk")
+async def proxy_live_risk(request: Request):
+    return await _proxy_request(request, "/api/live-risk")
+
+
+@app.get("/api/live-risk/html")
+async def proxy_live_risk_html(request: Request):
+    """Proxy the HTML risk strip partial for HTMX injection."""
+    return await _proxy_request(request, "/api/live-risk/html")
+
+
+@app.get("/api/live-risk/summary")
+async def proxy_live_risk_summary(request: Request):
+    return await _proxy_request(request, "/api/live-risk/summary")
+
+
+@app.post("/api/live-risk/refresh")
+async def proxy_live_risk_refresh(request: Request):
+    return await _proxy_request(request, "/api/live-risk/refresh")
+
+
+@app.get("/api/live-risk/position/{asset_name}/html")
+async def proxy_live_risk_position_html(request: Request, asset_name: str):
+    return await _proxy_request(request, f"/api/live-risk/position/{asset_name}/html")
 
 
 # ---------------------------------------------------------------------------

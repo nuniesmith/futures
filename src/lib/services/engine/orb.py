@@ -1683,6 +1683,9 @@ def publish_orb_alert(result: ORBResult, session: ORBSession | None = None) -> b
       - Redis PubSub ``dashboard:orb:{session_key}`` — session-specific trigger
       - Redis PubSub ``dashboard:orb``   — legacy trigger
 
+    Also pushes the signal to the TradingView signal store + GitHub signals.csv
+    (Phase TV-A) so TradingView's ``request.seed()`` can auto-draw engine levels.
+
     Returns True on success.
     """
     try:
@@ -1736,6 +1739,62 @@ def publish_orb_alert(result: ORBResult, session: ORBSession | None = None) -> b
             result.or_low,
             result.or_high,
         )
+
+        # ── Phase TV-A: Push to TradingView signal store + GitHub ──────
+        if result.breakout_detected and result.direction:
+            try:
+                from lib.services.engine.data.api.tradingview import (
+                    publish_signal_to_tv_sync,
+                )
+
+                # Resolve asset name from ticker
+                asset_name = result.symbol
+                try:
+                    from lib.core.asset_registry import get_asset_name_by_ticker
+
+                    asset_name = get_asset_name_by_ticker(result.symbol) or result.symbol
+                except ImportError:
+                    pass
+
+                # Compute entry/stop/TP from ORB result
+                entry = result.trigger_price
+                if result.direction == "LONG":
+                    stop = result.or_low
+                    risk = entry - stop
+                    tp1 = entry + risk * 1.0  # 1R
+                    tp2 = entry + risk * 2.0  # 2R
+                    tp3 = entry + risk * 3.0  # 3R
+                else:
+                    stop = result.or_high
+                    risk = stop - entry
+                    tp1 = entry - risk * 1.0
+                    tp2 = entry - risk * 2.0
+                    tp3 = entry - risk * 3.0
+
+                session_key = result.session_key or (session.key if session else "us")
+
+                tv_signal = {
+                    "timestamp": datetime.now(tz=_EST).isoformat(),
+                    "asset": asset_name,
+                    "breakout_type": "ORB",
+                    "direction": result.direction,
+                    "entry": round(entry, 4),
+                    "stop": round(stop, 4),
+                    "tp1": round(tp1, 4),
+                    "tp2": round(tp2, 4),
+                    "tp3": round(tp3, 4),
+                    "cnn_prob": result.cnn_prob if result.cnn_prob is not None else 0.0,
+                    "atr": result.atr_value,
+                    "session": session_key,
+                    "quality": 0.0,
+                    "mtf": "",
+                }
+                publish_signal_to_tv_sync(tv_signal, source=f"orb_{session_key}")
+            except ImportError:
+                logger.debug("TradingView module not available — skipping TV signal publish for ORB")
+            except Exception as tv_exc:
+                logger.debug("TV signal publish for ORB failed (non-fatal): %s", tv_exc)
+
         return True
 
     except Exception as exc:

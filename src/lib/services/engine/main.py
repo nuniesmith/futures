@@ -64,6 +64,11 @@ _model_watcher = None  # type: ignore[assignment]
 # ---------------------------------------------------------------------------
 _position_manager = None
 
+# ---------------------------------------------------------------------------
+# Module-level LiveRiskPublisher (initialised in main())
+# ---------------------------------------------------------------------------
+_live_risk_publisher = None
+
 
 def _get_position_manager(account_size: int = 50_000):
     """Lazy-init and return the global PositionManager singleton."""
@@ -81,6 +86,46 @@ def _get_position_manager(account_size: int = 50_000):
         except Exception as exc:
             logger.warning("PositionManager init failed (non-fatal): %s", exc)
     return _position_manager
+
+
+def _get_live_risk_publisher():
+    """Lazy-init and return the global LiveRiskPublisher singleton.
+
+    Requires _risk_manager and _position_manager to be initialised first.
+    Also registers the publisher with the live_risk API module so the
+    /api/live-risk/refresh endpoint can trigger immediate recomputation.
+    """
+    global _live_risk_publisher
+    if _live_risk_publisher is None:
+        try:
+            from lib.services.engine.live_risk import LiveRiskPublisher
+
+            _live_risk_publisher = LiveRiskPublisher(
+                risk_manager=_risk_manager,
+                position_manager=_position_manager,
+                interval_seconds=5.0,
+            )
+
+            # Wire into the live_risk API module so /api/live-risk/refresh works
+            try:
+                from lib.services.engine.data.api.live_risk import set_publisher
+
+                set_publisher(_live_risk_publisher)
+                logger.info("LiveRiskPublisher registered with live_risk API module")
+            except ImportError:
+                logger.debug("live_risk API module not available — publisher not registered with API")
+
+            # Force an initial publish so the dashboard has data immediately
+            _ = _live_risk_publisher.force_publish()
+
+            logger.info(
+                "LiveRiskPublisher initialised (interval=5s, rm=%s, pm=%s)",
+                "yes" if _risk_manager else "no",
+                "yes" if _position_manager else "no",
+            )
+        except Exception as exc:
+            logger.warning("LiveRiskPublisher init failed (non-fatal): %s", exc)
+    return _live_risk_publisher
 
 
 def _write_health(healthy: bool, status: str, **extras):
@@ -198,14 +243,25 @@ def _run_retrain_from_command(
 
 
 def _handle_compute_daily_focus(engine, account_size: int) -> None:
-    """Compute daily focus for all tracked assets and publish to Redis."""
+    """Compute daily focus for all tracked assets and publish to Redis.
+
+    When a LiveRiskPublisher is active, the latest LiveRiskState is passed
+    into compute_daily_focus so that focus cards use the remaining risk
+    budget for dynamic position sizing (Phase 5C) and include live
+    position overlays (Phase 5D).
+    """
     from lib.services.engine.focus import (
         compute_daily_focus,
         publish_focus_to_redis,
     )
 
-    logger.info("▶ Computing daily focus...")
-    focus = compute_daily_focus(account_size=account_size)
+    # Grab the latest LiveRiskState from the publisher (if available)
+    live_risk = None
+    if _live_risk_publisher is not None:
+        live_risk = _live_risk_publisher.last_state
+
+    logger.info("▶ Computing daily focus...%s", " (with live risk)" if live_risk else "")
+    focus = compute_daily_focus(account_size=account_size, live_risk=live_risk)
     publish_focus_to_redis(focus)
 
     if focus.get("no_trade"):
@@ -334,18 +390,49 @@ def _publish_regime_states() -> None:
 
 
 def _handle_publish_focus_update(engine, account_size: int) -> None:
-    """Re-publish current focus data to Redis for SSE consumers."""
+    """Re-publish current focus data to Redis for SSE consumers.
+
+    Passes the latest LiveRiskState (if available) so focus cards use
+    dynamic risk budgets and include live position overlays.
+
+    Also flushes any debounced GitHub signals.csv changes (Phase TV-A)
+    so TradingView ``request.seed()`` stays current even if no new signal
+    fires within the debounce window.
+    """
     from lib.services.engine.focus import (
         compute_daily_focus,
         publish_focus_to_redis,
     )
 
     try:
-        focus = compute_daily_focus(account_size=account_size)
+        live_risk = None
+        if _live_risk_publisher is not None:
+            live_risk = _live_risk_publisher.last_state
+
+        focus = compute_daily_focus(account_size=account_size, live_risk=live_risk)
         publish_focus_to_redis(focus)
-        logger.debug("Focus update published to Redis")
+        logger.debug("Focus update published to Redis%s", " (with live risk)" if live_risk else "")
     except Exception as exc:
         logger.debug("Focus publish error (non-fatal): %s", exc)
+
+    # ── Phase TV-A: Flush debounced GitHub signals.csv if dirty ────────
+    # This runs every ~2 min via PUBLISH_FOCUS_UPDATE, ensuring that any
+    # signals published within the debounce window eventually reach GitHub.
+    try:
+        import asyncio
+
+        from lib.services.engine.data.api.tradingview import flush_github_if_dirty
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(flush_github_if_dirty())
+        except RuntimeError:
+            # No event loop — skip (will catch up next tick)
+            pass
+    except ImportError:
+        pass
+    except Exception as exc:
+        logger.debug("GitHub flush error (non-fatal): %s", exc)
 
 
 def _handle_check_no_trade(engine, account_size: int) -> None:
@@ -404,19 +491,141 @@ def _handle_check_no_trade(engine, account_size: int) -> None:
 
 
 def _handle_grok_morning_brief(engine) -> None:
-    """Run Grok morning market briefing (pre-market)."""
+    """Run Grok morning market briefing (pre-market).
+
+    Phase 3C: In addition to the legacy GrokSession briefing, runs the
+    structured daily-plan Grok analysis (``run_daily_plan_grok_analysis``)
+    which returns parsed JSON with macro_bias, top_assets, risk_warnings,
+    economic_events, session_plan, correlation_notes, and swing_insights.
+
+    The structured result is stored in Redis (``engine:grok_daily_plan``)
+    and also published to the ``dashboard:grok`` channel so the dashboard
+    Grok panel can render the structured morning brief card.
+    """
     logger.info("▶ Grok morning briefing...")
+
+    # --- Legacy GrokSession briefing (free-text) ---
     try:
         from lib.integrations.grok_helper import GrokSession
 
         session = GrokSession()
         if session is not None:
-            # Infrastructure is in place — GrokSession manages briefing state
-            logger.info("✅ Grok morning briefing complete")
+            logger.info("✅ Grok morning briefing (GrokSession) complete")
         else:
             logger.info("Grok helper not available — skipping morning brief")
     except Exception as exc:
-        logger.debug("Grok morning brief skipped: %s", exc)
+        logger.debug("Grok morning brief (legacy) skipped: %s", exc)
+
+    # --- Phase 3C: Structured daily-plan Grok analysis ---
+    api_key = os.getenv("XAI_API_KEY", "").strip()
+    if not api_key:
+        logger.debug("No XAI_API_KEY — skipping structured Grok analysis")
+        return
+
+    try:
+        from lib.integrations.grok_helper import (
+            format_grok_daily_plan_for_display,
+            run_daily_plan_grok_analysis,
+        )
+
+        # Load biases and focus asset names from the daily plan (if computed)
+        raw_plan = None
+        try:
+            from lib.core.cache import cache_get
+
+            raw = cache_get("engine:daily_plan")
+            if raw:
+                raw_plan = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        except Exception:
+            pass
+
+        all_biases: dict = {}
+        asset_names: list[str] = []
+        swing_names: list[str] = []
+        scalp_names: list[str] = []
+
+        if raw_plan:
+            all_biases = raw_plan.get("all_biases", {})
+            swing_names = raw_plan.get("swing_candidate_names", [])
+            scalp_names = raw_plan.get("scalp_focus_names", [])
+            # Get all asset names from biases
+            asset_names = list(all_biases.keys())
+
+        if not asset_names:
+            # Fallback: use ASSETS dict
+            try:
+                from lib.core.models import ASSETS
+
+                asset_names = list(ASSETS.keys())
+            except ImportError:
+                pass
+
+        if not asset_names:
+            logger.info("Structured Grok analysis skipped — no asset names available")
+            return
+
+        logger.info(
+            "Running structured Grok daily plan analysis (%d assets, %d swing, %d scalp)...",
+            len(asset_names),
+            len(swing_names),
+            len(scalp_names),
+        )
+
+        grok_result = run_daily_plan_grok_analysis(
+            biases=all_biases,
+            asset_names=asset_names,
+            swing_candidate_names=swing_names or None,
+            scalp_focus_names=scalp_names or None,
+            api_key=api_key,
+        )
+
+        if grok_result:
+            # Store structured result in Redis
+            try:
+                from lib.core.cache import cache_set as _cs
+
+                _cs(
+                    "engine:grok_daily_plan",
+                    json.dumps(grok_result, default=str).encode(),
+                    ttl=18 * 3600,
+                )
+            except Exception:
+                pass
+
+            # Also update the daily plan in Redis with the grok_analysis field
+            if raw_plan is not None:
+                raw_plan["grok_analysis"] = grok_result
+                raw_plan["grok_available"] = True
+                display_text = format_grok_daily_plan_for_display(grok_result)
+                raw_plan["market_context"] = display_text
+                try:
+                    from lib.core.cache import cache_set as _cs2
+
+                    _cs2(
+                        "engine:daily_plan",
+                        json.dumps(raw_plan, default=str).encode(),
+                        ttl=18 * 3600,
+                    )
+                except Exception:
+                    pass
+
+            # Publish to dashboard Grok channel
+            display_text = format_grok_daily_plan_for_display(grok_result)
+            _publish_grok_update(display_text)
+
+            logger.info(
+                "✅ Structured Grok analysis complete: macro=%s, %d top assets, %d warnings",
+                grok_result.get("macro_bias", "?"),
+                len(grok_result.get("top_assets", [])),
+                len(grok_result.get("risk_warnings", [])),
+            )
+        else:
+            logger.info("Structured Grok analysis returned no results")
+
+    except ImportError:
+        logger.debug("Structured Grok analysis not available (import failed)")
+    except Exception as exc:
+        logger.warning("Structured Grok analysis failed (non-fatal): %s", exc)
 
 
 def _handle_grok_live_update(engine) -> None:
@@ -1672,7 +1881,11 @@ def _fetch_bars_1m(engine, ticker: str, symbol: str) -> "pd.DataFrame | None":
 
 
 def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "us") -> None:
-    """Publish a non-ORB breakout result to Redis for SSE / dashboard consumption."""
+    """Publish a non-ORB breakout result to Redis for SSE / dashboard consumption.
+
+    Also pushes the signal to the TradingView signal store + GitHub signals.csv
+    (Phase TV-A) so TradingView's request.seed() can auto-draw engine levels.
+    """
     try:
         from lib.core.cache import cache_set
 
@@ -1701,6 +1914,66 @@ def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "u
             result.range_low,
             result.range_high,
         )
+
+        # ── Phase TV-A: Push to TradingView signal store + GitHub ──────
+        # Convert BreakoutResult → TV signal dict and publish via the
+        # debounced publisher so signals.csv auto-updates for request.seed().
+        if result.breakout_detected and result.direction:
+            try:
+                from lib.services.engine.data.api.tradingview import (
+                    publish_signal_to_tv_sync,
+                )
+
+                # Resolve asset name from ticker
+                asset_name = result.symbol
+                try:
+                    from lib.core.asset_registry import get_asset_name_by_ticker
+
+                    asset_name = get_asset_name_by_ticker(result.symbol) or result.symbol
+                except ImportError:
+                    pass
+
+                # Compute entry/stop/TP from the breakout result
+                # Entry = trigger price, Stop = opposite side of range
+                entry = result.trigger_price
+                if result.direction == "LONG":
+                    stop = result.range_low
+                    tp1 = entry + (entry - stop) * 1.0  # 1R
+                    tp2 = entry + (entry - stop) * 2.0  # 2R
+                    tp3 = entry + (entry - stop) * 3.0  # 3R
+                else:
+                    stop = result.range_high
+                    tp1 = entry - (stop - entry) * 1.0
+                    tp2 = entry - (stop - entry) * 2.0
+                    tp3 = entry - (stop - entry) * 3.0
+
+                tv_signal = {
+                    "timestamp": datetime.now(tz=ZoneInfo("America/New_York")).isoformat(),
+                    "asset": asset_name,
+                    "breakout_type": result.breakout_type.value
+                    if hasattr(result.breakout_type, "value")
+                    else str(result.breakout_type),
+                    "direction": result.direction,
+                    "entry": round(entry, 4),
+                    "stop": round(stop, 4),
+                    "tp1": round(tp1, 4),
+                    "tp2": round(tp2, 4),
+                    "tp3": round(tp3, 4),
+                    "cnn_prob": result.cnn_prob if result.cnn_prob is not None else 0.0,
+                    "atr": result.atr_value,
+                    "session": orb_session_key,
+                    "quality": round(result.mtf_score or 0, 3),
+                    "mtf": result.mtf_direction or "",
+                }
+                publish_signal_to_tv_sync(
+                    tv_signal,
+                    source=result.breakout_type.value.lower() if hasattr(result.breakout_type, "value") else "breakout",
+                )
+            except ImportError:
+                logger.debug("TradingView module not available — skipping TV signal publish for breakout")
+            except Exception as exc:
+                logger.debug("TV signal publish for breakout failed (non-fatal): %s", exc)
+
     except Exception as exc:
         logger.debug("_publish_breakout_result error: %s", exc)
 
@@ -1881,8 +2154,39 @@ def _handle_update_positions(engine) -> None:
                 pm.get_position_count(),
             )
 
+            # Position changed — force immediate live risk publish so the
+            # dashboard risk strip and focus cards update within 1-2 seconds.
+            if _live_risk_publisher is not None:
+                try:
+                    _ = _live_risk_publisher.force_publish()
+                except Exception as exc:
+                    logger.debug("LiveRisk force_publish after position update failed: %s", exc)
+
     except Exception as exc:
         logger.debug("_handle_update_positions error (non-fatal): %s", exc)
+
+
+def _tick_live_risk_publisher() -> None:
+    """Tick the LiveRiskPublisher — publishes every 5s if due.
+
+    Called on every engine loop iteration.  The publisher internally
+    tracks elapsed time and only recomputes + publishes when the
+    interval has elapsed (default 5 seconds).
+    """
+    if _live_risk_publisher is None:
+        return
+    try:
+        state = _live_risk_publisher.tick()
+        if state is not None:
+            logger.debug(
+                "📊 LiveRisk published: PnL=$%.2f | Pos=%d/%d | Health=%s",
+                state.total_pnl,
+                state.open_position_count,
+                state.max_open_trades,
+                state.health,
+            )
+    except Exception as exc:
+        logger.debug("LiveRisk tick error (non-fatal): %s", exc)
 
 
 def _persist_breakout_result(result: "BreakoutResult", session_key: str = "") -> int | None:
@@ -2472,6 +2776,41 @@ def _handle_run_backtest(engine) -> None:
         logger.warning("Backtest error: %s", exc)
 
 
+def _handle_check_swing(engine, account_size: int) -> None:
+    """Run one tick of the swing detector — entry detection + state management.
+
+    Phase 2C integration: scans daily-plan swing candidates for pullback,
+    breakout, and gap-continuation entries.  Manages per-asset SwingState
+    (TP/SL/trail/time-stop) and publishes signals + states to Redis for
+    dashboard live display and TradingView signals.csv.
+
+    Called every 2 min during active hours (03:00–15:30 ET) via CHECK_SWING.
+    """
+    try:
+        from lib.services.engine.swing import tick_swing_detector
+
+        result = tick_swing_detector(engine, account_size)
+
+        new_sigs = result.get("new_signals", 0)
+        active = result.get("active_states", 0)
+        exits = result.get("exits", 0)
+        closed = result.get("closed", 0)
+
+        if new_sigs > 0 or exits > 0 or active > 0:
+            logger.info(
+                "🕐 Swing tick: %d new signal(s), %d active, %d exit(s), %d closed",
+                new_sigs,
+                active,
+                exits,
+                closed,
+            )
+        else:
+            logger.debug("Swing tick: no activity (candidates=%s)", result.get("candidates_scanned", 0))
+
+    except Exception as exc:
+        logger.warning("Swing detector tick failed (non-fatal): %s", exc)
+
+
 def _handle_next_day_prep(engine) -> None:
     """Prepare next trading day parameters (off-hours)."""
     logger.info("▶ Next-day prep...")
@@ -2994,6 +3333,17 @@ def _publish_engine_status(engine, session_mode: str, scheduler_status: dict) ->
         status["session_mode"] = session_mode
         status["scheduler"] = scheduler_status
         status["modules"] = _check_module_health()
+
+        # Inject swing detector summary (Phase 2C)
+        try:
+            from lib.services.engine.swing import get_swing_summary
+
+            status["swing"] = get_swing_summary()
+        except ImportError:
+            status["swing"] = {"active_count": 0, "active_assets": []}
+        except Exception:
+            status["swing"] = {"active_count": 0, "active_assets": [], "error": True}
+
         cache_set(
             "engine:status",
             json.dumps(status, default=str).encode(),
@@ -3102,6 +3452,11 @@ def main():
     # Initialise the PositionManager — loads any persisted positions from Redis
     _get_position_manager(account_size)
 
+    # Initialise the LiveRiskPublisher — merges RiskManager + PositionManager
+    # into a unified LiveRiskState and publishes to Redis every 5 seconds.
+    # Also wired into the live_risk API module for /api/live-risk/refresh.
+    _get_live_risk_publisher()
+
     action_handlers = {
         ActionType.COMPUTE_DAILY_FOCUS: lambda: _handle_compute_daily_focus(engine, account_size),
         ActionType.GROK_MORNING_BRIEF: lambda: _handle_grok_morning_brief(engine),
@@ -3147,6 +3502,7 @@ def main():
             or "us",
             types=getattr(pending[0] if pending else None, "payload", None) and pending[0].payload.get("types") or None,
         ),
+        ActionType.CHECK_SWING: lambda: _handle_check_swing(engine, account_size),
         ActionType.HISTORICAL_BACKFILL: lambda: _handle_historical_backfill(engine),
         ActionType.RUN_OPTIMIZATION: lambda: _handle_run_optimization(engine),
         ActionType.RUN_BACKTEST: lambda: _handle_run_backtest(engine),
@@ -3245,6 +3601,11 @@ def main():
             # are open.  Must run BEFORE publish so the status payload reflects
             # the latest position state.
             _handle_update_positions(engine)
+
+            # Tick the LiveRiskPublisher — publishes unified risk state to
+            # Redis every 5 seconds (or immediately after position changes).
+            # This feeds the dashboard risk strip and focus card overlays.
+            _tick_live_risk_publisher()
 
             # Publish engine status to Redis every iteration
             _publish_engine_status(

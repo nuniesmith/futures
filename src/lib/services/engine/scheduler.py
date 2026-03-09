@@ -150,6 +150,11 @@ class ActionType(StrEnum):
     # Daily report — runs once per day at end of active session (~12:00 ET)
     DAILY_REPORT = "daily_report"
 
+    # Swing detector — runs every 2 min during active session (03:00–15:30 ET)
+    # Scans daily-plan swing candidates for pullback/breakout/gap entries,
+    # manages SwingState per asset, publishes signals + states to Redis.
+    CHECK_SWING = "check_swing"
+
 
 @dataclass
 class ScheduledAction:
@@ -224,6 +229,7 @@ class ScheduleManager:
     FIB_CHECK_INTERVAL = 2 * 60  # Fibonacci retracement
     FOCUS_PUBLISH_INTERVAL = 30  # 30 s during active (throttled downstream)
     STATUS_PUBLISH_INTERVAL = 10  # 10 s always
+    SWING_CHECK_INTERVAL = 2 * 60  # 2 min — swing detector scan cadence
 
     # Sleep intervals per session
     SLEEP_EVENING = 30.0  # check every 30 s during evening overnight ORBs
@@ -683,6 +689,22 @@ class ScheduleManager:
                     action=ActionType.GROK_LIVE_UPDATE,
                     priority=5,
                     description="Run Grok 15-minute live market update",
+                )
+            )
+
+        # ── Swing detector — every 2 min during active hours (03:00–15:30 ET) ──
+        # Scans daily-plan swing candidates for pullback, breakout, and gap-
+        # continuation entries.  Manages per-asset SwingState (TP/SL/trail)
+        # and publishes signals + states to Redis for dashboard display.
+        # Stops scanning after 15:30 ET (swing time-stop — no new entries).
+        if _dt_time(3, 0) <= now_time <= _dt_time(15, 30) and self._interval_elapsed(
+            ActionType.CHECK_SWING, ts, self.SWING_CHECK_INTERVAL
+        ):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_SWING,
+                    priority=5,
+                    description="Swing detector: scan candidates for entry/exit signals",
                 )
             )
 

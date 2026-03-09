@@ -40,6 +40,7 @@ GROK_MODEL = "grok-4-1-fast-reasoning"
 DEFAULT_MAX_TOKENS_BRIEFING = 3000
 DEFAULT_MAX_TOKENS_LIVE = 800
 DEFAULT_MAX_TOKENS_LIVE_COMPACT = 350
+DEFAULT_MAX_TOKENS_DAILY_PLAN = 1500
 DEFAULT_TEMPERATURE = 0.3
 
 
@@ -538,6 +539,18 @@ _MORNING_SYSTEM = (
     "write 'USD' instead. Do not use LaTeX or math notation."
 )
 
+# ---------------------------------------------------------------------------
+# Phase 3C: Structured Grok Daily Plan Analysis
+# ---------------------------------------------------------------------------
+
+_DAILY_PLAN_SYSTEM = (
+    "You are a disciplined futures trading co-pilot. You will receive bias "
+    "analysis and key levels for several assets. Your job is to provide "
+    "structured macro context and asset-specific insights. Respond ONLY with "
+    "valid JSON — no markdown fences, no commentary outside the JSON object. "
+    "NEVER use bare $ signs — write 'USD' instead."
+)
+
 
 def run_morning_briefing(context: dict, api_key: str) -> str | None:
     """Generate a comprehensive pre-market game plan.
@@ -892,6 +905,374 @@ Be extremely concise. This is a quick check-in, not a full analysis."""
 # ---------------------------------------------------------------------------
 # Grok session manager (tracks state across 15-min intervals)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Phase 3C: Structured Grok analysis for DailyPlan integration
+# ---------------------------------------------------------------------------
+
+
+def run_daily_plan_grok_analysis(
+    biases: dict,
+    asset_names: list[str],
+    swing_candidate_names: list[str] | None = None,
+    scalp_focus_names: list[str] | None = None,
+    account_size: int = 50_000,
+    api_key: str | None = None,
+) -> dict | None:
+    """Generate structured Grok analysis for the daily plan.
+
+    Phase 3C: Called during daily plan generation to get macro context,
+    asset-specific insights, and risk warnings in a structured format
+    that can be parsed and stored on the DailyPlan dataclass.
+
+    Unlike the free-text morning briefing, this returns a parsed dict
+    with well-defined fields the dashboard and engine can consume
+    programmatically.
+
+    Args:
+        biases: {asset_name: DailyBias} or {asset_name: dict} from bias analyzer.
+        asset_names: All tracked asset names.
+        swing_candidate_names: Assets selected as swing candidates.
+        scalp_focus_names: Assets selected for scalp focus.
+        account_size: Account size for context.
+        api_key: xAI API key. If None, reads from XAI_API_KEY env var.
+
+    Returns:
+        Parsed dict with structured fields, or None on failure.
+        Keys:
+          - macro_bias: "risk_on" | "risk_off" | "mixed"
+          - macro_summary: str (1-2 sentences)
+          - top_assets: list[dict] with {name, reason, key_level, bias_agreement}
+          - risk_warnings: list[str]
+          - economic_events: list[str]
+          - session_plan: str (1-2 sentences on when to be aggressive vs patient)
+          - correlation_notes: list[str]
+          - swing_insights: dict[str, str] — per-asset swing trade notes
+          - raw_text: str — the full Grok response for logging/display
+    """
+    import json as _json
+    import os
+
+    if api_key is None:
+        api_key = os.getenv("XAI_API_KEY", "").strip()
+    if not api_key:
+        return None
+
+    now = datetime.now(tz=_EST)
+
+    # Build bias summary for the prompt
+    bias_lines: list[str] = []
+    for name in asset_names[:10]:
+        b = biases.get(name)
+        if b is None:
+            continue
+        # Support both DailyBias objects and dicts
+        if hasattr(b, "direction"):
+            direction = b.direction.value if hasattr(b.direction, "value") else str(b.direction)
+            confidence = b.confidence
+            reasoning = b.reasoning[:100] if b.reasoning else ""
+            key_lvl = ""
+            if hasattr(b, "key_levels") and b.key_levels:
+                kl = b.key_levels
+                if hasattr(kl, "prior_day_high"):
+                    key_lvl = f"PDH={kl.prior_day_high:.2f} PDL={kl.prior_day_low:.2f} WH={kl.weekly_high:.2f}"
+        else:
+            direction = b.get("direction", "NEUTRAL")
+            confidence = b.get("confidence", 0.0)
+            reasoning = b.get("reasoning", "")[:100]
+            kl_d = b.get("key_levels", {})
+            key_lvl = (
+                f"PDH={kl_d.get('prior_day_high', 0):.2f} "
+                f"PDL={kl_d.get('prior_day_low', 0):.2f} "
+                f"WH={kl_d.get('weekly_high', 0):.2f}"
+            )
+        bias_lines.append(
+            f"  {name}: {direction} ({confidence:.0%}) — {reasoning}" + (f" | {key_lvl}" if key_lvl else "")
+        )
+
+    bias_block = "\n".join(bias_lines) if bias_lines else "No bias data available"
+
+    # Swing / scalp context
+    swing_names_str = ", ".join(swing_candidate_names) if swing_candidate_names else "None selected yet"
+    scalp_names_str = ", ".join(scalp_focus_names) if scalp_focus_names else "None selected yet"
+
+    prompt = (
+        f"Daily plan analysis for {now.strftime('%A %B %d, %Y')} "
+        f"({now.strftime('%H:%M')} ET).\n\n"
+        f"Account: USD {account_size:,}\n"
+        f"Scalp focus assets: {scalp_names_str}\n"
+        f"Swing candidates: {swing_names_str}\n\n"
+        "My system's directional bias for today:\n"
+        f"{bias_block}\n\n"
+        "Respond with a JSON object (no markdown fences) with these exact keys:\n"
+        "{\n"
+        '  "macro_bias": "risk_on" | "risk_off" | "mixed",\n'
+        '  "macro_summary": "1-2 sentence macro read for the day",\n'
+        '  "top_assets": [\n'
+        '    {"name": "Gold", "reason": "why this asset today", '
+        '"key_level": "2725.0 PDH", "bias_agreement": true}\n'
+        "  ],\n"
+        '  "risk_warnings": ["warning 1", "warning 2"],\n'
+        '  "economic_events": ["event 1 at HH:MM ET", "event 2"],\n'
+        '  "session_plan": "When to be aggressive vs patient today",\n'
+        '  "correlation_notes": ["Gold/Silver moving together", "ES/NQ diverging"],\n'
+        '  "swing_insights": {"asset_name": "specific swing setup note"}\n'
+        "}\n\n"
+        "Rules:\n"
+        "- top_assets: rank by setup quality, max 4 assets\n"
+        "- bias_agreement: true if you agree with my system's bias, false if not\n"
+        "- risk_warnings: real risks for today (FOMC, data releases, geopolitics)\n"
+        "- economic_events: only events that could move futures today\n"
+        "- swing_insights: for each swing candidate, note the best entry approach\n"
+        "- Be concise and actionable. No fluff."
+    )
+
+    raw_text = _call_grok(
+        prompt,
+        api_key,
+        max_tokens=DEFAULT_MAX_TOKENS_DAILY_PLAN,
+        system_prompt=_DAILY_PLAN_SYSTEM,
+    )
+
+    if not raw_text:
+        return None
+
+    # Parse the JSON response
+    parsed = parse_grok_daily_plan_response(raw_text)
+    if parsed is not None:
+        parsed["raw_text"] = raw_text
+    return parsed
+
+
+def parse_grok_daily_plan_response(text: str) -> dict | None:
+    """Parse a Grok daily plan response into a structured dict.
+
+    Handles common response quirks:
+      - Markdown code fences (```json ... ```)
+      - Leading/trailing whitespace
+      - Partial JSON (best-effort extraction)
+
+    Returns:
+        Parsed dict with validated fields, or None on failure.
+    """
+    import json as _json
+    import re
+
+    if not text or not text.strip():
+        return None
+
+    cleaned = text.strip()
+
+    # Strip markdown code fences if present
+    # Match ```json ... ``` or ``` ... ```
+    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", cleaned, re.DOTALL)
+    if fence_match:
+        cleaned = fence_match.group(1).strip()
+
+    # Try direct JSON parse first
+    try:
+        data = _json.loads(cleaned)
+        return _validate_grok_plan_response(data)
+    except _json.JSONDecodeError:
+        pass
+
+    # Try to find a JSON object in the text (Grok sometimes adds preamble)
+    brace_start = cleaned.find("{")
+    brace_end = cleaned.rfind("}")
+    if brace_start >= 0 and brace_end > brace_start:
+        json_candidate = cleaned[brace_start : brace_end + 1]
+        try:
+            data = _json.loads(json_candidate)
+            return _validate_grok_plan_response(data)
+        except _json.JSONDecodeError:
+            pass
+
+    # Last resort: try to fix common JSON issues
+    # (trailing commas, single quotes, unquoted keys)
+    try:
+        # Replace single quotes with double quotes (very rough)
+        fixed = cleaned.replace("'", '"')
+        # Remove trailing commas before } or ]
+        fixed = re.sub(r",\s*([}\]])", r"\1", fixed)
+        brace_start = fixed.find("{")
+        brace_end = fixed.rfind("}")
+        if brace_start >= 0 and brace_end > brace_start:
+            data = _json.loads(fixed[brace_start : brace_end + 1])
+            return _validate_grok_plan_response(data)
+    except (ValueError, _json.JSONDecodeError):
+        pass
+
+    logger.warning(
+        "Failed to parse Grok daily plan JSON response (%d chars). First 200 chars: %s",
+        len(text),
+        text[:200],
+    )
+
+    # Return a minimal dict with just the raw text so the caller
+    # can still display it even if structured parsing failed
+    return {
+        "macro_bias": "mixed",
+        "macro_summary": text[:300] if len(text) > 300 else text,
+        "top_assets": [],
+        "risk_warnings": [],
+        "economic_events": [],
+        "session_plan": "",
+        "correlation_notes": [],
+        "swing_insights": {},
+        "_parse_failed": True,
+    }
+
+
+def _validate_grok_plan_response(data: dict) -> dict:
+    """Validate and normalize the parsed Grok daily plan response.
+
+    Ensures all expected keys exist with correct types, fills defaults
+    for missing fields.
+    """
+    result = {
+        "macro_bias": "mixed",
+        "macro_summary": "",
+        "top_assets": [],
+        "risk_warnings": [],
+        "economic_events": [],
+        "session_plan": "",
+        "correlation_notes": [],
+        "swing_insights": {},
+    }
+
+    # macro_bias
+    mb = data.get("macro_bias", "mixed")
+    if isinstance(mb, str) and mb.lower() in ("risk_on", "risk_off", "mixed"):
+        result["macro_bias"] = mb.lower()
+
+    # macro_summary
+    ms = data.get("macro_summary", "")
+    if isinstance(ms, str):
+        result["macro_summary"] = ms[:500]
+
+    # top_assets
+    ta = data.get("top_assets", [])
+    if isinstance(ta, list):
+        validated_assets = []
+        for item in ta[:6]:
+            if isinstance(item, dict):
+                validated_assets.append(
+                    {
+                        "name": str(item.get("name", "")),
+                        "reason": str(item.get("reason", "")),
+                        "key_level": str(item.get("key_level", "")),
+                        "bias_agreement": bool(item.get("bias_agreement", True)),
+                    }
+                )
+        result["top_assets"] = validated_assets
+
+    # risk_warnings
+    rw = data.get("risk_warnings", [])
+    if isinstance(rw, list):
+        result["risk_warnings"] = [str(w)[:200] for w in rw[:10] if w]
+
+    # economic_events
+    ee = data.get("economic_events", [])
+    if isinstance(ee, list):
+        result["economic_events"] = [str(e)[:200] for e in ee[:10] if e]
+
+    # session_plan
+    sp = data.get("session_plan", "")
+    if isinstance(sp, str):
+        result["session_plan"] = sp[:300]
+
+    # correlation_notes
+    cn = data.get("correlation_notes", [])
+    if isinstance(cn, list):
+        result["correlation_notes"] = [str(n)[:200] for n in cn[:10] if n]
+
+    # swing_insights
+    si = data.get("swing_insights", {})
+    if isinstance(si, dict):
+        result["swing_insights"] = {str(k): str(v)[:300] for k, v in si.items()}
+
+    return result
+
+
+def format_grok_daily_plan_for_display(grok_data: dict) -> str:
+    """Format a structured Grok daily plan response for dashboard display.
+
+    Converts the parsed JSON dict back into a human-readable summary
+    suitable for the Grok panel or daily plan header card.
+
+    Args:
+        grok_data: Parsed dict from run_daily_plan_grok_analysis().
+
+    Returns:
+        Formatted multi-line string for display.
+    """
+    if not grok_data:
+        return ""
+
+    lines: list[str] = []
+
+    # Macro bias
+    macro_emoji = {
+        "risk_on": "🟢 RISK-ON",
+        "risk_off": "🔴 RISK-OFF",
+        "mixed": "🟡 MIXED",
+    }
+    bias = grok_data.get("macro_bias", "mixed")
+    lines.append(f"📊 Macro: {macro_emoji.get(bias, bias)}")
+
+    summary = grok_data.get("macro_summary", "")
+    if summary:
+        lines.append(f"   {summary}")
+
+    # Top assets
+    top_assets = grok_data.get("top_assets", [])
+    if top_assets:
+        lines.append("")
+        lines.append("🎯 Top Assets:")
+        for i, a in enumerate(top_assets, 1):
+            agree = "✅" if a.get("bias_agreement") else "⚠️"
+            lines.append(f"   {i}. {a.get('name', '?')} {agree} — {a.get('reason', '')} [{a.get('key_level', '')}]")
+
+    # Economic events
+    events = grok_data.get("economic_events", [])
+    if events:
+        lines.append("")
+        lines.append("📅 Events:")
+        for e in events:
+            lines.append(f"   • {e}")
+
+    # Risk warnings
+    warnings = grok_data.get("risk_warnings", [])
+    if warnings:
+        lines.append("")
+        lines.append("⚠️ Risks:")
+        for w in warnings:
+            lines.append(f"   • {w}")
+
+    # Session plan
+    plan = grok_data.get("session_plan", "")
+    if plan:
+        lines.append("")
+        lines.append(f"📋 Session: {plan}")
+
+    # Correlation notes
+    corr = grok_data.get("correlation_notes", [])
+    if corr:
+        lines.append("")
+        lines.append("🔗 Correlations:")
+        for c in corr:
+            lines.append(f"   • {c}")
+
+    # Swing insights
+    swing = grok_data.get("swing_insights", {})
+    if swing:
+        lines.append("")
+        lines.append("📈 Swing Notes:")
+        for asset, note in swing.items():
+            lines.append(f"   {asset}: {note}")
+
+    return "\n".join(lines)
 
 
 class GrokSession:

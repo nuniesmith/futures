@@ -363,7 +363,7 @@ def _get_focus_data() -> dict[str, Any] | None:
         # Try to get a Redis client; the function may not exist in all versions
         client: Any = None
         try:
-            from lib.core.cache import get_redis_client as _get_client  # type: ignore[attr-defined]
+            from lib.core.cache import _init_redis as _get_client  # type: ignore[attr-defined]
 
             client = _get_client()
         except (ImportError, AttributeError):
@@ -1457,8 +1457,176 @@ def _get_grok_update() -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
+def _render_dual_sizing_row(asset: dict[str, Any]) -> str:
+    """Render the dual micro/full contract sizing row (Phase 5C).
+
+    Shows side-by-side sizing for micro and full contracts so the trader
+    knows exactly what to type into TradingView/Tradovate.
+    """
+    dual = asset.get("dual_sizing", {})
+    if not dual:
+        return ""
+
+    parts = []
+    for key, label, icon in [("micro", "Micro", "📏"), ("full", "Full", "📐")]:
+        sizing = dual.get(key)
+        if not sizing:
+            continue
+        sym = sizing.get("symbol", "")
+        contracts = sizing.get("contracts", 0)
+        risk = sizing.get("risk_dollars", 0)
+        tp1_d = sizing.get("tp1_dollars", 0)
+        tp2_d = sizing.get("tp2_dollars", 0)
+
+        tp_str = ""
+        if tp1_d > 0:
+            tp_str += f' <span style="color:#4ade80;font-size:8px">TP1:+${tp1_d:,.0f}</span>'
+        if tp2_d > 0:
+            tp_str += f' <span style="color:#86efac;font-size:8px">TP2:+${tp2_d:,.0f}</span>'
+
+        parts.append(
+            f'<div style="display:flex;align-items:center;gap:4px;padding:2px 0">'
+            f'<span style="font-size:10px">{icon}</span>'
+            f'<span style="font-size:10px;color:#a1a1aa">{label}:</span>'
+            f"<span style=\"font-size:11px;font-weight:600;color:#e4e4e7;font-family:'SF Mono','Fira Code',monospace\">"
+            f"{contracts}× {sym}</span>"
+            f'<span style="font-size:9px;color:#f87171">@ ${risk:,.0f} risk</span>'
+            f"{tp_str}"
+            f"</div>"
+        )
+
+    if not parts:
+        return ""
+
+    return (
+        '<div style="margin:4px 0;padding:4px 6px;border-radius:4px;'
+        'background:rgba(161,161,170,0.08);border:1px solid rgba(161,161,170,0.12)">' + "".join(parts) + "</div>"
+    )
+
+
+def _render_live_position_overlay(asset: dict[str, Any]) -> str:
+    """Render live position overlay when in a trade (Phase 5D).
+
+    Replaces the entry zone with real-time position info: direction, entry,
+    current P&L, bracket phase, R-multiple, hold duration.
+    """
+    pos = asset.get("live_position")
+    if not pos:
+        return ""
+
+    side = pos.get("position_side", "UNKNOWN")
+    qty = pos.get("position_quantity", 0)
+    entry_px = pos.get("position_entry_price", 0)
+    current_px = pos.get("position_current_price", 0)
+    stop_px = pos.get("position_stop_price", 0)
+    pnl = pos.get("position_unrealized_pnl", 0)
+    r_mult = pos.get("position_r_multiple", 0)
+    phase = pos.get("position_bracket_phase", "INITIAL")
+    hold = pos.get("position_hold_duration", "0s")
+    source = pos.get("position_source", "engine")
+    sym = pos.get("position_symbol", "")
+
+    # P&L color
+    if pnl > 0:
+        pnl_color = "#4ade80"
+        pnl_prefix = "+"
+    elif pnl < 0:
+        pnl_color = "#f87171"
+        pnl_prefix = ""
+    else:
+        pnl_color = "#a1a1aa"
+        pnl_prefix = ""
+
+    # Side color and emoji
+    if side == "LONG":
+        side_color = "#4ade80"
+        side_emoji = "🟢"
+    elif side == "SHORT":
+        side_color = "#f87171"
+        side_emoji = "🔴"
+    else:
+        side_color = "#a1a1aa"
+        side_emoji = "⚪"
+
+    # Bracket phase progress
+    phases = ["INITIAL", "TP1_HIT", "TP2_HIT", "TRAILING"]
+    phase_upper = phase.upper().replace(" ", "_")
+    phase_idx = phases.index(phase_upper) if phase_upper in phases else 0
+    phase_labels = ["Entry", "TP1 ✓", "TP2 ✓", "Trail"]
+
+    phase_bar = '<div style="display:flex;gap:2px;margin:4px 0">'
+    for i, plabel in enumerate(phase_labels):
+        if i < phase_idx:
+            bg = "#4ade80"
+            fg = "#000"
+        elif i == phase_idx:
+            bg = "#facc15"
+            fg = "#000"
+        else:
+            bg = "rgba(161,161,170,0.2)"
+            fg = "#71717a"
+        phase_bar += (
+            f'<span style="flex:1;text-align:center;font-size:8px;padding:1px 0;'
+            f'border-radius:2px;background:{bg};color:{fg}">{plabel}</span>'
+        )
+    phase_bar += "</div>"
+
+    # R-multiple badge
+    if r_mult >= 2.0:
+        r_bg = "rgba(34,197,94,0.2)"
+        r_color = "#4ade80"
+    elif r_mult >= 1.0:
+        r_bg = "rgba(250,204,21,0.2)"
+        r_color = "#facc15"
+    elif r_mult >= 0:
+        r_bg = "rgba(161,161,170,0.15)"
+        r_color = "#a1a1aa"
+    else:
+        r_bg = "rgba(239,68,68,0.2)"
+        r_color = "#f87171"
+
+    return (
+        f'<div style="margin:6px 0;padding:6px 8px;border-radius:6px;'
+        f'background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.3)">'
+        # Header: LIVE badge + side + qty
+        f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">'
+        f'<div style="display:flex;align-items:center;gap:4px">'
+        f'<span style="font-size:8px;padding:1px 4px;border-radius:3px;'
+        f"background:rgba(239,68,68,0.3);color:#f87171;font-weight:700;"
+        f'animation:pulse 2s infinite">LIVE</span>'
+        f'<span style="font-size:10px">{side_emoji}</span>'
+        f'<span style="font-size:11px;font-weight:600;color:{side_color}">'
+        f"{side} {qty}× {sym}</span>"
+        f"</div>"
+        f'<span style="font-size:9px;color:#71717a">{source} · {hold}</span>'
+        f"</div>"
+        # P&L row
+        f'<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:3px">'
+        f'<span style="font-size:16px;font-weight:700;color:{pnl_color};'
+        f"font-family:'SF Mono','Fira Code',monospace\">"
+        f"{pnl_prefix}${pnl:,.2f}</span>"
+        f'<span style="font-size:10px;padding:1px 4px;border-radius:3px;'
+        f'background:{r_bg};color:{r_color}">{r_mult:+.1f}R</span>'
+        f"</div>"
+        # Entry / Current / Stop
+        f'<div style="display:flex;gap:8px;font-size:9px;color:#a1a1aa;margin-bottom:3px">'
+        f'<span>Entry: <b style="color:#e4e4e7">{entry_px:,.2f}</b></span>'
+        f'<span>Now: <b style="color:#e4e4e7">{current_px:,.2f}</b></span>'
+        f'<span>Stop: <b style="color:#f87171">{stop_px:,.2f}</b></span>'
+        f"</div>"
+        # Bracket progress bar
+        f"{phase_bar}"
+        f"</div>"
+    )
+
+
 def _render_asset_card(asset: dict[str, Any]) -> str:
-    """Render a single asset focus card as an HTML fragment."""
+    """Render a single asset focus card as an HTML fragment.
+
+    Phase 5C: Shows dual micro/full contract sizing side by side.
+    Phase 5D: Overlays live position info when in a trade.
+    Phase 3B: Shows focus category badge (scalp_focus / swing / background).
+    """
     symbol = asset.get("symbol", "?")
     bias = asset.get("bias", "NEUTRAL")
     bias_emoji = asset.get("bias_emoji", "⚪")
@@ -1483,6 +1651,15 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
     notes = asset.get("notes", "")
     skip = asset.get("skip", False)
 
+    # Phase 3B: focus category
+    focus_category = asset.get("focus_category", "")
+    focus_rank = asset.get("focus_rank", 999)
+
+    # Phase 5C/5D state
+    has_live_position = asset.get("has_live_position", False)
+    risk_blocked = asset.get("risk_blocked", False)
+    max_positions_reached = asset.get("max_positions_reached", False)
+
     # Build a locale-aware price formatter that respects the tick precision
     def _fmt(v: float) -> str:
         if price_decimals <= 2:
@@ -1504,8 +1681,26 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
             f'background:{style};margin-left:2px">~${amount:,.0f}</span>'
         )
 
-    # Color scheme based on bias
-    if bias == "LONG":
+    # Color scheme based on bias — override for live position
+    if has_live_position:
+        pos_side = asset.get("live_position", {}).get("position_side", "")
+        if pos_side == "LONG":
+            border_color = "border-green-500"
+            bias_bg = "bg-green-900/40"
+            bias_text = "text-green-400"
+        elif pos_side == "SHORT":
+            border_color = "border-red-500"
+            bias_bg = "bg-red-900/40"
+            bias_text = "text-red-400"
+        else:
+            border_color = "border-indigo-500"
+            bias_bg = "bg-indigo-900/40"
+            bias_text = "text-indigo-400"
+    elif risk_blocked:
+        border_color = "border-red-700"
+        bias_bg = "bg-red-900/30"
+        bias_text = "text-red-400"
+    elif bias == "LONG":
         border_color = "border-green-500"
         bias_bg = "bg-green-900/40"
         bias_text = "text-green-400"
@@ -1526,10 +1721,95 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
     else:
         q_color = "bg-red-500"
 
-    # Opacity for skipped assets
-    opacity = "opacity-50" if skip else ""
+    # Opacity for skipped assets (but NOT if they have a live position)
+    opacity = "opacity-50" if (skip and not has_live_position) else ""
 
     symbol_lower = symbol.lower().replace(" ", "_").replace("&", "")
+
+    # ── Header status badge ─────────────────────────────────────────────
+    # Phase 5D: Show LIVE badge when in a trade
+    # Phase 5C: Show RISK BLOCKED or MAX POSITIONS badges
+    # Phase 3B: Show focus rank badge for scalp_focus assets
+    header_badge = ""
+    if has_live_position:
+        header_badge = (
+            '<span style="font-size:8px;padding:1px 5px;border-radius:3px;'
+            "background:rgba(239,68,68,0.3);color:#f87171;font-weight:700;"
+            'margin-left:6px;animation:pulse 2s infinite">● LIVE</span>'
+        )
+    elif risk_blocked:
+        header_badge = (
+            '<span style="font-size:8px;padding:1px 5px;border-radius:3px;'
+            "background:rgba(239,68,68,0.3);color:#f87171;font-weight:700;"
+            'margin-left:6px">🚫 BLOCKED</span>'
+        )
+    elif max_positions_reached:
+        header_badge = (
+            '<span style="font-size:8px;padding:1px 5px;border-radius:3px;'
+            "background:rgba(250,204,21,0.2);color:#facc15;font-weight:600;"
+            'margin-left:6px">⚠️ MAX POS</span>'
+        )
+
+    # Phase 3B: focus rank badge
+    focus_badge = ""
+    if focus_category == "scalp_focus" and focus_rank < 999:
+        focus_badge = (
+            f'<span style="font-size:8px;padding:1px 5px;border-radius:3px;'
+            f"background:rgba(34,197,94,0.15);color:#4ade80;font-weight:700;"
+            f'margin-left:4px">#{focus_rank} FOCUS</span>'
+        )
+    elif focus_category == "swing":
+        focus_badge = (
+            '<span style="font-size:8px;padding:1px 5px;border-radius:3px;'
+            "background:rgba(250,204,21,0.15);color:#facc15;font-weight:700;"
+            'margin-left:4px">🕐 SWING</span>'
+        )
+
+    # ── Live position overlay (Phase 5D) ────────────────────────────────
+    live_pos_html = _render_live_position_overlay(asset) if has_live_position else ""
+
+    # ── Dual sizing row (Phase 5C) ──────────────────────────────────────
+    dual_sizing_html = _render_dual_sizing_row(asset) if not has_live_position else ""
+
+    # ── Build the card body: setup mode vs live position mode ───────────
+    # When in a trade, the entry/stop/TP levels section is replaced by the
+    # live position overlay.  The quality/wave and meta rows remain.
+    if has_live_position:
+        levels_section = live_pos_html
+    else:
+        levels_section = f"""
+        <div class="grid grid-cols-3 gap-1 mb-2 sm:mb-3 text-xs">
+            <div class="t-panel-inner rounded p-1 sm:p-1.5 text-center">
+                <div class="t-text-muted text-[10px] sm:text-xs">Entry</div>
+                <div class="t-text-secondary font-mono text-[10px] sm:text-xs">{_fmt(entry_low)}</div>
+                <div class="t-text-muted font-mono text-[10px] sm:text-xs">– {_fmt(entry_high)}</div>
+            </div>
+            <div class="t-panel-inner rounded p-1 sm:p-1.5 text-center">
+                <div class="t-text-muted text-[10px] sm:text-xs">Stop</div>
+                <div class="text-red-400 font-mono text-[10px] sm:text-xs">{_fmt(stop)}</div>
+                <div class="text-red-300 font-mono" style="font-size:8px">-${risk_dollars:,.0f}</div>
+            </div>
+            <div class="t-panel-inner rounded p-1 sm:p-1.5 text-center">
+                <div class="t-text-muted text-[10px] sm:text-xs">TP1 / TP2</div>
+                <div class="text-green-400 font-mono text-[10px] sm:text-xs">
+                    {_fmt(tp1)}{_dollar_badge(target1_dollars)}
+                </div>
+                <div class="text-green-300 font-mono text-[10px] sm:text-xs">
+                    {_fmt(tp2)}{_dollar_badge(target2_dollars)}
+                </div>
+            </div>
+        </div>
+        """
+
+    # ── Meta row: original sizing line + dual sizing ────────────────────
+    if risk_blocked:
+        sizing_text = '<span style="color:#f87171;font-weight:600">🚫 RISK BLOCKED</span>'
+    elif max_positions_reached:
+        sizing_text = '<span style="color:#facc15;font-weight:600">⚠️ MAX POSITIONS</span>'
+    elif has_live_position:
+        sizing_text = '<span style="color:#818cf8;font-weight:600">● Position active</span>'
+    else:
+        sizing_text = f"{position_size} micros / ${risk_dollars:,.0f} risk"
 
     return f"""
     <div id="asset-card-{symbol_lower}"
@@ -1538,6 +1818,8 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
          data-wave="{wave_ratio}"
          data-bias="{bias}"
          data-symbol="{symbol_lower}"
+         data-focus-category="{focus_category}"
+         data-has-position="{"true" if has_live_position else "false"}"
          hx-swap-oob="true"
          _="on load if my @data-quality as Number < 55 add .opacity-50 to me
               else remove .opacity-50 from me end">
@@ -1546,7 +1828,7 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
         <div class="flex items-center justify-between mb-2 sm:mb-3">
             <div class="flex items-center gap-2 min-w-0">
                 <span class="text-xl sm:text-2xl shrink-0">{bias_emoji}</span>
-                <h3 class="text-base sm:text-lg font-bold t-text truncate">{symbol}</h3>
+                <h3 class="text-base sm:text-lg font-bold t-text truncate">{symbol}{header_badge}{focus_badge}</h3>
             </div>
             <div class="text-right shrink-0 ml-2">
                 <div class="text-lg sm:text-xl font-mono font-bold t-text">{last_price:,.2f}</div>
@@ -1570,34 +1852,17 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
             </div>
         </div>
 
-        <!-- Levels -->
-        <div class="grid grid-cols-3 gap-1 mb-2 sm:mb-3 text-xs">
-            <div class="t-panel-inner rounded p-1 sm:p-1.5 text-center">
-                <div class="t-text-muted text-[10px] sm:text-xs">Entry</div>
-                <div class="t-text-secondary font-mono text-[10px] sm:text-xs">{_fmt(entry_low)}</div>
-                <div class="t-text-muted font-mono text-[10px] sm:text-xs">– {_fmt(entry_high)}</div>
-            </div>
-            <div class="t-panel-inner rounded p-1 sm:p-1.5 text-center">
-                <div class="t-text-muted text-[10px] sm:text-xs">Stop</div>
-                <div class="text-red-400 font-mono text-[10px] sm:text-xs">{_fmt(stop)}</div>
-                <div class="text-red-300 font-mono" style="font-size:8px">-${risk_dollars:,.0f}</div>
-            </div>
-            <div class="t-panel-inner rounded p-1 sm:p-1.5 text-center">
-                <div class="t-text-muted text-[10px] sm:text-xs">TP1 / TP2</div>
-                <div class="text-green-400 font-mono text-[10px] sm:text-xs">
-                    {_fmt(tp1)}{_dollar_badge(target1_dollars)}
-                </div>
-                <div class="text-green-300 font-mono text-[10px] sm:text-xs">
-                    {_fmt(tp2)}{_dollar_badge(target2_dollars)}
-                </div>
-            </div>
-        </div>
+        <!-- Levels / Live Position (Phase 5D swap) -->
+        {levels_section}
+
+        <!-- Dual Micro/Full Sizing (Phase 5C) -->
+        {dual_sizing_html}
 
         <!-- Meta row — wraps gracefully on mobile -->
         <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] sm:text-xs t-text-muted">
             <span>{trend_dir}</span>
             <span>Vol: {vol_cluster} ({vol_pct:.0%})</span>
-            <span>{position_size} micros / ${risk_dollars:,.0f} risk</span>
+            <span>{sizing_text}</span>
         </div>
 
         <!-- Notes -->
@@ -2271,6 +2536,855 @@ def _render_market_events_panel() -> str:
     """
 
 
+# ---------------------------------------------------------------------------
+# Phase 3B — Dashboard Focus Mode
+# ---------------------------------------------------------------------------
+
+
+def _get_daily_plan_data() -> dict[str, Any] | None:
+    """Read daily plan from Redis for dashboard display.
+
+    Returns the full plan dict (scalp_focus, swing_candidates, market_context,
+    all_biases, composite scores, etc.) or None if unavailable.
+    """
+    try:
+        from lib.core.cache import cache_get
+
+        raw = cache_get("engine:daily_plan")
+        if raw:
+            parsed: object = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed  # type: ignore[return-value]
+    except Exception as exc:
+        logger.debug("Failed to read daily plan from Redis: %s", exc)
+    return None
+
+
+def _render_daily_plan_header(plan: dict[str, Any] | None, focus_data: dict[str, Any] | None) -> str:
+    """Render the daily plan header: Grok morning brief + focus summary.
+
+    Phase 3B: Shown above the asset cards in Trading Mode when a daily plan
+    is active, giving the trader immediate context on macro conditions and
+    today's selected focus.
+
+    Phase 3C: When structured ``grok_analysis`` is available, renders a rich
+    card with macro bias badge, top asset chips with bias agreement indicators,
+    economic events timeline, risk warnings, session plan, and correlation notes.
+    Falls back to the free-text display when structured data is not present.
+    """
+    if not plan and not (focus_data and focus_data.get("focus_mode_active")):
+        return ""
+
+    # --- Grok morning brief card (if available) ---
+    grok_brief = ""
+    market_ctx = (plan or {}).get("market_context", "")
+    grok_available = (plan or {}).get("grok_available", False)
+    grok_analysis = (plan or {}).get("grok_analysis") or {}
+
+    # Phase 3C: Structured Grok analysis rendering
+    if grok_analysis and not grok_analysis.get("_parse_failed"):
+        grok_brief = _render_structured_grok_brief(grok_analysis, grok_available)
+
+    elif market_ctx:
+        # Fallback: free-text Grok brief (Phase 3B original)
+        display_ctx = market_ctx[:600] + ("..." if len(market_ctx) > 600 else "")
+        grok_brief = (
+            '<div style="margin-bottom:8px;padding:8px 10px;border-radius:6px;'
+            "background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.25);"
+            'position:relative">'
+            '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
+            '<span style="font-size:14px">🤖</span>'
+            '<span style="font-size:11px;font-weight:700;color:#c4b5fd">Grok Morning Brief</span>'
+            + (
+                '<span style="font-size:8px;padding:1px 4px;border-radius:3px;'
+                'background:rgba(34,197,94,0.15);color:#4ade80;margin-left:4px">LIVE</span>'
+                if grok_available
+                else '<span style="font-size:8px;padding:1px 4px;border-radius:3px;'
+                'background:rgba(161,161,170,0.15);color:#a1a1aa;margin-left:4px">CACHED</span>'
+            )
+            + "</div>"
+            f'<div style="font-size:10px;line-height:1.5;color:var(--text-secondary)">'
+            f"{display_ctx}</div>"
+            "</div>"
+        )
+
+    # --- Focus plan summary strip ---
+    scalp_names = (focus_data or {}).get("scalp_focus_names", [])
+    swing_names = (focus_data or {}).get("swing_candidate_names", [])
+    plan_time = (plan or {}).get("computed_at", "")
+    if isinstance(plan_time, str) and "T" in plan_time:
+        try:
+            from datetime import datetime as _dt
+
+            dt = _dt.fromisoformat(plan_time)
+            plan_time = dt.strftime("%I:%M %p ET")
+        except Exception:
+            pass
+
+    # Build the plan strip showing today's selections
+    scalp_chips = ""
+    for i, name in enumerate(scalp_names):
+        rank = i + 1
+        scalp_chips += (
+            f'<span style="font-size:10px;padding:2px 6px;border-radius:4px;'
+            f"background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.3);"
+            f'color:#4ade80;font-weight:600">'
+            f"#{rank} {name}</span>"
+        )
+
+    swing_chips = ""
+    for name in swing_names:
+        swing_chips += (
+            f'<span style="font-size:10px;padding:2px 6px;border-radius:4px;'
+            f"background:rgba(250,204,21,0.1);border:1px solid rgba(250,204,21,0.3);"
+            f'color:#facc15;font-weight:600">'
+            f"🕐 {name}</span>"
+        )
+
+    plan_strip = (
+        '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;'
+        "padding:6px 10px;border-radius:6px;background:var(--bg-panel-inner);"
+        'border:1px solid var(--border-subtle);margin-bottom:8px">'
+        '<span style="font-size:11px;font-weight:700;color:var(--text-primary);margin-right:4px">'
+        "🎯 Today's Focus</span>"
+        + scalp_chips
+        + swing_chips
+        + (
+            f'<span style="margin-left:auto;font-size:9px;color:var(--text-faint)">Plan: {plan_time}</span>'
+            if plan_time
+            else ""
+        )
+        + "</div>"
+    )
+
+    return f'<div id="daily-plan-header">{grok_brief}{plan_strip}</div>'
+
+
+def _render_structured_grok_brief(grok_analysis: dict[str, Any], grok_available: bool = True) -> str:
+    """Render the structured Grok daily plan analysis as a rich dashboard card.
+
+    Phase 3C: Converts the parsed JSON from ``run_daily_plan_grok_analysis()``
+    into a visually rich card with:
+      - Macro bias badge (risk-on / risk-off / mixed) with colored indicator
+      - Macro summary sentence
+      - Top assets row with bias-agreement indicators (checkmark / warning)
+      - Economic events timeline
+      - Risk warnings (collapsible if > 2)
+      - Session plan one-liner
+      - Correlation notes
+      - Swing-specific insights (shown near swing cards)
+    """
+    if not grok_analysis:
+        return ""
+
+    # --- Macro bias badge ---
+    macro_bias = grok_analysis.get("macro_bias", "mixed")
+    macro_styles = {
+        "risk_on": ("🟢", "RISK-ON", "rgba(34,197,94,0.15)", "#4ade80", "rgba(34,197,94,0.3)"),
+        "risk_off": ("🔴", "RISK-OFF", "rgba(239,68,68,0.15)", "#f87171", "rgba(239,68,68,0.3)"),
+        "mixed": ("🟡", "MIXED", "rgba(250,204,21,0.12)", "#facc15", "rgba(250,204,21,0.3)"),
+    }
+    m_emoji, m_label, m_bg, m_color, m_border = macro_styles.get(macro_bias, macro_styles["mixed"])
+
+    macro_summary = grok_analysis.get("macro_summary", "")
+    # Escape HTML entities in user/AI text
+    macro_summary_safe = macro_summary.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:400]
+
+    macro_badge = (
+        f'<span style="font-size:9px;padding:2px 8px;border-radius:4px;'
+        f"background:{m_bg};color:{m_color};font-weight:700;"
+        f'border:1px solid {m_border}">'
+        f"{m_emoji} {m_label}</span>"
+    )
+
+    live_badge = (
+        '<span style="font-size:8px;padding:1px 4px;border-radius:3px;'
+        'background:rgba(34,197,94,0.15);color:#4ade80;margin-left:4px">LIVE</span>'
+        if grok_available
+        else '<span style="font-size:8px;padding:1px 4px;border-radius:3px;'
+        'background:rgba(161,161,170,0.15);color:#a1a1aa;margin-left:4px">CACHED</span>'
+    )
+
+    # --- Top assets chips ---
+    top_assets = grok_analysis.get("top_assets", [])
+    top_assets_html = ""
+    if top_assets:
+        chips = []
+        for i, asset in enumerate(top_assets):
+            name = asset.get("name", "?")
+            reason = asset.get("reason", "")
+            key_level = asset.get("key_level", "")
+            agrees = asset.get("bias_agreement", True)
+            agree_icon = "✅" if agrees else "⚠️"
+            chip_bg = "rgba(34,197,94,0.08)" if agrees else "rgba(250,204,21,0.08)"
+            chip_border = "rgba(34,197,94,0.25)" if agrees else "rgba(250,204,21,0.25)"
+            tooltip = f"{reason}"
+            if key_level:
+                tooltip += f" | {key_level}"
+            tooltip_safe = (
+                tooltip.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+            )
+            chips.append(
+                f'<span title="{tooltip_safe}" style="font-size:9px;padding:2px 6px;border-radius:4px;'
+                f"background:{chip_bg};border:1px solid {chip_border};"
+                f'color:var(--text-secondary);cursor:help">'
+                f"{agree_icon} {name}</span>"
+            )
+        top_assets_html = (
+            '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:6px">'
+            '<span style="font-size:9px;color:var(--text-muted);font-weight:600;margin-right:2px">'
+            "🎯 Top:</span>" + "".join(chips) + "</div>"
+        )
+
+    # --- Economic events ---
+    events = grok_analysis.get("economic_events", [])
+    events_html = ""
+    if events:
+        event_items = []
+        for e in events[:5]:
+            e_safe = str(e).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:120]
+            event_items.append(
+                f'<span style="font-size:8px;padding:1px 5px;border-radius:3px;'
+                f"background:rgba(96,165,250,0.1);border:1px solid rgba(96,165,250,0.2);"
+                f'color:#93c5fd">'
+                f"📅 {e_safe}</span>"
+            )
+        events_html = (
+            '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px">'
+            + "".join(event_items)
+            + "</div>"
+        )
+
+    # --- Risk warnings ---
+    warnings = grok_analysis.get("risk_warnings", [])
+    warnings_html = ""
+    if warnings:
+        warning_items = []
+        for w in warnings[:4]:
+            w_safe = str(w).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:150]
+            warning_items.append(f'<div style="font-size:9px;color:#fca5a5;line-height:1.4">⚠️ {w_safe}</div>')
+        if len(warnings) <= 2:
+            warnings_html = '<div style="margin-top:5px">' + "".join(warning_items) + "</div>"
+        else:
+            # Collapsible for > 2 warnings
+            warnings_html = (
+                '<details style="margin-top:5px">'
+                '<summary style="font-size:9px;color:#fca5a5;cursor:pointer;font-weight:600">'
+                f"⚠️ {len(warnings)} Risk Warning{'s' if len(warnings) != 1 else ''}</summary>"
+                '<div style="margin-top:3px;padding-left:4px">' + "".join(warning_items) + "</div></details>"
+            )
+
+    # --- Session plan ---
+    session_plan = grok_analysis.get("session_plan", "")
+    session_html = ""
+    if session_plan:
+        sp_safe = session_plan.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:250]
+        session_html = (
+            f'<div style="font-size:9px;color:var(--text-muted);margin-top:5px;'
+            f'font-style:italic;line-height:1.4">'
+            f"📋 {sp_safe}</div>"
+        )
+
+    # --- Correlation notes ---
+    correlations = grok_analysis.get("correlation_notes", [])
+    corr_html = ""
+    if correlations:
+        corr_items = []
+        for c in correlations[:3]:
+            c_safe = str(c).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:120]
+            corr_items.append(f'<span style="font-size:8px;color:var(--text-faint)">🔗 {c_safe}</span>')
+        corr_html = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">' + "".join(corr_items) + "</div>"
+
+    # --- Assemble the card ---
+    return (
+        '<div style="margin-bottom:8px;padding:8px 10px;border-radius:6px;'
+        "background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.25);"
+        'position:relative">'
+        # Header row: icon + title + macro badge + live badge
+        '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
+        '<span style="font-size:14px">🤖</span>'
+        '<span style="font-size:11px;font-weight:700;color:#c4b5fd">Grok Morning Brief</span>'
+        + macro_badge
+        + live_badge
+        + "</div>"
+        # Macro summary
+        + (
+            f'<div style="font-size:10px;line-height:1.5;color:var(--text-secondary)">{macro_summary_safe}</div>'
+            if macro_summary_safe
+            else ""
+        )
+        # Top assets
+        + top_assets_html
+        # Economic events
+        + events_html
+        # Risk warnings
+        + warnings_html
+        # Session plan
+        + session_html
+        # Correlations
+        + corr_html
+        + "</div>"
+    )
+
+
+def _render_why_these_assets(plan: dict[str, Any] | None) -> str:
+    """Render the 'Why these assets?' panel showing composite score breakdown.
+
+    Phase 3B: Collapsible panel explaining the ranking logic so the trader
+    can understand and trust the daily selection.
+    """
+    if not plan:
+        return ""
+
+    scalp_focus = plan.get("scalp_focus", [])
+    swing_candidates = plan.get("swing_candidates", [])
+
+    if not scalp_focus and not swing_candidates:
+        return ""
+
+    # --- Build score breakdown table for scalp assets ---
+    scalp_rows = ""
+    for asset in scalp_focus:
+        name = asset.get("asset_name", "?")
+        composite = asset.get("composite_score", 0)
+        sig_q = asset.get("signal_quality_score", 0)
+        atr_opp = asset.get("atr_opportunity_score", 0)
+        rb_dens = asset.get("rb_setup_density_score", 0)
+        sess_fit = asset.get("session_fit_score", 0)
+        catalyst = asset.get("catalyst_score", 0)
+        bias_dir = asset.get("bias_direction", "NEUTRAL")
+        bias_conf = asset.get("bias_confidence", 0)
+
+        bias_color = "#4ade80" if bias_dir == "LONG" else "#f87171" if bias_dir == "SHORT" else "#a1a1aa"
+
+        # Mini bar for each score component
+        def _mini_bar(val: float, max_val: float = 100.0) -> str:
+            pct = min(val / max_val * 100, 100) if max_val > 0 else 0
+            color = "#4ade80" if pct >= 70 else "#facc15" if pct >= 50 else "#f87171"
+            return (
+                f'<div style="display:flex;align-items:center;gap:3px">'
+                f'<div style="width:36px;height:4px;background:var(--bg-bar);border-radius:2px;overflow:hidden">'
+                f'<div style="width:{pct:.0f}%;height:100%;background:{color};border-radius:2px"></div>'
+                f"</div>"
+                f'<span style="font-size:8px;color:var(--text-muted);min-width:20px">{val:.0f}</span>'
+                f"</div>"
+            )
+
+        scalp_rows += (
+            "<tr>"
+            f'<td style="font-weight:600;color:var(--text-primary);font-size:11px">{name}</td>'
+            f'<td style="font-weight:700;font-size:12px;color:var(--text-primary)">{composite:.0f}</td>'
+            f"<td>{_mini_bar(sig_q)}</td>"
+            f"<td>{_mini_bar(atr_opp)}</td>"
+            f"<td>{_mini_bar(rb_dens)}</td>"
+            f"<td>{_mini_bar(sess_fit)}</td>"
+            f"<td>{_mini_bar(catalyst)}</td>"
+            f'<td><span style="font-size:9px;color:{bias_color};font-weight:600">'
+            f"{bias_dir} {bias_conf:.0%}</span></td>"
+            "</tr>"
+        )
+
+    # --- Build swing candidate rows ---
+    swing_rows = ""
+    for cand in swing_candidates:
+        name = cand.get("asset_name", "?")
+        score = cand.get("swing_score", 0)
+        direction = cand.get("direction", "?")
+        confidence = cand.get("confidence", 0)
+        reasoning = cand.get("reasoning", "")
+        entry_styles = ", ".join(cand.get("entry_styles", []))
+
+        dir_color = "#4ade80" if direction == "LONG" else "#f87171" if direction == "SHORT" else "#a1a1aa"
+
+        swing_rows += (
+            '<div style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;'
+            'border-bottom:1px solid var(--border-subtle)">'
+            f'<span style="font-weight:600;font-size:11px;color:var(--text-primary);min-width:40px">{name}</span>'
+            f'<span style="font-size:10px;font-weight:600;color:{dir_color}">{direction}</span>'
+            f'<span style="font-size:9px;color:var(--text-muted)">Score: {score:.0f}</span>'
+            f'<span style="font-size:9px;color:var(--text-muted)">Conf: {confidence:.0%}</span>'
+            + (f'<span style="font-size:9px;color:var(--text-faint)">{entry_styles}</span>' if entry_styles else "")
+            + (
+                f'<span style="font-size:9px;color:var(--text-faint);margin-left:auto;'
+                f'max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"'
+                f' title="{reasoning}">{reasoning}</span>'
+                if reasoning
+                else ""
+            )
+            + "</div>"
+        )
+
+    # --- Assemble ---
+    return (
+        '<details id="why-these-assets" style="margin-bottom:8px">'
+        '<summary class="cursor-pointer" style="display:flex;align-items:center;gap:4px;'
+        "padding:4px 0;font-size:11px;font-weight:600;color:var(--text-muted);"
+        'text-transform:uppercase;letter-spacing:0.05em">'
+        '<span class="rotate-on-open" style="transition:transform .15s;font-size:9px">▶</span>'
+        "💡 Why these assets?"
+        "</summary>"
+        '<div style="padding:6px 8px;border-radius:6px;background:var(--bg-panel-inner);'
+        'border:1px solid var(--border-subtle)">'
+        # Scalp focus table
+        + (
+            '<div style="margin-bottom:6px">'
+            '<div style="font-size:10px;font-weight:600;color:var(--text-muted);margin-bottom:4px;'
+            'text-transform:uppercase;letter-spacing:0.03em">Scalp Focus — Composite Scores</div>'
+            '<div style="overflow-x:auto">'
+            '<table style="width:100%;font-size:10px">'
+            "<thead><tr>"
+            '<th style="text-transform:none;font-size:9px">Asset</th>'
+            '<th style="text-transform:none;font-size:9px">Score</th>'
+            '<th style="text-transform:none;font-size:9px">Signal (30%)</th>'
+            '<th style="text-transform:none;font-size:9px">ATR (25%)</th>'
+            '<th style="text-transform:none;font-size:9px">RB Density (20%)</th>'
+            '<th style="text-transform:none;font-size:9px">Session (15%)</th>'
+            '<th style="text-transform:none;font-size:9px">Catalyst (10%)</th>'
+            '<th style="text-transform:none;font-size:9px">Bias</th>'
+            "</tr></thead>"
+            f"<tbody>{scalp_rows}</tbody>"
+            "</table></div></div>"
+            if scalp_rows
+            else ""
+        )
+        # Swing candidates
+        + (
+            "<div>"
+            '<div style="font-size:10px;font-weight:600;color:var(--text-muted);margin-bottom:4px;'
+            'text-transform:uppercase;letter-spacing:0.03em">Swing Candidates</div>'
+            f"{swing_rows}"
+            "</div>"
+            if swing_rows
+            else ""
+        )
+        + "</div></details>"
+    )
+
+
+def _render_swing_card(
+    asset: dict[str, Any],
+    swing_data: dict[str, Any] | None = None,
+    grok_swing_insight: str = "",
+    active_swing_states: dict[str, Any] | None = None,
+    pending_swing_signals: dict[str, Any] | None = None,
+) -> str:
+    """Render a swing candidate card with different styling from scalp cards.
+
+    Phase 3B: Swing cards are visually distinct — amber/gold border, wider TP
+    levels (TP1/TP2/TP3), labeled 'DAILY SWING', and show entry styles.
+    Falls back to a modified _render_asset_card when no swing_data is provided.
+
+    Phase 3C: When ``grok_swing_insight`` is provided (from the structured
+    Grok daily plan analysis), renders an AI insight note below the reasoning.
+
+    Phase 3D: Action buttons (Accept/Ignore/Close/Move-to-BE) are rendered
+    via HTMX — each button POSTs to the swing actions API and swaps the
+    action area in-place.  A live status badge polls every 30s.
+    """
+    symbol = asset.get("symbol", "?")
+    bias = asset.get("bias", "NEUTRAL")
+    bias_emoji = asset.get("bias_emoji", "⚪")
+    last_price = asset.get("last_price", 0)
+    quality_pct = asset.get("quality_pct", 0)
+    wave_ratio = asset.get("wave_ratio", 1.0)
+    price_decimals = asset.get("price_decimals", 4)
+    has_live_position = asset.get("has_live_position", False)
+
+    def _fmt(v: float) -> str:
+        if price_decimals <= 2:
+            return f"{v:,.{price_decimals}f}"
+        return f"{v:.{price_decimals}f}"
+
+    # Use swing_data for levels if available (wider TPs from daily plan)
+    if swing_data:
+        entry_low = swing_data.get("entry_zone_low", asset.get("entry_low", 0))
+        entry_high = swing_data.get("entry_zone_high", asset.get("entry_high", 0))
+        stop = swing_data.get("stop_loss", asset.get("stop", 0))
+        tp1 = swing_data.get("tp1", asset.get("tp1", 0))
+        tp2 = swing_data.get("tp2", asset.get("tp2", 0))
+        tp3 = swing_data.get("tp3", 0)
+        risk_dollars = swing_data.get("risk_dollars", asset.get("risk_dollars", 0))
+        position_size = swing_data.get("position_size", 1)
+        swing_score = swing_data.get("swing_score", 0)
+        confidence = swing_data.get("confidence", 0)
+        direction = swing_data.get("direction", bias)
+        reasoning = swing_data.get("reasoning", "")
+        entry_styles = swing_data.get("entry_styles", [])
+    else:
+        entry_low = asset.get("entry_low", 0)
+        entry_high = asset.get("entry_high", 0)
+        stop = asset.get("stop", 0)
+        tp1 = asset.get("tp1", 0)
+        tp2 = asset.get("tp2", 0)
+        tp3 = 0
+        risk_dollars = asset.get("risk_dollars", 0)
+        position_size = asset.get("position_size", 0)
+        swing_score = 0
+        confidence = 0
+        direction = bias
+        reasoning = ""
+        entry_styles = []
+
+    symbol_lower = symbol.lower().replace(" ", "_").replace("&", "")
+
+    # Swing-specific styling: amber/gold theme
+    border_color = "border-yellow-400/40"
+    card_bg = "background:rgba(250,204,21,0.06)"
+
+    if has_live_position:
+        pos_side = asset.get("live_position", {}).get("position_side", "")
+        if pos_side == "LONG":
+            border_color = "border-green-500"
+            card_bg = "background:rgba(20,83,45,0.4)"
+        elif pos_side == "SHORT":
+            border_color = "border-red-500"
+            card_bg = "background:rgba(127,29,29,0.4)"
+
+    # Live position overlay
+    live_pos_html = _render_live_position_overlay(asset) if has_live_position else ""
+
+    # Levels section
+    if has_live_position:
+        levels_section = live_pos_html
+    else:
+        tp3_cell = ""
+        if tp3 > 0:
+            tp3_cell = (
+                '<div class="t-panel-inner rounded p-1 text-center">'
+                '<div class="t-text-muted text-[10px]">TP3</div>'
+                f'<div class="text-green-300 font-mono text-[10px]">{_fmt(tp3)}</div>'
+                "</div>"
+            )
+        grid_cols = "grid-cols-4" if tp3 > 0 else "grid-cols-3"
+        levels_section = f"""
+        <div class="grid {grid_cols} gap-1 mb-2 text-xs">
+            <div class="t-panel-inner rounded p-1 text-center">
+                <div class="t-text-muted text-[10px]">Entry</div>
+                <div class="t-text-secondary font-mono text-[10px]">{_fmt(entry_low)}</div>
+                <div class="t-text-muted font-mono text-[10px]">– {_fmt(entry_high)}</div>
+            </div>
+            <div class="t-panel-inner rounded p-1 text-center">
+                <div class="t-text-muted text-[10px]">Stop</div>
+                <div class="text-red-400 font-mono text-[10px]">{_fmt(stop)}</div>
+                <div class="text-red-300 font-mono" style="font-size:8px">-${risk_dollars:,.0f}</div>
+            </div>
+            <div class="t-panel-inner rounded p-1 text-center">
+                <div class="t-text-muted text-[10px]">TP1 / TP2</div>
+                <div class="text-green-400 font-mono text-[10px]">{_fmt(tp1)}</div>
+                <div class="text-green-300 font-mono text-[10px]">{_fmt(tp2)}</div>
+            </div>
+            {tp3_cell}
+        </div>
+        """
+
+    # Entry styles chips
+    styles_html = ""
+    if entry_styles:
+        chips = "".join(
+            f'<span style="font-size:8px;padding:1px 4px;border-radius:3px;'
+            f'background:rgba(250,204,21,0.1);color:#facc15;border:1px solid rgba(250,204,21,0.2)">'
+            f"{s}</span>"
+            for s in entry_styles
+        )
+        styles_html = f'<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:4px">{chips}</div>'
+
+    # Reasoning line
+    reasoning_html = ""
+    if reasoning:
+        reasoning_html = (
+            f'<div style="font-size:9px;color:var(--text-muted);font-style:italic;'
+            f'margin-top:2px;line-height:1.4">{reasoning}</div>'
+        )
+
+    # Phase 3C: Grok AI swing insight
+    grok_insight_html = ""
+    if grok_swing_insight:
+        insight_safe = grok_swing_insight.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:250]
+        grok_insight_html = (
+            '<div style="font-size:9px;margin-top:4px;padding:4px 6px;border-radius:4px;'
+            "background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.2);"
+            'line-height:1.4">'
+            '<span style="font-size:8px;font-weight:700;color:#c4b5fd">🤖 Grok:</span> '
+            f'<span style="color:var(--text-secondary)">{insight_safe}</span>'
+            "</div>"
+        )
+
+    # Quality bar
+    if quality_pct >= 70:
+        q_color = "bg-green-500"
+    elif quality_pct >= 55:
+        q_color = "bg-yellow-500"
+    else:
+        q_color = "bg-red-500"
+
+    # Header badge
+    swing_badge = (
+        '<span style="font-size:8px;padding:1px 5px;border-radius:3px;'
+        "background:rgba(250,204,21,0.2);color:#facc15;font-weight:700;"
+        'margin-left:6px">🕐 DAILY SWING</span>'
+    )
+    if has_live_position:
+        swing_badge += (
+            '<span style="font-size:8px;padding:1px 5px;border-radius:3px;'
+            "background:rgba(239,68,68,0.3);color:#f87171;font-weight:700;"
+            'margin-left:4px;animation:pulse 2s infinite">● LIVE</span>'
+        )
+
+    # Score badge
+    score_badge = ""
+    if swing_score > 0:
+        score_badge = (
+            f'<span style="font-size:9px;padding:1px 5px;border-radius:3px;'
+            f"background:rgba(250,204,21,0.12);color:#facc15;font-weight:600;"
+            f'border:1px solid rgba(250,204,21,0.2)">'
+            f"Score: {swing_score:.0f} · {confidence:.0%} conf</span>"
+        )
+
+    dir_emoji = "🟢" if direction == "LONG" else "🔴" if direction == "SHORT" else "⚪"
+    dir_color = "text-green-400" if direction == "LONG" else "text-red-400" if direction == "SHORT" else "text-zinc-400"
+
+    # Phase 3D: Render action buttons (Accept/Ignore/Close/Move-to-BE)
+    action_buttons_html = ""
+    try:
+        from lib.services.engine.data.api.swing_actions import render_swing_action_buttons_for_card
+
+        action_buttons_html = render_swing_action_buttons_for_card(
+            asset_name=symbol,
+            active_states=active_swing_states,
+            pending_signals=pending_swing_signals,
+        )
+    except Exception:
+        pass  # Gracefully degrade — buttons simply won't appear
+
+    # Live status badge — polls every 30s to keep swing card state fresh
+    asset_slug = symbol.lower().replace(" ", "_").replace("&", "")
+    live_status_id = f"swing-live-status-{asset_slug}"
+    live_status_html = (
+        f'<div id="{live_status_id}" '
+        f'hx-get="/api/swing/status-badge/{symbol}" '
+        f'hx-trigger="load, every 30s" '
+        f'hx-swap="innerHTML" '
+        f'style="margin-top:4px">'
+        f'<div style="font-size:9px;color:var(--text-faint)">Loading status...</div>'
+        f"</div>"
+    )
+
+    return f"""
+    <div id="asset-card-{symbol_lower}"
+         class="border {border_color} rounded-lg p-3 t-panel"
+         style="{card_bg};border-width:2px"
+         data-quality="{quality_pct}"
+         data-wave="{wave_ratio}"
+         data-bias="{bias}"
+         data-symbol="{symbol_lower}"
+         data-focus-category="swing"
+         data-has-position="{"true" if has_live_position else "false"}"
+         hx-swap-oob="true">
+
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-2 min-w-0">
+                <span class="text-xl shrink-0">{dir_emoji}</span>
+                <h3 class="text-base font-bold t-text truncate">{symbol}{swing_badge}</h3>
+            </div>
+            <div class="text-right shrink-0 ml-2">
+                <div class="text-lg font-mono font-bold t-text">{last_price:,.2f}</div>
+                <div class="text-xs {dir_color} font-semibold">{direction}</div>
+            </div>
+        </div>
+
+        <!-- Score + entry styles -->
+        <div class="flex items-center gap-2 mb-2">
+            {score_badge}
+        </div>
+        {styles_html}
+
+        <!-- Quality & Wave -->
+        <div class="grid grid-cols-2 gap-2 mb-2">
+            <div>
+                <div class="text-xs t-text-muted mb-1">Quality</div>
+                <div class="w-full t-bar rounded-full h-2">
+                    <div class="{q_color} h-2 rounded-full" style="width:{min(quality_pct, 100):.0f}%"></div>
+                </div>
+                <div class="text-xs t-text-secondary mt-0.5">{quality_pct:.0f}%</div>
+            </div>
+            <div>
+                <div class="text-xs t-text-muted mb-1">Wave Ratio</div>
+                <div class="text-lg font-mono font-bold t-text">{wave_ratio:.2f}x</div>
+            </div>
+        </div>
+
+        <!-- Levels / Live Position -->
+        {levels_section}
+
+        <!-- Meta -->
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] t-text-muted">
+            <span>{position_size} micros / ${risk_dollars:,.0f} risk</span>
+        </div>
+
+        {reasoning_html}
+        {grok_insight_html}
+
+        <!-- Live status badge (polls every 30s) -->
+        {live_status_html}
+
+        <!-- Action buttons (Accept/Ignore/Close/Move-to-BE) -->
+        {action_buttons_html}
+    </div>
+    """
+
+
+def _render_focus_mode_grid(focus_data: dict[str, Any] | None) -> str:
+    """Render the full focus mode grid: focused scalp cards, swing cards, background.
+
+    Phase 3B: Replaces the flat asset card grid with a structured layout:
+      1. Daily plan header (Grok brief + focus summary chips)
+      2. "Why these assets?" collapsible scoring breakdown
+      3. Prominent 3-4 scalp focus cards (full size, 2-col grid)
+      4. 1-2 swing candidate cards (amber styling, wider TPs)
+      5. Collapsed/expandable background assets section
+
+    Falls back to the plain flat grid when no daily plan is active.
+    """
+    if not focus_data or not focus_data.get("assets"):
+        return """
+        <div class="col-span-2" style="text-align:center;padding:3rem 0">
+            <div style="font-size:2.5rem;margin-bottom:1rem">📊</div>
+            <div class="t-text-muted" style="font-size:1.1rem">Waiting for engine to compute daily focus...</div>
+            <div class="t-text-faint" style="font-size:0.85rem;margin-top:0.5rem">Data will appear automatically when ready.</div>
+        </div>
+        """
+
+    focus_mode_active = focus_data.get("focus_mode_active", False)
+    all_assets = focus_data.get("assets", [])
+
+    # If focus mode is NOT active, render the old flat grid
+    if not focus_mode_active:
+        cards = ""
+        for asset in all_assets:
+            cards += _render_asset_card(asset)
+        return cards
+
+    # --- Focus Mode Active: split into tiers ---
+    plan_data = focus_data.get("daily_plan")
+    scalp_focus_names = set(focus_data.get("scalp_focus_names", []))
+    swing_candidate_names = set(focus_data.get("swing_candidate_names", []))
+
+    # Build a lookup from swing_data by asset name for level overrides
+    swing_data_lookup: dict[str, dict[str, Any]] = {}
+    if plan_data:
+        for cand in plan_data.get("swing_candidates", []):
+            swing_data_lookup[cand.get("asset_name", "")] = cand
+
+    # Phase 3C: Build lookup for Grok swing insights
+    grok_swing_insights: dict[str, str] = {}
+    grok_analysis = (plan_data or {}).get("grok_analysis") or {}
+    if grok_analysis:
+        grok_swing_insights = grok_analysis.get("swing_insights", {})
+
+    scalp_assets = []
+    swing_assets = []
+    background_assets = []
+
+    for asset in all_assets:
+        symbol = asset.get("symbol", "")
+        cat = asset.get("focus_category", "background")
+        if cat == "scalp_focus" or symbol in scalp_focus_names:
+            scalp_assets.append(asset)
+        elif cat == "swing" or symbol in swing_candidate_names:
+            swing_assets.append(asset)
+        else:
+            background_assets.append(asset)
+
+    html_parts: list[str] = []
+
+    # 1. Daily plan header
+    plan_header = _render_daily_plan_header(plan_data, focus_data)
+    if plan_header:
+        html_parts.append(f'<div class="col-span-2">{plan_header}</div>')
+
+    # 2. "Why these assets?" breakdown
+    why_panel = _render_why_these_assets(plan_data)
+    if why_panel:
+        html_parts.append(f'<div class="col-span-2">{why_panel}</div>')
+
+    # 3. Scalp focus cards — prominent, full-width 2-col grid
+    if scalp_assets:
+        html_parts.append(
+            '<div class="col-span-2" style="margin-bottom:2px">'
+            '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
+            '<span style="font-size:12px">⚡</span>'
+            '<span style="font-size:11px;font-weight:700;color:var(--text-primary);'
+            'text-transform:uppercase;letter-spacing:0.03em">Scalp Focus</span>'
+            f'<span style="font-size:10px;color:var(--text-faint)">'
+            f"{len(scalp_assets)} asset{'s' if len(scalp_assets) != 1 else ''}</span>"
+            "</div></div>"
+        )
+        for asset in scalp_assets:
+            html_parts.append(_render_asset_card(asset))
+
+    # 4. Swing candidate cards
+    if swing_assets:
+        html_parts.append(
+            '<div class="col-span-2" style="margin-top:8px;margin-bottom:2px">'
+            '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
+            '<span style="font-size:12px">🕐</span>'
+            '<span style="font-size:11px;font-weight:700;color:#facc15;'
+            'text-transform:uppercase;letter-spacing:0.03em">Daily Swing Candidates</span>'
+            f'<span style="font-size:10px;color:var(--text-faint)">'
+            f"{len(swing_assets)} candidate{'s' if len(swing_assets) != 1 else ''}</span>"
+            "</div></div>"
+        )
+        # Phase 3D: Fetch active swing states + pending signals for action buttons
+        _swing_active_states = None
+        _swing_pending_signals = None
+        try:
+            from lib.services.engine.swing import get_active_swing_states, get_pending_signals
+
+            _swing_active_states = get_active_swing_states()
+            _swing_pending_signals = get_pending_signals()
+        except Exception:
+            pass
+
+        for asset in swing_assets:
+            sym = asset.get("symbol", "")
+            swing_data = swing_data_lookup.get(sym)
+            grok_insight = grok_swing_insights.get(sym, "")
+            html_parts.append(
+                _render_swing_card(
+                    asset,
+                    swing_data,
+                    grok_swing_insight=grok_insight,
+                    active_swing_states=_swing_active_states,
+                    pending_swing_signals=_swing_pending_signals,
+                )
+            )
+
+    # 5. Background assets — collapsed
+    if background_assets:
+        bg_cards = ""
+        for asset in background_assets:
+            bg_cards += _render_asset_card(asset)
+
+        html_parts.append(
+            '<div class="col-span-2" style="margin-top:8px">'
+            "<details>"
+            '<summary class="cursor-pointer" style="display:flex;align-items:center;gap:4px;'
+            "padding:4px 0;font-size:11px;font-weight:600;color:var(--text-muted);"
+            'text-transform:uppercase;letter-spacing:0.05em">'
+            '<span class="rotate-on-open" style="transition:transform .15s;font-size:9px">▶</span>'
+            f"📋 Background Assets ({len(background_assets)})"
+            "</summary>"
+            f'<div class="grid grid-cols-1 sm:grid-cols-2 gap-3" style="margin-top:6px">'
+            f"{bg_cards}"
+            "</div>"
+            "</details>"
+            "</div>"
+        )
+
+    return "\n".join(html_parts)
+
+
 def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str, str]) -> str:
     """Render the complete dashboard HTML page.
 
@@ -2278,19 +3392,8 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     are defined in the embedded <style> block so the dashboard renders
     correctly even when there is no internet access on the host.
     """
-    # Asset cards grid
-    cards_html = ""
-    if focus_data and focus_data.get("assets"):
-        for asset in focus_data["assets"]:
-            cards_html += _render_asset_card(asset)
-    else:
-        cards_html = """
-        <div class="col-span-2" style="text-align:center;padding:3rem 0">
-            <div style="font-size:2.5rem;margin-bottom:1rem">📊</div>
-            <div class="t-text-muted" style="font-size:1.1rem">Waiting for engine to compute daily focus...</div>
-            <div class="t-text-faint" style="font-size:0.85rem;margin-top:0.5rem">Data will appear automatically when ready.</div>
-        </div>
-        """
+    # Asset cards grid — Phase 3B: use focus mode when daily plan is active
+    cards_html = _render_focus_mode_grid(focus_data)
 
     # No-trade banner
     no_trade_html = ""
@@ -2890,6 +3993,25 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     </div>
 </nav>
 
+<!-- ═══════════════════════════════════════════════════════════════
+     LIVE RISK STRIP — Phase 5E
+     Persistent horizontal bar: Daily P&L, Open Positions, Risk %,
+     Budget, Consecutive Losses, Session Time.
+     Color-coded: green → yellow → red.
+     Updates via HTMX polling every 5s + SSE push.
+═══════════════════════════════════════════════════════════════════ -->
+<div id="live-risk-strip-container" class="trading-only"
+     hx-get="/api/live-risk/html"
+     hx-trigger="load, every 5s"
+     hx-swap="innerHTML">
+    <div id="risk-strip" class="risk-strip"
+         style="background:#0a2d0a;color:#44ff88;border-bottom:2px solid #44ff88;
+                padding:6px 12px;display:flex;align-items:center;justify-content:center;
+                font-family:'SF Mono','Fira Code',monospace;font-size:12px;">
+        ⏳ Loading live risk data...
+    </div>
+</div>
+
 <div id="sse-container">
 <div class="container">
 
@@ -2974,13 +4096,14 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         {no_trade_html}
     </div>
 
-    <!-- Focus summary bar -->
+    <!-- Focus summary bar — Phase 3B: show focus mode indicator -->
     <div id="focus-summary"
          class="t-panel border t-border rounded-lg flex items-center justify-between"
          style="padding:6px 12px;margin-bottom:0.75rem;flex-wrap:wrap;gap:0.25rem 0">
         <div class="flex items-center" style="gap:0.75rem;flex-wrap:wrap">
             <span class="t-text-muted uppercase tracking-wide font-semibold text-xs">Today's Focus</span>
             <span id="focus-count" class="t-text-secondary font-mono text-xs">{tradeable}/{total} tradeable</span>
+            {"<span style='font-size:9px;padding:1px 5px;border-radius:9999px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.3);color:#4ade80;font-weight:600'>🎯 Focus Mode</span>" if focus_data and focus_data.get("focus_mode_active") else ""}
             <span id="focus-updated" class="t-text-faint text-xs hidden sm:inline">Updated: {computed}</span>
         </div>
         <div class="flex items-center gap-2">
@@ -3026,7 +4149,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 </div>
             </details>
 
-            <!-- Asset Focus Cards -->
+            <!-- Asset Focus Cards — Phase 3B: focus mode grid -->
             <div>
                 <div class="flex items-center justify-between mb-1.5">
                     <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">Asset Focus</h3>
@@ -3558,7 +4681,7 @@ function toggleTheme() {{
 
         _es.addEventListener('connected', function() {{ _setStatus('connected'); }});
 
-        // Focus update
+        // Focus update — Phase 3B: also refresh the daily plan panel
         _es.addEventListener('focus-update', function(e) {{
             try {{
                 var focus = JSON.parse(e.data);
@@ -3569,8 +4692,17 @@ function toggleTheme() {{
                     var d = new Date(focus.computed_at);
                     updEl.textContent = 'Updated: ' + d.toLocaleTimeString('en-US',{{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:true}}) + ' ET';
                 }}
+                // Refresh the focus grid (which now includes focus mode layout)
                 if (typeof htmx!=='undefined') htmx.ajax('GET','/api/focus/html',{{target:'#focus-grid',swap:'innerHTML'}});
             }} catch(err) {{}}
+        }});
+
+        // Daily plan update — Phase 3B: refresh focus grid when plan changes
+        _es.addEventListener('daily-plan-update', function(e) {{
+            if (typeof htmx!=='undefined') {{
+                htmx.ajax('GET','/api/focus/html',{{target:'#focus-grid',swap:'innerHTML'}});
+            }}
+            _pushEvent('🎯','Daily plan updated','#c084fc');
         }});
 
         // Heartbeat
@@ -3658,6 +4790,63 @@ function toggleTheme() {{
             }} catch(err) {{}}
         }});
 
+        // Swing update — Phase 3D: refresh swing cards + status badges
+        // when signals are detected, states are created/updated/closed,
+        // or manual actions (accept/ignore/close/stop-to-BE) are performed.
+        _es.addEventListener('swing-update', function(e) {{
+            // Refresh the entire focus grid so swing cards get updated action
+            // buttons, status badges, and live state changes.
+            if (typeof htmx!=='undefined') {{
+                htmx.ajax('GET','/api/focus/html',{{target:'#focus-grid',swap:'innerHTML'}});
+            }}
+            try {{
+                var sw = JSON.parse(e.data);
+                var action = sw.action || sw.event || '';
+                var asset  = sw.asset_name || sw.asset || '';
+                var phase  = sw.phase || '';
+                if (action === 'accepted' || action === 'created') {{
+                    _pushEvent('✅', 'Swing accepted — ' + asset + (phase ? ' (' + phase + ')' : ''), '#4ade80');
+                }} else if (action === 'closed') {{
+                    _pushEvent('🏁', 'Swing closed — ' + asset, '#60a5fa');
+                }} else if (action === 'ignored') {{
+                    _pushEvent('⏭️', 'Swing ignored — ' + asset, '#a1a1aa');
+                }} else if (action === 'stop_moved') {{
+                    _pushEvent('🔒', 'Stop → BE — ' + asset, '#facc15');
+                }} else if (action === 'signal_detected') {{
+                    var direction = sw.direction || '';
+                    var confidence = sw.confidence ? (sw.confidence * 100).toFixed(0) + '%' : '';
+                    var sigColor = direction === 'LONG' ? '#4ade80' : direction === 'SHORT' ? '#f87171' : '#facc15';
+                    _pushEvent('⚡', 'Swing signal — ' + asset + ' ' + direction + (confidence ? ' ' + confidence : ''), sigColor);
+                }} else if (action === 'exit') {{
+                    var reason = sw.reason || '';
+                    _pushEvent('📊', 'Swing exit — ' + asset + (reason ? ' (' + reason + ')' : ''), '#60a5fa');
+                }} else {{
+                    _pushEvent('🕐', 'Swing update' + (asset ? ' — ' + asset : ''), '#facc15');
+                }}
+            }} catch(err) {{
+                _pushEvent('🕐', 'Swing state updated', '#facc15');
+            }}
+        }});
+
+        // TradingView alert — Phase TV-D: show TV webhook alerts in market events
+        _es.addEventListener('tv-alert', function(e) {{
+            try {{
+                var tv = JSON.parse(e.data);
+                var action = tv.action || '';
+                var symbol = tv.symbol || tv.asset_name || '';
+                var price  = tv.price ? tv.price.toFixed(2) : '';
+                var note   = tv.note || '';
+                var color  = action.indexOf('LONG') >= 0 ? '#4ade80' : action.indexOf('SHORT') >= 0 ? '#f87171' : '#60a5fa';
+                var emoji  = action.indexOf('LONG') >= 0 ? '🟢' : action.indexOf('SHORT') >= 0 ? '🔴' : '📺';
+                var msg = 'TV: ' + action + ' ' + symbol;
+                if (price) msg += ' @ ' + price;
+                if (note) msg += ' — ' + note;
+                _pushEvent(emoji, msg, color);
+            }} catch(err) {{
+                _pushEvent('📺', 'TradingView alert received', '#60a5fa');
+            }}
+        }});
+
         _es.onmessage = function(e) {{}};
     }}
 
@@ -3726,6 +4915,9 @@ def get_focus():
 def get_focus_html(request: Request):
     """Return all asset cards as HTML fragments (for HTMX swap).
 
+    Phase 3B: Uses focus mode grid when a daily plan is active — groups
+    assets into scalp focus, swing candidates, and background tiers.
+
     When called by HTMX polling and there is no data (Redis key expired),
     return 204 No Content so HTMX keeps the existing DOM intact instead
     of replacing visible cards with a "waiting" placeholder.
@@ -3747,9 +4939,8 @@ def get_focus_html(request: Request):
             """
         )
 
-    html = ""
-    for asset in focus_data["assets"]:
-        html += _render_asset_card(asset)
+    # Phase 3B: use focus mode grid when daily plan is active
+    html = _render_focus_mode_grid(focus_data)
     return HTMLResponse(content=html)
 
 
@@ -3816,6 +5007,29 @@ def get_orb_html():
     """Return Opening Range Breakout panel as HTML fragment (TASK-801)."""
     orb_data = _get_orb_data()
     return HTMLResponse(content=_render_orb_panel(orb_data))
+
+
+@router.get("/api/daily-plan/html", response_class=HTMLResponse)
+def get_daily_plan_html():
+    """Return the daily plan header panel as an HTML fragment (Phase 3B).
+
+    Shows the Grok morning brief, focus chip summary, and 'Why these assets?'
+    scoring breakdown. Updated via HTMX polling or SSE push when the daily
+    plan changes.
+    """
+    plan_data = _get_daily_plan_data()
+    focus_data = _get_focus_data()
+
+    header = _render_daily_plan_header(plan_data, focus_data)
+    why = _render_why_these_assets(plan_data)
+
+    if not header and not why:
+        return HTMLResponse(
+            content='<div id="daily-plan-panel" class="t-text-faint text-xs" '
+            'style="text-align:center;padding:4px">No daily plan active</div>'
+        )
+
+    return HTMLResponse(content=f'<div id="daily-plan-panel">{header}{why}</div>')
 
 
 # ---------------------------------------------------------------------------
@@ -4234,7 +5448,6 @@ def get_orb_history_html(
     )
 
 
-@router.get("/api/alerts/html", response_class=HTMLResponse)
 def _get_gap_alerts() -> dict:
     """Read the latest gap alert payload from Redis.
 
@@ -4252,6 +5465,7 @@ def _get_gap_alerts() -> dict:
     return {}
 
 
+@router.get("/api/alerts/html", response_class=HTMLResponse)
 def get_alerts_html():
     """Return alerts panel as HTML fragment.
 

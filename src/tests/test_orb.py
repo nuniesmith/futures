@@ -514,9 +514,18 @@ class TestORBPublishing:
         mock_cache._r = mock_r
         mock_cache.cache_set = MagicMock()
 
+        mock_tv_module = MagicMock()
+        mock_tv_module.publish_signal_to_tv_sync = MagicMock(return_value=True)
+
         result = ORBResult(symbol="MGC", breakout_detected=True, direction="LONG")
 
-        with patch.dict(sys.modules, {"lib.core.cache": mock_cache}):
+        with patch.dict(
+            sys.modules,
+            {
+                "lib.core.cache": mock_cache,
+                "lib.services.engine.data.api.tradingview": mock_tv_module,
+            },
+        ):
             success = publish_orb_alert(result)
             assert success is True
             mock_r.publish.assert_called_once()

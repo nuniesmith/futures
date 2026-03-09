@@ -121,6 +121,9 @@ from lib.services.engine.data.api.journal import (  # noqa: E402
     router as journal_router,
 )
 from lib.services.engine.data.api.kraken import router as kraken_router  # noqa: E402
+from lib.services.engine.data.api.live_risk import (  # noqa: E402
+    router as live_risk_router,
+)
 from lib.services.engine.data.api.market_data import (  # noqa: E402
     router as market_data_router,
 )
@@ -143,8 +146,14 @@ from lib.services.engine.data.api.settings import (  # noqa: E402
     router as settings_router,
 )
 from lib.services.engine.data.api.sse import router as sse_router  # noqa: E402
+from lib.services.engine.data.api.swing_actions import (  # noqa: E402
+    router as swing_actions_router,
+)
 from lib.services.engine.data.api.trades import (  # noqa: E402
     router as trades_router,
+)
+from lib.services.engine.data.api.tradingview import (  # noqa: E402
+    router as tradingview_router,
 )
 from lib.services.engine.data.api.trainer import (  # noqa: E402
     router as trainer_router,
@@ -296,6 +305,41 @@ async def lifespan(app: FastAPI):
     analysis_set_engine(_engine)
     actions_set_engine(_engine)
     grok_set_engine(_engine)
+
+    # 4b. Wire LiveRiskPublisher into the live_risk API module.
+    #     In embedded mode the standalone engine loop (main.py) is NOT running,
+    #     so we create a LiveRiskPublisher here that the /api/live-risk/refresh
+    #     endpoint and the HTMX polling strip can use.
+    #     In remote mode there is no local RiskManager/PositionManager — the
+    #     live_risk API falls back to reading from Redis (published by the
+    #     separate engine container).
+    _live_risk_publisher = None
+    if _ENGINE_MODE != "remote":
+        try:
+            from lib.services.engine.data.api.live_risk import set_publisher as lr_set_publisher
+            from lib.services.engine.live_risk import LiveRiskPublisher
+
+            # Try to get RiskManager and PositionManager from the engine
+            _rm = getattr(_engine, "risk_manager", None) if _engine else None
+            _pm = getattr(_engine, "position_manager", None) if _engine else None
+
+            _live_risk_publisher = LiveRiskPublisher(
+                risk_manager=_rm,
+                position_manager=_pm,
+                interval_seconds=5.0,
+            )
+            lr_set_publisher(_live_risk_publisher)
+
+            # Force an initial publish so the dashboard risk strip has data
+            # immediately on first load.
+            _live_risk_publisher.force_publish()
+            logger.info(
+                "LiveRiskPublisher wired into data-service (rm=%s, pm=%s)",
+                "yes" if _rm else "no",
+                "yes" if _pm else "no",
+            )
+        except Exception as exc:
+            logger.warning("LiveRiskPublisher setup failed (non-fatal): %s", exc)
 
     # 5. Log data source
     try:
@@ -563,6 +607,28 @@ app.include_router(trainer_router, tags=["Trainer"])
 # NOTE: settings_router is mounted WITHOUT a prefix — route is defined with /settings path.
 app.include_router(settings_router, tags=["Settings"])
 
+# TradingView: /api/tv/alert, /api/tv/signals, /api/tv/positions, /api/tv/metrics,
+#              /api/tv/status, /api/tv/health
+# Webhook receiver for TradingView outbound alerts, signal publisher for Ruby Futures
+# Pine Script indicator, Tradovate position sync, and engine metrics push.
+# NOTE: tradingview_router is mounted WITHOUT a prefix — routes are defined with /api/tv/ paths.
+app.include_router(tradingview_router, tags=["TradingView"])
+
+# Live Risk: /api/live-risk, /api/live-risk/html, /api/live-risk/summary,
+#            /api/live-risk/refresh, /api/live-risk/position/{asset_name}/html
+# Phase 5B/5E: Real-time risk budget state and persistent risk dashboard strip.
+# NOTE: live_risk_router is mounted WITHOUT a prefix — routes are defined with /api/live-risk/ paths.
+app.include_router(live_risk_router, tags=["Live Risk"])
+
+# Swing Actions: /api/swing/accept/{asset}, /api/swing/ignore/{asset},
+#                /api/swing/close/{asset}, /api/swing/stop-to-be/{asset},
+#                /api/swing/update-stop/{asset}, /api/swing/pending,
+#                /api/swing/active, /api/swing/detail/{asset},
+#                /api/swing/history, /api/swing/status-badge/{asset}
+# Phase 3D: HTMX mutation + query endpoints for swing trade management.
+# NOTE: swing_actions_router is mounted WITHOUT a prefix — routes are defined with /api/swing/ paths.
+app.include_router(swing_actions_router, tags=["Swing Actions"])
+
 
 # ---------------------------------------------------------------------------
 # Root endpoint — now served by dashboard_router (GET / returns HTML dashboard)
@@ -619,6 +685,15 @@ def api_info():
             "trainer_config": "/trainer/config",
             "trainer_service_status": "/trainer/service_status",
             "trainer_api": "/trainer/api/{path}",
+            "tv_alert": "/api/tv/alert",
+            "tv_signals": "/api/tv/signals",
+            "tv_positions": "/api/tv/positions",
+            "tv_metrics": "/api/tv/metrics",
+            "tv_status": "/api/tv/status",
+            "tv_health": "/api/tv/health",
+            "live_risk": "/api/live-risk",
+            "live_risk_html": "/api/live-risk/html",
+            "live_risk_summary": "/api/live-risk/summary",
             "bars": "/bars/{symbol}",
             "bars_bulk": "/bars/bulk",
             "bars_status": "/bars/status",

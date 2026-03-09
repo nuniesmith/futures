@@ -1,17 +1,21 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © nuniesmith
 //
-// Ruby Futures v1.0
+// Ruby Futures v2.0
 // Extends Ruby with:
 //   - Futures contract specs (MGC, MES, MNQ, MYM, M2K, 6E, 6B, 6J, MBT, MET)
 //   - Micro + Regular contract sizing side-by-side on every signal label
 //   - Dollar value display on entry/SL/TP lines (risk per contract * size)
 //   - Engine signal overlay: Entry / Stop / TP1 / TP2 / TP3 lines + $ values
-//     populated via TV Settings panel (update manually per engine signal)
+//     Auto mode: request.seed() reads from GitHub seed repo (Phase TV-B)
+//     Manual mode: populate via TV Settings panel per engine signal
+//   - CNN probability badge on chart when engine signal is active
+//   - Ruby TP targets: configurable R:R TP1/TP2 lines on native buy/sell signals
 //   - Live position tracker: entry, contracts, bracket phase, unrealised P&L
 //   - Daily P&L / risk strip in dashboard (consecutive losses, daily loss %)
 //   - Asian range box (19:00–02:00 ET), Prev Day Mid line
 //   - Futures-specific alert messages with contract + dollar values
+//   - Hidden plots for indicator-to-indicator consumption (eff_entry, eff_sl, etc.)
 //   - All original Ruby wave / regime / volatility / S/R logic untouched
 
 //@version=6
@@ -139,26 +143,94 @@ f_move_dollars(price_a, price_b, contracts) =>
 
 // ==================================================================================
 // 🔴 ENGINE SIGNAL OVERLAY
-// Populate these from your Python engine output after each signal fires.
-// TradingView Settings → "Engine Signal Overlay" section.
+// Auto mode: reads seed CSV from GitHub via request.seed()
+// Manual mode: populate from TV Settings panel after each engine signal fires.
 // ==================================================================================
 var group_engine = "🔴 Engine Signal Overlay"
 
-engine_active    = input.bool(false,   title = "Signal Active",      group = group_engine)
-engine_dir       = input.string("LONG",title = "Direction",          group = group_engine, options = ["LONG","SHORT"])
+engine_auto_mode = input.bool(false, title = "Auto-Load from GitHub Seed",  group = group_engine,
+     tooltip = "When ON, reads engine signal state from GitHub seed repo via request.seed().\nWhen OFF, use the manual inputs below.")
+engine_seed_repo = input.string("nuniesmith/futures-signals", title = "GitHub Seed Repo", group = group_engine)
+engine_seed_asset = input.string("auto", title = "Seed Asset",  group = group_engine,
+     options = ["auto","gold","sp500","nasdaq","russell_2000","dow_jones","crude_oil","natural_gas","silver","copper","euro_fx","british_pound","japanese_yen","bitcoin","ethereum"],
+     tooltip = "auto = derive from Contract selector above")
+engine_seed_expiry_h = input.float(4.0, title = "Signal Expiry (hours)", group = group_engine, minval = 0.5, maxval = 24, step = 0.5)
+
+engine_active    = input.bool(false,   title = "Signal Active (manual)",      group = group_engine)
+engine_dir       = input.string("LONG",title = "Direction (manual)",          group = group_engine, options = ["LONG","SHORT"])
 engine_type      = input.string("ORB", title = "Breakout Type",      group = group_engine,
-     options = ["ORB","PDR","IB","CONS","WEEKLY","MONTHLY","ASIAN","BBSQZ","VA","INSDAY","GAPRJ","PIVOT","FIB"])
+     options = ["ORB","PDR","IB","CONS","SWING","WEEKLY","MONTHLY","ASIAN","BBSQZ","VA","INSDAY","GAPRJ","PIVOT","FIB"])
 engine_session   = input.string("US",  title = "Session",            group = group_engine,
      options = ["US","LONDON","LONDON_NY","FRANKFURT","CME","CME_SETTLE","SYDNEY","TOKYO","SHANGHAI"])
-engine_entry     = input.float(0.0,    title = "Entry Price",         group = group_engine)
-engine_sl        = input.float(0.0,    title = "Stop Loss",           group = group_engine)
-engine_tp1       = input.float(0.0,    title = "TP1",                 group = group_engine)
-engine_tp2       = input.float(0.0,    title = "TP2",                 group = group_engine)
-engine_tp3       = input.float(0.0,    title = "TP3",                 group = group_engine)
-engine_cnn       = input.float(0.0,    title = "CNN Probability",     group = group_engine, minval = 0, maxval = 1, step = 0.01)
+engine_entry     = input.float(0.0,    title = "Entry Price (manual)",         group = group_engine)
+engine_sl        = input.float(0.0,    title = "Stop Loss (manual)",           group = group_engine)
+engine_tp1       = input.float(0.0,    title = "TP1 (manual)",                 group = group_engine)
+engine_tp2       = input.float(0.0,    title = "TP2 (manual)",                 group = group_engine)
+engine_tp3       = input.float(0.0,    title = "TP3 (manual)",                 group = group_engine)
+engine_cnn       = input.float(0.0,    title = "CNN Probability (manual)",     group = group_engine, minval = 0, maxval = 1, step = 0.01)
 engine_quality   = input.float(0.0,    title = "Signal Quality (0-1)",group = group_engine, minval = 0, maxval = 1, step = 0.01)
 engine_mtf       = input.float(0.0,    title = "MTF Score (0-1)",     group = group_engine, minval = 0, maxval = 1, step = 0.01)
 engine_bias      = input.string("NEUTRAL", title = "Daily Bias",      group = group_engine, options = ["LONG","SHORT","NEUTRAL"])
+show_cnn_badge   = input.bool(true,    title = "Show CNN Badge on Chart",      group = group_engine)
+
+// ── Seed data: map contract → seed asset name
+f_contract_to_seed(ct) =>
+    switch ct
+        "MGC" => "gold"
+        "MES" => "sp500"
+        "MNQ" => "nasdaq"
+        "MYM" => "dow_jones"
+        "M2K" => "russell_2000"
+        "6E"  => "euro_fx"
+        "6B"  => "british_pound"
+        "6J"  => "japanese_yen"
+        "MBT" => "bitcoin"
+        "MET" => "ethereum"
+        => "gold"
+
+_seed_asset = engine_seed_asset == "auto" ? f_contract_to_seed(contract_type) : engine_seed_asset
+_seed_sym   = "seed/" + _seed_asset
+
+// Read OHLCV fields from seed CSV via request.seed()
+_sd_entry_raw = request.seed(engine_seed_repo, _seed_sym, open,   ignore_invalid_symbol = true)
+_sd_stop_raw  = request.seed(engine_seed_repo, _seed_sym, high,   ignore_invalid_symbol = true)
+_sd_tp1_raw   = request.seed(engine_seed_repo, _seed_sym, low,    ignore_invalid_symbol = true)
+_sd_tp2_raw   = request.seed(engine_seed_repo, _seed_sym, close,  ignore_invalid_symbol = true)
+_sd_vol_raw   = request.seed(engine_seed_repo, _seed_sym, volume, ignore_invalid_symbol = true)
+_sd_time_raw  = request.seed(engine_seed_repo, _seed_sym, time,   ignore_invalid_symbol = true)
+
+// Decode packed volume → direction + CNN prob + TP3 offset
+_sd_vol_int   = int(math.round(nz(_sd_vol_raw, 0)))
+_sd_dir_code  = math.floor(_sd_vol_int / 1000000)
+_sd_cnn_raw   = math.floor((_sd_vol_int % 1000000) / 100)
+_sd_cnn_prob  = _sd_cnn_raw / 10000.0
+_sd_tp3_off   = _sd_vol_int % 100
+
+_sd_entry = nz(_sd_entry_raw, 0.0)
+_sd_stop  = nz(_sd_stop_raw,  0.0)
+_sd_tp1   = nz(_sd_tp1_raw,   0.0)
+_sd_tp2   = nz(_sd_tp2_raw,   0.0)
+
+// Reconstruct TP3 from offset (offset is abs distance from entry * 100)
+_sd_tp3 = _sd_tp3_off > 0 and _sd_entry > 0 ? (_sd_dir_code == 1 ? _sd_entry + _sd_tp3_off / 100.0 : _sd_entry - _sd_tp3_off / 100.0) : 0.0
+
+// Expiry check: signal is valid if not expired and has sensible prices
+_sd_age_ms    = nz(_sd_time_raw, 0) > 0 ? (timenow - nz(_sd_time_raw, 0)) : 0
+_sd_expiry_ms = engine_seed_expiry_h * 60 * 60 * 1000
+_sd_expired   = _sd_age_ms > _sd_expiry_ms or _sd_age_ms <= 0
+_sd_valid     = not na(_sd_entry_raw) and _sd_entry > 0 and _sd_stop > 0 and not _sd_expired and _sd_dir_code >= 1 and _sd_dir_code <= 2
+
+_use_seed = engine_auto_mode and _sd_valid
+
+// ── Effective engine signal values (seed takes priority when auto mode is on)
+eff_active = _use_seed ? true                                    : engine_active
+eff_dir    = _use_seed ? (_sd_dir_code == 1 ? "LONG" : "SHORT") : engine_dir
+eff_entry  = _use_seed ? _sd_entry                               : engine_entry
+eff_sl     = _use_seed ? _sd_stop                                : engine_sl
+eff_tp1    = _use_seed ? (_sd_tp1 > 0 ? _sd_tp1 : 0.0)          : engine_tp1
+eff_tp2    = _use_seed ? (_sd_tp2 > 0 ? _sd_tp2 : 0.0)          : engine_tp2
+eff_tp3    = _use_seed ? (_sd_tp3 > 0 ? _sd_tp3 : 0.0)          : engine_tp3
+eff_cnn    = _use_seed ? _sd_cnn_prob                            : engine_cnn
 
 // ==================================================================================
 // 📍 LIVE POSITION TRACKER
@@ -177,26 +249,19 @@ pos_trades_today = input.int(0,        title = "Trades Today",           group =
 pos_consec_loss  = input.int(0,        title = "Consecutive Losses",     group = group_pos)
 
 // ==================================================================================
-// 📊 DASHBOARD SETTINGS  — identical to Ruby
+// 🎯 RUBY TP SETTINGS (for Ruby's own buy/sell signals)
 // ==================================================================================
-var group_dashboard = "📊 Dashboard Settings"
-show_dashboard       = input.bool(true,         title = "Show Dashboard",              group = group_dashboard)
-show_trend_info      = input.bool(true,         title = "Show Trend Info",             group = group_dashboard)
-show_wave_analysis   = input.bool(true,         title = "Show Wave Analysis",          group = group_dashboard)
-show_market_regime   = input.bool(true,         title = "Show Market Regime",          group = group_dashboard)
-show_sr_analysis     = input.bool(true,         title = "Show Support/Resistance",     group = group_dashboard)
-show_volatility      = input.bool(true,         title = "Show Volatility Analysis",    group = group_dashboard)
-show_breakout_points = input.bool(true,         title = "Show Breakout Points",        group = group_dashboard)
-show_engine_panel    = input.bool(true,         title = "Show Engine Signal Panel",    group = group_dashboard)
-show_risk_panel      = input.bool(true,         title = "Show Risk / Position Panel",  group = group_dashboard)
-dashboard_position   = input.string("top_right",title = "Dashboard Position",
-     options = ["top_right","top_left","bottom_right","bottom_left"],                   group = group_dashboard)
-color_theme          = input.string("dark",     title = "Color Theme",
-     options = ["dark","light"],                                                         group = group_dashboard)
-show_plot_values     = input.bool(false,        title = "Show Core Plots for Alerts",  group = group_dashboard)
+var group_ruby_tp = "🎯 Ruby TP Targets"
+
+ruby_tp1_rr    = input.float(1.0, title = "TP1 R:R Ratio",  group = group_ruby_tp, minval = 0.5, maxval = 5.0, step = 0.25,
+     tooltip = "TP1 = Entry ± SL_distance × this value. Default 1R.")
+ruby_tp2_rr    = input.float(2.0, title = "TP2 R:R Ratio",  group = group_ruby_tp, minval = 1.0, maxval = 10.0, step = 0.5,
+     tooltip = "TP2 = Entry ± SL_distance × this value. Default 2R.")
+show_ruby_tp   = input.bool(true, title = "Show TP Lines on Ruby Signals", group = group_ruby_tp)
+ruby_tp_color  = input.color(color.new(#00e5ff, 30), title = "TP Line Color", group = group_ruby_tp)
 
 // ==================================================================================
-// 📈 CORE INPUTS — all carried over unchanged from Ruby
+//  CORE INPUTS
 // ==================================================================================
 var group_trend_speed = "⚡ Trend Speed Analysis"
 asset_type          = input.string('Gold', title = 'Asset Type', options = ['Gold', 'Crypto', 'Stocks', 'Forex'], group = group_trend_speed)
@@ -297,7 +362,7 @@ squeeze_kc_length = input.int(20, minval = 5,   title = "Squeeze KC Length",    
 squeeze_kc_mult   = input.float(1.5, minval = 0.5, title = "Squeeze KC Multiplier", group = group_breakout)
 
 // ==================================================================================
-// SESSION MANAGEMENT  — identical to Ruby
+// SESSION MANAGEMENT
 // ==================================================================================
 var int start_hour = 0
 var int end_hour   = 0
@@ -321,7 +386,7 @@ bool session_started = in_session and not in_session[1] and barstate.isconfirmed
 bool session_ended   = not in_session and in_session[1] and barstate.isconfirmed
 
 // ==================================================================================
-// UTILITY FUNCTIONS  — identical to Ruby
+// UTILITY FUNCTIONS
 // ==================================================================================
 safeDivide(numerator, denominator, defaultValue) =>
     denominator == 0 or na(denominator) ? defaultValue : numerator / denominator
@@ -402,7 +467,7 @@ getNearestSR(tf) =>
     [ph, pl]
 
 // ==================================================================================
-// TREND SPEED + WAVE ANALYSIS  — identical to Ruby
+// TREND SPEED + WAVE ANALYSIS
 // ==================================================================================
 var int   max_length_eff       = 20
 var float accel_multiplier_eff = 0.02
@@ -513,7 +578,7 @@ if barstate.isconfirmed
     current_text_max    := str.tostring(math.round(math.abs(current_ratio_max), 2)) + "x"
 
 // ==================================================================================
-// SUPPORT/RESISTANCE  — identical to Ruby
+// SUPPORT/RESISTANCE
 // ==================================================================================
 var float nearest_resistance_1m = na
 var float nearest_support_1m    = na
@@ -534,10 +599,10 @@ long_bias_5m  = include_sr and not na(nearest_support_5m)    and not na(nearest_
 short_bias_5m = include_sr and not na(nearest_support_5m)    and not na(nearest_resistance_5m) ? close < nearest_resistance_5m and (nearest_resistance_5m - close < close - nearest_support_5m)    : false
 
 // ==================================================================================
-// BREAKOUT POINTS  — Ruby originals + futures additions
+// BREAKOUT POINTS
 // ==================================================================================
 
-// Previous Day High / Low / Mid  (Ruby original, mid line added)
+// Previous Day High / Low / Mid
 var float prev_day_high = na
 var float prev_day_low  = na
 if ta.change(dayofweek) != 0 and barstate.isconfirmed
@@ -549,7 +614,7 @@ else
 
 prev_day_mid = (prev_day_high + prev_day_low) / 2
 
-// 30-Min Opening Range Breakout  (Ruby original)
+// 30-Min Opening Range Breakout
 var float orb_high     = na
 var float orb_low      = na
 var int   orb_bars     = 0
@@ -571,7 +636,7 @@ if not orb_complete and in_session
 orb_breakout_up = orb_complete and close > orb_high and close[1] <= orb_high
 orb_breakout_dn = orb_complete and close < orb_low  and close[1] >= orb_low
 
-// Initial Balance 60-min  (Ruby original)
+// Initial Balance 60-min
 var float ib_high     = na
 var float ib_low      = na
 var int   ib_bars     = 0
@@ -593,7 +658,7 @@ if not ib_complete and in_session
 ib_breakout_up = ib_complete and close > ib_high and close[1] <= ib_high
 ib_breakout_dn = ib_complete and close < ib_low  and close[1] >= ib_low
 
-// Squeeze Detection  (Ruby original)
+// Squeeze Detection
 basis    = ta.sma(close, squeeze_bb_length)
 dev      = squeeze_bb_mult * ta.stdev(close, squeeze_bb_length)
 upper_bb = basis + dev
@@ -606,7 +671,7 @@ squeeze_on   = lower_bb > lower_kc and upper_bb < upper_kc
 squeeze_off  = lower_bb <= lower_kc and upper_bb >= upper_kc
 squeeze_fired = squeeze_off and squeeze_on[1]
 
-// ── NEW: Asian Range box (19:00–02:00 ET) ─────────────────────
+// ── Asian Range box (19:00–02:00 ET) ─────────────────────
 in_asian = hour >= 19 or hour <= 2
 var float asian_high     = na
 var float asian_low      = na
@@ -637,14 +702,14 @@ if show_asian_range and asian_complete and barstate.islast
          bgcolor = color.new(#ff9800, 88), border_color = color.new(#ff9800, 50),
          border_width = 1, border_style = line.style_dashed)
 
-// ── Breakout markers  (Ruby original)
+// ── Breakout markers
 plotshape(show_orb and orb_breakout_up, title="ORB Break Up",   style=shape.triangleup,   location=location.belowbar, color=color.new(color.lime,0), size=size.small)
 plotshape(show_orb and orb_breakout_dn, title="ORB Break Down", style=shape.triangledown, location=location.abovebar, color=color.new(color.red,0),  size=size.small)
 plotshape(show_ib  and ib_breakout_up,  title="IB Break Up",    style=shape.circle,       location=location.belowbar, color=color.new(color.aqua,0), size=size.tiny)
 plotshape(show_ib  and ib_breakout_dn,  title="IB Break Down",  style=shape.circle,       location=location.abovebar, color=color.new(color.orange,0), size=size.tiny)
 plotshape(show_squeeze and squeeze_fired, title="Squeeze Fired",style=shape.diamond,      location=location.belowbar, color=color.new(color.yellow,0), size=size.small)
 
-// ── Breakout level plots  (Ruby original + prev_day_mid added)
+// ── Breakout level plots
 plot(show_orb  and orb_complete ? orb_high     : na, "ORB High",      color=color.new(color.green,50),  linewidth=1, style=plot.style_linebr)
 plot(show_orb  and orb_complete ? orb_low      : na, "ORB Low",       color=color.new(color.red,50),    linewidth=1, style=plot.style_linebr)
 plot(show_ib   and ib_complete  ? ib_high      : na, "IB High",       color=color.new(color.aqua,60),   linewidth=1, style=plot.style_linebr)
@@ -654,7 +719,7 @@ plot(show_prev_day              ? prev_day_low  : na, "Prev Day Low",  color=col
 plot(show_prev_day              ? prev_day_mid  : na, "Prev Day Mid",  color=color.new(color.gray,80),   linewidth=1, style=plot.style_stepline)
 
 // ==================================================================================
-// VOLATILITY + ADAPTIVE ATR  — identical to Ruby
+// VOLATILITY + ADAPTIVE ATR
 // ==================================================================================
 volatility = nz(ta.atr(atr_len), 0.00001)
 volatility := volatility <= 0 ? 0.00001 : volatility
@@ -684,7 +749,10 @@ if use_kmeans_atr and (bar_index % recalculate_clusters == 0 or bar_index == tra
     int  iters = 0
     bool cont  = true
     while cont and iters < max_iterations and bar_index >= training_data_period - 1
-        array.clear(hv) ; array.clear(mv) ; array.clear(lv)
+        array.clear(hv)
+        array.clear(mv)
+        array.clear(lv)
+
         for i = 0 to training_data_period - 1
             val = nz(volatility[i], volatility)
             d1 = math.abs(val - a_mean)
@@ -696,14 +764,22 @@ if use_kmeans_atr and (bar_index % recalculate_clusters == 0 or bar_index == tra
                 array.push(mv, val)
             else
                 array.push(lv, val)
+
         new_a = array.size(hv) > 0 ? array.avg(hv) : a_mean
         new_b = array.size(mv) > 0 ? array.avg(mv) : b_mean
         new_c = array.size(lv) > 0 ? array.avg(lv) : c_mean
-        new_a := nz(new_a, hv_init) ; new_b := nz(new_b, mv_init) ; new_c := nz(new_c, lv_init)
+
+        new_a := nz(new_a, hv_init)
+        new_b := nz(new_b, mv_init)
+        new_c := nz(new_c, lv_init)
+
         if math.abs(new_a - a_mean) < volatility * 0.001 and math.abs(new_b - b_mean) < volatility * 0.001 and math.abs(new_c - c_mean) < volatility * 0.001
             cont := false
-        a_mean := new_a ; b_mean := new_b ; c_mean := new_c
-        iters  += 1
+
+        a_mean := new_a
+        b_mean := new_b
+        c_mean := new_c
+        iters += 1
     dist_a   = math.abs(volatility - a_mean)
     dist_b   = math.abs(volatility - b_mean)
     dist_c   = math.abs(volatility - c_mean)
@@ -731,7 +807,7 @@ vol_regime = vol_percentile < 0.2 ? "VERY LOW" : vol_percentile < 0.4 ? "LOW" : 
 vol_within_range = not (require_atr_minimum and vol_percentile < min_volatility_percentile) and not (avoid_high_volatility and vol_percentile > max_volatility_percentile)
 
 // ==================================================================================
-// MARKET REGIME + PHASE  — identical to Ruby
+// MARKET REGIME + PHASE
 // ==================================================================================
 higher_tf_ma  = request.security(syminfo.tickerid, higher_tf, ta.sma(close, 50), lookahead = barmerge.lookahead_off)
 ma_cur        = ta.sma(close, regime_ma_length)
@@ -755,49 +831,53 @@ signalAO = ta.sma(AO, signalperiod)
 
 var string market_phase = "ACCUMULATION"
 var color  phase_color  = color.yellow
+
 lowest_src  = ta.lowest(low,  length)
 highest_src = ta.highest(high, length)
 mid         = ta.hma(math.avg(lowest_src, highest_src), 15)
 
 if ta.crossover(close, highest_src[10]) and AO > 0
-    market_phase := "UPTREND"    ; phase_color := color.green
+    market_phase := "UPTREND"
+    phase_color  := color.green
+
 if ta.crossunder(close, lowest_src[10]) and AO < 0
-    market_phase := "DOWNTREND"  ; phase_color := color.red
+    market_phase := "DOWNTREND"
+    phase_color  := color.red
+
 if close > highest_src[5] and close < highest_src and AO > 0 and AO < AO[10]
-    market_phase := "DISTRIBUTION" ; phase_color := color.orange
+    market_phase := "DISTRIBUTION"
+    phase_color  := color.orange
+
 if close < lowest_src[5] and close > lowest_src and AO < 0 and AO > AO[10]
-    market_phase := "ACCUMULATION" ; phase_color := color.yellow
+    market_phase := "ACCUMULATION"
+    phase_color  := color.yellow
 
 rsi_14       = ta.rsi(close, 14)
 in_uptrend   = market_phase == "UPTREND"   or (market_phase == "ACCUMULATION" and AO > 0 and rsi_14 > 50)
 in_downtrend = market_phase == "DOWNTREND" or (market_phase == "DISTRIBUTION" and AO < 0 and rsi_14 < 50)
 
 // ==================================================================================
-// SIGNAL QUALITY + FINAL SIGNALS  — identical to Ruby
+// SIGNAL QUALITY + FINAL SIGNALS
 // ==================================================================================
 rsi_value            = rsi_14
 strong_trend_aligned = use_multi_timeframe ? (in_uptrend and close > higher_tf_ma) or (in_downtrend and close < higher_tf_ma) : true
-
-vol_surge_raw     = volume / nz(ta.sma(volume, 20), volume)
-vol_surge_score   = math.min(vol_surge_raw / 2.0, 1.0) * 30.0
-wave_ratio_score  = math.min(math.abs(current_ratio_avg) / 3.0, 1.0) * 40.0
-squeeze_score     = squeeze_fired ? 15.0 : squeeze_on ? 10.0 : 0.0
-trend_align_score = (in_uptrend or in_downtrend) and strong_trend_aligned ? 15.0 : (in_uptrend or in_downtrend) ? 7.5 : 0.0
-breakout_strength = math.round(wave_ratio_score + vol_surge_score + squeeze_score + trend_align_score, 1)
-
+vol_surge_raw      = volume / nz(ta.sma(volume, 20), volume)
+vol_surge_score    = math.min(vol_surge_raw / 2.0, 1.0) * 30.0
+wave_ratio_score   = math.min(math.abs(current_ratio_avg) / 3.0, 1.0) * 40.0
+squeeze_score      = squeeze_fired ? 15.0 : squeeze_on ? 10.0 : 0.0
+trend_align_score  = (in_uptrend or in_downtrend) and strong_trend_aligned ? 15.0 : (in_uptrend or in_downtrend) ? 7.5 : 0.0
+breakout_strength  = math.round(wave_ratio_score + vol_surge_score + squeeze_score + trend_align_score, 1)
 momentum_change     = ta.change(close, momentum_lookback) / nz(close[momentum_lookback], close)
 momentum_stdev      = ta.stdev(momentum_change, 100)
 normalized_velocity = momentum_stdev == 0 ? 0 : momentum_change / momentum_stdev
-
 bullish_candle = f_detect_bullish_candle_pattern()
 bearish_candle = f_detect_bearish_candle_pattern()
-
 trend_speed_factor = math.abs(current_ratio_avg) > min_wave_ratio ? 1.0 : math.abs(current_ratio_avg) > min_wave_ratio * 0.7 ? 0.7 : math.abs(current_ratio_avg) > min_wave_ratio * 0.5 ? 0.4 : 0.0
 htf_bias_factor    = include_sr ? (in_uptrend and (long_bias_1m or long_bias_5m) ? (long_bias_1m and long_bias_5m ? 1.0 : 0.5) : in_downtrend and (short_bias_1m or short_bias_5m) ? (short_bias_1m and short_bias_5m ? 1.0 : 0.5) : 0.0) : 0.0
 squeeze_factor     = squeeze_fired ? 1.0 : squeeze_on ? 0.5 : 0.0
 velocity_change    = ta.change(normalized_velocity, momentum_lookback)
-
 signal_quality_score = 0.0
+
 if in_uptrend
     signal_quality_score := ((vol_percentile > 0.2 and vol_percentile < 0.7 ? 1.5 : 0.5) + (normalized_velocity > 0 ? 1.0 : 0) + (velocity_change > 0 ? 0.5 : 0) + trend_speed_factor * 0.5 + htf_bias_factor * 0.5 + squeeze_factor * 0.5) / 4.5
 else if in_downtrend
@@ -807,8 +887,11 @@ else
 
 high_quality = signal_quality_score >= signal_quality_threshold
 
-lowest_20  = ta.lowest(low[1],  20) ; lowest_30  = ta.lowest(low[1],  30)
-highest_20 = ta.highest(high[1],20) ; highest_30 = ta.highest(high[1],30)
+lowest_20  = ta.lowest(low[1],  20)
+lowest_30  = ta.lowest(low[1],  30)
+highest_20 = ta.highest(high[1],20)
+highest_30 = ta.highest(high[1],30)
+
 bottom     = low  <= lowest_20  and low  > lowest_30
 top        = high >= highest_20 and high < highest_30
 
@@ -825,25 +908,30 @@ var int last_buy  = 0
 var int last_sell = 0
 final_buy  = final_buy_raw  and (bar_index - last_buy  > signal_cooldown) and in_session
 final_sell = final_sell_raw and (bar_index - last_sell > signal_cooldown) and in_session
-if final_buy  then last_buy  := bar_index
-if final_sell then last_sell := bar_index
+
+if final_buy
+    last_buy := bar_index
+if final_sell
+    last_sell := bar_index
 
 sl_phase_mult  = market_phase == "UPTREND" or market_phase == "DOWNTREND" ? 1.5 : 1.2
 sl_phase_mult *= use_regime_filter ? (market_regime == "TRENDING BULL" or market_regime == "TRENDING BEAR" ? 1.2 : market_regime == "VOLATILE" ? 1.5 : market_regime == "RANGING" ? 0.8 : 1.0) : 1.0
+
 long_sl  = low  - volatility * vol_multiplier * sl_phase_mult
 short_sl = high + volatility * vol_multiplier * sl_phase_mult
 
-// ── NEW: Futures contract sizing for Ruby's own signals
+// ── Futures contract sizing for Ruby's own signals
 ruby_buy_contracts  = final_buy  ? f_calc_contracts(close, long_sl)  : 1
 ruby_sell_contracts = final_sell ? f_calc_contracts(close, short_sl) : 1
 
 // ==================================================================================
-// VISUALS  — identical to Ruby
+// VISUALS
 // ==================================================================================
 regression_line_val = ta.sma(bar_index * ta.correlation(bar_index, hl2, length) * ta.stdev(hl2, length) / ta.stdev(bar_index, length) + ta.sma(hl2, length) - ta.sma(bar_index, length) * ta.correlation(bar_index, hl2, length) * ta.stdev(hl2, length) / ta.stdev(bar_index, length), length)
 color_level         = (close - regression_line_val) / ta.stdev(close - regression_line_val, 200)
 color_level        := math.max(math.min(color_level, 5), -5)
 heatmap_color       = color_level > 0 ? color.from_gradient(color_level, 0, math.max(ta.highest(color_level, heat_sensative), 0.0001), color.yellow, color.red) : color.from_gradient(color_level, math.min(ta.lowest(color_level, heat_sensative), -0.0001), 0, color.aqua, color.yellow)
+
 barcolor(heatmap_color)
 
 plot(highest_src, "Resistance", color = clean_chart_mode ? na : red_color,   linewidth = 1)
@@ -873,7 +961,8 @@ if show_entry_labels
              str.tostring(ruby_buy_contracts) + "× " + contract_type +
              (show_full_size ? "  /  " + str.tostring(_full_cts) + "× " + CT_FSYMBOL : "") + "\n" +
              "Q: " + str.tostring(math.round(signal_quality_score * 100, 0)) + "%  Wave: " + str.tostring(math.round(math.abs(current_ratio_avg), 2)) + "x",
-             color=color.new(color.green,20), style=label.style_label_up, textcolor=color.black, size=size.normal)
+             color=color.new(color.green,20), style=label.style_label_up, textcolor=color.white, size=size.normal)
+
     if final_sell
         _risk_usd  = f_move_dollars(close, short_sl, ruby_sell_contracts)
         _full_cts  = math.max(1, math.round(ruby_sell_contracts / CT_FRATIO))
@@ -884,9 +973,9 @@ if show_entry_labels
              str.tostring(ruby_sell_contracts) + "× " + contract_type +
              (show_full_size ? "  /  " + str.tostring(_full_cts) + "× " + CT_FSYMBOL : "") + "\n" +
              "Q: " + str.tostring(math.round(signal_quality_score * 100, 0)) + "%  Wave: " + str.tostring(math.round(math.abs(current_ratio_avg), 2)) + "x",
-             color=color.new(color.red,20), style=label.style_label_down, textcolor=color.black, size=size.normal)
+             color=color.new(color.red,20), style=label.style_label_down, textcolor=color.white, size=size.normal)
 
-// Entry zones  (Ruby original — unchanged)
+// Entry zones
 var box   support_zone     = na
 var box   resistance_zone  = na
 var label support_label    = na
@@ -903,264 +992,180 @@ if show_entry_zones
             support_zone    := box.new(bar_index[20], support_bottom, bar_index, support_top,    bgcolor=color.new(color.aqua,90),   border_color=color.new(color.green,70))
             resistance_zone := box.new(bar_index[20], resistance_top, bar_index, resistance_bottom, bgcolor=color.new(color.yellow,90), border_color=color.new(color.red,70))
         else
-            box.set_lefttop(support_zone,    bar_index[20], support_top)    ; box.set_rightbottom(support_zone,    bar_index, support_bottom)
-            box.set_lefttop(resistance_zone, bar_index[20], resistance_top) ; box.set_rightbottom(resistance_zone, bar_index, resistance_bottom)
+            box.set_lefttop(support_zone,    bar_index[20], support_top)
+            box.set_rightbottom(support_zone,    bar_index, support_bottom)
+            box.set_lefttop(resistance_zone, bar_index[20], resistance_top)
+            box.set_rightbottom(resistance_zone, bar_index, resistance_bottom)
 
         support_mid    = (support_bottom + support_top) / 2
         resistance_mid = (resistance_bottom + resistance_top) / 2
+
         if na(support_label)
             support_label    := label.new(bar_index - 10, support_mid,    "S: " + str.tostring(support_bottom, "#.####"),  color=color.new(color.aqua,100),   textcolor=color.new(color.green,30), style=label.style_label_center, size=size.small)
             resistance_label := label.new(bar_index - 10, resistance_mid, "R: " + str.tostring(resistance_top, "#.####"),  color=color.new(color.yellow,100), textcolor=color.new(color.red,30),   style=label.style_label_center, size=size.small)
         else
-            label.set_xy(support_label,    bar_index - 10, support_mid)    ; label.set_text(support_label,    "S: " + str.tostring(support_bottom, "#.####"))
-            label.set_xy(resistance_label, bar_index - 10, resistance_mid) ; label.set_text(resistance_label, "R: " + str.tostring(resistance_top, "#.####"))
+            label.set_xy(support_label,    bar_index - 10, support_mid)
+            label.set_text(support_label,    "S: " + str.tostring(support_bottom, "#.####"))
+            label.set_xy(resistance_label, bar_index - 10, resistance_mid)
+            label.set_text(resistance_label, "R: " + str.tostring(resistance_top, "#.####"))
+// ==================================================================================
+// 🎯 RUBY TP LINES (for Ruby's own buy/sell signals)
+// ==================================================================================
+var line  _rtp1_buy_line  = na
+var line  _rtp2_buy_line  = na
+var label _rtp1_buy_label = na
+var label _rtp2_buy_label = na
+var line  _rtp1_sell_line  = na
+var line  _rtp2_sell_line  = na
+var label _rtp1_sell_label = na
+var label _rtp2_sell_label = na
+
+if show_ruby_tp and barstate.islast
+    // Clean up previous Ruby TP drawings
+    if not na(_rtp1_buy_line)
+        line.delete(_rtp1_buy_line)
+        line.delete(_rtp2_buy_line)
+        label.delete(_rtp1_buy_label)
+        label.delete(_rtp2_buy_label)
+    if not na(_rtp1_sell_line)
+        line.delete(_rtp1_sell_line)
+        line.delete(_rtp2_sell_line)
+        label.delete(_rtp1_sell_label)
+        label.delete(_rtp2_sell_label)
+    _rtp1_buy_line  := na
+    _rtp2_buy_line  := na
+    _rtp1_buy_label := na
+    _rtp2_buy_label := na
+    _rtp1_sell_line  := na
+    _rtp2_sell_line  := na
+    _rtp1_sell_label := na
+    _rtp2_sell_label := na
+
+if show_ruby_tp and final_buy
+    _r_sl_dist = math.abs(close - long_sl)
+    _r_tp1_price = close + _r_sl_dist * ruby_tp1_rr
+    _r_tp2_price = close + _r_sl_dist * ruby_tp2_rr
+    _r_tp1_usd = f_move_dollars(_r_tp1_price, close, ruby_buy_contracts)
+    _r_tp2_usd = f_move_dollars(_r_tp2_price, close, ruby_buy_contracts)
+    _rlb = bar_index
+    _rrb = bar_index + 30
+
+    if not na(_rtp1_buy_line)
+        line.delete(_rtp1_buy_line)
+        line.delete(_rtp2_buy_line)
+        label.delete(_rtp1_buy_label)
+        label.delete(_rtp2_buy_label)
+
+    _rtp1_buy_line  := line.new(_rlb, _r_tp1_price, _rrb, _r_tp1_price, color=ruby_tp_color, width=1, style=line.style_dotted)
+    _rtp2_buy_line  := line.new(_rlb, _r_tp2_price, _rrb, _r_tp2_price, color=ruby_tp_color, width=1, style=line.style_dashed)
+    _rtp1_buy_label := label.new(_rrb, _r_tp1_price, "TP1 " + str.tostring(_r_tp1_price, "#.##") + "  +$" + str.tostring(math.round(_r_tp1_usd, 0)), color=color.new(ruby_tp_color, 20), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+    _rtp2_buy_label := label.new(_rrb, _r_tp2_price, "TP2 " + str.tostring(_r_tp2_price, "#.##") + "  +$" + str.tostring(math.round(_r_tp2_usd, 0)), color=color.new(ruby_tp_color, 10), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+
+if show_ruby_tp and final_sell
+    _r_sl_dist = math.abs(short_sl - close)
+    _r_tp1_price = close - _r_sl_dist * ruby_tp1_rr
+    _r_tp2_price = close - _r_sl_dist * ruby_tp2_rr
+    _r_tp1_usd = f_move_dollars(close, _r_tp1_price, ruby_sell_contracts)
+    _r_tp2_usd = f_move_dollars(close, _r_tp2_price, ruby_sell_contracts)
+    _rlb = bar_index
+    _rrb = bar_index + 30
+
+    if not na(_rtp1_sell_line)
+        line.delete(_rtp1_sell_line)
+        line.delete(_rtp2_sell_line)
+        label.delete(_rtp1_sell_label)
+        label.delete(_rtp2_sell_label)
+
+    _rtp1_sell_line  := line.new(_rlb, _r_tp1_price, _rrb, _r_tp1_price, color=ruby_tp_color, width=1, style=line.style_dotted)
+    _rtp2_sell_line  := line.new(_rlb, _r_tp2_price, _rrb, _r_tp2_price, color=ruby_tp_color, width=1, style=line.style_dashed)
+    _rtp1_sell_label := label.new(_rrb, _r_tp1_price, "TP1 " + str.tostring(_r_tp1_price, "#.##") + "  +$" + str.tostring(math.round(_r_tp1_usd, 0)), color=color.new(ruby_tp_color, 20), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+    _rtp2_sell_label := label.new(_rrb, _r_tp2_price, "TP2 " + str.tostring(_r_tp2_price, "#.##") + "  +$" + str.tostring(math.round(_r_tp2_usd, 0)), color=color.new(ruby_tp_color, 10), textcolor=color.white, style=label.style_label_left, size=size.tiny)
 
 // ==================================================================================
-// ENGINE SIGNAL LINES  (NEW — Entry / SL / TP1 / TP2 / TP3 with $ labels)
+// ENGINE SIGNAL LINES (uses eff_* resolved from seed or manual inputs)
 // ==================================================================================
+
 // Pre-compute dollar values for the engine signal
-_e_cts_micro = engine_entry > 0 and engine_sl > 0 ? f_calc_contracts(engine_entry, engine_sl) : 1
-_e_cts_full  = math.max(1, math.round(_e_cts_micro / CT_FRATIO))
-_e_risk      = engine_entry > 0 ? f_move_dollars(engine_entry, engine_sl,  _e_cts_micro) : 0.0
-_e_tp1_usd   = engine_entry > 0 ? f_move_dollars(engine_tp1,   engine_entry, _e_cts_micro) : 0.0
-_e_tp2_usd   = engine_entry > 0 ? f_move_dollars(engine_tp2,   engine_entry, _e_cts_micro) : 0.0
-_e_tp3_usd   = engine_entry > 0 ? f_move_dollars(engine_tp3,   engine_entry, _e_cts_micro) : 0.0
+_e_cts_micro = eff_entry > 0 and eff_sl > 0 ? f_calc_contracts(eff_entry, eff_sl) : 1
+_e_cts_full = math.max(1, math.round(_e_cts_micro / CT_FRATIO))
+_e_risk = eff_entry > 0 ? f_move_dollars(eff_entry, eff_sl, _e_cts_micro) : 0.0
+_e_tp1_usd = eff_entry > 0 and eff_tp1 > 0 ? f_move_dollars(eff_tp1, eff_entry, _e_cts_micro) : 0.0
+_e_tp2_usd = eff_entry > 0 and eff_tp2 > 0 ? f_move_dollars(eff_tp2, eff_entry, _e_cts_micro) : 0.0
+_e_tp3_usd = eff_entry > 0 and eff_tp3 > 0 ? f_move_dollars(eff_tp3, eff_entry, _e_cts_micro) : 0.0
 
-var line  _l_entry = na ; var line  _l_sl  = na
-var line  _l_tp1   = na ; var line  _l_tp2 = na ; var line _l_tp3 = na
-var label _lb_entry = na; var label _lb_sl  = na
-var label _lb_tp1   = na; var label _lb_tp2 = na; var label _lb_tp3 = na
+var line _l_entry = na
+var line _l_sl = na
+var line _l_tp1 = na
+var line _l_tp2 = na
+var line _l_tp3 = na
+var label _lb_entry = na
+var label _lb_sl = na
+var label _lb_tp1 = na
+var label _lb_tp2 = na
+var label _lb_tp3 = na
+var label _lb_cnn = na
 
-if show_engine_lines and engine_active and engine_entry > 0 and barstate.islast
-    _dir_col = engine_dir == "LONG" ? color.new(#00e676, 0) : color.new(#ff1744, 0)
-    _lb      = bar_index - 30
-    _rb      = bar_index + 50
+_src_tag = _use_seed ? "  ● SEED" : ""
 
-    if not na(_l_entry) ; line.delete(_l_entry)  ; line.delete(_l_sl)  ; line.delete(_l_tp1) ; line.delete(_l_tp2) ; line.delete(_l_tp3)  ; end
-    if not na(_lb_entry); label.delete(_lb_entry); label.delete(_lb_sl); label.delete(_lb_tp1); label.delete(_lb_tp2); label.delete(_lb_tp3); end
+if show_engine_lines and eff_active and eff_entry > 0 and barstate.islast
+    _dir_col = eff_dir == "LONG" ? color.new(#00e676, 0) : color.new(#ff1744, 0)
+    _lb = bar_index - 30
+    _rb = bar_index + 50
 
-    _l_entry := line.new(_lb, engine_entry, _rb, engine_entry, color=_dir_col,              width=2, style=line.style_solid)
-    _l_sl    := line.new(_lb, engine_sl,    _rb, engine_sl,    color=color.new(#ff1744,0),  width=2, style=line.style_dashed)
-    _l_tp1   := line.new(_lb, engine_tp1,   _rb, engine_tp1,   color=color.new(#69f0ae,50), width=1, style=line.style_dotted)
-    _l_tp2   := line.new(_lb, engine_tp2,   _rb, engine_tp2,   color=color.new(#69f0ae,20), width=1, style=line.style_dotted)
-    _l_tp3   := line.new(_lb, engine_tp3,   _rb, engine_tp3,   color=color.new(#b9f6ca,0),  width=2, style=line.style_solid)
+    // Delete previous drawings
+    if not na(_l_entry)
+        line.delete(_l_entry)
+        line.delete(_l_sl)
+        line.delete(_l_tp1)
+        line.delete(_l_tp2)
+        line.delete(_l_tp3)
 
-    _lb_entry := label.new(_rb, engine_entry, "ENTRY " + str.tostring(engine_entry, "#.##") + "\n" + str.tostring(_e_cts_micro) + "× " + contract_type + (show_full_size ? "  /  " + str.tostring(_e_cts_full) + "× " + CT_FSYMBOL : "") + "\nRisk: -$" + str.tostring(math.round(_e_risk, 0)),     color=color.new(_dir_col, 15), textcolor=color.white, style=label.style_label_left, size=size.small)
-    _lb_sl    := label.new(_rb, engine_sl,    "SL  " + str.tostring(engine_sl, "#.##") + "  -$" + str.tostring(math.round(_e_risk, 0)),                                                                                                                                                              color=color.new(#ff1744, 15), textcolor=color.white, style=label.style_label_left, size=size.small)
-    _lb_tp1   := label.new(_rb, engine_tp1,   "TP1 " + str.tostring(engine_tp1, "#.##") + "  +$" + str.tostring(math.round(_e_tp1_usd, 0)),                                                                                                                                                         color=color.new(#69f0ae, 15), textcolor=color.white, style=label.style_label_left, size=size.small)
-    _lb_tp2   := label.new(_rb, engine_tp2,   "TP2 " + str.tostring(engine_tp2, "#.##") + "  +$" + str.tostring(math.round(_e_tp2_usd, 0)),                                                                                                                                                         color=color.new(#69f0ae, 15), textcolor=color.white, style=label.style_label_left, size=size.small)
-    _lb_tp3   := label.new(_rb, engine_tp3,   "TP3 " + str.tostring(engine_tp3, "#.##") + "  +$" + str.tostring(math.round(_e_tp3_usd, 0)),                                                                                                                                                         color=color.new(#b9f6ca, 10), textcolor=color.white, style=label.style_label_left, size=size.small)
+    if not na(_lb_entry)
+        label.delete(_lb_entry)
+        label.delete(_lb_sl)
+        label.delete(_lb_tp1)
+        label.delete(_lb_tp2)
+        label.delete(_lb_tp3)
 
-// ==================================================================================
-// 📊 DASHBOARD TABLE
-// ==================================================================================
-if show_dashboard and barstate.islast
-    dash_pos   = dashboard_position == "top_right" ? position.top_right : dashboard_position == "top_left" ? position.top_left : dashboard_position == "bottom_right" ? position.bottom_right : position.bottom_left
-    bg_color   = color_theme == "dark" ? color.rgb(0,0,0,90)    : color.rgb(255,255,255,90)
-    text_color = color_theme == "dark" ? color.white             : color.black
-    header_bg  = color_theme == "dark" ? color.rgb(40,40,40)    : color.rgb(200,200,200)
-    label_col  = color_theme == "dark" ? color.silver            : color.gray
-    up_c = color.green ; dn_c = color.red ; neu_c = color.silver
+    if not na(_lb_cnn)
+        label.delete(_lb_cnn)
 
-    // Row count: header(1) + engine panel(~9) + risk panel(~7) + trend(4) + wave(3) + regime(2) + breakouts(5) + sr(2) + vol(3) = ~36
-    var table dash = table.new(dash_pos, 4, 40, bgcolor = bg_color, border_width = 1, border_color = color.gray, frame_color = color.gray)
-    table.clear(dash, 0, 0, 3, 39)
+    // Create fresh lines + labels using effective (seed-resolved) values
+    _l_entry := line.new(_lb, eff_entry, _rb, eff_entry, color=_dir_col, width=2, style=line.style_solid)
+    _l_sl := line.new(_lb, eff_sl, _rb, eff_sl, color=color.new(#ff1744,0), width=2, style=line.style_dashed)
 
-    // ── HEADER
-    table.cell(dash, 0, 0, "RUBY FUTURES  " + contract_type, bgcolor = header_bg, text_color = text_color, text_halign = text.align_center, text_size = size.normal)
-    table.merge_cells(dash, 0, 0, 3, 0)
-    int row = 1
+    if eff_tp1 > 0
+        _l_tp1 := line.new(_lb, eff_tp1, _rb, eff_tp1, color=color.new(#69f0ae,50), width=1, style=line.style_dotted)
+    if eff_tp2 > 0
+        _l_tp2 := line.new(_lb, eff_tp2, _rb, eff_tp2, color=color.new(#69f0ae,20), width=1, style=line.style_dotted)
+    if eff_tp3 > 0
+        _l_tp3 := line.new(_lb, eff_tp3, _rb, eff_tp3, color=color.new(#b9f6ca,0), width=2, style=line.style_solid)
 
-    // ── ENGINE SIGNAL PANEL (NEW)
-    if show_engine_panel
-        eng_bg  = engine_active ? (engine_dir == "LONG" ? color.rgb(0,35,15) : color.rgb(35,0,10)) : color.rgb(18,18,18)
-        dir_c   = engine_dir == "LONG" ? up_c : dn_c
-        cnn_c   = engine_cnn >= 0.85 ? color.lime : engine_cnn >= 0.75 ? color.orange : dn_c
-        qual_c  = engine_quality >= 0.7 ? color.lime : engine_quality >= 0.5 ? color.orange : dn_c
-        mtf_c   = engine_mtf   >= 0.6 ? color.lime : engine_mtf   >= 0.4 ? color.orange : dn_c
-        bias_c  = engine_bias == "LONG" ? up_c : engine_bias == "SHORT" ? dn_c : neu_c
+    _lb_entry := label.new(_rb, eff_entry, "ENTRY " + str.tostring(eff_entry, "#.##") + _src_tag + "\n" + str.tostring(_e_cts_micro) + "× " + contract_type + (show_full_size ? " / " + str.tostring(_e_cts_full) + "× " + CT_FSYMBOL : "") + "\nRisk: -$" + str.tostring(math.round(_e_risk, 0)), color=color.new(_dir_col, 15), textcolor=color.white, style=label.style_label_left, size=size.small)
+    _lb_sl := label.new(_rb, eff_sl, "SL " + str.tostring(eff_sl, "#.##") + " -$" + str.tostring(math.round(_e_risk, 0)), color=color.new(#ff1744, 15), textcolor=color.white, style=label.style_label_left, size=size.small)
 
-        table.cell(dash, 0, row, "ENGINE SIGNAL", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center, text_size = size.small)
-        table.merge_cells(dash, 0, row, 3, row) ; row += 1
+    if eff_tp1 > 0
+        _lb_tp1 := label.new(_rb, eff_tp1, "TP1 " + str.tostring(eff_tp1, "#.##") + " +$" + str.tostring(math.round(_e_tp1_usd, 0)), color=color.new(#69f0ae, 15), textcolor=color.white, style=label.style_label_left, size=size.small)
+    if eff_tp2 > 0
+        _lb_tp2 := label.new(_rb, eff_tp2, "TP2 " + str.tostring(eff_tp2, "#.##") + " +$" + str.tostring(math.round(_e_tp2_usd, 0)), color=color.new(#69f0ae, 15), textcolor=color.white, style=label.style_label_left, size=size.small)
+    if eff_tp3 > 0
+        _lb_tp3 := label.new(_rb, eff_tp3, "TP3 " + str.tostring(eff_tp3, "#.##") + " +$" + str.tostring(math.round(_e_tp3_usd, 0)), color=color.new(#b9f6ca, 10), textcolor=color.white, style=label.style_label_left, size=size.small)
 
-        // Status row
-        status_txt = engine_active ? engine_dir + "  " + engine_type : "— IDLE —"
-        table.cell(dash, 0, row, engine_active ? "🔴" : "⚫",  bgcolor = eng_bg, text_color = engine_active ? dir_c : neu_c, text_size = size.small)
-        table.cell(dash, 1, row, status_txt,                    bgcolor = eng_bg, text_color = engine_active ? dir_c : neu_c, text_size = size.small)
-        table.cell(dash, 2, row, "Sess:",  bgcolor = eng_bg, text_color = label_col,    text_size = size.small)
-        table.cell(dash, 3, row, engine_session, bgcolor = eng_bg, text_color = text_color, text_size = size.small) ; row += 1
-
-        if engine_active and engine_entry > 0
-            // Entry + SL
-            table.cell(dash, 0, row, "Entry:", bgcolor=eng_bg, text_color=label_col,  text_size=size.small)
-            table.cell(dash, 1, row, str.tostring(engine_entry, "#.##"), bgcolor=eng_bg, text_color=dir_c, text_size=size.small)
-            table.cell(dash, 2, row, "SL:",   bgcolor=eng_bg, text_color=label_col,  text_size=size.small)
-            table.cell(dash, 3, row, str.tostring(engine_sl, "#.##") + "  -$" + str.tostring(math.round(_e_risk,0)), bgcolor=eng_bg, text_color=dn_c, text_size=size.small) ; row += 1
-            // TP1 + TP3
-            table.cell(dash, 0, row, "TP1:", bgcolor=eng_bg, text_color=label_col, text_size=size.small)
-            table.cell(dash, 1, row, str.tostring(engine_tp1,"#.##") + "  +$" + str.tostring(math.round(_e_tp1_usd,0)), bgcolor=eng_bg, text_color=up_c, text_size=size.small)
-            table.cell(dash, 2, row, "TP3:", bgcolor=eng_bg, text_color=label_col, text_size=size.small)
-            table.cell(dash, 3, row, str.tostring(engine_tp3,"#.##") + "  +$" + str.tostring(math.round(_e_tp3_usd,0)), bgcolor=eng_bg, text_color=color.new(up_c,20), text_size=size.small) ; row += 1
-            // Sizing: micro + full side-by-side
-            table.cell(dash, 0, row, "Micro:", bgcolor=eng_bg, text_color=label_col, text_size=size.small)
-            table.cell(dash, 1, row, str.tostring(_e_cts_micro) + "× " + contract_type, bgcolor=eng_bg, text_color=text_color, text_size=size.small)
-            table.cell(dash, 2, row, "Full:", bgcolor=eng_bg, text_color=label_col, text_size=size.small)
-            table.cell(dash, 3, row, str.tostring(_e_cts_full) + "× " + CT_FSYMBOL, bgcolor=eng_bg, text_color=color.new(text_color,30), text_size=size.small) ; row += 1
-
-        // CNN + Quality + MTF + Bias
-        table.cell(dash, 0, row, "CNN:", bgcolor=eng_bg, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, str.tostring(math.round(engine_cnn * 100, 1)) + "%", bgcolor=eng_bg, text_color=cnn_c, text_size=size.small)
-        table.cell(dash, 2, row, "Q:", bgcolor=eng_bg, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, str.tostring(math.round(engine_quality * 100, 0)) + "%", bgcolor=eng_bg, text_color=qual_c, text_size=size.small) ; row += 1
-        table.cell(dash, 0, row, "MTF:", bgcolor=eng_bg, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, str.tostring(math.round(engine_mtf * 100, 0)) + "%", bgcolor=eng_bg, text_color=mtf_c, text_size=size.small)
-        table.cell(dash, 2, row, "Bias:", bgcolor=eng_bg, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, engine_bias, bgcolor=eng_bg, text_color=bias_c, text_size=size.small) ; row += 1
-
-    // ── RISK / POSITION PANEL (NEW)
-    if show_risk_panel
-        table.cell(dash, 0, row, "RISK / POSITION", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center, text_size = size.small)
-        table.merge_cells(dash, 0, row, 3, row) ; row += 1
-
-        pnl_c     = pos_daily_pnl >= 0 ? up_c : dn_c
-        pnl_pct   = safeDivide(pos_daily_pnl, account_size, 0) * 100
-        loss_pct  = safeDivide(math.abs(math.min(pos_daily_pnl, 0)), account_size, 0) * 100
-        loss_c    = loss_pct >= 4.0 ? dn_c : loss_pct >= 2.0 ? color.orange : up_c
-        closs_c   = pos_consec_loss >= 3 ? dn_c : pos_consec_loss >= 2 ? color.orange : up_c
-        max_pos   = tpt_mode ? f_tpt_max() : 5
-
-        // Daily P&L row
-        table.cell(dash, 0, row, "Daily P&L:", bgcolor=bg_color, text_color=label_col,  text_size=size.small)
-        table.cell(dash, 1, row, (pos_daily_pnl >= 0 ? "+$" : "-$") + str.tostring(math.abs(math.round(pos_daily_pnl,0))), bgcolor=bg_color, text_color=pnl_c, text_size=size.small)
-        table.cell(dash, 2, row, "P&L%:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, str.tostring(math.round(pnl_pct, 2)) + "%", bgcolor=bg_color, text_color=pnl_c, text_size=size.small) ; row += 1
-
-        // Trades today + max positions
-        table.cell(dash, 0, row, "Trades:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, str.tostring(pos_trades_today), bgcolor=bg_color, text_color=text_color, text_size=size.small)
-        table.cell(dash, 2, row, "Max:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, str.tostring(max_pos) + (tpt_mode ? " (TPT)" : ""), bgcolor=bg_color, text_color=text_color, text_size=size.small) ; row += 1
-
-        // Loss % + consecutive losses
-        table.cell(dash, 0, row, "Loss%:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, str.tostring(math.round(loss_pct, 2)) + "%", bgcolor=bg_color, text_color=loss_c, text_size=size.small)
-        table.cell(dash, 2, row, "C.Loss:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, str.tostring(pos_consec_loss), bgcolor=bg_color, text_color=closs_c, text_size=size.small) ; row += 1
-
-        // Live position sub-panel
-        if pos_active and pos_entry > 0
-            pos_pts_raw = pos_dir == "LONG" ? close - pos_entry : pos_entry - close
-            pos_usd     = pos_pts_raw * CT_PVAL * pos_contracts
-            pos_c       = pos_usd >= 0 ? up_c : dn_c
-            pos_r       = safeDivide(pos_usd, account_size * risk_pct / 100, 0)
-            pos_full_c  = math.max(1, math.round(pos_contracts / CT_FRATIO))
-            pos_bg      = color.rgb(0, 28, 10)
-
-            table.cell(dash, 0, row, "LIVE " + pos_dir + "  " + pos_phase, bgcolor=pos_bg, text_color=pos_c, text_halign=text.align_center, text_size=size.small)
-            table.merge_cells(dash, 0, row, 3, row) ; row += 1
-
-            table.cell(dash, 0, row, "Entry:", bgcolor=pos_bg, text_color=label_col, text_size=size.small)
-            table.cell(dash, 1, row, str.tostring(pos_entry, "#.##"), bgcolor=pos_bg, text_color=text_color, text_size=size.small)
-            table.cell(dash, 2, row, "Unrl:", bgcolor=pos_bg, text_color=label_col, text_size=size.small)
-            table.cell(dash, 3, row, (pos_usd >= 0 ? "+$" : "-$") + str.tostring(math.abs(math.round(pos_usd,0))), bgcolor=pos_bg, text_color=pos_c, text_size=size.small) ; row += 1
-
-            table.cell(dash, 0, row, "Micro:", bgcolor=pos_bg, text_color=label_col, text_size=size.small)
-            table.cell(dash, 1, row, str.tostring(pos_contracts) + "× " + contract_type, bgcolor=pos_bg, text_color=text_color, text_size=size.small)
-            table.cell(dash, 2, row, "R:", bgcolor=pos_bg, text_color=label_col, text_size=size.small)
-            table.cell(dash, 3, row, str.tostring(math.round(pos_r, 2)) + "R", bgcolor=pos_bg, text_color=pos_c, text_size=size.small) ; row += 1
-
-    // ── TREND INFO  (identical to Ruby)
-    if show_trend_info
-        table.cell(dash, 0, row, "TREND", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center, text_size = size.small)
-        table.merge_cells(dash, 0, row, 3, row) ; row += 1
-        trend_dir  = trendspeed > 0 ? "↗️" : trendspeed < 0 ? "↘️" : "↔️"
-        sig_status = final_buy ? "BUY" : final_sell ? "SELL" : math.abs(current_ratio_avg) >= 1.3 ? (current_ratio_avg > 0 ? "BULL" : "BEAR") : "---"
-        table.cell(dash, 0, row, "Dir:",  bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, trend_dir, bgcolor=bg_color, text_color=trendspeed > 0 ? up_c : trendspeed < 0 ? dn_c : neu_c, text_size=size.small)
-        table.cell(dash, 2, row, "Sig:",  bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, sig_status, bgcolor=bg_color, text_color=final_buy ? up_c : final_sell ? dn_c : math.abs(current_ratio_avg) >= 1.3 ? (current_ratio_avg > 0 ? color.new(up_c,40) : color.new(dn_c,40)) : neu_c, text_size=size.small) ; row += 1
-        table.cell(dash, 0, row, "Q:",    bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, str.tostring(math.round(signal_quality_score * 100, 0)) + "%", bgcolor=bg_color, text_color=signal_quality_score > 0.7 ? up_c : signal_quality_score > 0.5 ? color.orange : dn_c, text_size=size.small)
-        table.cell(dash, 2, row, "Sess:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, in_session ? "ON" : "OFF", bgcolor=bg_color, text_color=in_session ? up_c : dn_c, text_size=size.small) ; row += 1
-
-    // ── WAVE ANALYSIS  (identical to Ruby)
-    if show_wave_analysis
-        table.cell(dash, 0, row, "WAVE", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center, text_size = size.small)
-        table.merge_cells(dash, 0, row, 3, row) ; row += 1
-        table.cell(dash, 0, row, "Ratio:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, wave_size_text_avg, bgcolor=bg_color, text_color=wave_size_ratio_avg > 1 ? color.lime : color.red, text_size=size.small)
-        table.cell(dash, 2, row, "Curr:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, current_text_avg, bgcolor=bg_color, text_color=current_ratio_avg > 0 ? color.lime : color.red, text_size=size.small) ; row += 1
-        table.cell(dash, 0, row, "Dom:",  bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, dominance_avg_text, bgcolor=bg_color, text_color=dominance_avg_value > 0 ? color.lime : color.red, text_size=size.small)
-        table.cell(dash, 2, row, "Bias:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, market_bias, bgcolor=bg_color, text_color=market_bias == "Bullish" ? up_c : market_bias == "Bearish" ? dn_c : neu_c, text_size=size.small) ; row += 1
-
-    // ── MARKET REGIME  (identical to Ruby)
-    if show_market_regime
-        table.cell(dash, 0, row, "REGIME", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center, text_size = size.small)
-        table.merge_cells(dash, 0, row, 3, row) ; row += 1
-        regime_emoji = market_regime == "TRENDING BULL" ? "🐂" : market_regime == "TRENDING BEAR" ? "🐻" : market_regime == "VOLATILE" ? "⚡" : market_regime == "RANGING" ? "↔️" : "⚖️"
-        phase_emoji  = market_phase  == "UPTREND"       ? "🚀" : market_phase  == "DOWNTREND"       ? "🧸" : market_phase  == "ACCUMULATION" ? "🏗️" : "📦"
-        table.cell(dash, 0, row, regime_emoji, bgcolor=bg_color, text_color=market_regime == "TRENDING BULL" ? up_c : market_regime == "TRENDING BEAR" ? dn_c : market_regime == "VOLATILE" ? color.orange : neu_c, text_size=size.small)
-        table.cell(dash, 1, row, phase_emoji,  bgcolor=bg_color, text_color=phase_color, text_size=size.small)
-        table.cell(dash, 2, row, "RSI:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, str.tostring(math.round(rsi_value, 0)), bgcolor=bg_color, text_color=rsi_value > 60 ? up_c : rsi_value < 40 ? dn_c : neu_c, text_size=size.small) ; row += 1
-
-    // ── BREAKOUT POINTS  (Ruby original + ATR $ value added)
-    if show_breakout_points
-        table.cell(dash, 0, row, "BREAKOUTS", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center, text_size = size.small)
-        table.merge_cells(dash, 0, row, 3, row) ; row += 1
-        orb_status = orb_breakout_up ? "🚀" : orb_breakout_dn ? "📉" : orb_complete ? "✓" : "⏳"
-        ib_status  = ib_breakout_up  ? "🚀" : ib_breakout_dn  ? "📉" : ib_complete  ? "✓" : "⏳"
-        table.cell(dash, 0, row, "ORB:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, orb_status, bgcolor=bg_color, text_color=orb_breakout_up ? up_c : orb_breakout_dn ? dn_c : orb_complete ? color.orange : neu_c, text_size=size.small)
-        table.cell(dash, 2, row, "IB:",  bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, ib_status,  bgcolor=bg_color, text_color=ib_breakout_up  ? up_c : ib_breakout_dn  ? dn_c : ib_complete  ? color.orange : neu_c, text_size=size.small) ; row += 1
-        sqz_status    = squeeze_on ? "💥" : squeeze_fired ? "🔥" : "〰️"
-        pd_pct        = safeDivide((close - prev_day_low), (prev_day_high - prev_day_low), 0.5) * 100
-        table.cell(dash, 0, row, "Sqz:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, sqz_status, bgcolor=bg_color, text_color=squeeze_on ? color.yellow : squeeze_fired ? up_c : neu_c, text_size=size.small)
-        table.cell(dash, 2, row, "PD%:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, str.tostring(math.round(pd_pct, 0)) + "%", bgcolor=bg_color, text_color=pd_pct > 60 ? up_c : pd_pct < 40 ? dn_c : neu_c, text_size=size.small) ; row += 1
-        str_col   = breakout_strength >= 70 ? up_c : breakout_strength >= 40 ? color.orange : dn_c
-        str_emoji = breakout_strength >= 70 ? "🔥" : breakout_strength >= 40 ? "〰️" : "❄️"
-        _atr_usd  = math.round(atr_14 * CT_PVAL)
-        table.cell(dash, 0, row, "Str:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, str.tostring(math.round(breakout_strength,0)) + "%  " + str_emoji, bgcolor=bg_color, text_color=str_col, text_size=size.small)
-        table.cell(dash, 2, row, "ATR$:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, "$" + str.tostring(_atr_usd) + "/ct", bgcolor=bg_color, text_color=text_color, text_size=size.small) ; row += 1
-
-    // ── S/R  (identical to Ruby)
-    if show_sr_analysis and include_sr
-        table.cell(dash, 0, row, "S/R", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center, text_size = size.small)
-        table.merge_cells(dash, 0, row, 3, row) ; row += 1
-        table.cell(dash, 0, row, "1m:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, long_bias_1m ? "L" : short_bias_1m ? "S" : "N", bgcolor=bg_color, text_color=long_bias_1m ? up_c : short_bias_1m ? dn_c : neu_c, text_size=size.small)
-        table.cell(dash, 2, row, "5m:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, long_bias_5m ? "L" : short_bias_5m ? "S" : "N", bgcolor=bg_color, text_color=long_bias_5m ? up_c : short_bias_5m ? dn_c : neu_c, text_size=size.small) ; row += 1
-
-    // ── VOLATILITY  (identical to Ruby + ATR $ per contract added)
-    if show_volatility
-        table.cell(dash, 0, row, "VOL", bgcolor = header_bg, text_color = text_color, text_halign = text.align_center, text_size = size.small)
-        table.merge_cells(dash, 0, row, 3, row) ; row += 1
-        table.cell(dash, 0, row, "ATR:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 1, row, str.tostring(math.round(atr_14, 5)), bgcolor=bg_color, text_color=text_color, text_size=size.small)
-        table.cell(dash, 2, row, "%ile:", bgcolor=bg_color, text_color=label_col, text_size=size.small)
-        table.cell(dash, 3, row, str.tostring(math.round(vol_percentile * 100, 0)) + "%", bgcolor=bg_color, text_color=text_color, text_size=size.small) ; row += 1
-        vol_emoji = vol_regime == "VERY HIGH" ? "⚡⚡" : vol_regime == "HIGH" ? "⚡" : vol_regime == "VERY LOW" ? "🧘🧘" : vol_regime == "LOW" ? "🧘" : "〰️"
-        vol_strat = vol_percentile > 0.8 ? "AVOID" : vol_percentile < 0.2 ? "BRKOUT" : vol_percentile > 0.6 ? "WIDE" : vol_percentile < 0.4 ? "TIGHT" : "NORM"
-        table.cell(dash, 0, row, vol_emoji, bgcolor=bg_color, text_color=vol_regime == "VERY HIGH" ? dn_c : vol_regime == "HIGH" ? color.orange : vol_regime == "VERY LOW" ? up_c : neu_c, text_size=size.small)
-        table.cell(dash, 1, row, vol_strat, bgcolor=bg_color, text_color=vol_percentile > 0.8 ? dn_c : vol_percentile < 0.2 ? up_c : vol_percentile > 0.6 ? color.orange : color.new(up_c,40), text_size=size.small)
-        table.cell(dash, 2, row, "", bgcolor=bg_color, text_size=size.small)
-        table.cell(dash, 3, row, "", bgcolor=bg_color, text_size=size.small) ; row += 1
+    // CNN probability badge
+    if show_cnn_badge and eff_cnn > 0
+        _cnn_pct = math.round(eff_cnn * 100, 1)
+        _cnn_col = eff_cnn >= 0.85 ? color.new(#00e676, 0) : eff_cnn >= 0.75 ? color.new(#ff9800, 0) : color.new(#ff1744, 0)
+        _cnn_y   = eff_dir == "LONG" ? eff_entry - math.abs(eff_entry - eff_sl) * 0.3 : eff_entry + math.abs(eff_entry - eff_sl) * 0.3
+        _lb_cnn := label.new(_rb + 5, _cnn_y, "CNN " + str.tostring(_cnn_pct, "#.#") + "%", color=color.new(_cnn_col, 15), textcolor=color.white, style=label.style_label_left, size=size.tiny)
 
 // ==================================================================================
-// ALERTS  (Ruby originals kept + futures-aware messages added)
+// ALERTS
 // ==================================================================================
-alertcondition(final_buy,       title = "Ruby Futures BUY",      message = "{{ticker}} 🟢 BUY " + contract_type + " | Entry: {{close}} | Q: {{plot('Signal Quality')}}% | Wave: {{plot('Wave Ratio')}}x")
-alertcondition(final_sell,      title = "Ruby Futures SELL",     message = "{{ticker}} 🔴 SELL " + contract_type + " | Entry: {{close}} | Q: {{plot('Signal Quality')}}% | Wave: {{plot('Wave Ratio')}}x")
+// (dashboard removed — clean overlay only)
+
+alertcondition(final_buy,  title = "Ruby Futures BUY",  message = "{{ticker}} 🟢 BUY | Entry: {{close}} | Q: {{plot('Signal Quality')}}% | Wave: {{plot('Wave Ratio')}}x")
+alertcondition(final_sell, title = "Ruby Futures SELL", message = "{{ticker}} 🔴 SELL | Entry: {{close}} | Q: {{plot('Signal Quality')}}% | Wave: {{plot('Wave Ratio')}}x")
+
 alertcondition(regime_changed,  title = "Regime Change",         message = "{{ticker}} 🔄 Regime Change Detected")
 alertcondition(session_started, title = "Session Start",         message = "{{ticker}} ⏰ Session OPEN")
 alertcondition(session_ended,   title = "Session End",           message = "{{ticker}} ⏰ Session CLOSED")
@@ -1170,11 +1175,17 @@ alertcondition(ib_breakout_up,  title = "IB Breakout Up",        message = "{{ti
 alertcondition(ib_breakout_dn,  title = "IB Breakout Down",      message = "{{ticker}} 🟠 IB BREAK DN")
 alertcondition(squeeze_fired,   title = "Squeeze Fired",         message = "{{ticker}} 💥 SQUEEZE FIRED")
 
-// Hidden plots for alerts (identical to Ruby)
-plot(show_plot_values ? trendspeed                : na, "Trend Speed",    display = display.none)
-plot(show_plot_values ? current_ratio_avg         : na, "Wave Ratio",     display = display.none)
-plot(show_plot_values ? signal_quality_score * 100: na, "Signal Quality", display = display.none)
-plot(show_plot_values ? (market_regime == "TRENDING BULL" ? 1 : market_regime == "TRENDING BEAR" ? 2 : market_regime == "VOLATILE" ? 3 : market_regime == "RANGING" ? 4 : 0) : na, "Market Regime", display = display.none)
-plot(show_plot_values ? orb_high : na, "ORB High", display = display.none)
-plot(show_plot_values ? orb_low  : na, "ORB Low",  display = display.none)
-plot(show_plot_values ? engine_cnn : na, "CNN Prob", display = display.none)
+// Hidden plots for alerts + indicator-to-indicator consumption
+plot(trendspeed,                 "Trend Speed",    display = display.none)
+plot(current_ratio_avg,          "Wave Ratio",     display = display.none)
+plot(signal_quality_score * 100, "Signal Quality", display = display.none)
+plot(market_regime == "TRENDING BULL" ? 1 : market_regime == "TRENDING BEAR" ? 2 : market_regime == "VOLATILE" ? 3 : market_regime == "RANGING" ? 4 : 0, "Market Regime", display = display.none)
+plot(orb_high,  "ORB High", display = display.none)
+plot(orb_low,   "ORB Low",  display = display.none)
+plot(eff_cnn,    "CNN Prob", display = display.none)
+plot(eff_entry,  "Eff Entry", display = display.none)
+plot(eff_sl,     "Eff SL",    display = display.none)
+plot(eff_tp1,    "Eff TP1",   display = display.none)
+plot(eff_tp2,    "Eff TP2",   display = display.none)
+plot(eff_tp3,    "Eff TP3",   display = display.none)
+plot(_use_seed ? 1 : 0, "Seed Active", display = display.none)

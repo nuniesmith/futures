@@ -19,20 +19,51 @@ Risk rules:
   - should_not_trade() returns True if ALL assets < 55% quality or
     max vol_percentile > 88%
 
+Phase 3A: Top-4 Asset Selection for Live Trading
+  - get_daily_plan_focus_assets() returns (scalp_names, swing_names) from
+    the daily plan persisted in Redis, or generates a fresh plan if none exists
+  - compute_daily_focus() accepts optional focus_assets filter to only
+    compute full focus data for the selected assets (others returned as stubs)
+
+Phase 5C: Dynamic Position Sizing on Focus Cards
+  - compute_asset_focus() accepts an optional `live_risk: LiveRiskState`
+  - When provided, remaining_risk_budget replaces static max_risk_per_trade
+  - Dual micro/full contract sizing shown side by side
+  - Live position overlay when there's an active position on this asset
+
+Phase 5D: Live Position Overlay on Focus Cards
+  - When in a trade, the focus card data includes position info
+  - direction, entry, current P&L, bracket phase, R-multiple
+  - Card flips from "setup" mode to "live position" mode
+
 Usage:
     from lib.services.engine.focus import compute_daily_focus, should_not_trade
 
     focus = compute_daily_focus(account_size=50_000)
     if should_not_trade(focus):
         print("NO TRADE today")
+
+    # With live risk state for dynamic sizing:
+    from lib.services.engine.live_risk import compute_live_risk
+    live_risk = compute_live_risk(risk_manager, position_manager)
+    focus = compute_daily_focus(account_size=50_000, live_risk=live_risk)
+
+    # With daily plan focus narrowing (Phase 3A):
+    focus = compute_daily_focus(account_size=50_000, live_risk=live_risk, use_daily_plan=True)
+    # Only the top 3-4 scalp focus assets get full computation; the rest are stubs
 """
+
+from __future__ import annotations
 
 import json
 import logging
 import math
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    from lib.services.engine.live_risk import LiveRiskState
 
 logger = logging.getLogger("engine.focus")
 
@@ -208,11 +239,89 @@ def _derive_bias(
     return "NEUTRAL"
 
 
+def _compute_dual_sizing(
+    name: str,
+    entry_price: float,
+    stop_price: float,
+    max_risk_dollars: float,
+) -> dict[str, Any]:
+    """Compute position sizing for BOTH micro and full contracts side by side.
+
+    Uses the asset registry to look up both contract variants and computes
+    the number of contracts and dollar P&L estimates for each.
+
+    Returns a dict with "micro" and "full" keys (either may be absent if
+    the variant doesn't exist for this asset).
+    """
+    try:
+        from lib.core.asset_registry import get_asset
+
+        asset = get_asset(name)
+        if asset is not None:
+            return asset.dual_sizing(entry_price, stop_price, max_risk_dollars)
+    except ImportError:
+        pass
+
+    # Fallback: return empty if asset registry not available
+    return {}
+
+
+def _build_live_position_overlay(
+    name: str,
+    live_risk: LiveRiskState,
+) -> dict[str, Any] | None:
+    """Build position overlay data if there's an active position on this asset.
+
+    Returns a dict with live position info for the focus card, or None if
+    no position is open.
+    """
+    pos = live_risk.get_position_for_asset(name)
+    if pos is None:
+        return None
+
+    # Format hold duration
+    hold_secs = pos.hold_duration_seconds
+    if hold_secs >= 3600:
+        hold_str = f"{hold_secs // 3600}h {(hold_secs % 3600) // 60}m"
+    elif hold_secs >= 60:
+        hold_str = f"{hold_secs // 60}m {hold_secs % 60}s"
+    else:
+        hold_str = f"{hold_secs}s"
+
+    return {
+        "has_live_position": True,
+        "position_side": pos.side,
+        "position_quantity": pos.quantity,
+        "position_entry_price": pos.entry_price,
+        "position_current_price": pos.current_price,
+        "position_stop_price": pos.stop_price,
+        "position_unrealized_pnl": round(pos.unrealized_pnl, 2),
+        "position_r_multiple": round(pos.r_multiple, 2),
+        "position_bracket_phase": pos.bracket_phase,
+        "position_hold_duration": hold_str,
+        "position_hold_seconds": hold_secs,
+        "position_risk_dollars": round(pos.risk_dollars, 2),
+        "position_source": pos.source,
+        "position_symbol": pos.symbol,
+    }
+
+
 def compute_asset_focus(
     name: str,
     account_size: int = DEFAULT_ACCOUNT_SIZE,
+    live_risk: LiveRiskState | None = None,
 ) -> dict[str, Any] | None:
     """Compute focus data for a single asset.
+
+    Args:
+        name: Asset name (e.g. "Gold", "S&P", "Nasdaq")
+        account_size: Account size for risk calculations
+        live_risk: Optional LiveRiskState for dynamic sizing + position overlay.
+                   When provided:
+                     - remaining_risk_budget replaces static max_risk_per_trade
+                     - Dual micro/full sizing computed side by side
+                     - Live position overlay included if in a trade
+                     - "MAX POSITIONS" / "RISK BLOCKED" badges when applicable
 
     Returns dict with all focus fields, or None on failure.
     """
@@ -306,10 +415,33 @@ def compute_asset_focus(
     # Compute levels — pass tick_size so forex gets correct decimal precision
     levels = _compute_entry_zone(last_price, bias, atr, wave_ratio, tick_size=tick_size)
 
-    # Max risk per trade
-    max_risk = account_size * DEFAULT_RISK_PCT
+    # ── Risk budget: static or dynamic ──────────────────────────────────
+    # Phase 5C: When live_risk is provided, use remaining_risk_budget
+    # instead of the static max_risk_per_trade.  This accounts for current
+    # open positions, daily P&L drawdown, and consecutive losses.
+    static_max_risk = account_size * DEFAULT_RISK_PCT
+    max_risk = static_max_risk
 
-    # Position sizing
+    risk_blocked = False
+    risk_blocked_reason = ""
+    max_positions_reached = False
+
+    if live_risk is not None:
+        if not live_risk.can_trade:
+            risk_blocked = True
+            risk_blocked_reason = live_risk.block_reason or "Trading blocked"
+            max_risk = 0.0
+        elif live_risk.remaining_trade_slots <= 0:
+            max_positions_reached = True
+            max_risk = 0.0
+        elif live_risk.remaining_risk_budget > 0:
+            # Use the smaller of: remaining budget or per-trade max
+            effective_per_trade = live_risk.max_risk_per_trade or static_max_risk
+            max_risk = min(live_risk.remaining_risk_budget, effective_per_trade)
+        # Fallback: if remaining_risk_budget is 0 but can_trade and slots > 0,
+        # use static max_risk (defensive)
+
+    # Position sizing (primary: micro contracts)
     position_size, risk_dollars = _compute_position_size(
         last_price=last_price,
         stop_price=levels["stop"],
@@ -317,6 +449,11 @@ def compute_asset_focus(
         point_value=point_value,
         max_risk_dollars=max_risk,
     )
+
+    # Override to 0 when risk is blocked or max positions reached
+    if risk_blocked or max_positions_reached:
+        position_size = 0
+        risk_dollars = 0.0
 
     # Estimate dollar value of TP targets for the display card.
     # dollar_per_tick = tick_size × point_value (already in micro-contract terms)
@@ -330,8 +467,48 @@ def compute_asset_focus(
         target1_dollars = 0.0
         target2_dollars = 0.0
 
+    # ── Dual micro/full sizing (Phase 5C) ───────────────────────────────
+    # Compute position sizes for BOTH micro and full contracts using the
+    # asset registry, so the trader sees side-by-side values on the card.
+    dual_sizing: dict[str, Any] = {}
+    if not risk_blocked and not max_positions_reached and max_risk > 0:
+        dual_sizing = _compute_dual_sizing(
+            name=name,
+            entry_price=last_price,
+            stop_price=levels["stop"],
+            max_risk_dollars=max_risk,
+        )
+        # Enrich with TP dollar estimates for each variant
+        stop_distance = abs(last_price - levels["stop"])
+        for variant_key, sizing in dual_sizing.items():
+            if stop_distance > 0 and sizing.get("contracts", 0) > 0:
+                try:
+                    from lib.core.asset_registry import get_asset
+
+                    asset_obj = get_asset(name)
+                    if asset_obj:
+                        v = asset_obj.variants.get(variant_key)
+                        if v:
+                            pv = v.point_value
+                            c = sizing["contracts"]
+                            sizing["tp1_dollars"] = round(c * abs(levels["tp1"] - last_price) * pv, 2)
+                            sizing["tp2_dollars"] = round(c * abs(levels["tp2"] - last_price) * pv, 2)
+                except ImportError:
+                    pass
+
+    # ── Live position overlay (Phase 5D) ────────────────────────────────
+    # When in a trade on this asset, include position info so the card
+    # can flip from "setup" mode to "live position" mode.
+    position_overlay: dict[str, Any] | None = None
+    if live_risk is not None:
+        position_overlay = _build_live_position_overlay(name, live_risk)
+
     # Build skip note
     notes = []
+    if risk_blocked:
+        notes.append(f"🚫 RISK BLOCKED: {risk_blocked_reason}")
+    elif max_positions_reached:
+        notes.append("⚠️ MAX POSITIONS — no new entries")
     if quality < MIN_QUALITY_THRESHOLD:
         notes.append(f"Quality too low ({quality_pct:.0f}%) — skip today")
     if vol_percentile > EXTREME_VOL_THRESHOLD:
@@ -339,7 +516,7 @@ def compute_asset_focus(
 
     price_decimals = int(levels.get("price_decimals", 4))
 
-    return {
+    result: dict[str, Any] = {
         "symbol": name,
         "ticker": ticker,
         "bias": bias,
@@ -370,14 +547,112 @@ def compute_asset_focus(
         "atr": round(atr, 6),
         "notes": "; ".join(notes) if notes else "",
         "skip": quality < MIN_QUALITY_THRESHOLD,
+        # ── Phase 5C: Dual sizing ──────────────────────────────────────
+        "dual_sizing": dual_sizing,
+        "risk_blocked": risk_blocked,
+        "risk_blocked_reason": risk_blocked_reason,
+        "max_positions_reached": max_positions_reached,
+        # ── Phase 5D: Live position overlay ────────────────────────────
+        "has_live_position": position_overlay is not None,
+        "live_position": position_overlay,
     }
+
+    return result
+
+
+def get_daily_plan_focus_assets(
+    redis_client: Any | None = None,
+    account_size: int = DEFAULT_ACCOUNT_SIZE,
+    force_regenerate: bool = False,
+) -> tuple[list[str], list[str], dict[str, Any] | None]:
+    """Get the focused asset lists from the daily plan.
+
+    Checks Redis for a persisted daily plan first. If none exists (or
+    ``force_regenerate`` is True), generates a fresh plan.
+
+    Args:
+        redis_client: Optional Redis client. If None, attempts to get one
+                      from the cache module.
+        account_size: Account size for plan generation.
+        force_regenerate: If True, always generate a new plan even if one
+                          exists in Redis.
+
+    Returns:
+        (scalp_names, swing_names, plan_dict) where:
+          - scalp_names: list of 3-4 asset names for scalp focus
+          - swing_names: list of 1-2 asset names for daily swing candidates
+          - plan_dict: the full plan dict (for dashboard enrichment), or None
+    """
+    # Try to get Redis client if not provided
+    if redis_client is None:
+        try:
+            from lib.core.cache import REDIS_AVAILABLE, _r
+
+            if REDIS_AVAILABLE and _r is not None:
+                redis_client = _r
+        except ImportError:
+            pass
+
+    # Attempt to load existing plan from Redis
+    if redis_client is not None and not force_regenerate:
+        try:
+            from lib.strategies.daily.daily_plan import DailyPlan
+
+            plan = DailyPlan.load_from_redis(redis_client)
+            if plan is not None:
+                scalp_names = [a.asset_name for a in plan.scalp_focus]
+                swing_names = [s.asset_name for s in plan.swing_candidates]
+                logger.info(
+                    "Loaded daily plan from Redis: scalp=%s, swing=%s",
+                    scalp_names,
+                    swing_names,
+                )
+                return scalp_names, swing_names, plan.to_dict()
+        except Exception as exc:
+            logger.debug("Could not load daily plan from Redis: %s", exc)
+
+    # No cached plan — generate a fresh one
+    try:
+        from lib.strategies.daily.daily_plan import generate_daily_plan
+
+        plan = generate_daily_plan(
+            account_size=account_size,
+            redis_client=redis_client,
+            include_grok=True,
+        )
+
+        # Publish if we have Redis
+        if redis_client is not None:
+            plan.publish_to_redis(redis_client)
+
+        scalp_names = [a.asset_name for a in plan.scalp_focus]
+        swing_names = [s.asset_name for s in plan.swing_candidates]
+        return scalp_names, swing_names, plan.to_dict()
+
+    except Exception as exc:
+        logger.error("Failed to generate daily plan: %s", exc)
+        return [], [], None
 
 
 def compute_daily_focus(
     account_size: int = DEFAULT_ACCOUNT_SIZE,
     symbols: list[str] | None = None,
+    live_risk: LiveRiskState | None = None,
+    use_daily_plan: bool = False,
+    redis_client: Any | None = None,
 ) -> dict[str, Any]:
     """Compute full daily focus payload for all tracked assets.
+
+    Args:
+        account_size: Account size for risk calculations
+        symbols: List of asset names to compute (None = all tracked)
+        live_risk: Optional LiveRiskState for dynamic sizing.
+                   When provided, focus cards use remaining_risk_budget
+                   and include live position overlays.
+        use_daily_plan: If True, load or generate a daily plan (Phase 3A)
+                        and tag each asset with its focus category
+                        (scalp_focus, swing, or background).
+        redis_client: Optional Redis client for daily plan lookups.
 
     Returns a dict with:
       - assets: list of per-asset focus dicts
@@ -386,6 +661,10 @@ def compute_daily_focus(
       - computed_at: ISO timestamp
       - account_size: int
       - session_mode: current session
+      - live_risk_active: bool — whether live_risk was used
+      - daily_plan: dict or None — the daily plan data (when use_daily_plan=True)
+      - scalp_focus_names: list[str] — focused scalp asset names
+      - swing_candidate_names: list[str] — swing candidate asset names
     """
     try:
         from lib.core.models import ASSETS as assets_map
@@ -397,36 +676,68 @@ def compute_daily_focus(
 
     now = datetime.now(tz=_EST)
 
+    # ── Phase 3A: Daily plan focus narrowing ────────────────────────────
+    scalp_focus_names: list[str] = []
+    swing_candidate_names: list[str] = []
+    daily_plan_data: dict[str, Any] | None = None
+
+    if use_daily_plan:
+        scalp_focus_names, swing_candidate_names, daily_plan_data = get_daily_plan_focus_assets(
+            redis_client=redis_client,
+            account_size=account_size,
+        )
+
+    # Combined set of "important" assets — these get full computation
+    important_assets = set(scalp_focus_names) | set(swing_candidate_names)
+
     logger.info(
-        "Computing daily focus for %d assets (account=$%s)",
+        "Computing daily focus for %d assets (account=$%s%s%s)",
         len(symbols),
         f"{account_size:,}",
+        ", live_risk=active" if live_risk else "",
+        f", plan_focus={len(important_assets)}" if important_assets else "",
     )
 
     asset_results = []
     for name in symbols:
         try:
-            result = compute_asset_focus(name, account_size=account_size)
+            result = compute_asset_focus(name, account_size=account_size, live_risk=live_risk)
             if result is not None:
+                # Tag with focus category (Phase 3A)
+                if name in scalp_focus_names:
+                    result["focus_category"] = "scalp_focus"
+                    result["focus_rank"] = scalp_focus_names.index(name) + 1
+                elif name in swing_candidate_names:
+                    result["focus_category"] = "swing"
+                    result["focus_rank"] = swing_candidate_names.index(name) + 1
+                else:
+                    result["focus_category"] = "background"
+                    result["focus_rank"] = 999
+
                 asset_results.append(result)
                 logger.info(
-                    "  %s: %s %s | quality=%.0f%% | wave=%.2fx | price=%.2f",
+                    "  %s: %s %s | quality=%.0f%% | wave=%.2fx | price=%.2f%s",
                     name,
                     result["bias_emoji"],
                     result["bias"],
                     result["quality_pct"],
                     result["wave_ratio"],
                     result["last_price"],
+                    f" [{result['focus_category']}]" if result["focus_category"] != "background" else "",
                 )
             else:
                 logger.warning("  %s: no data available", name)
         except Exception as exc:
             logger.error("  %s: focus computation failed: %s", name, exc)
 
-    # Sort by quality (best first), then by wave ratio
+    # Sort: focused assets first (by rank), then background by quality
     asset_results.sort(
-        key=lambda x: (x.get("quality", 0), x.get("wave_ratio", 0)),
-        reverse=True,
+        key=lambda x: (
+            0 if x.get("focus_category") == "scalp_focus" else (1 if x.get("focus_category") == "swing" else 2),
+            x.get("focus_rank", 999),
+            -x.get("quality", 0),
+            -x.get("wave_ratio", 0),
+        ),
     )
 
     # Check no-trade conditions
@@ -441,6 +752,9 @@ def compute_daily_focus(
     else:
         session = "off-hours"
 
+    # Count live positions from focus data
+    live_positions = sum(1 for a in asset_results if a.get("has_live_position"))
+
     payload = {
         "assets": asset_results,
         "no_trade": no_trade,
@@ -450,6 +764,14 @@ def compute_daily_focus(
         "session_mode": session,
         "total_assets": len(asset_results),
         "tradeable_assets": sum(1 for a in asset_results if not a.get("skip")),
+        "live_risk_active": live_risk is not None,
+        "live_positions": live_positions,
+        "risk_blocked": live_risk.block_reason if live_risk and not live_risk.can_trade else "",
+        # Phase 3A fields
+        "daily_plan": daily_plan_data,
+        "scalp_focus_names": scalp_focus_names,
+        "swing_candidate_names": swing_candidate_names,
+        "focus_mode_active": bool(important_assets),
     }
 
     logger.info(
@@ -576,6 +898,20 @@ def publish_focus_to_redis(focus_data: dict[str, Any]) -> bool:
                             {
                                 "no_trade": True,
                                 "reason": focus_data.get("no_trade_reason", ""),
+                                "ts": ts,
+                            }
+                        ),
+                    )
+
+                # Phase 3B: Publish daily plan event when focus mode is active
+                if focus_data.get("focus_mode_active") and focus_data.get("daily_plan"):
+                    _r.publish(
+                        "dashboard:daily_plan",
+                        json.dumps(
+                            {
+                                "focus_mode_active": True,
+                                "scalp_focus_names": focus_data.get("scalp_focus_names", []),
+                                "swing_candidate_names": focus_data.get("swing_candidate_names", []),
                                 "ts": ts,
                             }
                         ),

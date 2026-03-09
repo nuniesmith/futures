@@ -645,6 +645,22 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                             else:
                                 yield _format_sse(data=data, event="orb-update")
 
+                        elif channel == "dashboard:swing_update":
+                            # Swing detector state/signal update (Phase 3D)
+                            # Pushed when swing signals are detected, states are
+                            # created/updated/closed, or manual actions (accept/
+                            # ignore/close/stop-to-BE) are performed.
+                            if not _should_throttle("swing-update"):
+                                yield _format_sse(data=data, event="swing-update")
+
+                        elif channel == "dashboard:tv_alert":
+                            # TradingView webhook alert (Phase TV-D)
+                            # Pushed when TradingView fires an outbound webhook
+                            # to POST /api/tv/alert. Forwarded to dashboard so
+                            # the market events feed shows TV alerts in real-time.
+                            if not _should_throttle("tv-alert"):
+                                yield _format_sse(data=data, event="tv-alert")
+
                 except Exception as exc:
                     pubsub_errors += 1
                     backoff = _PUBSUB_BACKOFF[min(pubsub_errors - 1, len(_PUBSUB_BACKOFF) - 1)]
