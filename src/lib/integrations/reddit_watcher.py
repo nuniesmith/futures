@@ -26,7 +26,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import lru_cache
 
 import praw
