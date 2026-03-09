@@ -9,7 +9,7 @@ All business logic modules live under organised sub-packages:
     from lib.core.alerts import get_dispatcher
     from lib.core.logging_config import setup_logging, get_logger
     from lib.core.breakout_types import BreakoutType, get_range_config
-    from lib.core.multi_session import get_session, all_sessions, ORBSession
+    from lib.core.multi_session import get_session, all_sessions, RBSession, ORBSession
 
     # Analysis modules
     from lib.analysis.volatility import kmeans_volatility_clusters

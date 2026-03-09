@@ -40,8 +40,9 @@ showTable     = input.bool(true,  "Show Ruby Dashboard",  group="3. Plots")
 showTopG          = input.bool(true,  "Show Top G Channel",      group="4. Top G Channel")
 topGLength        = input.int(200,    "Channel Range Length",     minval=20,               group="4. Top G Channel")
 showTopGMid       = input.bool(true,  "Show Mid Line",            group="4. Top G Channel")
-showTopGSignals   = input.bool(true,  "Show Channel Signals",     group="4. Top G Channel")
-showPotentialSigs = input.bool(true,  "Show Potential Signals",   group="4. Top G Channel")
+showTopGSignals   = input.bool(true,  "Show Strong Channel Signals", group="4. Top G Channel")
+showSimpleSigs    = input.bool(false, "Show Simple Signals (noisy)", group="4. Top G Channel")
+showPotentialSigs = input.bool(false, "Show Potential Signals",      group="4. Top G Channel")
 showEntryZones    = input.bool(true,  "Show Entry Zones",         group="4. Top G Channel")
 signalSensitivity = input.float(0.5,  "Signal Sensitivity",
      minval=0.1, maxval=2.0, step=0.1,                           group="4. Top G Channel")
@@ -49,10 +50,11 @@ signalSensitivity = input.float(0.5,  "Signal Sensitivity",
 // ══════════════════════════════════════════════════════════════════════════════
 // 5. S/R LEVELS  (from FKS)
 // ══════════════════════════════════════════════════════════════════════════════
-showSR      = input.bool(true,  "Show HTF S/R Levels",  group="5. S/R Levels")
-srLookback  = input.int(20,     "S/R Lookback Periods", minval=5,               group="5. S/R Levels")
-srThreshold = input.float(0.3,  "S/R Sensitivity",      minval=0.1, maxval=1.0,
-     step=0.1,                                                     group="5. S/R Levels")
+showSR      = input.bool(true,  "Show HTF S/R Levels",    group="5. S/R Levels")
+show1mSR    = input.bool(false, "Show 1m S/R (fine)",     group="5. S/R Levels")
+srLookback  = input.int(20,     "S/R Lookback Periods",   minval=5,               group="5. S/R Levels")
+srThreshold = input.float(0.3,  "S/R Sensitivity",        minval=0.1, maxval=1.0,
+     step=0.1,                                                         group="5. S/R Levels")
 
 // ══════════════════════════════════════════════════════════════════════════════
 // 6. BAR COLORING  (from FKS — heatmap + new volume mode)
@@ -81,7 +83,8 @@ f_regression_line(_len) =>
     _y_    = ta.sma(_y, _len)
     _mx    = ta.stdev(_x, _len)
     _my    = ta.stdev(_y, _len)
-    _slope = _mx == 0 ? 0 : ta.correlation(_x, _y, _len) * (_my / _mx)
+    _corr  = ta.correlation(_x, _y, _len)
+    _slope = _mx == 0 ? 0 : _corr * (_my / _mx)
     _inter = _y_ - _slope * _x_
     _x * _slope + _inter
 
@@ -177,8 +180,8 @@ get_nearest_sr_levels(_tf) =>
 // SESSION & TIME
 // ══════════════════════════════════════════════════════════════════════════════
 rthSess = "0300-1600"   // ← adjust for non-US futures
-inRTH   = time("1", rthSess)
-newDay  = ta.change(time("D"))
+inRTH   = not na(time("1", rthSess))
+newDay  = ta.change(time("D")) != 0
 
 // ══════════════════════════════════════════════════════════════════════════════
 // CORE INDICATORS
@@ -246,12 +249,27 @@ else
     sr_sup_5m := na
 
 // ══════════════════════════════════════════════════════════════════════════════
+// HOISTED HISTORICAL CALLS
+// ta.change / ta.crossover / ta.crossunder must execute every bar (not inside
+// conditionals) so Pine's history buffers stay consistent.
+// ══════════════════════════════════════════════════════════════════════════════
+bool _asian_sess_change  = ta.change(time("1", "0500-1700")) != 0
+bool _london_sess_change = ta.change(time("1", "1000-0200")) != 0
+bool _asian_sess_start   = ta.change(time("1", "1700-0500")) != 0
+bool _london_sess_start  = ta.change(time("1", "0200-1000")) != 0
+bool _custom_sess_start  = ta.change(time("1", customSess))  != 0
+
+// ══════════════════════════════════════════════════════════════════════════════
 // RANGE BUILDING
 // ══════════════════════════════════════════════════════════════════════════════
 var float  rHigh      = na
 var float  rLow       = na
 var bool   rangeReady = false
 var string rangeName  = ""
+
+// Hoisted here so rHigh/rLow are in scope
+bool _cross_high = ta.crossover( high, nz(rHigh))
+bool _cross_low  = ta.crossunder(low,  nz(rLow))
 
 if newDay
     rHigh      := na
@@ -262,7 +280,7 @@ if newDay
 if rangeType == "ORB"
     rangeName := "ORB"
     int barsSinceOpen = ta.barssince(newDay)
-    if barsSinceOpen * timeframe.in_minutes <= orbMinutes and inRTH
+    if barsSinceOpen * timeframe.multiplier <= orbMinutes and inRTH
         rHigh := math.max(nz(rHigh, high), high)
         rLow  := math.min(nz(rLow,  low),  low)
     else if not rangeReady and not na(rHigh)
@@ -278,39 +296,39 @@ if rangeType == "Prev Day Range"
 // 3. Asian Range
 if rangeType == "Asian Range"
     rangeName := "Asian"
-    asianSess  = "1700-0500"
-    if ta.change(time("1", asianSess))
+    string asianSess = "1700-0500"
+    if _asian_sess_start
         rHigh := high
         rLow  := low
-    if time("1", asianSess)
+    if not na(time("1", asianSess))
         rHigh := math.max(nz(rHigh), high)
         rLow  := math.min(nz(rLow),  low)
-    if not rangeReady and ta.change(time("1", "0500-1700"))
+    if not rangeReady and _asian_sess_change
         rangeReady := true
 
 // 4. London Range
 if rangeType == "London Range"
     rangeName  := "London"
-    londonSess  = "0200-1000"
-    if ta.change(time("1", londonSess))
+    string londonSess = "0200-1000"
+    if _london_sess_start
         rHigh := high
         rLow  := low
-    if time("1", londonSess)
+    if not na(time("1", londonSess))
         rHigh := math.max(nz(rHigh), high)
         rLow  := math.min(nz(rLow),  low)
-    if not rangeReady and ta.change(time("1", "1000-0200"))
+    if not rangeReady and _london_sess_change
         rangeReady := true
 
 // 5. Custom Range
 if rangeType == "Custom Range"
     rangeName := "Custom"
-    if ta.change(time("1", customSess))
+    if _custom_sess_start
         rHigh := high
         rLow  := low
-    if time("1", customSess)
+    if not na(time("1", customSess))
         rHigh := math.max(nz(rHigh), high)
         rLow  := math.min(nz(rLow),  low)
-    if not rangeReady and not time("1", customSess) and not na(rHigh)
+    if not rangeReady and not na(rHigh) and na(time("1", customSess))
         rangeReady := true
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -348,8 +366,8 @@ if newDay
     breakoutBar   := na
     breakoutPrice := na
 
-longBreak  = rangeReady and ta.crossover(high, rHigh) and      bullBias and not breakoutFired
-shortBreak = rangeReady and ta.crossunder(low,  rLow)  and not bullBias and not breakoutFired
+longBreak  = rangeReady and _cross_high and      bullBias and not breakoutFired
+shortBreak = rangeReady and _cross_low  and not bullBias and not breakoutFired
 
 volOK       = volume > volAvg * volMult
 vwapOKLong  = not requireVWAP or close > vwap
@@ -392,43 +410,70 @@ plot(showVWAP ? vwap    : na, "VWAP",     color.new(#FF00FF, 0), 2)
 plot(showBB   ? bbUpper : na, "BB Upper", color.new(#FF5252, 0), 1, plot.style_linebr)
 plot(showBB   ? bbLower : na, "BB Lower", color.new(#00E676, 0), 1, plot.style_linebr)
 
-// ── Top G Channel bands
-pTGHigh = plot(showTopG            ? tg_hi  : na, "TG Resistance", color.new(#ff1100, 35), 1)
-pTGLow  = plot(showTopG            ? tg_lo  : na, "TG Support",    color.new(#00ffbb, 35), 1)
-plot(showTopG and showTopGMid      ? tg_mid : na, "TG Mid",        color.new(color.gray, 60), 1, plot.style_linebr)
-fill(pTGHigh, pTGLow, color.new(color.blue, 96), "TG Zone")
+// ── Top G Channel bands — dashed lines only, no fill, lighter weight
+pTGHigh = plot(showTopG            ? tg_hi  : na, "TG Resistance", color.new(#ff1100, 50), 1, plot.style_linebr)
+pTGLow  = plot(showTopG            ? tg_lo  : na, "TG Support",    color.new(#00ffbb, 50), 1, plot.style_linebr)
+plot(showTopG and showTopGMid      ? tg_mid : na, "TG Mid",        color.new(color.gray, 75), 1, plot.style_linebr)
 
-// ── HTF S/R levels
-//    1m: small circles (fine-grained)  |  5m: stepline diamonds (structural)
-plot(showSR and not na(sr_res_1m) ? sr_res_1m : na, "1m Resistance",
-     color.new(color.red,   55), 1, plot.style_circles)
-plot(showSR and not na(sr_sup_1m) ? sr_sup_1m : na, "1m Support",
-     color.new(color.green, 55), 1, plot.style_circles)
-plot(showSR and not na(sr_res_5m) ? sr_res_5m : na, "5m Resistance",
-     color.new(color.red,   20), 2, plot.style_stepline_diamond)
-plot(showSR and not na(sr_sup_5m) ? sr_sup_5m : na, "5m Support",
-     color.new(color.green, 20), 2, plot.style_stepline_diamond)
+// ── HTF S/R — true horizontal lines via line.new(), only redrawn when level shifts
+//    This prevents the staircase pattern caused by plot() updating every bar.
+var line _ln_res_5m = na
+var line _ln_sup_5m = na
+var line _ln_res_1m = na
+var line _ln_sup_1m = na
+var float _last_res_5m = na
+var float _last_sup_5m = na
+var float _last_res_1m = na
+var float _last_sup_1m = na
 
-// ── Breakout / ADD arrows (existing)
-plotshape(longBreakout,  "Breakout Long",  location.belowbar, color.lime,   shape.triangleup,   size.large,  text=showTable ? "BREAKOUT" : na)
-plotshape(shortBreakout, "Breakout Short", location.abovebar, color.red,    shape.triangledown, size.large,  text=showTable ? "BREAKOUT" : na)
-plotshape(longAdd,       "ADD Long",       location.belowbar, color.cyan,   shape.triangleup,   size.normal, text="ADD")
-plotshape(shortAdd,      "ADD Short",      location.abovebar, color.orange, shape.triangledown, size.normal, text="ADD")
+_sr_threshold = atr14 * 0.15   // only redraw if level moved more than 15% of ATR
+
+if showSR and barstate.isconfirmed
+    if not na(sr_res_5m) and (na(_last_res_5m) or math.abs(sr_res_5m - _last_res_5m) > _sr_threshold)
+        line.delete(_ln_res_5m)
+        _ln_res_5m    := line.new(bar_index, sr_res_5m, bar_index + 1, sr_res_5m,
+             extend=extend.right, color=color.new(color.red, 25), width=2, style=line.style_dashed)
+        _last_res_5m  := sr_res_5m
+
+    if not na(sr_sup_5m) and (na(_last_sup_5m) or math.abs(sr_sup_5m - _last_sup_5m) > _sr_threshold)
+        line.delete(_ln_sup_5m)
+        _ln_sup_5m    := line.new(bar_index, sr_sup_5m, bar_index + 1, sr_sup_5m,
+             extend=extend.right, color=color.new(color.green, 25), width=2, style=line.style_dashed)
+        _last_sup_5m  := sr_sup_5m
+
+    if show1mSR
+        if not na(sr_res_1m) and (na(_last_res_1m) or math.abs(sr_res_1m - _last_res_1m) > _sr_threshold)
+            line.delete(_ln_res_1m)
+            _ln_res_1m   := line.new(bar_index, sr_res_1m, bar_index + 1, sr_res_1m,
+                 extend=extend.right, color=color.new(color.red, 55), width=1, style=line.style_dotted)
+            _last_res_1m := sr_res_1m
+
+        if not na(sr_sup_1m) and (na(_last_sup_1m) or math.abs(sr_sup_1m - _last_sup_1m) > _sr_threshold)
+            line.delete(_ln_sup_1m)
+            _ln_sup_1m   := line.new(bar_index, sr_sup_1m, bar_index + 1, sr_sup_1m,
+                 extend=extend.right, color=color.new(color.green, 55), width=1, style=line.style_dotted)
+            _last_sup_1m := sr_sup_1m
+
+// ── Breakout / ADD arrows
+plotshape(series=longBreakout,  title="Breakout Long",  style=shape.triangleup,   location=location.belowbar, color=color.lime,          size=size.large,  text="BREAKOUT")
+plotshape(series=shortBreakout, title="Breakout Short", style=shape.triangledown, location=location.abovebar, color=color.red,           size=size.large,  text="BREAKOUT")
+plotshape(series=longAdd,       title="ADD Long",       style=shape.triangleup,   location=location.belowbar, color=color.new(#00BFFF,0), size=size.normal, text="ADD")
+plotshape(series=shortAdd,      title="ADD Short",      style=shape.triangledown, location=location.abovebar, color=color.orange,        size=size.normal, text="ADD")
 
 // ── Top G channel signals
 //    Strong bounce/rejection: solid circle (normal size)
 //    Single-bar touch:        faded circle (small)
 //    Potential / early entry: diamond (tiny)
-plotshape(showTopGSignals and tg_bot,    "TG Strong Support",    shape.circle,  location.belowbar, color.new(#00ffbb, 0),  size=size.normal)
-plotshape(showTopGSignals and tg_top,    "TG Strong Resistance", shape.circle,  location.abovebar, color.new(#ff1100, 0),  size=size.normal)
-plotshape(showTopGSignals and tg_s_bot,  "TG Simple Support",    shape.circle,  location.belowbar, color.new(#00ffbb, 45), size=size.small)
-plotshape(showTopGSignals and tg_s_top,  "TG Simple Resistance", shape.circle,  location.abovebar, color.new(#ff1100, 45), size=size.small)
-plotshape(showPotentialSigs and tg_p_bot,"TG Potential Support", shape.diamond, location.belowbar, color.new(#00ffbb, 60), size=size.tiny)
-plotshape(showPotentialSigs and tg_p_top,"TG Potential Resist",  shape.diamond, location.abovebar, color.new(#ff1100, 60), size=size.tiny)
+plotshape(series=showTopGSignals and tg_bot,    title="TG Strong Support",    style=shape.circle,  location=location.belowbar, color=color.new(#00ffbb, 0),  size=size.normal)
+plotshape(series=showTopGSignals and tg_top,    title="TG Strong Resistance", style=shape.circle,  location=location.abovebar, color=color.new(#ff1100, 0),  size=size.normal)
+plotshape(series=showSimpleSigs and tg_s_bot,  title="TG Simple Support",    style=shape.circle,  location=location.belowbar, color=color.new(#00ffbb, 45), size=size.small)
+plotshape(series=showSimpleSigs and tg_s_top,  title="TG Simple Resistance", style=shape.circle,  location=location.abovebar, color=color.new(#ff1100, 45), size=size.small)
+plotshape(series=showPotentialSigs and tg_p_bot, title="TG Potential Support", style=shape.diamond, location=location.belowbar, color=color.new(#00ffbb, 60), size=size.tiny)
+plotshape(series=showPotentialSigs and tg_p_top, title="TG Potential Resist",  style=shape.diamond, location=location.abovebar, color=color.new(#ff1100, 60), size=size.tiny)
 
 // ── Background tint (existing — uses chart background, not candle colour)
-bgcolor(close > ema9 and ao > 0  ? color.new(color.lime, 92) :
-        close < ema9 and ao < 0  ? color.new(color.red,  92) : na)
+bgcolor(close > ema9 and ao > 0  ? color.new(color.lime, 96) :
+        close < ema9 and ao < 0  ? color.new(color.red,  96) : na)
 
 // ── Entry zone boxes (FKS)
 //    Highlight the bottom 10 % and top 10 % of the Top G channel — the
@@ -516,7 +561,7 @@ if barstate.islast and showTable
     // ── Bar colour mode indicator
     table.cell(dash, 0, 11, "Bars",    text_color=color.gray,   text_size=size.tiny)
     table.cell(dash, 1, 11, barColorMode,
-         text_color=barColorMode == "Off" ? color.gray : color.cyan, text_size=size.tiny)
+         text_color=barColorMode == "Off" ? color.gray : color.new(#00BFFF, 0), text_size=size.tiny)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ALERTS

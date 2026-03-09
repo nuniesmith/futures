@@ -120,31 +120,42 @@ The filters (NR7, premarket range, session window, lunch filter, MTF bias, VWAP 
 
 Reduce complexity before the v7.1 retrain. These make the codebase easier to reason about during training experiments and reduce the chance of bugs introduced by the duplicate enum/config split.
 
-### Phase 1A: Merge BreakoutType Enums → Single Source of Truth
-- [ ] Eliminate the engine `StrEnum` in `services/engine/breakout.py` — use `core/breakout_types.BreakoutType` (IntEnum) everywhere
-  - Remove `_ENGINE_TO_TRAINING` / `_TRAINING_TO_ENGINE` mapping dicts
-  - Remove `to_training_type()` / `from_training_type()` / `breakout_type_ordinal()` bridge functions
-  - Update all engine callers to import from `lib.core.breakout_types`
+### Phase 1A: Merge BreakoutType Enums → Single Source of Truth ✅
+- [x] Eliminate the engine `StrEnum` in `services/engine/breakout.py` — use `core/breakout_types.BreakoutType` (IntEnum) everywhere
+  - Removed `_ENGINE_TO_TRAINING` / `_TRAINING_TO_ENGINE` mapping dicts
+  - Removed `to_training_type()` / `from_training_type()` / `breakout_type_ordinal()` bridge functions
+  - All engine callers import from `lib.core.breakout_types`
   - `BreakoutResult.to_dict()` uses `.name` for JSON serialisation and `.value` for ordinals
+  - Short-name aliases (`"PDR"` → `PrevDay`, etc.) retained in `breakout.py` for backward compat
 
-### Phase 1B: Merge `RangeConfig` → Single Dataclass
-- [ ] Unify the two `RangeConfig` dataclasses into `core/breakout_types.py`
-  - Merge detection-threshold fields (ATR mult, body ratio, range caps, squeeze params) INTO the core `RangeConfig`
-  - All 13 `_*_CONFIG` registry entries get the detection fields added
-  - Kill the engine-side `RangeConfig` entirely — `get_range_config(BreakoutType.ORB)` returns everything
+### Phase 1B: Merge `RangeConfig` → Single Dataclass ✅
+- [x] Unify the two `RangeConfig` dataclasses into `core/breakout_types.py`
+  - Detection-threshold fields (ATR mult, body ratio, range caps, squeeze params) merged INTO the core `RangeConfig`
+  - All 13 `_*_CONFIG` registry entries have detection fields
+  - Engine-side `RangeConfig` eliminated — `get_range_config(BreakoutType.ORB)` returns everything
+  - `DEFAULT_CONFIGS` in `breakout.py` delegates to `get_range_config()`
 
-### Phase 1C: Merge ORB Detection into Unified RB Detector
-- [ ] `detect_opening_range_breakout()` becomes `detect_range_breakout(config=ORB_CONFIG)`
-  - Extract all `_build_*_range()` functions into `strategies/rb/range_builders.py`
+### Phase 1C: Merge ORB Detection into Unified RB Detector ✅
+- [x] `detect_range_breakout(config=ORB_CONFIG)` handles all 13 types including ORB
+  - All `_build_*_range()` functions extracted into `strategies/rb/range_builders.py`
   - Single `detect_range_breakout(bars, symbol, config)` in `strategies/rb/detector.py`
-  - `ORBResult` retired — `BreakoutResult` covers all types
-  - Single `compute_atr()` in `strategies/rb/detector.py` (deduplicate 3 copies)
+  - `BreakoutResult` covers all types (ORB fields mapped: `range_high`↔`or_high`, etc.)
+  - Single `compute_atr()` in `strategies/rb/range_builders.py` (canonical implementation)
+- [x] `_handle_check_orb()` (~800 lines) replaced by `handle_orb_check()` delegation
+  - Quality filters pipeline extracted to `handlers.run_quality_filters()`
+  - CNN inference pipeline extracted to `handlers.run_cnn_inference()`
+  - CNN tabular feature construction extracted to `handlers.build_cnn_tabular_features()`
+  - Session-aware filter windows extracted to `handlers.get_filter_windows_for_session()`
+  - All 11 ORB session handlers (`_handle_check_orb_london`, etc.) are now one-liners
+  - ORB-specific Redis publishing handled via `_publish_orb_result()` shim for backward compat
+- [ ] **Remaining:** `orb.py` still has `detect_opening_range_breakout()` and `ORBResult` — can be deprecated once v7.1 retrain validates the unified path
 
-### Phase 1D: Extract Generic Handler Pipeline from `main.py`
-- [ ] One handler function for all 13 breakout types — eliminate ~400 lines of copy-paste
-  - Create `services/engine/handlers.py` with a single `handle_breakout_check(engine, breakout_type, session_key)`
-  - `_handle_check_pdr`, `_handle_check_ib`, `_handle_check_consolidation` become one-liners
-  - Extract shared helpers: `fetch_bars_1m`, `get_htf_bars`, `run_mtf_on_result`, `persist_breakout_result`, `publish_breakout_result`, `send_breakout_alert`
+### Phase 1D: Extract Generic Handler Pipeline from `main.py` ✅
+- [x] One handler function for all 13 breakout types — `handle_breakout_check()` in `handlers.py`
+  - `_handle_check_pdr`, `_handle_check_ib`, `_handle_check_consolidation` are one-liners
+  - Shared helpers extracted: `fetch_bars_1m`, `get_htf_bars`, `run_mtf_on_result`, `persist_breakout_result`, `publish_breakout_result`, `send_breakout_alert`
+  - `handle_breakout_multi()` runs multiple types in parallel via ThreadPoolExecutor
+  - `enable_filters=True` / `enable_cnn=True` flags bring filter+CNN support to any type
 
 ### Phase 1E: Rename `orb_filters.py` → `breakout_filters.py` ✅
 - [x] `ORBFilterResult` → `BreakoutFilterResult`. Backward-compat shim in place.
@@ -152,13 +163,14 @@ Reduce complexity before the v7.1 retrain. These make the codebase easier to rea
 ### Phase 1F: Rename `orb_simulator.py` → `rb_simulator.py` ✅
 - [x] `simulate_orb_outcome` → `simulate_rb_outcome`. Shim in place.
 
-### Phase 1G: Create `lib/strategies/` Package
-- [ ] Clean separation of strategy code from infrastructure
+### Phase 1G: Create `lib/strategies/` Package ✅
+- [x] Clean separation of strategy code from infrastructure
   - `lib/strategies/rb/` — Range Breakout scalping system (detector, range_builders, publisher)
-  - Move `lib/trading/costs.py` → `lib/strategies/costs.py`
-  - Move `lib/trading/strategies.py` → `lib/strategies/strategy_defs.py`
-  - Move `lib/trading/engine.py` → `lib/strategies/backtesting.py`
-  - Rename `ORBSession` → `RBSession` (keep old name as alias)
+  - `lib/trading/costs.py` → `lib/strategies/costs.py` (shim in place)
+  - `lib/trading/strategies.py` → `lib/strategies/strategy_defs.py` (shim in place)
+  - `lib/trading/engine.py` → `lib/strategies/backtesting.py` (shim in place)
+  - `RBSession` alias added in `multi_session.py`, exported from `lib.core`
+- [ ] **Remaining:** Bulk-rename `ORBSession` → `RBSession` in callers (non-breaking — alias works)
 
 ---
 

@@ -67,6 +67,7 @@ from lib.services.engine.handlers import (
     get_htf_bars,
     handle_breakout_check,
     handle_breakout_multi,
+    handle_orb_check,
     run_mtf_on_result,
 )
 
@@ -166,6 +167,7 @@ __all__ = [
     # Handler pipeline (from engine)
     "handle_breakout_check",
     "handle_breakout_multi",
+    "handle_orb_check",
     "get_assets_for_session_key",
     "fetch_bars_1m",
     "get_htf_bars",

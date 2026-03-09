@@ -810,952 +810,119 @@ def _persist_risk_event(
         logger.debug("Failed to persist risk event (non-fatal): %s", exc)
 
 
-def _handle_check_orb_london(engine) -> None:
-    """Check for London Open ORB patterns (03:00–03:30 ET / 08:00–08:30 UTC).
+# ===========================================================================
+# ORB session handlers — Phase 1C: delegate to unified handle_orb_check()
+# ===========================================================================
 
-    Delegates to the shared ORB handler with the London session config.
-    London open is the primary ORB session — institutional order flow
-    drives range establishment for metals, energy, and index futures.
-    """
+
+def _handle_check_orb_london(engine) -> None:
+    """Check for London Open ORB patterns (03:00–03:30 ET / 08:00–08:30 UTC)."""
+    from lib.services.engine.handlers import handle_orb_check
     from lib.services.engine.orb import LONDON_SESSION
 
-    _handle_check_orb(engine, orb_session=LONDON_SESSION)
+    handle_orb_check(engine, orb_session=LONDON_SESSION)
 
 
 def _handle_check_orb_london_ny(engine) -> None:
-    """Check for London-NY Crossover ORB patterns (08:00–08:30 ET).
-
-    Both London and New York are fully active — highest intraday volume,
-    tightest spreads. Best assets: 6E, MES, MNQ, MGC.
-    """
+    """Check for London-NY Crossover ORB patterns (08:00–08:30 ET)."""
+    from lib.services.engine.handlers import handle_orb_check
     from lib.services.engine.orb import LONDON_NY_SESSION
 
-    _handle_check_orb(engine, orb_session=LONDON_NY_SESSION)
+    handle_orb_check(engine, orb_session=LONDON_NY_SESSION)
 
 
 def _handle_check_orb_frankfurt(engine) -> None:
-    """Check for Frankfurt/Xetra Open ORB patterns (03:00–03:30 ET / 08:00 CET).
-
-    Pre-London European institutional flow. Sets EUR/USD direction and
-    DAX-correlated index futures tone. Fires at the same ET time as the
-    London open but uses the frankfurt session asset list (6E, MES/MNQ,
-    MYM, MGC).  wraps_midnight=False.
-    """
+    """Check for Frankfurt/Xetra Open ORB patterns (03:00–03:30 ET / 08:00 CET)."""
+    from lib.services.engine.handlers import handle_orb_check
     from lib.services.engine.orb import FRANKFURT_SESSION
 
-    _handle_check_orb(engine, orb_session=FRANKFURT_SESSION)
+    handle_orb_check(engine, orb_session=FRANKFURT_SESSION)
 
 
 def _handle_check_orb_sydney(engine) -> None:
-    """Check for Sydney/ASX Open ORB patterns (18:30–19:00 ET, overnight).
-
-    Australian Securities Exchange open. Thin overnight session relevant
-    for metals, energy, AUD/JPY FX, and MBT. wraps_midnight=True.
-    """
+    """Check for Sydney/ASX Open ORB patterns (18:30–19:00 ET, overnight)."""
+    from lib.services.engine.handlers import handle_orb_check
     from lib.services.engine.orb import SYDNEY_SESSION
 
-    _handle_check_orb(engine, orb_session=SYDNEY_SESSION)
+    handle_orb_check(engine, orb_session=SYDNEY_SESSION)
 
 
 def _handle_check_orb_cme(engine) -> None:
-    """Check for CME Globex Re-Open ORB patterns (18:00–18:30 ET, overnight).
-
-    First bars of the new Globex trading day after the 17:00–18:00 ET
-    settlement break.  Clean overnight anchor for all CME micro products.
-    wraps_midnight=True.
-    """
+    """Check for CME Globex Re-Open ORB patterns (18:00–18:30 ET, overnight)."""
+    from lib.services.engine.handlers import handle_orb_check
     from lib.services.engine.orb import CME_OPEN_SESSION
 
-    _handle_check_orb(engine, orb_session=CME_OPEN_SESSION)
+    handle_orb_check(engine, orb_session=CME_OPEN_SESSION)
 
 
 def _handle_check_orb_tokyo(engine) -> None:
-    """Check for Tokyo/TSE Open ORB patterns (19:00–19:30 ET, overnight).
-
-    Narrow-range session with mean-reversion bias. Strongest for metals
-    and JPY/AUD-correlated FX in overnight Globex hours. wraps_midnight=True.
-    """
+    """Check for Tokyo/TSE Open ORB patterns (19:00–19:30 ET, overnight)."""
+    from lib.services.engine.handlers import handle_orb_check
     from lib.services.engine.orb import TOKYO_SESSION
 
-    _handle_check_orb(engine, orb_session=TOKYO_SESSION)
+    handle_orb_check(engine, orb_session=TOKYO_SESSION)
 
 
 def _handle_check_orb_shanghai(engine) -> None:
-    """Check for Shanghai/HK Open ORB patterns (21:00–21:30 ET, overnight).
-
-    CSI 300 / HKEX open (09:30 CST).  Copper (MHG) and gold (MGC)
-    sentiment driver via SHFE open-price auction. wraps_midnight=True.
-    """
+    """Check for Shanghai/HK Open ORB patterns (21:00–21:30 ET, overnight)."""
+    from lib.services.engine.handlers import handle_orb_check
     from lib.services.engine.orb import SHANGHAI_SESSION
 
-    _handle_check_orb(engine, orb_session=SHANGHAI_SESSION)
+    handle_orb_check(engine, orb_session=SHANGHAI_SESSION)
 
 
 def _handle_check_orb_cme_settle(engine) -> None:
-    """Check for CME Settlement ORB patterns (14:00–14:30 ET).
-
-    Metals and energy settlement window.  Gold (MGC) and crude (MCL)
-    typically see directional resolution before the 17:00 ET close.
-    wraps_midnight=False.
-    """
+    """Check for CME Settlement ORB patterns (14:00–14:30 ET)."""
+    from lib.services.engine.handlers import handle_orb_check
     from lib.services.engine.orb import CME_SETTLEMENT_SESSION
 
-    _handle_check_orb(engine, orb_session=CME_SETTLEMENT_SESSION)
+    handle_orb_check(engine, orb_session=CME_SETTLEMENT_SESSION)
 
 
 def _handle_check_orb_crypto_utc0(engine) -> None:
-    """Check for Crypto UTC-midnight ORB patterns (19:00–19:30 ET EST / 00:00 UTC).
-
-    High-volume Asia open window for BTC/ETH/SOL and other spot crypto pairs
-    tracked on Kraken.  Uses wider ATR thresholds and looser quality gates
-    via CRYPTO_UTC_MIDNIGHT_SESSION and per-symbol overrides.
-    Only active when ENABLE_KRAKEN_CRYPTO=1.  wraps_midnight=True.
-    """
+    """Check for Crypto UTC-midnight ORB patterns (19:00–19:30 ET EST / 00:00 UTC)."""
     try:
         from lib.services.engine.orb import CRYPTO_UTC_MIDNIGHT_SESSION
     except ImportError:
         logger.warning("CRYPTO_UTC_MIDNIGHT_SESSION not available — crypto ORB disabled")
         return
 
-    _handle_check_orb(engine, orb_session=CRYPTO_UTC_MIDNIGHT_SESSION)
+    from lib.services.engine.handlers import handle_orb_check
+
+    handle_orb_check(engine, orb_session=CRYPTO_UTC_MIDNIGHT_SESSION)
 
 
 def _handle_check_orb_crypto_utc12(engine) -> None:
-    """Check for Crypto UTC-noon ORB patterns (07:00–07:30 ET EST / 12:00 UTC).
-
-    London morning crypto session.  High-volume pre-US-open positioning
-    window for BTC/ETH/SOL and tracked Kraken pairs.  Uses wider ATR
-    thresholds and per-symbol overrides.
-    Only active when ENABLE_KRAKEN_CRYPTO=1.  wraps_midnight=False.
-    """
+    """Check for Crypto UTC-noon ORB patterns (07:00–07:30 ET EST / 12:00 UTC)."""
     try:
         from lib.services.engine.orb import CRYPTO_UTC_NOON_SESSION
     except ImportError:
         logger.warning("CRYPTO_UTC_NOON_SESSION not available — crypto ORB disabled")
         return
 
-    _handle_check_orb(engine, orb_session=CRYPTO_UTC_NOON_SESSION)
+    from lib.services.engine.handlers import handle_orb_check
+
+    handle_orb_check(engine, orb_session=CRYPTO_UTC_NOON_SESSION)
 
 
 def _handle_check_orb(engine, orb_session=None) -> None:
-    """Check for Opening Range Breakout patterns.
+    """Check for Opening Range Breakout patterns — unified pipeline.
 
-    Runs ORB detection across all focus assets using 1-minute bar data.
-    When a breakout is detected, applies quality filters (NR7, pre-market
-    range, session window, lunch filter, multi-TF EMA bias, VWAP confluence)
-    before publishing alerts.
-
-    Gate mode is controlled by the ``ORB_FILTER_GATE`` environment variable:
-      - ``"majority"`` (default) — breakout passes if >50% of hard filters pass.
-        Recommended for live use: balances quality and trade volume.
-      - ``"all"`` — every hard filter must pass (strictest).
+    Phase 1C: delegates entirely to ``handle_orb_check()`` in ``handlers.py``,
+    which runs detection via ``detect_range_breakout()``, quality filters,
+    CNN inference, and publishing through the single generic pipeline.
 
     Args:
         engine: The engine instance.
         orb_session: ORBSession to check. Defaults to US_SESSION if None.
-
-    Publishes breakout alerts to Redis when detected AND filtered.
-    Persists every evaluation result to the database for permanent audit trail.
     """
+    from lib.services.engine.handlers import handle_orb_check
     from lib.services.engine.orb import US_SESSION
 
     if orb_session is None:
         orb_session = US_SESSION
 
-    session_label = orb_session.name
-    logger.debug("▶ Opening Range Breakout check [%s]...", session_label)
-    try:
-        from lib.services.engine.orb import (
-            detect_opening_range_breakout,
-            publish_orb_alert,
-        )
-
-        # Get 1-minute bars from cache for each focus asset
-        try:
-            from lib.core.cache import cache_get
-
-            raw_focus = cache_get("engine:daily_focus")
-            if not raw_focus:
-                logger.debug("No daily focus data — skipping ORB check")
-                return
-
-            focus_data = json.loads(raw_focus)
-            assets = focus_data.get("assets", [])
-        except Exception as exc:
-            logger.debug("Could not read focus for ORB: %s", exc)
-            return
-
-        # Import quality filters — graceful fallback if module missing
-        try:
-            from lib.analysis.orb_filters import (
-                apply_all_filters,
-                extract_premarket_range,
-            )
-
-            _filters_available = True
-        except ImportError:
-            _filters_available = False
-            apply_all_filters = None  # type: ignore[assignment]
-            extract_premarket_range = None  # type: ignore[assignment]
-            logger.debug("ORB filters module not available — breakouts will be unfiltered")
-
-        breakouts_found = 0
-        breakouts_filtered = 0
-        for asset in assets:
-            symbol = asset.get("symbol", "")
-            ticker = asset.get("ticker", "")
-            if not symbol:
-                continue
-
-            try:
-                import io
-
-                import pandas as pd
-
-                # Try to get 1-minute bars from the engine's data
-                bars_1m = None
-
-                # Attempt via cache (engine publishes bars)
-                bars_key = f"engine:bars_1m:{ticker or symbol}"
-                raw_bars = cache_get(bars_key)
-                if raw_bars:
-                    raw_str = raw_bars.decode("utf-8") if isinstance(raw_bars, bytes) else raw_bars
-                    bars_1m = pd.read_json(io.StringIO(raw_str))
-
-                # Attempt via engine's fetch method
-                if bars_1m is None or bars_1m.empty:
-                    with contextlib.suppress(Exception):
-                        bars_1m = engine._fetch_tf_safe(ticker or symbol, interval="1m", period="1d")
-
-                if bars_1m is None or bars_1m.empty:
-                    logger.debug("No 1m bars for %s — skipping ORB", symbol)
-                    continue
-
-                result = detect_opening_range_breakout(bars_1m, symbol=symbol, session=orb_session)
-
-                # Persist every ORB evaluation to the audit trail
-                # (returns row_id so we can enrich with filter/CNN metadata later)
-                _orb_row_id = _persist_orb_event(
-                    result,
-                    metadata={"orb_session": getattr(orb_session, "key", "us")},
-                )
-
-                if result.breakout_detected:
-                    breakouts_found += 1
-
-                    # Resolve session key once — used by filters, CNN inference,
-                    # and the per-session CNN gate lookup below.
-                    _session_key = getattr(orb_session, "key", "us")
-
-                    # ── Quality Filter Gate ──────────────────────────
-                    # Run all enabled filters before publishing.  If any
-                    # hard filter fails, the breakout is logged but NOT
-                    # sent as an alert / signal.
-                    filter_passed = True
-                    filter_summary = ""
-                    bars_daily = None  # initialised here so CNN block can always read it
-
-                    if _filters_available:
-                        try:
-                            # ── Session-aware filter configuration ────────
-                            # Each ORB session needs its own filter windows:
-                            #   London (03:00–05:00 ET): premarket is 00:00–03:00,
-                            #     session window 03:00–05:00, no lunch filter needed.
-                            #   US (09:30–11:00 ET): premarket is 00:00–08:20,
-                            #     session window 08:20–10:30, lunch filter active.
-                            from datetime import time as _dt_time
-
-                            _session_key = getattr(orb_session, "key", "us")
-
-                            # ── Session-aware filter windows ───────────────────
-                            # Each session needs its own allowed trading window,
-                            # pre-market range end, and lunch-filter flag.
-                            # All times are ET wall-clock (DST-safe via ZoneInfo).
-                            if _session_key == "cme":
-                                # CME Globex open 18:00–20:00 ET (overnight)
-                                _filter_allowed_windows = [(_dt_time(18, 0), _dt_time(20, 0))]
-                                _pm_end = _dt_time(18, 0)
-                                _enable_lunch = False
-                                logger.debug("ORB filters: CME-open mode — 18:00–20:00 ET, lunch OFF")
-
-                            elif _session_key == "sydney":
-                                # Sydney/ASX open 18:30–20:30 ET (overnight)
-                                _filter_allowed_windows = [(_dt_time(18, 30), _dt_time(20, 30))]
-                                _pm_end = _dt_time(18, 30)
-                                _enable_lunch = False
-                                logger.debug("ORB filters: Sydney mode — 18:30–20:30 ET, lunch OFF")
-
-                            elif _session_key == "tokyo":
-                                # Tokyo/TSE open 19:00–21:00 ET (overnight)
-                                _filter_allowed_windows = [(_dt_time(19, 0), _dt_time(21, 0))]
-                                _pm_end = _dt_time(19, 0)
-                                _enable_lunch = False
-                                logger.debug("ORB filters: Tokyo mode — 19:00–21:00 ET, lunch OFF")
-
-                            elif _session_key == "shanghai":
-                                # Shanghai/HK open 21:00–23:00 ET (overnight)
-                                _filter_allowed_windows = [(_dt_time(21, 0), _dt_time(23, 0))]
-                                _pm_end = _dt_time(21, 0)
-                                _enable_lunch = False
-                                logger.debug("ORB filters: Shanghai mode — 21:00–23:00 ET, lunch OFF")
-
-                            elif _session_key == "frankfurt":
-                                # Frankfurt/Xetra open 03:00–04:30 ET
-                                _filter_allowed_windows = [(_dt_time(3, 0), _dt_time(4, 30))]
-                                _pm_end = _dt_time(3, 0)
-                                _enable_lunch = False
-                                logger.debug("ORB filters: Frankfurt mode — 03:00–04:30 ET, lunch OFF")
-
-                            elif _session_key == "london":
-                                # London open 03:00–05:00 ET
-                                _filter_allowed_windows = [(_dt_time(3, 0), _dt_time(5, 0))]
-                                _pm_end = _dt_time(3, 0)
-                                _enable_lunch = False
-                                logger.debug("ORB filters: London mode — 03:00–05:00 ET, lunch OFF")
-
-                            elif _session_key == "london_ny":
-                                # London-NY crossover 08:00–10:00 ET
-                                _filter_allowed_windows = [(_dt_time(8, 0), _dt_time(10, 0))]
-                                _pm_end = _dt_time(8, 0)
-                                _enable_lunch = False
-                                logger.debug("ORB filters: London-NY mode — 08:00–10:00 ET, lunch OFF")
-
-                            elif _session_key == "cme_settle":
-                                # CME settlement window 14:00–15:30 ET
-                                _filter_allowed_windows = [(_dt_time(14, 0), _dt_time(15, 30))]
-                                _pm_end = _dt_time(8, 20)
-                                _enable_lunch = False
-                                logger.debug("ORB filters: CME-settle mode — 14:00–15:30 ET, lunch OFF")
-
-                            else:
-                                # US session (default, 09:30–11:00 ET)
-                                _filter_allowed_windows = [(_dt_time(8, 20), _dt_time(10, 30))]
-                                _pm_end = _dt_time(8, 20)
-                                _enable_lunch = True
-                                logger.debug("ORB filters: US mode — 08:20–10:30 ET, lunch ON")
-
-                            # Extract pre-market range with session-aware end time
-                            pm_high, pm_low = extract_premarket_range(bars_1m, pm_end=_pm_end)  # type: ignore[possibly-unbound]
-
-                            # Try to load daily bars for NR7 check
-                            bars_daily = None
-                            try:
-                                daily_key = f"engine:bars_daily:{ticker or symbol}"
-                                raw_daily = cache_get(daily_key)
-                                if raw_daily:
-                                    raw_daily_str = (
-                                        raw_daily.decode("utf-8") if isinstance(raw_daily, bytes) else raw_daily
-                                    )
-                                    bars_daily = pd.read_json(io.StringIO(raw_daily_str))
-                            except Exception:
-                                pass
-
-                            # Try to load HTF (15m) bars for multi-TF bias
-                            bars_htf = None
-                            try:
-                                htf_key = f"engine:bars_15m:{ticker or symbol}"
-                                raw_htf = cache_get(htf_key)
-                                if raw_htf:
-                                    raw_htf_str = raw_htf.decode("utf-8") if isinstance(raw_htf, bytes) else raw_htf
-                                    bars_htf = pd.read_json(io.StringIO(raw_htf_str))
-                            except Exception:
-                                pass
-
-                            # If no dedicated 15m bars, try resampling from 1m
-                            if (bars_htf is None or bars_htf.empty) and bars_1m is not None:
-                                with contextlib.suppress(Exception):
-                                    _resampled = (
-                                        bars_1m.resample("15min")
-                                        .agg(
-                                            {
-                                                "Open": "first",
-                                                "High": "max",
-                                                "Low": "min",
-                                                "Close": "last",
-                                                "Volume": "sum",
-                                            }
-                                        )
-                                        .dropna()
-                                    )
-                                    bars_htf = (
-                                        pd.DataFrame(_resampled)
-                                        if not isinstance(_resampled, pd.DataFrame)
-                                        else _resampled
-                                    )
-
-                            from datetime import datetime as _dt
-                            from zoneinfo import ZoneInfo as _ZI
-
-                            signal_time = _dt.now(tz=_ZI("America/New_York"))
-
-                            # Gate mode: env var ORB_FILTER_GATE (default "majority")
-                            _gate_mode = os.environ.get("ORB_FILTER_GATE", "majority")
-
-                            # Read MTF min_pass_score from env (default 0.55)
-                            _mtf_min_score = float(os.environ.get("ORB_MTF_MIN_SCORE", "0.55"))
-
-                            filter_result = apply_all_filters(  # type: ignore[possibly-unbound]
-                                direction=result.direction,
-                                trigger_price=result.trigger_price,
-                                signal_time=signal_time,
-                                bars_daily=bars_daily,
-                                bars_1m=bars_1m,
-                                bars_htf=bars_htf,
-                                premarket_high=pm_high,
-                                premarket_low=pm_low,
-                                orb_high=result.or_high,
-                                orb_low=result.or_low,
-                                gate_mode=_gate_mode,
-                                allowed_windows=_filter_allowed_windows,
-                                enable_lunch_filter=_enable_lunch,
-                                enable_mtf_analyzer=True,
-                                mtf_min_pass_score=_mtf_min_score,
-                            )
-
-                            filter_passed = filter_result.passed
-                            filter_summary = filter_result.summary
-
-                            # ── MTF enrichment on the ORB result ──────────────────
-                            # Run the full MTF analyzer independently of the filter
-                            # so we always capture mtf_score / macd_slope / divergence
-                            # in the DB even when the filter gate is in "majority" mode
-                            # and the MTF verdict didn't block the signal.
-                            _orb_mtf_score: float | None = None
-                            _orb_macd_slope: float | None = None
-                            _orb_divergence: str = ""
-                            try:
-                                from lib.analysis.mtf_analyzer import analyze_mtf as _analyze_mtf
-
-                                _mtf_res = _analyze_mtf(bars_htf, direction=result.direction)
-                                if not _mtf_res.error:
-                                    _orb_mtf_score = _mtf_res.mtf_score
-                                    _orb_macd_slope = _mtf_res.macd_histogram_slope
-                                    _orb_divergence = _mtf_res.divergence_type or ""
-                            except Exception:
-                                pass
-
-                            if not filter_passed:
-                                breakouts_filtered += 1
-                                logger.info(
-                                    "🚫 ORB FILTERED: %s %s @ %.4f — %s",
-                                    result.direction,
-                                    symbol,
-                                    result.trigger_price,
-                                    filter_summary,
-                                )
-                                # Enrich the audit row with filter rejection + MTF data
-                                _persist_orb_enrichment(
-                                    _orb_row_id,
-                                    {
-                                        "orb_session": _session_key,
-                                        "filter_passed": False,
-                                        "filter_summary": filter_summary,
-                                        "published": False,
-                                        "mtf_score": _orb_mtf_score,
-                                        "macd_slope": _orb_macd_slope,
-                                        "divergence": _orb_divergence,
-                                    },
-                                )
-                                # Also update the new dedicated columns
-                                try:
-                                    from lib.core.models import _get_conn, _is_using_postgres
-
-                                    if _orb_row_id is not None and (
-                                        _orb_mtf_score is not None or _orb_macd_slope is not None or _orb_divergence
-                                    ):
-                                        _pg = _is_using_postgres()
-                                        _ph = "%s" if _pg else "?"
-                                        _conn = _get_conn()
-                                        _conn.execute(
-                                            f"UPDATE orb_events SET "
-                                            f"breakout_type={_ph}, mtf_score={_ph}, "
-                                            f"macd_slope={_ph}, divergence={_ph} "
-                                            f"WHERE id={_ph}",
-                                            (
-                                                "ORB",
-                                                _orb_mtf_score,
-                                                _orb_macd_slope,
-                                                _orb_divergence,
-                                                _orb_row_id,
-                                            ),
-                                        )
-                                        _conn.commit()
-                                        _conn.close()
-                                except Exception:
-                                    pass
-                                # Prometheus: filter rejected
-                                try:
-                                    from lib.services.engine.data.api.metrics import record_orb_filter_result
-
-                                    record_orb_filter_result("rejected")
-                                except Exception:
-                                    pass
-                            else:
-                                logger.info(
-                                    "✅ ORB PASSED filters: %s %s — %s",
-                                    result.direction,
-                                    symbol,
-                                    filter_summary,
-                                )
-                                # Prometheus: filter passed
-                                try:
-                                    from lib.services.engine.data.api.metrics import record_orb_filter_result
-
-                                    record_orb_filter_result("passed")
-                                except Exception:
-                                    pass
-
-                        except Exception as exc:
-                            # Filter failure is non-fatal — allow the breakout through
-                            logger.warning(
-                                "ORB filter error for %s (allowing breakout): %s",
-                                symbol,
-                                exc,
-                            )
-                            filter_passed = True
-                            # Prometheus: filter error
-                            try:
-                                from lib.services.engine.data.api.metrics import record_orb_filter_result
-
-                                record_orb_filter_result("error")
-                            except Exception:
-                                pass
-
-                    # Only publish and alert if filters pass (or filters unavailable)
-                    if filter_passed:
-                        # ── CNN Inference (optional, non-blocking) ────────
-                        # If a trained model exists, render a chart snapshot
-                        # and run the hybrid CNN to get a breakout probability.
-                        # The CNN result is advisory — it enriches the alert
-                        # payload but does NOT gate publishing by default.
-                        # Set ORB_CNN_GATE=1 to also gate by CNN threshold.
-                        cnn_prob: float | None = None
-                        cnn_confidence: str = ""
-                        cnn_signal: bool = True  # default: pass through
-
-                        try:
-                            from lib.analysis.breakout_cnn import _find_latest_model, predict_breakout
-                            from lib.analysis.chart_renderer import (  # type: ignore[import-unresolved]
-                                cleanup_inference_images,
-                                render_snapshot_for_inference,
-                            )
-
-                            _cnn_model = _find_latest_model()
-                            if _cnn_model and bars_1m is not None:
-                                # Render a chart snapshot for the CNN
-                                snap_path = render_snapshot_for_inference(
-                                    bars=bars_1m,
-                                    symbol=symbol,
-                                    orb_high=result.or_high,
-                                    orb_low=result.or_low,
-                                    direction=result.direction,
-                                    quality_pct=int(getattr(result, "quality_pct", 0)),
-                                )
-
-                                if snap_path:
-                                    # Build tabular features (18 features v6 — must match TABULAR_FEATURES order)
-                                    _vol_ratio = 1.0
-                                    _atr_pct = 0.0
-                                    _quality_norm = 0.0
-                                    _cvd_delta = 0.0
-                                    _nr7_flag = 0.0
-                                    try:
-                                        _quality_norm = getattr(result, "quality_pct", 0) / 100.0
-                                        if hasattr(result, "atr_value") and result.atr_value > 0:
-                                            _atr_pct = result.atr_value / result.trigger_price
-                                        # Volume ratio from ORB result if available (not always present)
-                                        _vol_ratio_raw = getattr(result, "volume_ratio", None)
-                                        if _vol_ratio_raw is not None and float(_vol_ratio_raw) > 0:
-                                            _vol_ratio = float(_vol_ratio_raw)
-                                    except Exception:
-                                        pass
-
-                                    # Compute real CVD delta from 1m bars if possible
-                                    try:
-                                        if bars_1m is not None and len(bars_1m) > 30:
-                                            _closes = bars_1m["Close"].values.astype(float)
-                                            _opens = (
-                                                bars_1m["Open"].values.astype(float)
-                                                if "Open" in bars_1m.columns
-                                                else _closes
-                                            )
-                                            _vols = (
-                                                bars_1m["Volume"].values.astype(float)
-                                                if "Volume" in bars_1m.columns
-                                                else None
-                                            )
-                                            if _vols is not None:
-                                                _total_v = float(_vols.sum())
-                                                if _total_v > 0:
-                                                    _buy_v = float(_vols[_closes > _opens].sum())
-                                                    _sell_v = float(_vols[_closes <= _opens].sum())
-                                                    _cvd_delta = (_buy_v - _sell_v) / _total_v
-                                    except Exception:
-                                        pass
-
-                                    # NR7 flag: check if today's daily range is narrowest in 7 days
-                                    try:
-                                        if bars_daily is not None and len(bars_daily) >= 7:
-                                            _d_highs = bars_daily["High"].values[-7:].astype(float)
-                                            _d_lows = bars_daily["Low"].values[-7:].astype(float)
-                                            _d_ranges = _d_highs - _d_lows
-                                            _nr7_flag = 1.0 if _d_ranges[-1] <= _d_ranges.min() else 0.0
-                                    except Exception:
-                                        pass
-
-                                    _session_key = getattr(orb_session, "key", "us")
-
-                                    # London/NY overlap: 08:00–09:00 ET is historically strongest
-                                    _london_overlap = 0.0
-                                    _now_hour = 10  # default US open hour
-                                    try:
-                                        from datetime import datetime as _dt
-                                        from zoneinfo import ZoneInfo as _ZI
-
-                                        _now_hour = _dt.now(tz=_ZI("America/New_York")).hour
-                                        _london_overlap = 1.0 if 8 <= _now_hour <= 9 else 0.0
-                                    except Exception:
-                                        pass
-
-                                    # Encode session as a normalised ordinal using the
-                                    # canonical get_session_ordinal() from breakout_cnn.
-                                    try:
-                                        from lib.analysis.breakout_cnn import (
-                                            get_asset_class_id as _get_asset_cls,
-                                        )
-                                        from lib.analysis.breakout_cnn import (
-                                            get_asset_volatility_class as _get_vol_class,
-                                        )
-                                        from lib.analysis.breakout_cnn import (
-                                            get_breakout_type_ordinal as _get_btype_ord,
-                                        )
-                                        from lib.analysis.breakout_cnn import (
-                                            get_session_ordinal as _get_session_ordinal,
-                                        )
-
-                                        _session_enc = _get_session_ordinal(_session_key)
-                                    except ImportError:
-                                        _get_btype_ord = lambda t: 0.0  # noqa: E731
-                                        _get_vol_class = lambda t: 0.5  # noqa: E731
-                                        _get_asset_cls = lambda t: 0.0  # noqa: E731
-                                        _session_enc = 0.875
-
-                                    # ── v4 features [8..13] ──────────────────────────────
-
-                                    # [8] or_range_atr_ratio — raw ORB range / ATR
-                                    _or_range = getattr(result, "or_range", 0.0) or getattr(result, "range_size", 0.0)
-                                    _or_range_atr = 0.0
-                                    if result.atr_value > 0 and _or_range > 0:
-                                        _or_range_atr = _or_range / result.atr_value
-
-                                    # [9] premarket_range_ratio — raw PM range / ORB range
-                                    _pm_range_ratio = 0.0
-                                    try:
-                                        _pm_high = getattr(result, "pm_high", None)
-                                        _pm_low = getattr(result, "pm_low", None)
-                                        if _pm_high is not None and _pm_low is not None and _or_range > 0:
-                                            _pm_range = float(_pm_high) - float(_pm_low)
-                                            if _pm_range > 0:
-                                                _pm_range_ratio = _pm_range / _or_range
-                                    except Exception:
-                                        pass
-
-                                    # [10] bar_of_day — minutes since Globex open (18:00 ET) / 1380
-                                    _bar_of_day_min = (_now_hour - 18) * 60 if _now_hour >= 18 else (_now_hour + 6) * 60
-                                    _bar_of_day = max(0.0, min(1.0, _bar_of_day_min / 1380.0))
-
-                                    # [11] day_of_week — Mon=0..Fri=4 / 4
-                                    _dow = 0.5
-                                    try:
-                                        from datetime import datetime as _dt3
-
-                                        _dow_raw = _dt3.now().weekday()
-                                        if 0 <= _dow_raw <= 4:
-                                            _dow = _dow_raw / 4.0
-                                    except Exception:
-                                        pass
-
-                                    # [12] vwap_distance — (price - vwap) / ATR (raw)
-                                    _vwap_dist = 0.0
-                                    try:
-                                        _vwap = getattr(result, "vwap", None)
-                                        if _vwap is None and _or_range > 0:
-                                            _vwap = (result.or_high + result.or_low) / 2.0
-                                        if _vwap is not None and result.atr_value > 0:
-                                            _vwap_dist = (result.trigger_price - float(_vwap)) / result.atr_value
-                                    except Exception:
-                                        pass
-
-                                    # [13] asset_class_id — ordinal / 4
-                                    _asset_cls = _get_asset_cls(ticker or symbol)
-
-                                    # ── v6 features [14..17] ─────────────────────────────
-
-                                    # [14] breakout_type_ord — BreakoutType ordinal / 12
-                                    _btype_raw = getattr(result, "breakout_type", "ORB")
-                                    _btype_name = _btype_raw.value if hasattr(_btype_raw, "value") else str(_btype_raw)
-                                    _btype_ord_val = _get_btype_ord(_btype_name)
-
-                                    # [15] asset_volatility_class — low=0.0 / med=0.5 / high=1.0
-                                    _vol_class_val = _get_vol_class(ticker or symbol)
-
-                                    # [16] hour_of_day — current ET hour / 23
-                                    _hour_of_day = max(0.0, min(1.0, _now_hour / 23.0))
-
-                                    # [17] tp3_atr_mult_norm — TP3 multiplier / 5.0
-                                    _tp3_norm = 0.0
-                                    try:
-                                        from lib.core.breakout_types import (
-                                            BreakoutType as _BT,
-                                        )
-                                        from lib.core.breakout_types import (
-                                            breakout_type_from_name as _bt_from_name,
-                                        )
-                                        from lib.core.breakout_types import (
-                                            get_range_config as _get_rc,
-                                        )
-
-                                        try:
-                                            _bt_enum = _bt_from_name(_btype_name)
-                                        except ValueError:
-                                            _bt_enum = _BT.ORB
-                                        _rc = _get_rc(_bt_enum)
-                                        _tp3_norm = max(0.0, min(1.0, _rc.tp3_atr_mult / 5.0))
-                                    except Exception:
-                                        pass
-
-                                    tab_features = [
-                                        # ── v4 core (14 features) ────────────────────────────
-                                        _quality_norm,  # [0]  quality_pct_norm
-                                        _vol_ratio,  # [1]  volume_ratio
-                                        _atr_pct,  # [2]  atr_pct
-                                        _cvd_delta,  # [3]  cvd_delta
-                                        _nr7_flag,  # [4]  nr7_flag
-                                        1.0 if result.direction == "LONG" else 0.0,  # [5] direction_flag
-                                        _session_enc,  # [6]  session_ordinal
-                                        _london_overlap,  # [7]  london_overlap_flag
-                                        _or_range_atr,  # [8]  or_range_atr_ratio (raw)
-                                        _pm_range_ratio,  # [9]  premarket_range_ratio (raw)
-                                        _bar_of_day,  # [10] bar_of_day
-                                        _dow,  # [11] day_of_week
-                                        _vwap_dist,  # [12] vwap_distance (raw)
-                                        _asset_cls,  # [13] asset_class_id
-                                        # ── v6 additions (4 new features) ────────────────────
-                                        _btype_ord_val,  # [14] breakout_type_ord
-                                        _vol_class_val,  # [15] asset_volatility_class
-                                        _hour_of_day,  # [16] hour_of_day
-                                        _tp3_norm,  # [17] tp3_atr_mult_norm
-                                    ]
-
-                                    cnn_result = predict_breakout(
-                                        image_path=snap_path,
-                                        tabular_features=tab_features,
-                                        model_path=_cnn_model,
-                                    )
-
-                                    if cnn_result:
-                                        cnn_prob = cnn_result["prob"]
-                                        cnn_confidence = cnn_result["confidence"]
-                                        cnn_signal = cnn_result["signal"]
-                                        logger.info(
-                                            "🧠 CNN: %s %s P(good)=%.3f (%s) %s",
-                                            result.direction,
-                                            symbol,
-                                            cnn_prob,
-                                            cnn_confidence,
-                                            "SIGNAL" if cnn_signal else "NO SIGNAL",
-                                        )
-                                        # Prometheus: CNN probability + verdict
-                                        try:
-                                            from lib.services.engine.data.api.metrics import (
-                                                record_orb_cnn_prob,
-                                                record_orb_cnn_signal,
-                                            )
-
-                                            if cnn_prob is not None:
-                                                record_orb_cnn_prob(cnn_prob)
-                                            record_orb_cnn_signal("signal" if cnn_signal else "no_signal")
-                                        except Exception:
-                                            pass
-
-                                # Periodic cleanup of old inference images
-                                cleanup_inference_images(max_age_seconds=1800)
-
-                        except ImportError:
-                            logger.debug("CNN module not available — skipping inference")
-                            try:
-                                from lib.services.engine.data.api.metrics import record_orb_cnn_signal
-
-                                record_orb_cnn_signal("skipped")
-                            except Exception:
-                                pass
-                        except Exception as cnn_exc:
-                            logger.debug("CNN inference error (non-fatal): %s", cnn_exc)
-                            try:
-                                from lib.services.engine.data.api.metrics import record_orb_cnn_signal
-
-                                record_orb_cnn_signal("skipped")
-                            except Exception:
-                                pass
-
-                        # Optional CNN gate — per-session Redis override, with
-                        # global ORB_CNN_GATE env-var as fallback.
-                        #
-                        # Resolution order:
-                        #   1. Redis key  engine:config:cnn_gate:{session_key}
-                        #      ("1" = enabled, "0" = disabled)
-                        #      Set via: set_cnn_gate("tokyo", True)  or the
-                        #      /config/cnn-gate dashboard endpoint.
-                        #   2. ORB_CNN_GATE env var ("1" = enabled globally).
-                        #   3. Default: disabled.
-                        #
-                        # This lets you enable the hard gate for overnight
-                        # sessions selectively once signal quality is validated,
-                        # without touching the env var or restarting the engine.
-                        try:
-                            from lib.core.redis_helpers import get_cnn_gate as _get_cnn_gate
-
-                            _cnn_gate = _get_cnn_gate(_session_key)
-                        except Exception:
-                            # Fallback to env var if the helper is unavailable
-                            _cnn_gate = os.environ.get("ORB_CNN_GATE", "0") == "1"
-
-                        if _cnn_gate and not cnn_signal:
-                            breakouts_filtered += 1
-                            logger.info(
-                                "🚫 ORB CNN-GATED [%s]: %s %s — P(good)=%.3f < threshold",
-                                _session_key,
-                                result.direction,
-                                symbol,
-                                cnn_prob or 0.0,
-                            )
-                            # Enrich the audit row — CNN gated
-                            _persist_orb_enrichment(
-                                _orb_row_id,
-                                {
-                                    "orb_session": _session_key,
-                                    "filter_passed": True,
-                                    "filter_summary": filter_summary,
-                                    "cnn_prob": cnn_prob,
-                                    "cnn_confidence": cnn_confidence,
-                                    "cnn_signal": cnn_signal,
-                                    "cnn_gated": True,
-                                    "cnn_gate_source": "redis" if _cnn_gate else "env",
-                                    "published": False,
-                                },
-                            )
-                        else:
-                            publish_orb_alert(result)
-
-                            # Forward to PositionManager (stop-and-reverse)
-                            _dispatch_to_position_manager(
-                                result,
-                                bars_1m=bars_1m,
-                                session_key=_session_key,
-                            )
-
-                            # Build enriched log / alert message
-                            cnn_line = ""
-                            if cnn_prob is not None:
-                                cnn_line = f" | CNN P(good)={cnn_prob:.3f} ({cnn_confidence})"
-
-                            logger.info(
-                                "🔔 ORB BREAKOUT: %s %s @ %.4f (OR %.4f–%.4f)%s%s",
-                                result.direction,
-                                symbol,
-                                result.trigger_price,
-                                result.or_low,
-                                result.or_high,
-                                f" [{filter_summary}]" if filter_summary else "",
-                                cnn_line,
-                            )
-
-                            # Enrich the audit row — published (includes MTF data)
-                            _persist_orb_enrichment(
-                                _orb_row_id,
-                                {
-                                    "orb_session": getattr(orb_session, "key", "us"),
-                                    "filter_passed": True,
-                                    "filter_summary": filter_summary,
-                                    "cnn_prob": cnn_prob,
-                                    "cnn_confidence": cnn_confidence,
-                                    "cnn_signal": cnn_signal,
-                                    "cnn_gated": False,
-                                    "published": True,
-                                    "mtf_score": _orb_mtf_score,
-                                    "macd_slope": _orb_macd_slope,
-                                    "divergence": _orb_divergence,
-                                },
-                            )
-                            # Update new dedicated columns
-                            try:
-                                from lib.core.models import _get_conn, _is_using_postgres
-
-                                if _orb_row_id is not None:
-                                    _pg = _is_using_postgres()
-                                    _ph = "%s" if _pg else "?"
-                                    _conn = _get_conn()
-                                    _conn.execute(
-                                        f"UPDATE orb_events SET "
-                                        f"breakout_type={_ph}, mtf_score={_ph}, "
-                                        f"macd_slope={_ph}, divergence={_ph} "
-                                        f"WHERE id={_ph}",
-                                        (
-                                            "ORB",
-                                            _orb_mtf_score,
-                                            _orb_macd_slope,
-                                            _orb_divergence,
-                                            _orb_row_id,
-                                        ),
-                                    )
-                                    _conn.commit()
-                                    _conn.close()
-                            except Exception:
-                                pass
-
-                            # Send alert
-                            try:
-                                from lib.core.alerts import send_signal
-
-                                filter_line = f"\nFilters: {filter_summary}" if filter_summary else ""
-                                cnn_alert_line = ""
-                                if cnn_prob is not None:
-                                    cnn_alert_line = f"\nCNN: P(good)={cnn_prob:.3f} ({cnn_confidence})"
-
-                                send_signal(
-                                    signal_key=f"orb_{symbol}_{result.direction}",
-                                    title=f"📊 ORB {result.direction}: {symbol}",
-                                    message=(
-                                        f"Opening Range Breakout detected!\n"
-                                        f"Direction: {result.direction}\n"
-                                        f"Trigger: {result.trigger_price:,.4f}\n"
-                                        f"OR Range: {result.or_low:,.4f} – {result.or_high:,.4f}\n"
-                                        f"ATR: {result.atr_value:,.4f}"
-                                        f"{filter_line}"
-                                        f"{cnn_alert_line}"
-                                    ),
-                                    asset=symbol,
-                                    direction=result.direction,
-                                )
-                            except Exception:
-                                pass
-
-            except Exception as exc:
-                logger.debug("ORB check failed for %s: %s", symbol, exc)
-
-        if breakouts_found:
-            logger.info(
-                "✅ ORB [%s] check complete: %d breakout(s) found, %d filtered out, %d published",
-                session_label,
-                breakouts_found,
-                breakouts_filtered,
-                breakouts_found - breakouts_filtered,
-            )
-        else:
-            logger.debug("✅ ORB [%s] check complete: no breakouts", session_label)
-
-    except Exception as exc:
-        logger.debug("ORB [%s] check error (non-fatal): %s", session_label, exc)
+    handle_orb_check(engine, orb_session=orb_session)
 
 
 def _persist_orb_event(result, metadata: dict | None = None) -> int | None:

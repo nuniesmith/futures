@@ -349,15 +349,15 @@ class TestDefaultConfigs:
 
     def test_new_types_present(self):
         new_types = [
-            BreakoutType.WEEKLY,
-            BreakoutType.MONTHLY,
-            BreakoutType.ASIAN,
-            BreakoutType.BBSQUEEZE,
-            BreakoutType.VA,
-            BreakoutType.INSIDE,
-            BreakoutType.GAP,
-            BreakoutType.PIVOT,
-            BreakoutType.FIB,
+            BreakoutType.Weekly,
+            BreakoutType.Monthly,
+            BreakoutType.Asian,
+            BreakoutType.BollingerSqueeze,
+            BreakoutType.ValueArea,
+            BreakoutType.InsideDay,
+            BreakoutType.GapRejection,
+            BreakoutType.PivotPoints,
+            BreakoutType.Fibonacci,
         ]
         for btype in new_types:
             assert btype in DEFAULT_CONFIGS, f"Missing DEFAULT_CONFIG for new type {btype.value}"

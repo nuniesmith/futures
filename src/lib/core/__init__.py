@@ -4,7 +4,12 @@ lib.core — Core infrastructure modules.
 Re-exports the public API from each sub-module so callers can do:
 
     from lib.core import cache_get, cache_set, ASSETS, init_db
-    from lib.core import BreakoutType, get_range_config, ORBSession, get_session
+    from lib.core import BreakoutType, get_range_config, RBSession, get_session
+
+.. note::
+
+   ``RBSession`` is the preferred name (Phase 1G rename).
+   ``ORBSession`` is kept as a backward-compatible alias.
 """
 
 from lib.core.alerts import AlertDispatcher, get_dispatcher, send_risk_alert
@@ -74,6 +79,7 @@ from lib.core.multi_session import (
     ALL_SESSION_KEYS,
     SESSION_BY_KEY,
     ORBSession,
+    RBSession,
     all_sessions,
     daytime_sessions,
     get_session,
@@ -101,6 +107,7 @@ __all__ = [
     "ALL_SESSION_KEYS",
     "SESSION_BY_KEY",
     "ORBSession",
+    "RBSession",
     "all_sessions",
     "daytime_sessions",
     "get_session",
