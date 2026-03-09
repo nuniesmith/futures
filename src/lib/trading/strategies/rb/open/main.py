@@ -1,6 +1,6 @@
 """
-Opening Range Breakout — Legacy Entry Point
-============================================
+Opening Range Breakout — Legacy Entry Point (Deprecated)
+=========================================================
 This file previously contained the full ORB implementation (~1 800 lines).
 It has been refactored into focused sub-modules inside this package:
 
@@ -38,9 +38,22 @@ change, only the import path.
 
 from __future__ import annotations
 
+import warnings
+
+warnings.warn(
+    (
+        "Importing from 'lib.trading.strategies.rb.open.main' is deprecated and will be "
+        "removed in a future release. Update your import to:\n\n"
+        "    from lib.trading.strategies.rb.open import <symbol>\n\n"
+        "All symbols are re-exported unchanged from the package __init__.py."
+    ),
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 # Re-export the entire public API from the package so that any code still
 # importing directly from this module continues to work without modification.
-from lib.trading.strategies.rb.open import (  # noqa: F401
+from lib.trading.strategies.rb.open import (  # noqa: F401, E402
     ATR_PERIOD,
     BREAKOUT_ATR_MULTIPLIER,
     CME_OPEN_SESSION,

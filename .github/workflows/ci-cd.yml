@@ -248,6 +248,10 @@ jobs:
                       dockerfile: docker/monitoring/grafana/Dockerfile
                       platforms: linux/amd64,linux/arm64
                       is_default: false
+                    - service: charting
+                      dockerfile: docker/charting/Dockerfile
+                      platforms: linux/amd64,linux/arm64
+                      is_default: false
         steps:
             - name: 📥 Checkout code
               uses: actions/checkout@v4
@@ -460,16 +464,19 @@ jobs:
                       echo "==> Pulling :web image..."
                       docker pull ${{ env.IMAGE_NAME }}:web
 
+                      echo "==> Pulling :charting image..."
+                      docker pull ${{ env.IMAGE_NAME }}:charting
+
                       # Start services (trainer goes to the home laptop — not deployed here)
-                      echo "🚀 Starting data, engine and web services..."
-                      docker compose up -d --no-build --remove-orphans data engine web prometheus grafana
+                      echo "🚀 Starting data, engine, web and charting services..."
+                      docker compose up -d --no-build --remove-orphans data engine web charting prometheus grafana
 
                   post-deploy-command: |
                       cd ~/futures
 
                       echo ""
                       echo "📊 Container status:"
-                      docker compose ps data engine web 2>/dev/null || \
+                      docker compose ps data engine web charting 2>/dev/null || \
                         docker ps --filter "name=futures" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
                       echo ""

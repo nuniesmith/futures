@@ -227,15 +227,15 @@ def _patch_redis(monkeypatch, swing_mod):
 def _patch_swing_detector(monkeypatch):
     """Patch the strategy-layer swing detector imports used by swing.py mutations."""
     monkeypatch.setattr(
-        "lib.strategies.daily.swing_detector.SwingPhase",
+        "lib.trading.strategies.daily.swing_detector.SwingPhase",
         _SwingPhase,
     )
     monkeypatch.setattr(
-        "lib.strategies.daily.swing_detector.SwingEntryStyle",
+        "lib.trading.strategies.daily.swing_detector.SwingEntryStyle",
         _SwingEntryStyle,
     )
     monkeypatch.setattr(
-        "lib.strategies.daily.swing_detector.SwingSignal",
+        "lib.trading.strategies.daily.swing_detector.SwingSignal",
         _SwingSignal,
     )
 
@@ -259,7 +259,7 @@ def _patch_swing_detector(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "lib.strategies.daily.swing_detector.create_swing_state",
+        "lib.trading.strategies.daily.swing_detector.create_swing_state",
         _fake_create_swing_state,
     )
     yield

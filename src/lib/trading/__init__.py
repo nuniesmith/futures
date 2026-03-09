@@ -6,11 +6,6 @@ Re-exports the public API from each sub-module so callers can do:
     from lib.trading import get_engine, DashboardEngine, STRATEGY_CLASSES
 """
 
-from lib.trading.costs import (
-    estimate_trade_costs,
-    get_cost_model,
-    slippage_commission_rate,
-)
 from lib.trading.engine import (
     DashboardEngine,
     get_engine,
@@ -19,10 +14,6 @@ from lib.trading.engine import (
 )
 
 __all__ = [
-    # costs
-    "estimate_trade_costs",
-    "get_cost_model",
-    "slippage_commission_rate",
     # engine
     "DashboardEngine",
     "get_engine",

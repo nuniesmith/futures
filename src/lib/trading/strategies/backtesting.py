@@ -62,7 +62,7 @@ from lib.integrations.massive_client import (  # noqa: E402
     get_massive_provider,
     is_massive_available,
 )
-from lib.trading.costs import slippage_commission_rate  # noqa: E402
+from lib.trading.strategies.costs import slippage_commission_rate  # noqa: E402
 from lib.trading.strategies.strategy_defs import (  # noqa: E402
     STRATEGY_CLASSES,
     STRATEGY_LABELS,

@@ -271,9 +271,14 @@ _CRYPTO_FALLBACK_OVERRIDES: dict[str, float] = {
 #
 # Gated by ENABLE_KRAKEN_CRYPTO (same env flag as lib/core/models.py).
 # Populated once at import time so subsequent callers see the merged lists.
+#
+# A module-level guard (_CRYPTO_INJECTED) ensures the injection is
+# idempotent — reloading this module (e.g. during hot-reload or testing)
+# will not append duplicate tickers or register sessions twice.
 # ---------------------------------------------------------------------------
 
 _KRAKEN_CRYPTO_TICKERS: list[str] = []
+_CRYPTO_INJECTED: bool = False
 
 try:
     from lib.core.models import ENABLE_KRAKEN_CRYPTO as _ENABLE_KRAKEN_CRYPTO
@@ -285,7 +290,7 @@ try:
 except ImportError:
     pass
 
-if _KRAKEN_CRYPTO_TICKERS:
+if _KRAKEN_CRYPTO_TICKERS and not _CRYPTO_INJECTED:
     # Append crypto tickers to every existing CME session list
     for _sk in list(SESSION_ASSETS.keys()):
         SESSION_ASSETS[_sk] = SESSION_ASSETS[_sk] + _KRAKEN_CRYPTO_TICKERS
@@ -303,6 +308,7 @@ if _KRAKEN_CRYPTO_TICKERS:
         CRYPTO_UTC_NOON_SESSION,
         ORB_SESSIONS,
         SESSION_BY_KEY,
+        _rebuild_session_groups,
     )
 
     if CRYPTO_UTC_MIDNIGHT_SESSION not in ORB_SESSIONS:
@@ -312,6 +318,12 @@ if _KRAKEN_CRYPTO_TICKERS:
     if CRYPTO_UTC_NOON_SESSION not in ORB_SESSIONS:
         ORB_SESSIONS.append(CRYPTO_UTC_NOON_SESSION)
         SESSION_BY_KEY[CRYPTO_UTC_NOON_SESSION.key] = CRYPTO_UTC_NOON_SESSION
+
+    # Rebuild OVERNIGHT_SESSIONS / DAYTIME_SESSIONS / DATASET_SESSIONS
+    # in-place so they include the newly registered crypto sessions.
+    _rebuild_session_groups()
+
+    _CRYPTO_INJECTED = True
 
 
 # ---------------------------------------------------------------------------

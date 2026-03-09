@@ -223,6 +223,11 @@ def clear_orb_alert(session: ORBSession | None = None) -> bool:
     legacy combined keys.  When a specific session is provided, only that
     session's keys are cleared.
 
+    Uses ``DEL`` when a live Redis connection is available so keys vanish
+    immediately — dashboards will never briefly read a stale empty payload.
+    Falls back to ``cache_set(..., ttl=1)`` for the in-memory cache used in
+    tests / offline mode (the in-memory store has no native DEL).
+
     Args:
         session: Session to clear.  ``None`` clears everything.
 
@@ -230,20 +235,31 @@ def clear_orb_alert(session: ORBSession | None = None) -> bool:
         ``True`` on success, ``False`` if the cache module is unavailable.
     """
     try:
-        from lib.core.cache import cache_set
+        from lib.core.cache import REDIS_AVAILABLE, _r, cache_set
     except ImportError:
         return False
 
+    def _delete(key: str) -> None:
+        """Delete *key* immediately via DEL, or expire it in 1 s as fallback."""
+        if REDIS_AVAILABLE and _r is not None:
+            try:
+                _r.delete(key)
+                return
+            except Exception as exc:
+                logger.debug("Redis DEL failed for %s (falling back to ttl=1): %s", key, exc)
+        # In-memory fallback: set empty value with a 1-second TTL
+        cache_set(key, b"", ttl=1)
+
     try:
         if session is not None:
-            cache_set(_redis_key_orb(session), b"", ttl=1)
-            cache_set(_redis_key_orb_ts(session), b"", ttl=1)
+            _delete(_redis_key_orb(session))
+            _delete(_redis_key_orb_ts(session))
         else:
             for s in ORB_SESSIONS:
-                cache_set(_redis_key_orb(s), b"", ttl=1)
-                cache_set(_redis_key_orb_ts(s), b"", ttl=1)
-            cache_set(REDIS_KEY_ORB, b"", ttl=1)
-            cache_set(REDIS_KEY_ORB_TS, b"", ttl=1)
+                _delete(_redis_key_orb(s))
+                _delete(_redis_key_orb_ts(s))
+            _delete(REDIS_KEY_ORB)
+            _delete(REDIS_KEY_ORB_TS)
         return True
     except Exception:
         return False

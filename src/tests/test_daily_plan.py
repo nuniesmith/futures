@@ -188,36 +188,36 @@ class TestSafeFloat:
 
 
 class TestSessionFitScore:
-    @patch("lib.strategies.daily.daily_plan._get_current_session", return_value="us")
+    @patch("lib.trading.strategies.daily.daily_plan._get_current_session", return_value="us")
     def test_primary_session_match(self, _mock):
         # S&P's primary session is "us"
         score = _compute_session_fit_score("S&P")
         assert score == 100.0
 
-    @patch("lib.strategies.daily.daily_plan._get_current_session", return_value="us")
+    @patch("lib.trading.strategies.daily.daily_plan._get_current_session", return_value="us")
     def test_secondary_session_match(self, _mock):
         # Gold has sessions ("london", "us") — "us" is secondary
         score = _compute_session_fit_score("Gold")
         assert score == 70.0
 
-    @patch("lib.strategies.daily.daily_plan._get_current_session", return_value="london")
+    @patch("lib.trading.strategies.daily.daily_plan._get_current_session", return_value="london")
     def test_primary_london(self, _mock):
         # Gold's primary is "london"
         score = _compute_session_fit_score("Gold")
         assert score == 100.0
 
-    @patch("lib.strategies.daily.daily_plan._get_current_session", return_value="asian")
+    @patch("lib.trading.strategies.daily.daily_plan._get_current_session", return_value="asian")
     def test_no_session_match(self, _mock):
         # S&P only has ("us",) — Asian session is a mismatch
         score = _compute_session_fit_score("S&P")
         assert score == 20.0
 
-    @patch("lib.strategies.daily.daily_plan._get_current_session", return_value="off-hours")
+    @patch("lib.trading.strategies.daily.daily_plan._get_current_session", return_value="off-hours")
     def test_off_hours(self, _mock):
         score = _compute_session_fit_score("Gold")
         assert score == 10.0
 
-    @patch("lib.strategies.daily.daily_plan._get_current_session", return_value="us")
+    @patch("lib.trading.strategies.daily.daily_plan._get_current_session", return_value="us")
     def test_unknown_asset(self, _mock):
         score = _compute_session_fit_score("UnknownAssetXYZ")
         assert score == 30.0
@@ -623,8 +623,8 @@ class TestSelectDailyFocusAssets:
             "Russell 2000": _make_bias("Russell 2000", BiasDirection.SHORT, 0.30),
         }
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_returns_correct_types(self, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 65.0
@@ -640,8 +640,8 @@ class TestSelectDailyFocusAssets:
         assert all(isinstance(s, ScalpFocusAsset) for s in scalp)
         assert all(isinstance(s, SwingCandidate) for s in swing)
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_max_scalp_count(self, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 70.0
@@ -655,8 +655,8 @@ class TestSelectDailyFocusAssets:
 
         assert len(scalp) <= 3
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_max_swing_count(self, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 70.0
@@ -670,8 +670,8 @@ class TestSelectDailyFocusAssets:
 
         assert len(swing) <= 1
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_scalp_sorted_by_composite_score(self, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 70.0
@@ -686,8 +686,8 @@ class TestSelectDailyFocusAssets:
             scores = [s.composite_score for s in scalp]
             assert scores == sorted(scores, reverse=True)
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_neutral_bias_excluded_from_swing(self, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 70.0
@@ -704,8 +704,8 @@ class TestSelectDailyFocusAssets:
 
         assert len(swing) == 0
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_no_data_assets_skipped(self, mock_sq, mock_data):
         mock_data.return_value = (0.0, 0.0)  # No data
         mock_sq.return_value = 50.0
@@ -719,8 +719,8 @@ class TestSelectDailyFocusAssets:
         assert len(scalp) == 0
         assert len(swing) == 0
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_swing_has_valid_levels(self, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 70.0
@@ -740,8 +740,8 @@ class TestSelectDailyFocusAssets:
             assert sc.tp1 > 0
             assert sc.atr > 0
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_composite_score_components(self, mock_sq, mock_data):
         """Verify the composite score reflects the weighted components."""
         mock_data.return_value = (5000.0, 25.0)  # NATR ~0.5% → moderate opportunity
@@ -771,9 +771,9 @@ class TestSelectDailyFocusAssets:
 class TestGenerateDailyPlan:
     """Test the Phase 2B orchestrator."""
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
-    @patch("lib.strategies.daily.daily_plan.compute_all_daily_biases")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan.compute_all_daily_biases")
     def test_basic_generation(self, mock_biases, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 65.0
@@ -799,9 +799,9 @@ class TestGenerateDailyPlan:
         assert "Gold" in plan.all_biases
         assert "Nasdaq" in plan.all_biases
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
-    @patch("lib.strategies.daily.daily_plan.compute_all_daily_biases")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan.compute_all_daily_biases")
     def test_no_data_produces_no_trade(self, mock_biases, mock_sq, mock_data):
         mock_biases.return_value = {}
         mock_data.return_value = (0.0, 0.0)
@@ -816,9 +816,9 @@ class TestGenerateDailyPlan:
 
         assert plan.no_trade is True
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
-    @patch("lib.strategies.daily.daily_plan.compute_all_daily_biases")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan.compute_all_daily_biases")
     def test_all_neutral_note(self, mock_biases, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 65.0
@@ -840,9 +840,9 @@ class TestGenerateDailyPlan:
         # Should note low conviction even if scalp focus is selected
         assert "neutral" in plan.no_trade_reason.lower() or "conviction" in plan.no_trade_reason.lower()
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
-    @patch("lib.strategies.daily.daily_plan.compute_all_daily_biases")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan.compute_all_daily_biases")
     def test_grok_not_called_when_disabled(self, mock_biases, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 65.0
@@ -861,9 +861,9 @@ class TestGenerateDailyPlan:
         assert plan.grok_available is False
         assert plan.market_context == ""
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
-    @patch("lib.strategies.daily.daily_plan.compute_all_daily_biases")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan.compute_all_daily_biases")
     def test_plan_to_dict_is_complete(self, mock_biases, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 70.0
@@ -965,27 +965,27 @@ class TestBiasAnalyzerIntegration:
 class TestGetCurrentSession:
     """Test session detection logic with mocked time."""
 
-    @patch("lib.strategies.daily.daily_plan.datetime")
+    @patch("lib.trading.strategies.daily.daily_plan.datetime")
     def test_asian_session_evening(self, mock_dt):
         mock_dt.now.return_value = datetime(2025, 1, 15, 20, 30, tzinfo=_EST)
         assert _get_current_session() == "asian"
 
-    @patch("lib.strategies.daily.daily_plan.datetime")
+    @patch("lib.trading.strategies.daily.daily_plan.datetime")
     def test_asian_session_early_morning(self, mock_dt):
         mock_dt.now.return_value = datetime(2025, 1, 15, 1, 0, tzinfo=_EST)
         assert _get_current_session() == "asian"
 
-    @patch("lib.strategies.daily.daily_plan.datetime")
+    @patch("lib.trading.strategies.daily.daily_plan.datetime")
     def test_london_session(self, mock_dt):
         mock_dt.now.return_value = datetime(2025, 1, 15, 4, 30, tzinfo=_EST)
         assert _get_current_session() == "london"
 
-    @patch("lib.strategies.daily.daily_plan.datetime")
+    @patch("lib.trading.strategies.daily.daily_plan.datetime")
     def test_us_session(self, mock_dt):
         mock_dt.now.return_value = datetime(2025, 1, 15, 10, 0, tzinfo=_EST)
         assert _get_current_session() == "us"
 
-    @patch("lib.strategies.daily.daily_plan.datetime")
+    @patch("lib.trading.strategies.daily.daily_plan.datetime")
     def test_off_hours(self, mock_dt):
         mock_dt.now.return_value = datetime(2025, 1, 15, 17, 30, tzinfo=_EST)
         assert _get_current_session() == "off-hours"
@@ -1018,8 +1018,8 @@ class TestAssetSessionMap:
 
 
 class TestEdgeCases:
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_single_asset(self, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 75.0
@@ -1037,8 +1037,8 @@ class TestEdgeCases:
         # One directional asset should produce one swing candidate
         assert len(swing) <= 1
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_empty_biases(self, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 50.0
@@ -1051,8 +1051,8 @@ class TestEdgeCases:
         assert len(scalp) == 0
         assert len(swing) == 0
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_low_confidence_excluded_from_swing(self, mock_sq, mock_data):
         """Assets with confidence <= 0.15 should not be swing candidates."""
         mock_data.return_value = (2700.0, 18.0)
@@ -1069,8 +1069,8 @@ class TestEdgeCases:
 
         assert len(swing) == 0
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_rb_density_fallback_without_redis(self, mock_sq, mock_data):
         """Without Redis, RB density should return neutral score (40)."""
         mock_data.return_value = (2700.0, 18.0)
@@ -1087,8 +1087,8 @@ class TestEdgeCases:
         # RB density should be the neutral fallback of 40
         assert scalp[0].rb_setup_density_score == 40.0
 
-    @patch("lib.strategies.daily.daily_plan._fetch_asset_data")
-    @patch("lib.strategies.daily.daily_plan._compute_signal_quality_for_asset")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data")
+    @patch("lib.trading.strategies.daily.daily_plan._compute_signal_quality_for_asset")
     def test_catalyst_score_fallback_without_redis(self, mock_sq, mock_data):
         mock_data.return_value = (2700.0, 18.0)
         mock_sq.return_value = 70.0

@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
+import pandas as pd
 
 from lib.trading.strategies.rb.open.assets import get_symbol_session_overrides
 from lib.trading.strategies.rb.open.models import MultiSessionORBResult, ORBResult
@@ -51,11 +52,10 @@ from lib.trading.strategies.rb.open.sessions import (
     US_SESSION,
     ORBSession,
 )
+from lib.trading.strategies.rb.range_builders import compute_atr as _rb_compute_atr
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    import pandas as pd
 
 logger = logging.getLogger("engine.orb")
 
@@ -75,16 +75,22 @@ def compute_atr(
 ) -> float:
     """Compute the Average True Range (Wilder method) from raw bar arrays.
 
-    Algorithm::
+    This is a thin wrapper around the **canonical** implementation in
+    :func:`lib.trading.strategies.rb.range_builders.compute_atr`.  All ATR
+    calculations in the RB system are routed through that single function to
+    guarantee identical values regardless of call site.
+
+    The canonical implementation uses Wilder's EMA (alpha = 1/period)::
 
         TR_0  = High_0 − Low_0
         TR_i  = max(High_i − Low_i,
                     |High_i − Close_{i-1}|,
                     |Low_i  − Close_{i-1}|)
-        ATR   = SMA(TR[-period:])
+        ATR   = SMA(TR[:period])                          # seed
+        ATR_i = (1/period) * TR_i + (1 − 1/period) * ATR_{i-1}
 
-    Falls back to simple H-L mean when there are fewer than ``period + 1``
-    bars.  Returns ``0.0`` when fewer than 2 bars are available.
+    Falls back to a simple H-L mean when fewer than ``period + 1`` bars are
+    available.  Returns ``0.0`` for fewer than 2 bars.
 
     Args:
         highs:  1-D array of bar high prices.
@@ -95,21 +101,16 @@ def compute_atr(
     Returns:
         ATR as a float, or ``0.0`` on insufficient data.
     """
-    n = len(closes)
-    if n < 2:
-        return 0.0
-    if n < period + 1:
-        return float(np.mean(highs[:n] - lows[:n]))
-
-    tr = np.empty(n)
-    tr[0] = highs[0] - lows[0]
-    for i in range(1, n):
-        hl = float(highs[i] - lows[i])
-        hc = float(abs(highs[i] - closes[i - 1]))
-        lc = float(abs(lows[i] - closes[i - 1]))
-        tr[i] = max(hl, hc, lc)
-
-    return float(np.mean(tr[-period:]) if n >= period else np.mean(tr))
+    # range_builders.compute_atr expects a DataFrame with High/Low/Close columns.
+    # Build a minimal one from the raw arrays so we can delegate cleanly.
+    df = pd.DataFrame(
+        {
+            "High": np.asarray(highs, dtype=float),
+            "Low": np.asarray(lows, dtype=float),
+            "Close": np.asarray(closes, dtype=float),
+        }
+    )
+    return _rb_compute_atr(df, period=period)
 
 
 # ===========================================================================
@@ -164,7 +165,22 @@ def compute_opening_range(
 
     Returns:
         ``(or_high, or_low, bar_count, is_complete)`` where *is_complete*
-        is ``True`` once bars past the OR end-time are present in the data.
+        is ``True`` once at least one bar *past* ``session.or_end`` is
+        present in the data.
+
+    .. note:: ``complete`` semantics vs ``build_orb_range``
+
+        This function uses a **data-presence** check: ``is_complete`` is
+        only ``True`` when a bar timestamped after ``or_end`` actually
+        exists in *bars_1m*.  This is intentionally stricter than
+        :func:`~lib.trading.strategies.rb.range_builders.build_orb_range`,
+        which sets ``complete`` as soon as the last bar's wall-clock time
+        reaches ``session_end`` (a pure time comparison).
+
+        The stricter check is safer for live feeds where the most recent
+        bar may land exactly on the ``or_end`` boundary tick.  Use
+        ``build_orb_range`` for back-testing pipelines where the bar
+        window is guaranteed to be fully formed.
     """
     if session is None:
         session = US_SESSION
@@ -184,16 +200,14 @@ def compute_opening_range(
         if or_bars_all.empty:
             return 0.0, 0.0, 0, False
 
-        last_or_date = or_bars_all.index[-1].date()
-        or_bars: pd.DataFrame = or_bars_all[or_bars_all.index.date == last_or_date]
+        last_or_date = pd.Timestamp(or_bars_all.index[-1]).date()  # type: ignore[arg-type]
+        or_bars: pd.DataFrame = or_bars_all[pd.DatetimeIndex(or_bars_all.index).date == last_or_date]  # type: ignore[attr-defined]
 
         # is_complete: any bar past or_end on that date, or any bar on the
         # *next* calendar day (i.e. "today" if the OR was yesterday).
         next_date = last_or_date + _dt.timedelta(days=1)
-        post_or = df[
-            ((df.index.date == last_or_date) & (times >= session.or_end))  # type: ignore[operator]
-            | (df.index.date == next_date)  # type: ignore[operator]
-        ]
+        _dates = pd.DatetimeIndex(df.index).date  # type: ignore[attr-defined]
+        post_or = df[((_dates == last_or_date) & (times >= session.or_end)) | (_dates == next_date)]
         is_complete = not post_or.empty
     else:
         # Normal intraday session
@@ -274,10 +288,10 @@ def _check_breakout_bar_quality(
         * *depth_value*      — absolute penetration beyond the OR level (≥ 0).
         * *body_ratio_value* — clamped to ``[0.0, 1.0]``.
     """
-    bar_open: float = float(row.get("Open", row.get("open", 0.0)))
-    bar_high: float = float(row.get("High", row.get("high", 0.0)))
-    bar_low: float = float(row.get("Low", row.get("low", 0.0)))
-    bar_close: float = float(row.get("Close", row.get("close", 0.0)))
+    bar_open: float = float(row.get("Open") if row.get("Open") is not None else row.get("open") or 0.0)  # type: ignore[arg-type]
+    bar_high: float = float(row.get("High") if row.get("High") is not None else row.get("high") or 0.0)  # type: ignore[arg-type]
+    bar_low: float = float(row.get("Low") if row.get("Low") is not None else row.get("low") or 0.0)  # type: ignore[arg-type]
+    bar_close: float = float(row.get("Close") if row.get("Close") is not None else row.get("close") or 0.0)  # type: ignore[arg-type]
 
     # Depth: distance the close moved *past* the OR boundary
     depth = max(bar_close - or_high, 0.0) if direction == "LONG" else max(or_low - bar_close, 0.0)
@@ -448,19 +462,14 @@ def detect_opening_range_breakout(
         _or_dates = df.loc[_or_mask].index
         if _or_dates.empty:
             return result
-        _last_or_date = _or_dates[-1].date()
+        _last_or_date = pd.Timestamp(_or_dates[-1]).date()  # type: ignore[arg-type]
         _next_date = _last_or_date + _dt.timedelta(days=1)
 
-        post_or_bars: pd.DataFrame = df[
-            (
-                (df.index.date == _last_or_date)  # type: ignore[operator]
-                & (times >= session.or_end)
-                & (times <= session.scan_end)
-            )
-            | (  # type: ignore[operator]
-                (df.index.date == _next_date) & (times <= session.scan_end)
-            )
-        ]
+        _df_dates = pd.DatetimeIndex(df.index).date  # type: ignore[attr-defined]
+        _post_or_mask = ((_df_dates == _last_or_date) & (times >= session.or_end) & (times <= session.scan_end)) | (
+            (_df_dates == _next_date) & (times <= session.scan_end)
+        )
+        post_or_bars: pd.DataFrame = df.loc[_post_or_mask]
     else:
         post_or_mask = (times >= session.or_end) & (times <= session.scan_end)
         post_or_bars = df.loc[post_or_mask]
@@ -469,6 +478,15 @@ def detect_opening_range_breakout(
         return result
 
     # --- Scan for first qualifying breakout ---
+    # Track the best (deepest penetration) rejected candidate so that when
+    # no bar passes all gates the stored quality metrics reflect the most
+    # significant attempt rather than the first chronological one.
+    _best_candidate_depth: float = -1.0
+    _best_depth_ok: bool | None = None
+    _best_body_ok: bool | None = None
+    _best_depth_val: float = 0.0
+    _best_body_val: float = 0.0
+
     for idx_label, row in post_or_bars.iterrows():
         close: float = float(row["Close"])  # type: ignore[arg-type]
 
@@ -484,12 +502,15 @@ def detect_opening_range_breakout(
             row, candidate_direction, or_high, or_low, atr, session
         )
 
-        # Record quality metrics on first candidate for audit even if rejected
-        if result.depth_ok is None:
-            result.depth_ok = depth_ok
-            result.body_ratio_ok = body_ok
-            result.breakout_bar_depth = depth_val
-            result.breakout_bar_body_ratio = body_val
+        # Keep track of the deepest penetrating candidate seen so far so
+        # that if no bar ultimately passes all gates, the stored metrics
+        # describe the closest attempt (most useful for post-hoc review).
+        if depth_val > _best_candidate_depth:
+            _best_candidate_depth = depth_val
+            _best_depth_ok = depth_ok
+            _best_body_ok = body_ok
+            _best_depth_val = depth_val
+            _best_body_val = body_val
 
         if not depth_ok:
             logger.debug(
@@ -524,6 +545,15 @@ def detect_opening_range_breakout(
         result.breakout_bar_depth = depth_val
         result.breakout_bar_body_ratio = body_val
         break
+
+    # If no confirmed breakout, populate quality metrics from the best
+    # (deepest) candidate that was evaluated so callers can inspect why
+    # detection failed.  Only written when at least one candidate was seen.
+    if not result.breakout_detected and _best_depth_ok is not None:
+        result.depth_ok = _best_depth_ok
+        result.body_ratio_ok = _best_body_ok
+        result.breakout_bar_depth = _best_depth_val
+        result.breakout_bar_body_ratio = _best_body_val
 
     if result.breakout_detected:
         logger.info(

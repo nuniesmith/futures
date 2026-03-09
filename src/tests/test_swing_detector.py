@@ -510,7 +510,7 @@ class TestTimeStop:
 
 
 class TestPositionSizing:
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_basic_sizing(self, _mock_pv):
         size, risk = _compute_position_size(2700.0, 2685.0, 50_000, "Gold")
         # stop distance = 15, risk per contract = 15 * 10 = 150
@@ -520,13 +520,13 @@ class TestPositionSizing:
         assert size <= MAX_SWING_CONTRACTS
         assert risk > 0
 
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_caps_at_max(self, _mock_pv):
         # Very small stop → lots of contracts → should cap at MAX
         size, risk = _compute_position_size(2700.0, 2699.0, 500_000, "Gold")
         assert size <= MAX_SWING_CONTRACTS
 
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_minimum_one_contract(self, _mock_pv):
         # Very large stop → fraction of a contract → should floor at MIN
         size, risk = _compute_position_size(2700.0, 2600.0, 10_000, "Gold")
@@ -702,8 +702,8 @@ class TestPullbackEntry:
         result = detect_pullback_entry(bars, bias, 2710.0, 10.0)
         assert result is None
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_long_pullback_detected(self, _pv, _ts):
         """Price near prior_day_low (support) with LONG bias → signal."""
         prior_low = 2700.0
@@ -746,8 +746,8 @@ class TestPullbackEntry:
         assert result.tp1 > current_price
         assert result.tp2 > result.tp1
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_short_pullback_detected(self, _pv, _ts):
         """Price near prior_day_high (resistance) with SHORT bias → signal."""
         prior_high = 2750.0
@@ -780,8 +780,8 @@ class TestPullbackEntry:
         assert result.stop_loss > current_price
         assert result.tp1 < current_price
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_no_pullback_price_too_far(self, _pv, _ts):
         """Price far from all key levels → no signal."""
         atr = 10.0
@@ -793,8 +793,8 @@ class TestPullbackEntry:
         result = detect_pullback_entry(bars, bias, current_price, atr, "Gold")
         assert result is None
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_unconfirmed_pullback_watching(self, _pv, _ts):
         """Pullback detected but no confirmation bar → phase=WATCHING."""
         prior_low = 2700.0
@@ -829,8 +829,8 @@ class TestPullbackEntry:
             assert result.phase == SwingPhase.WATCHING
             assert result.confirmation_bar_idx == -1
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_pullback_confidence_includes_volume(self, _pv, _ts):
         """Volume confirmation adds to confidence score."""
         prior_low = 2700.0
@@ -863,8 +863,8 @@ class TestPullbackEntry:
         if sig_no_vol is not None and sig_with_vol is not None:
             assert sig_with_vol.confidence >= sig_no_vol.confidence
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_pullback_signal_has_reasoning(self, _pv, _ts):
         """Signal should include human-readable reasoning."""
         prior_low = 2700.0
@@ -916,8 +916,8 @@ class TestBreakoutEntry:
         result = detect_breakout_entry(bars, bias, 2760.0, 10.0)
         assert result is None
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_long_breakout_detected(self, _pv, _ts):
         """Price above prior day high with LONG bias → breakout signal."""
         pdh = 2750.0
@@ -939,8 +939,8 @@ class TestBreakoutEntry:
         assert result.entry_price > pdh
         assert result.stop_loss < pdh
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_short_breakout_detected(self, _pv, _ts):
         """Price below prior day low with SHORT bias → breakout signal."""
         pdl = 2700.0
@@ -959,8 +959,8 @@ class TestBreakoutEntry:
         assert result.entry_price < pdl
         assert result.stop_loss > pdl
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_no_breakout_price_below_level(self, _pv, _ts):
         """Price still below prior day high → no breakout."""
         pdh = 2750.0
@@ -970,8 +970,8 @@ class TestBreakoutEntry:
         result = detect_breakout_entry(bars, bias, 2740.0, 10.0, "Gold")
         assert result is None
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_no_breakout_weak_close(self, _pv, _ts):
         """Breakout with weak bar close → rejected."""
         pdh = 2750.0
@@ -988,8 +988,8 @@ class TestBreakoutEntry:
             # If somehow detected, confidence should be lower
             pass
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_breakout_volume_affects_confidence(self, _pv, _ts):
         """Volume confirmation increases confidence."""
         pdh = 2750.0
@@ -1006,8 +1006,8 @@ class TestBreakoutEntry:
         if sig_vol is not None and sig_no_vol is not None:
             assert sig_vol.confidence > sig_no_vol.confidence
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_breakout_atr_expanding_adds_confidence(self, _pv, _ts):
         """ATR expanding flag increases confidence."""
         pdh = 2750.0
@@ -1025,8 +1025,8 @@ class TestBreakoutEntry:
         if sig_exp is not None and sig_no_exp is not None:
             assert sig_exp.confidence > sig_no_exp.confidence
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_breakout_without_volume_col(self, _pv, _ts):
         """Bars without Volume column — still works but lower confidence."""
         pdh = 2750.0
@@ -1041,8 +1041,8 @@ class TestBreakoutEntry:
         if result is not None:
             assert result.entry_style == SwingEntryStyle.BREAKOUT
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_breakout_rr_positive(self, _pv, _ts):
         """Risk:reward should be positive for valid breakout."""
         pdh = 2750.0
@@ -1101,8 +1101,8 @@ class TestGapContinuation:
         result = detect_gap_continuation(bars, bias, 2715.0, 10.0)
         assert result is None
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_long_gap_continuation(self, _pv, _ts):
         """Gap up aligning with LONG bias, unfilled, with pullback → signal."""
         prior_close = 2700.0
@@ -1140,8 +1140,8 @@ class TestGapContinuation:
         assert result.direction == "LONG"
         assert result.key_level_used == "gap_zone"
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_short_gap_continuation(self, _pv, _ts):
         """Gap down aligning with SHORT bias → signal."""
         prior_close = 2700.0
@@ -1174,8 +1174,8 @@ class TestGapContinuation:
         assert result is not None
         assert result.direction == "SHORT"
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_gap_too_small(self, _pv, _ts):
         """Gap smaller than GAP_MIN_ATR_RATIO × ATR → no signal."""
         prior_close = 2700.0
@@ -1194,8 +1194,8 @@ class TestGapContinuation:
         )
         assert result is None
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_gap_against_bias(self, _pv, _ts):
         """Gap up with SHORT bias → no signal (misaligned)."""
         prior_close = 2700.0
@@ -1211,8 +1211,8 @@ class TestGapContinuation:
         )
         assert result is None
 
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_gap_filled_no_signal(self, _pv, _ts):
         """Gap that was filled (price retraced 50%+) → no signal."""
         prior_close = 2700.0
@@ -1280,16 +1280,16 @@ class TestDetectSwingEntries:
         result = detect_swing_entries(None, bias, 2710.0, 10.0, "Gold")
         assert result == []
 
-    @patch("lib.strategies.daily.swing_detector._is_time_stop_due", return_value=True)
+    @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=True)
     def test_time_stop_blocks_new_entries(self, _mock_ts):
         bars = _make_intraday_bars()
         bias = _make_bias()
         result = detect_swing_entries(bars, bias, 2710.0, 10.0, "Gold")
         assert result == []
 
-    @patch("lib.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_enabled_styles_filter(self, _pv, _ts, _time):
         """Only enabled styles are checked."""
         pdh = 2750.0
@@ -1310,9 +1310,9 @@ class TestDetectSwingEntries:
         for sig in result:
             assert sig.entry_style != SwingEntryStyle.BREAKOUT
 
-    @patch("lib.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_signals_sorted_by_confidence(self, _pv, _ts, _time):
         """Multiple signals should be sorted by confidence descending."""
         bars = _make_intraday_bars(n=40, start_price=2700.0)
@@ -1323,9 +1323,9 @@ class TestDetectSwingEntries:
             for i in range(len(result) - 1):
                 assert result[i].confidence >= result[i + 1].confidence
 
-    @patch("lib.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_breakout_signals_detected_in_combined(self, _pv, _ts, _time):
         """Breakout signal should appear in combined results."""
         pdh = 2750.0
@@ -1956,9 +1956,9 @@ class TestUpdateSwingState:
 
 
 class TestScanSwingEntriesAllAssets:
-    @patch("lib.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_basic_scan(self, _pv, _ts, _time):
         """Scan multiple assets and get combined results."""
         bars_gold = _make_breakout_bars(breakout_level=2750.0, direction="LONG", volume_surge=True, good_close=True)
@@ -1981,7 +1981,7 @@ class TestScanSwingEntriesAllAssets:
         if len(result) > 1:
             assert result[0].confidence >= result[1].confidence
 
-    @patch("lib.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
+    @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
     def test_skip_missing_bias(self, _time):
         """Assets without bias are skipped."""
         bars = {"Gold": _make_intraday_bars()}
@@ -1995,7 +1995,7 @@ class TestScanSwingEntriesAllAssets:
         )
         assert result == []
 
-    @patch("lib.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
+    @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
     def test_skip_zero_price(self, _time):
         bars = {"Gold": _make_intraday_bars()}
         biases = {"Gold": _make_bias()}
@@ -2008,7 +2008,7 @@ class TestScanSwingEntriesAllAssets:
         )
         assert result == []
 
-    @patch("lib.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
+    @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
     def test_max_signals_cap(self, _time):
         """Result is capped at max_signals."""
         result = scan_swing_entries_all_assets(
@@ -2027,9 +2027,9 @@ class TestScanSwingEntriesAllAssets:
 
 
 class TestEnrichSwingCandidates:
-    @patch("lib.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=10.0)
+    @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.01)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=10.0)
     def test_enriches_candidates(self, _pv, _ts, _time):
         """Should produce entry signals for swing candidates."""
         # Use a mock SwingCandidate-like object
@@ -2049,7 +2049,7 @@ class TestEnrichSwingCandidates:
         # May or may not have signals depending on conditions
         assert isinstance(result, dict)
 
-    @patch("lib.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
+    @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
     def test_skips_missing_data(self, _time):
         """Candidates without bars/price/ATR are skipped."""
         candidate = MagicMock()
@@ -2064,7 +2064,7 @@ class TestEnrichSwingCandidates:
         )
         assert "Gold" not in result
 
-    @patch("lib.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
+    @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
     def test_skips_missing_bias(self, _time):
         candidate = MagicMock()
         candidate.asset_name = "Gold"
@@ -2327,9 +2327,9 @@ class TestEdgeCases:
         except Exception:
             pass  # Acceptable to fail gracefully
 
-    @patch("lib.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
-    @patch("lib.strategies.daily.swing_detector._get_tick_size", return_value=0.0001)
-    @patch("lib.strategies.daily.swing_detector._get_point_value", return_value=12500.0)
+    @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=False)
+    @patch("lib.trading.strategies.daily.swing_detector._get_tick_size", return_value=0.0001)
+    @patch("lib.trading.strategies.daily.swing_detector._get_point_value", return_value=12500.0)
     def test_fx_precision(self, _pv, _ts, _time):
         """FX pairs should use proper decimal precision (4+ places)."""
         pdh = 1.1050

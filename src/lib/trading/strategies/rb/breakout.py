@@ -66,6 +66,7 @@ Public API
 
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -445,9 +446,9 @@ def _build_orb_range(
     ``complete`` is True once the current bar timestamp is past session_end.
     """
     bars_et = _localize_bars(bars)
-    now_et = bars_et.index[-1].to_pydatetime().time() if len(bars_et) > 0 else dt_time(0, 0)
+    now_et = pd.Timestamp(bars_et.index[-1]).to_pydatetime().time() if len(bars_et) > 0 else dt_time(0, 0)  # type: ignore[arg-type]
 
-    idx_time = pd.DatetimeIndex(bars_et.index).time
+    idx_time = pd.DatetimeIndex(bars_et.index).time  # type: ignore[attr-defined]
     mask = (idx_time >= session_start) & (idx_time < session_end)
     or_bars = bars_et.loc[mask]
 
@@ -483,20 +484,18 @@ def _build_pdr_range(
     session_start = config.pdr_session_start or dt_time(18, 0)  # 18:00 ET
 
     # Find the latest 18:00 ET boundary within the bar history
-    idx_time_pdr = pd.DatetimeIndex(bars_et.index).time
+    idx_time_pdr = pd.DatetimeIndex(bars_et.index).time  # type: ignore[attr-defined]
     today_session_starts = bars_et.index[idx_time_pdr == session_start]
 
     if len(today_session_starts) == 0:
         # Fallback: use calendar midnight boundary
-        today_et = bars_et.index[-1].to_pydatetime().date()
-        cutoff = pd.Timestamp(today_et, tz=_ET)
+        today_et = pd.Timestamp(bars_et.index[-1]).to_pydatetime().date()  # type: ignore[arg-type]
+        cutoff = pd.Timestamp(today_et, tz=_ET)  # type: ignore[arg-type]
         prev_bars = bars_et[bars_et.index < cutoff]
-        bars_et[bars_et.index >= cutoff]
     else:
         # The most recent session-start boundary
         latest_start = today_session_starts[-1]
         prev_bars = bars_et[bars_et.index < latest_start]
-        bars_et[bars_et.index >= latest_start]
 
     if len(prev_bars) < config.min_bars:
         # Fall back to daily bars if available: use the penultimate day's H/L
@@ -530,12 +529,12 @@ def _build_ib_range(
     ib_end_h, ib_end_m = divmod(ib_end_minutes, 60)
     ib_end = dt_time(int(ib_end_h), int(ib_end_m))
 
-    idx_time_ib = pd.DatetimeIndex(bars_et.index).time
+    idx_time_ib = pd.DatetimeIndex(bars_et.index).time  # type: ignore[attr-defined]
     mask = (idx_time_ib >= ib_start) & (idx_time_ib < ib_end)
     ib_bars = bars_et.loc[mask]
 
     bar_count = len(ib_bars)
-    now_et = bars_et.index[-1].to_pydatetime().time()
+    now_et = pd.Timestamp(bars_et.index[-1]).to_pydatetime().time()  # type: ignore[arg-type]
     complete = now_et >= ib_end
 
     if bar_count < config.min_bars:
@@ -570,16 +569,16 @@ def _build_consolidation_range(
     std_mult = config.squeeze_bb_std
 
     # Rolling Bollinger Bands
-    bb_mid = close.rolling(n).mean()
-    bb_std = close.rolling(n).std(ddof=0)
-    bb_upper = bb_mid + std_mult * bb_std
-    bb_lower = bb_mid - std_mult * bb_std
-    bb_width = (bb_upper - bb_lower).fillna(0.0)
+    bb_mid = pd.Series(close.rolling(n).mean())
+    bb_std_s = pd.Series(close.rolling(n).std(ddof=0))
+    bb_upper = pd.Series(bb_mid + std_mult * bb_std_s)
+    bb_lower = pd.Series(bb_mid - std_mult * bb_std_s)
+    bb_width = pd.Series((bb_upper - bb_lower).fillna(0.0))
 
     threshold = config.squeeze_atr_mult * atr
 
     # Count consecutive squeeze bars at the end of the series
-    squeeze_flags = bb_width < threshold
+    squeeze_flags = pd.Series(bb_width < threshold)
     squeeze_bar_count = 0
     for i in range(len(squeeze_flags) - 1, -1, -1):
         if squeeze_flags.iloc[i]:
@@ -633,13 +632,13 @@ def _build_weekly_range(
     if len(bars_et) < 2:
         return 0.0, 0.0, 0, False
 
-    today = bars_et.index[-1].to_pydatetime().date()
+    today = pd.Timestamp(bars_et.index[-1]).to_pydatetime().date()  # type: ignore[arg-type]
     # Walk back to find the start of this week (Monday)
     weekday = today.weekday()  # Monday=0 .. Sunday=6
-    this_week_start = today - pd.Timedelta(days=weekday)
+    this_week_start = today - _dt.timedelta(days=int(weekday))
 
     # Prior week bars: everything before this week's Monday
-    cutoff = pd.Timestamp(this_week_start, tz=_ET)
+    cutoff = pd.Timestamp(this_week_start, tz=_ET)  # type: ignore[arg-type]
     prev_week_end = cutoff
     prev_week_start = cutoff - pd.Timedelta(days=config.weekly_lookback_days)
 
@@ -670,10 +669,10 @@ def _build_monthly_range(
     if len(bars_et) < 2:
         return 0.0, 0.0, 0, False
 
-    today = bars_et.index[-1].to_pydatetime().date()
+    today = pd.Timestamp(bars_et.index[-1]).to_pydatetime().date()  # type: ignore[arg-type]
     # First day of current month
     first_of_month = today.replace(day=1)
-    cutoff = pd.Timestamp(first_of_month, tz=_ET)
+    cutoff = pd.Timestamp(first_of_month, tz=_ET)  # type: ignore[arg-type]
     lookback_start = cutoff - pd.Timedelta(days=config.monthly_lookback_days)
 
     mask = (bars_et.index >= lookback_start) & (bars_et.index < cutoff)
@@ -707,9 +706,9 @@ def _build_asian_range(
 
     start = config.asian_start_time or dt_time(19, 0)  # 19:00 ET
     end = config.asian_end_time or dt_time(2, 0)  # 02:00 ET
-    now_time = bars_et.index[-1].to_pydatetime().time()
+    now_time = pd.Timestamp(bars_et.index[-1]).to_pydatetime().time()  # type: ignore[arg-type]
 
-    idx_time = pd.DatetimeIndex(bars_et.index).time
+    idx_time = pd.DatetimeIndex(bars_et.index).time  # type: ignore[attr-defined]
 
     # Wraps midnight: time >= 19:00 OR time < 02:00
     mask = (idx_time >= start) | (idx_time < end) if start > end else (idx_time >= start) & (idx_time < end)
@@ -773,12 +772,16 @@ def _build_bbsqueeze_range(
     ).max(axis=1)
     rolling_atr = tr_series.rolling(n_kc).mean()
 
-    kc_upper = kc_mid + config.bbsqueeze_kc_atr_mult * rolling_atr
-    kc_lower = kc_mid - config.bbsqueeze_kc_atr_mult * rolling_atr
+    kc_upper = pd.Series(kc_mid + config.bbsqueeze_kc_atr_mult * rolling_atr)
+    kc_lower = pd.Series(kc_mid - config.bbsqueeze_kc_atr_mult * rolling_atr)
 
     # Squeeze: BB fully inside KC  (bb_upper < kc_upper AND bb_lower > kc_lower)
-    squeeze_flags = (bb_upper < kc_upper) & (bb_lower > kc_lower)
-    squeeze_flags = squeeze_flags.fillna(False)
+    # Wrap in pd.Series to guarantee .fillna/.iloc work — pyright loses the
+    # Series type through the rolling/ewm arithmetic chain.
+    squeeze_flags = pd.Series(  # type: ignore[call-overload]
+        pd.Series(bb_upper).lt(pd.Series(kc_upper))  # type: ignore[arg-type]
+        & pd.Series(bb_lower).gt(pd.Series(kc_lower))  # type: ignore[arg-type]
+    ).fillna(False)
 
     # Count consecutive squeeze bars at the tail
     squeeze_bar_count = 0
@@ -790,8 +793,8 @@ def _build_bbsqueeze_range(
 
     squeeze_detected = squeeze_bar_count >= config.bbsqueeze_min_squeeze_bars
 
-    cur_bb_upper = float(bb_upper.iloc[-1]) if len(bb_upper) > 0 else 0.0
-    cur_bb_lower = float(bb_lower.iloc[-1]) if len(bb_lower) > 0 else 0.0
+    cur_bb_upper = float(pd.Series(bb_upper).iloc[-1]) if len(bb_upper) > 0 else 0.0  # type: ignore[arg-type]
+    cur_bb_lower = float(pd.Series(bb_lower).iloc[-1]) if len(bb_lower) > 0 else 0.0  # type: ignore[arg-type]
     cur_bb_width = cur_bb_upper - cur_bb_lower
 
     if not squeeze_detected:
@@ -823,12 +826,12 @@ def _build_va_range(
 
     # Split at 18:00 ET to get prior session bars (same logic as PDR)
     session_start = dt_time(18, 0)
-    idx_time = pd.DatetimeIndex(bars_et.index).time
+    idx_time = pd.DatetimeIndex(bars_et.index).time  # type: ignore[attr-defined]
     today_session_starts = bars_et.index[idx_time == session_start]
 
     if len(today_session_starts) == 0:
-        today_et = bars_et.index[-1].to_pydatetime().date()
-        cutoff = pd.Timestamp(today_et, tz=_ET)
+        today_et = pd.Timestamp(bars_et.index[-1]).to_pydatetime().date()  # type: ignore[arg-type]
+        cutoff = pd.Timestamp(today_et, tz=_ET)  # type: ignore[arg-type]
         prev_bars = bars_et[bars_et.index < cutoff]
     else:
         latest_start = today_session_starts[-1]
@@ -841,7 +844,7 @@ def _build_va_range(
     if "Volume" not in prev_bars.columns or prev_bars["Volume"].sum() <= 0:
         # Fall back to simple H/L percentile if no volume data
         logger.debug("_build_va_range: no volume data — falling back to price-based VA")
-        sorted_closes = prev_bars["Close"].astype(float).sort_values()
+        sorted_closes: pd.Series = prev_bars["Close"].astype(float).sort_values()  # type: ignore[assignment]
         n = len(sorted_closes)
         val = float(sorted_closes.iloc[int(n * 0.15)])
         vah = float(sorted_closes.iloc[int(n * 0.85)])
@@ -852,7 +855,7 @@ def _build_va_range(
         from lib.analysis.volume_profile import compute_volume_profile
 
         profile = compute_volume_profile(
-            prev_bars,
+            prev_bars,  # type: ignore[arg-type]
             n_bins=config.va_n_bins,
             value_area_pct=config.va_value_area_pct,
         )
@@ -889,13 +892,13 @@ def _build_inside_day_range(
 
     # Split into today vs yesterday using 18:00 ET Globex boundary
     session_start = dt_time(18, 0)
-    idx_time = pd.DatetimeIndex(bars_et.index).time
+    idx_time = pd.DatetimeIndex(bars_et.index).time  # type: ignore[attr-defined]
     session_starts = bars_et.index[idx_time == session_start]
 
     if len(session_starts) < 2:
         # Not enough sessions to compare — try calendar day fallback
-        today_et = bars_et.index[-1].to_pydatetime().date()
-        cutoff = pd.Timestamp(today_et, tz=_ET)
+        today_et = pd.Timestamp(bars_et.index[-1]).to_pydatetime().date()  # type: ignore[arg-type]
+        cutoff = pd.Timestamp(today_et, tz=_ET)  # type: ignore[arg-type]
         today_bars = bars_et[bars_et.index >= cutoff]
         yesterday_bars = bars_et[bars_et.index < cutoff]
     else:
@@ -907,10 +910,10 @@ def _build_inside_day_range(
     if len(today_bars) < 1 or len(yesterday_bars) < 1:
         return 0.0, 0.0, 0, False, 0.0, 0.0, 0.0, 0.0
 
-    today_high = float(today_bars["High"].max())
-    today_low = float(today_bars["Low"].min())
-    yesterday_high = float(yesterday_bars["High"].max())
-    yesterday_low = float(yesterday_bars["Low"].min())
+    today_high = float(today_bars["High"].max())  # type: ignore[arg-type]
+    today_low = float(today_bars["Low"].min())  # type: ignore[arg-type]
+    yesterday_high = float(yesterday_bars["High"].max())  # type: ignore[arg-type]
+    yesterday_low = float(yesterday_bars["Low"].min())  # type: ignore[arg-type]
 
     # Inside day: today's range is fully contained within yesterday's
     inside = today_high <= yesterday_high and today_low >= yesterday_low
@@ -964,12 +967,12 @@ def _build_gap_rejection_range(
 
     # Split at 18:00 ET Globex boundary
     session_start = dt_time(18, 0)
-    idx_time = pd.DatetimeIndex(bars_et.index).time
+    idx_time = pd.DatetimeIndex(bars_et.index).time  # type: ignore[attr-defined]
     session_starts = bars_et.index[idx_time == session_start]
 
     if len(session_starts) < 1:
-        today_et = bars_et.index[-1].to_pydatetime().date()
-        cutoff = pd.Timestamp(today_et, tz=_ET)
+        today_et = pd.Timestamp(bars_et.index[-1]).to_pydatetime().date()  # type: ignore[arg-type]
+        cutoff = pd.Timestamp(today_et, tz=_ET)  # type: ignore[arg-type]
         today_bars = bars_et[bars_et.index >= cutoff]
         yesterday_bars = bars_et[bars_et.index < cutoff]
     else:
@@ -980,9 +983,9 @@ def _build_gap_rejection_range(
     if len(today_bars) < 1 or len(yesterday_bars) < 1:
         return 0.0, 0.0, 0, False, 0.0, 0.0, ""
 
-    yesterday_close = float(yesterday_bars["Close"].iloc[-1])
+    yesterday_close = float(yesterday_bars["Close"].iloc[-1])  # type: ignore[arg-type]
     today_open = (
-        float(today_bars["Open"].iloc[0]) if "Open" in today_bars.columns else float(today_bars["Close"].iloc[0])
+        float(today_bars["Open"].iloc[0]) if "Open" in today_bars.columns else float(today_bars["Close"].iloc[0])  # type: ignore[arg-type]
     )
 
     gap_size = today_open - yesterday_close
@@ -1025,12 +1028,12 @@ def _build_pivot_range(
 
     # Get prior session bars (same split as PDR)
     session_start = dt_time(18, 0)
-    idx_time = pd.DatetimeIndex(bars_et.index).time
+    idx_time = pd.DatetimeIndex(bars_et.index).time  # type: ignore[attr-defined]
     session_starts = bars_et.index[idx_time == session_start]
 
     if len(session_starts) < 1:
-        today_et = bars_et.index[-1].to_pydatetime().date()
-        cutoff = pd.Timestamp(today_et, tz=_ET)
+        today_et = pd.Timestamp(bars_et.index[-1]).to_pydatetime().date()  # type: ignore[arg-type]
+        cutoff = pd.Timestamp(today_et, tz=_ET)  # type: ignore[arg-type]
         prev_bars = bars_et[bars_et.index < cutoff]
     else:
         latest_start = session_starts[-1]
@@ -1039,9 +1042,9 @@ def _build_pivot_range(
     if len(prev_bars) < config.min_bars:
         return 0.0, 0.0, len(prev_bars), False, 0.0, 0.0, 0.0, 0.0
 
-    h = float(prev_bars["High"].max())
-    prev_low = float(prev_bars["Low"].min())
-    c = float(prev_bars["Close"].iloc[-1])
+    h = float(prev_bars["High"].max())  # type: ignore[arg-type]
+    prev_low = float(prev_bars["Low"].min())  # type: ignore[arg-type]
+    c = float(prev_bars["Close"].iloc[-1])  # type: ignore[arg-type]
 
     formula = config.pivot_formula.lower()
     if formula == "woodie":
@@ -1087,8 +1090,8 @@ def _build_fibonacci_range(
     # Use the last N bars for swing detection
     window = bars.iloc[-lookback:] if len(bars) > lookback else bars
 
-    swing_high = float(window["High"].max())
-    swing_low = float(window["Low"].min())
+    swing_high = float(window["High"].max())  # type: ignore[arg-type]
+    swing_low = float(window["Low"].min())  # type: ignore[arg-type]
     swing_size = swing_high - swing_low
 
     if swing_size < config.fib_min_swing_atr_mult * atr:
@@ -1150,17 +1153,17 @@ def _scan_for_breakout(
 
     for ts, row in bars_et.iterrows():
         bar_time = (
-            ts.to_pydatetime().time()
+            pd.Timestamp(ts).to_pydatetime().time()  # type: ignore[arg-type]
             if hasattr(ts, "to_pydatetime")
-            else (ts.time() if hasattr(ts, "time") else dt_time(0, 0))
+            else (ts.time() if hasattr(ts, "time") else dt_time(0, 0))  # type: ignore[union-attr]
         )
         if scan_start_time is not None and bar_time < scan_start_time:
             continue
 
-        bar_open = float(row["Open"] if "Open" in row.index else row["Close"] if "Close" in row.index else 0.0)
-        bar_high = float(row["High"] if "High" in row.index else 0.0)
-        bar_low = float(row["Low"] if "Low" in row.index else 0.0)
-        bar_close = float(row["Close"] if "Close" in row.index else 0.0)
+        bar_open = float(row["Open"] if "Open" in row.index else row["Close"] if "Close" in row.index else 0.0)  # type: ignore[arg-type]
+        bar_high = float(row["High"] if "High" in row.index else 0.0)  # type: ignore[arg-type]
+        bar_low = float(row["Low"] if "Low" in row.index else 0.0)  # type: ignore[arg-type]
+        bar_close = float(row["Close"] if "Close" in row.index else 0.0)  # type: ignore[arg-type]
 
         if bar_close <= 0:
             continue
@@ -1187,7 +1190,7 @@ def _scan_for_breakout(
                 config,
             )
             if depth_ok and body_ok:
-                bar_time_str = str(ts.isoformat()) if hasattr(ts, "isoformat") else str(ts)
+                bar_time_str = str(pd.Timestamp(ts).isoformat()) if hasattr(ts, "isoformat") else str(ts)  # type: ignore[arg-type]
                 return True, direction, bar_close, bar_time_str, depth, body_ratio
 
     return False, "", 0.0, "", 0.0, 0.0
@@ -1269,6 +1272,7 @@ def detect_range_breakout(
     result.atr_value = round(atr, 6)
 
     # --- Build range (type-specific) ---
+    btype: BreakoutType = config.breakout_type  # initialised before try so except block can reference it
     try:
         btype = config.breakout_type
 

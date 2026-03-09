@@ -56,15 +56,8 @@ Python Engine (Ubuntu Server)
     ├── Dashboard: focus mode cards, risk strip, swing actions, Grok brief
     ├── Reddit Sentiment: live pulse from futures-relevant subreddits
 
-TradingView (browser, Linux-native)
-    ├── Ruby Futures indicator (Pine Script) — reference for live price action
-    ├── NOT used for position sendback — manual trading only for now
-
-Python Dashboard (tiled alongside TV)
+Python Dashboard 
     └── Real-time CNN probabilities, risk strip, focus cards, swing signals, sentiment
-
-Tradovate Bridge (future — JavaScript)
-    └── Direct API connection for 1st account → PickMyTrade copies to remaining accounts
 ```
 
 > **TradingView Live Positions — DEFERRED**: Sending live positions back from TradingView is not straightforward and not worth the complexity right now. The Ruby Pine Script indicator is used as a **reference overlay for live market movements** only. All actual trading is manual via Tradovate, informed by the Python dashboard. A Tradovate JavaScript bridge is the preferred path for future automation (see Phase TBRIDGE below).
@@ -405,6 +398,90 @@ Step 3: Compare
 - [ ] Add `charts_page_route` FastAPI GET handler at `/charts` (already scaffolded at L6145 — just needs the new `charts_page()` wired in)
 - [ ] Web service proxy: ensure `/charts` and `/api/charts/*` and `/sse/bars/*` are proxied through `:web → :data` (currently all `/api/*` and `/sse/*` paths are already proxied — no web service changes needed)
 
+### Phase CHARTS-E: Charting Service — Volume Indicators & UX Polish *(charting service, `docker/charting/static/`)*
+
+> Extends the existing ApexCharts charting service (port 8003) with the three remaining volume-based indicators that give full context for ORB/breakout trading, plus VWAP standard-deviation bands and UX persistence. All work is pure front-end — no Python or data service changes needed.
+
+#### VWAP Standard-Deviation Bands (±1σ / ±2σ)
+
+Currently VWAP is implemented as a single line. The bands require accumulating a running variance term alongside the existing `cumTPV` / `cumVol` state:
+
+- [ ] **`calcVWAP()`** — extend to also accumulate `cumTypicalVolSq += typical * typical * vol`
+  - Derive `variance = (cumTypicalVolSq / cumVol) − vwap²`, then `σ = √max(variance, 0)`
+  - Return `{ vwap, upper1, lower1, upper2, lower2 }` per bar
+- [ ] **Add 4 new series slots** (after VWAP at index 7): `VWAP+1σ` (8), `VWAP−1σ` (9), `VWAP+2σ` (10), `VWAP−2σ` (11)
+  - Colors: `+1σ/−1σ` soft cyan dashed, `+2σ/−2σ` faint cyan dotted
+  - All 4 share `overlayYaxis` (hidden, price-scale linked) — same pattern as existing overlays
+- [ ] **`buildSeries()`** — add the 4 band series; empty array when VWAP toggle is off
+- [ ] **`buildOptions()`** — extend `stroke.width`, `stroke.dashArray`, `colors`, `yaxis` arrays to cover all 12 slots
+- [ ] **Incremental live update** (`updateIndicatorPoint`) — extend `push_or_replace` calls to cover the 4 band series using the same running-variance approach
+- [ ] **Indicator toggle** — VWAP button already exists; turning it off should hide all 5 series (line + 4 bands) simultaneously
+- [ ] **Tooltip** — add `VWAP+1σ` / `VWAP−1σ` rows to the OHLC tooltip `indLookup` block when VWAP is active
+
+#### CVD — Cumulative Volume Delta
+
+CVD shows net buy/sell pressure (buy volume − sell volume) as a running total. Since we only have OHLCV bars (no tape), use the standard bar-approximation: `delta = volume × (2 × (close − low) / (high − low) − 1)`. Reset per session (daily) the same way VWAP resets.
+
+- [ ] **`calcCVD(candles, volumes)`** — new function
+  - For each bar: `range = high − low`, guard `range > 0`; `delta = volume × (2 × (close − low) / range − 1)` if range > 0 else `0`
+  - Daily reset: when `new Date(x).toDateString()` changes, reset `cvd = 0`
+  - Returns `[{x, y: Math.round(cvd)}]`
+- [ ] **Add `cvdData` to `state`** and `recalcIndicators()` / `recalcSingleIndicator("cvd")`
+- [ ] **`liveInd`** — track `cvdRunning` and `cvdLastDay` for incremental `updateIndicatorPoint` extension
+- [ ] **CVD sub-pane** — separate ApexCharts instance in a new `#chart-cvd` div, same pattern as the existing RSI pane
+  - `buildCvdOptions()` — `type: "bar"`, height `120px`, green bars for positive delta / red for negative (per-point `fillColor`)
+  - Zero-line annotation (y=0 dashed white)
+  - `mountCvdChart()` / `unmountCvdChart()` / `syncCvdPane()` — mirror the RSI pane lifecycle functions
+  - `state.chartCvd` instance reference
+- [ ] **`index.html`** — add `<div id="chart-cvd" class="chart-cvd hidden"></div>` below `#chart-rsi`
+- [ ] **`style.css`** — add `.chart-cvd` / `.chart-cvd.hidden` rules (same `flex: 0 0 120px` pattern as `.chart-rsi`)
+- [ ] **Indicator toggle button** — add `<button class="ind-btn" data-ind="cvd" title="Cumulative Volume Delta">CVD</button>` to `index.html` indicator-tabs; add `cvd: false` to `state.indicators`; add `.ind-btn.active[data-ind="cvd"]` colour in `style.css`
+- [ ] **Live update** — on each SSE tick, call `syncCvdPane()` after `updateIndicatorPoint`
+
+#### Volume Profile — POC / VAH / VAL
+
+Shows how much volume traded at each price level over a rolling lookback window. Draws the Point of Control (highest-volume price), Value Area High, and Value Area Low as horizontal overlay lines on the price pane — the same three levels your Ruby NinjaTrader indicator tracks.
+
+- [ ] **`calcVolumeProfile(candles, volumes, bins=40, lookback=100)`** — new function
+  - For each bar `i`, take a rolling slice of `min(lookback, i+1)` bars
+  - Find `priceMin = min(slice lows)`, `priceMax = max(slice highs)`, `binSize = (priceMax − priceMin) / bins`
+  - Distribute each bar's volume across the bins it spans (proportional to overlap with `[low, high]`)
+  - **POC**: bin index with highest total volume → `priceMin + (pocBin + 0.5) × binSize`
+  - **Value Area**: expand outward from POC bin until cumulative volume ≥ 70% of total → `VAH` = top of upper bin, `VAL` = bottom of lower bin
+  - Returns `{ poc: [{x, y}], vah: [{x, y}], val: [{x, y}] }`
+  - Note: `O(n × lookback × bins)` — cap `lookback ≤ 100` and only recalc on new candle (not forming-candle updates) to keep it fast
+- [ ] **Add `pocData`, `vahData`, `valData` to `state`** and wire into `recalcIndicators()` / `recalcSingleIndicator("vp")`
+- [ ] **Series slots** (append after band series, e.g. indices 12/13/14): `POC` line, `VAH` line, `VAL` line
+  - Colors: POC bright cyan solid, VAH/VAL muted blue dashed — distinct from VWAP cyan
+  - All three use `overlayYaxis` (hidden, price-scale linked)
+- [ ] **`buildSeries()`** / **`buildOptions()`** — extend arrays to cover all slots
+- [ ] **Live update** — skip VP recalc on forming-candle ticks (only recalc on `isNewCandle === true` to avoid O(n) recalc every tick)
+- [ ] **Indicator toggle button** — add `<button class="ind-btn" data-ind="vp">VP</button>` to `index.html`; add `vp: false` to `state.indicators`; add colour rule to `style.css`
+
+#### Anchored VWAP
+
+Instead of resetting at midnight, anchor VWAP to a specific bar index. Most useful anchored to the ORB low/high (session open) or previous-day high/low — levels your engine already tracks.
+
+- [ ] **`calcAnchoredVWAP(candles, volumes, anchorIndex)`** — new function
+  - Same cumulative `(typicalPrice × vol) / cumVol` formula as `calcVWAP`, but starts accumulating from `anchorIndex` (returns `null` for bars before the anchor)
+  - Returns `[{x, y}]` with `y: null` for bars before the anchor
+- [ ] **Two default anchors** (user-selectable via dropdown or toggle):
+  - **Session open** (`anchorIndex` = index of first bar of the current day) — useful for ORB setups
+  - **Previous-day low/high** — index of the bar with the lowest low / highest high in the previous calendar day's slice
+  - Helper `findAnchorIndex(candles, mode)` → `number` that resolves the correct index for each mode
+- [ ] **`state`** additions: `avwapSessionData`, `avwapPrevDayData`; `indicators.avwap_session`, `indicators.avwap_prevday` (both default `false`)
+- [ ] **Series slots** for the two anchors; `overlayYaxis` linked; distinct colors (session=orange, prev-day=magenta)
+- [ ] **`buildSeries()`** / **`buildOptions()`** / **`recalcSingleIndicator`** — extend for both anchors
+- [ ] **Indicator toggle buttons** — `AVWAP-S` (session) and `AVWAP-P` (prev-day) in `index.html` indicator-tabs
+- [ ] **Live update** — both anchored VWAPs extend incrementally on each tick using the same running-accumulator pattern as `calcVWAP`; anchor index never changes within a session
+
+#### UX: Indicator Toggle Persistence
+
+- [ ] **localStorage persistence** — save `state.indicators` to `localStorage` key `ruby_chart_indicators` on every toggle
+  - On `boot()`, read saved preferences and apply before the first `renderBars()` call so the chart opens with the user's last indicator configuration
+  - Sync indicator button `active` classes from restored state in `wireControls()` (already done for initial state; just needs the read-from-localStorage step at the top of `boot()`)
+- [ ] **Per-indicator configuration** (stretch) — add period inputs (e.g. EMA period, BB period, VP lookback/bins) accessible via a small settings popover on each indicator button (long-press or right-click); persist to localStorage alongside the toggle flags
+
 ---
 
 ## 🔴 TradingView Integration — Reference Overlay Only *(deferred — after v8 champion)*
@@ -633,7 +710,7 @@ Deferred until v8 champion is live and profitable. Nice-to-have market regime ov
 - **Tests**: 2552 passed, 0 failed, 1 skipped — clean baseline
 
 ### ⚠️ Blocking Before Training (must fix)
-- [ ] **Smoke-test training loop** — run 2-epoch training on tiny synthetic dataset to verify v8 changes don't crash at runtime (mixup, grad accumulation, cosine warmup, separate LR groups, embedding layers all interacting)
+- [x] **Smoke-test training loop** — run 2-epoch training on tiny synthetic dataset to verify v8 changes don't crash at runtime (mixup, grad accumulation, cosine warmup, separate LR groups, embedding layers all interacting). Added `tests/test_v8_smoke.py` (31 tests, all passing: architecture, dataset loading, full 2-epoch train, evaluate_model, predict_breakout, predict_breakout_batch, grad accumulation, mixup, separate LR groups, cosine warmup, label smoothing). Also fixed 119 stale `@patch("lib.strategies.…")` paths across `test_daily_plan.py`, `test_swing_engine_grok.py`, `test_swing_detector.py`, `test_swing_actions.py` → `lib.trading.strategies.…`, and fixed 44 `lib.trading.strategies.rb.orb` import paths in `test_orb.py` → correct sub-modules (`open.detector`, `open.sessions`, `open.publisher`, `open.models`). Full suite: **2543 passed, 0 failed**.
 - [ ] **Generate v8 dataset** — `generate_dataset(symbols=ALL_25, days_back=120)` with v8 `DatasetConfig` defaults
 - [ ] **Verify CI/CD secrets** — `TRAINER_TAILSCALE_IP` = `100.113.72.63`, `PROD_TAILSCALE_IP` = Ubuntu Server IP
 
@@ -664,7 +741,7 @@ Deferred until v8 champion is live and profitable. Nice-to-have market regime ov
 **Step 2 — CNN v8 Champion (THE milestone, do once, do it right):**
 
   *Week 1: Final pre-train verification* 🔜
-  - Smoke-test training loop (2 epochs, tiny dataset) — verify all v8 changes work together
+  - ✅ Smoke-test training loop (2 epochs, tiny dataset) — all v8 changes verified working together
   - Verify CI/CD secrets (trainer IP, prod IP)
   - Generate v8 dataset (~50K–80K samples, all 25 symbols × 13 types × 9 sessions)
 

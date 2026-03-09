@@ -837,7 +837,7 @@ class TestTickSwingDetector:
         mock.
         """
         import lib.services.engine.swing as swing_mod
-        import lib.strategies.daily.swing_detector as sd_mod
+        import lib.trading.strategies.daily.swing_detector as sd_mod
         from lib.services.engine.swing import tick_swing_detector
         from lib.trading.strategies.daily.swing_detector import (
             SwingEntryStyle,
@@ -1451,7 +1451,7 @@ class TestEngineStatusSwingSummary:
 class TestDailyPlanGrokIntegration:
     """Test the full flow: generate_daily_plan → Grok structured call → plan with grok_analysis."""
 
-    @patch("lib.strategies.daily.daily_plan._fetch_grok_context")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_grok_context")
     @patch("lib.integrations.grok_helper.run_daily_plan_grok_analysis")
     @patch("lib.integrations.grok_helper.format_grok_daily_plan_for_display")
     def test_structured_grok_used_when_available(self, mock_format, mock_run, mock_legacy):
@@ -1490,7 +1490,7 @@ class TestDailyPlanGrokIntegration:
         mock_legacy.assert_not_called()
 
     @patch("lib.integrations.grok_helper.run_daily_plan_grok_analysis")
-    @patch("lib.strategies.daily.daily_plan._fetch_grok_context")
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_grok_context")
     def test_falls_back_to_legacy_on_failure(self, mock_legacy, mock_structured):
         """When structured Grok fails, should fall back to free-text."""
         from lib.trading.strategies.daily.daily_plan import generate_daily_plan

@@ -382,9 +382,31 @@ SESSION_BY_KEY: dict[str, ORBSession] = {s.key: s for s in ORB_SESSIONS}
 # ===========================================================================
 # Convenience groupings
 # ===========================================================================
-OVERNIGHT_SESSIONS: list[ORBSession] = [s for s in ORB_SESSIONS if s.wraps_midnight]
-DAYTIME_SESSIONS: list[ORBSession] = [s for s in ORB_SESSIONS if not s.wraps_midnight]
-DATASET_SESSIONS: list[ORBSession] = [s for s in ORB_SESSIONS if s.include_in_dataset]
+# NOTE: These are populated via _rebuild_session_groups() so that any
+# sessions appended to ORB_SESSIONS at runtime (e.g. crypto sessions
+# injected by assets.py) are automatically reflected here.  Call
+# _rebuild_session_groups() after mutating ORB_SESSIONS.
+OVERNIGHT_SESSIONS: list[ORBSession] = []
+DAYTIME_SESSIONS: list[ORBSession] = []
+DATASET_SESSIONS: list[ORBSession] = []
+
+
+def _rebuild_session_groups() -> None:
+    """Rebuild the OVERNIGHT / DAYTIME / DATASET convenience lists in-place.
+
+    Must be called whenever :data:`ORB_SESSIONS` is mutated (e.g. after
+    crypto sessions are appended by ``assets.py`` at import time).  The
+    lists are mutated in-place so that any code that already holds a
+    reference to them sees the updated contents.
+    """
+    global OVERNIGHT_SESSIONS, DAYTIME_SESSIONS, DATASET_SESSIONS
+    OVERNIGHT_SESSIONS[:] = [s for s in ORB_SESSIONS if s.wraps_midnight]
+    DAYTIME_SESSIONS[:] = [s for s in ORB_SESSIONS if not s.wraps_midnight]
+    DATASET_SESSIONS[:] = [s for s in ORB_SESSIONS if s.include_in_dataset]
+
+
+# Populate on first import using the base (non-crypto) session list.
+_rebuild_session_groups()
 
 
 # ===========================================================================
@@ -479,7 +501,10 @@ def get_active_sessions(now: datetime | None = None) -> list[ORBSession]:
     """Return sessions currently in their OR formation or scan window.
 
     For overnight sessions (``wraps_midnight=True``) the OR start is in
-    the evening ET; the scan window may extend past midnight.
+    the evening ET; the scan window may extend past midnight.  The same
+    midnight-wrap logic as :func:`get_active_session_keys` is used so
+    that e.g. the CME session (18:00–20:00 ET) is correctly reported as
+    active at 19:30 ET.
 
     Args:
         now: Current time (tz-aware).  Defaults to ``datetime.now(_EST)``.
@@ -495,8 +520,16 @@ def get_active_sessions(now: datetime | None = None) -> list[ORBSession]:
 
     active = []
     for session in ORB_SESSIONS:
-        if session.or_start <= t <= session.scan_end:
-            active.append(session)
+        start = session.or_start
+        end = session.scan_end
+        if start <= end:
+            # Normal (non-wrapping) window
+            if start <= t <= end:
+                active.append(session)
+        else:
+            # Wraps midnight: active when t >= start OR t <= end
+            if t >= start or t <= end:
+                active.append(session)
     return active
 
 
@@ -515,6 +548,10 @@ def get_session_status(now: datetime | None = None) -> dict[str, str]:
     * ``"scanning"`` — OR complete, scanning for breakout (``or_end`` ≤ t ≤ ``scan_end``)
     * ``"complete"`` — past ``scan_end``
 
+    For ``wraps_midnight=True`` sessions (e.g. CME Open 18:00–20:00 ET)
+    the window straddles midnight, so the comparison is inverted: the
+    session is active whenever ``t >= or_start`` *or* ``t <= scan_end``.
+
     Args:
         now: Current time (tz-aware).  Defaults to ``datetime.now(_EST)``.
     """
@@ -526,14 +563,31 @@ def get_session_status(now: datetime | None = None) -> dict[str, str]:
 
     statuses: dict[str, str] = {}
     for session in ORB_SESSIONS:
-        if t < session.or_start:
-            statuses[session.key] = "waiting"
-        elif session.or_start <= t < session.or_end:
-            statuses[session.key] = "forming"
-        elif session.or_end <= t <= session.scan_end:
-            statuses[session.key] = "scanning"
+        if not session.wraps_midnight:
+            # Normal intraday window — straightforward comparisons
+            if t < session.or_start:
+                statuses[session.key] = "waiting"
+            elif session.or_start <= t < session.or_end:
+                statuses[session.key] = "forming"
+            elif session.or_end <= t <= session.scan_end:
+                statuses[session.key] = "scanning"
+            else:
+                statuses[session.key] = "complete"
         else:
-            statuses[session.key] = "complete"
+            # Wraps-midnight session: or_start > scan_end in wall-clock terms.
+            # Active span: [or_start, midnight) ∪ [midnight, scan_end]
+            # "complete" means we are between scan_end and or_start on the
+            # same afternoon/evening (i.e. outside both halves of the window).
+            if session.scan_end < t < session.or_start:
+                # Between end of scan window and start of next OR window
+                statuses[session.key] = "waiting"
+            elif t >= session.or_start and t < session.or_end:
+                statuses[session.key] = "forming"
+            elif (t >= session.or_end) or (t <= session.scan_end):
+                # Either in the evening post-OR half or the early-morning half
+                statuses[session.key] = "scanning"
+            else:
+                statuses[session.key] = "complete"
 
     return statuses
 

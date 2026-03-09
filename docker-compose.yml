@@ -246,6 +246,45 @@ services:
             retries: 3
 
     # -------------------------------------------------------------------------
+    # Charting — Static TradingView Lightweight Charts (port 8003)
+    #
+    # Pure Nginx + JS (zero Python overhead). Serves the TradingView Lightweight
+    # Charts UI as a static site. Fetches bars + SSE directly from data-service.
+    # Embeds in the HTMX dashboard via iframe or plain JS fetch.
+    # -------------------------------------------------------------------------
+    charting:
+        image: nuniesmith/futures:charting
+        build:
+            context: .
+            dockerfile: docker/charting/Dockerfile
+        restart: unless-stopped
+        ports:
+            - "8003:8003"
+        environment:
+            - DATA_SERVICE_URL=http://data:8001
+            - CHARTING_SERVICE_PORT=8003
+            - CORS_ORIGINS=*
+        volumes:
+            - ./src/entrypoints/charting:/app/src/entrypoints/charting:ro
+        depends_on:
+            data:
+                condition: service_healthy
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "wget",
+                    "--no-verbose",
+                    "--tries=1",
+                    "--spider",
+                    "http://localhost:8003/health",
+                ]
+            interval: 15s
+            timeout: 5s
+            start_period: 10s
+            retries: 3
+
+    # -------------------------------------------------------------------------
     # Trainer — GPU CNN retraining server (port 8200)       [training profile]
     #
     # ⚠️  PRODUCTION NOTE: The trainer GPU rig uses the standalone
