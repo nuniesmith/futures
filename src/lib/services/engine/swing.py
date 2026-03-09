@@ -632,7 +632,7 @@ def _publish_swing_to_tv(signals: list[Any]) -> None:
         return
 
     try:
-        from lib.services.engine.data.api.tradingview import (
+        from lib.services.data.api.tradingview import (
             publish_signal_to_tv_sync,
         )
 

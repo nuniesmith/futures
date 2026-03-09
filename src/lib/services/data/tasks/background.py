@@ -195,7 +195,7 @@ async def lifespan_manager(app):
     """FastAPI lifespan context manager.
 
     Usage in main.py:
-        from lib.services.engine.data.tasks.background import lifespan_manager
+        from lib.services.data.tasks.background import lifespan_manager
         app = FastAPI(lifespan=lifespan_manager)
 
     Starts all background tasks on startup and cleanly shuts them

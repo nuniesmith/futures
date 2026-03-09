@@ -404,7 +404,7 @@ def _run_training_pipeline(params: TrainRequest) -> None:
 
         # Record dataset stats to Prometheus (best-effort — never block training).
         try:
-            from lib.services.engine.data.api.metrics import record_trainer_dataset_stats
+            from lib.services.data.api.metrics import record_trainer_dataset_stats
 
             record_trainer_dataset_stats(
                 total_images=ds_stats.total_images,

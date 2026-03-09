@@ -1633,7 +1633,7 @@ async def probe_services():
     """
     import time
 
-    from lib.services.engine.data.api.health import _check_postgres, _check_redis
+    from lib.services.data.api.health import _check_postgres, _check_redis
 
     overrides = _load_persisted_settings()
     svc = overrides.get("services", {})

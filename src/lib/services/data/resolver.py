@@ -14,7 +14,7 @@ Postgres and Redis so subsequent requests are served from warm/hot tiers.
 
 Usage
 -----
-    from lib.services.engine.data.resolver import DataResolver
+    from lib.services.data.resolver import DataResolver
 
     resolver = DataResolver()
 

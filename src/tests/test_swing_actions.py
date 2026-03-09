@@ -738,7 +738,7 @@ def test_client():
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from lib.services.engine.data.api.swing_actions import router
+    from lib.services.data.api.swing_actions import router
 
     app = FastAPI()
     app.include_router(router)
@@ -967,7 +967,7 @@ class TestSwingCardActionButtons:
 
     def test_buttons_for_pending(self, swing_mod, _patch_redis):
         """Pending signal renders Accept + Ignore buttons."""
-        from lib.services.engine.data.api.swing_actions import render_swing_action_buttons_for_card
+        from lib.services.data.api.swing_actions import render_swing_action_buttons_for_card
 
         swing_mod._pending_swing_signals["Gold"] = _make_signal("Gold")
 
@@ -980,7 +980,7 @@ class TestSwingCardActionButtons:
 
     def test_buttons_for_active(self, swing_mod, _patch_redis):
         """Active state renders Close + Stop→BE buttons."""
-        from lib.services.engine.data.api.swing_actions import render_swing_action_buttons_for_card
+        from lib.services.data.api.swing_actions import render_swing_action_buttons_for_card
 
         states = {"Gold": _make_state("Gold")}
         html = render_swing_action_buttons_for_card("Gold", active_states=states)
@@ -992,14 +992,14 @@ class TestSwingCardActionButtons:
 
     def test_buttons_empty_for_no_state(self, swing_mod, _patch_redis):
         """No state or signal renders empty string."""
-        from lib.services.engine.data.api.swing_actions import render_swing_action_buttons_for_card
+        from lib.services.data.api.swing_actions import render_swing_action_buttons_for_card
 
         html = render_swing_action_buttons_for_card("Gold", active_states={}, pending_signals={})
         assert html == ""
 
     def test_buttons_for_closed_state(self, swing_mod, _patch_redis):
         """Closed state renders no active-state buttons."""
-        from lib.services.engine.data.api.swing_actions import render_swing_action_buttons_for_card
+        from lib.services.data.api.swing_actions import render_swing_action_buttons_for_card
 
         states = {"Gold": _make_state("Gold", phase=_SwingPhase.CLOSED)}
         html = render_swing_action_buttons_for_card("Gold", active_states=states, pending_signals={})
@@ -1009,7 +1009,7 @@ class TestSwingCardActionButtons:
 
     def test_buttons_for_trailing_phase(self, swing_mod, _patch_redis):
         """TRAILING phase renders Close + Stop→BE."""
-        from lib.services.engine.data.api.swing_actions import render_swing_action_buttons_for_card
+        from lib.services.data.api.swing_actions import render_swing_action_buttons_for_card
 
         states = {"Gold": _make_state("Gold", phase=_SwingPhase.TRAILING)}
         html = render_swing_action_buttons_for_card("Gold", active_states=states)
@@ -1019,7 +1019,7 @@ class TestSwingCardActionButtons:
 
     def test_buttons_use_provided_dicts(self, swing_mod, _patch_redis):
         """When explicit active_states/pending_signals are passed, they are used."""
-        from lib.services.engine.data.api.swing_actions import render_swing_action_buttons_for_card
+        from lib.services.data.api.swing_actions import render_swing_action_buttons_for_card
 
         # Pass explicit dicts — module state should be irrelevant
         pending = {"Gold": _make_signal("Gold").to_dict()}
@@ -1030,7 +1030,7 @@ class TestSwingCardActionButtons:
 
     def test_buttons_htmx_target(self, swing_mod, _patch_redis):
         """Buttons target the correct HTMX swap container."""
-        from lib.services.engine.data.api.swing_actions import render_swing_action_buttons_for_card
+        from lib.services.data.api.swing_actions import render_swing_action_buttons_for_card
 
         swing_mod._pending_swing_signals["Gold"] = _make_signal("Gold")
         html = render_swing_action_buttons_for_card("Gold")
@@ -1049,7 +1049,7 @@ class TestSwingCardRendering:
 
     def test_card_includes_live_status_div(self, swing_mod, _patch_redis):
         """Swing card HTML includes the live status polling div."""
-        from lib.services.engine.data.api.dashboard import _render_swing_card
+        from lib.services.data.api.dashboard import _render_swing_card
 
         asset = {
             "symbol": "Gold",
@@ -1070,7 +1070,7 @@ class TestSwingCardRendering:
 
     def test_card_includes_action_buttons_area(self, swing_mod, _patch_redis):
         """Swing card HTML includes the action buttons container."""
-        from lib.services.engine.data.api.dashboard import _render_swing_card
+        from lib.services.data.api.dashboard import _render_swing_card
 
         # Put a pending signal so buttons appear
         swing_mod._pending_swing_signals["Gold"] = _make_signal("Gold")
@@ -1092,7 +1092,7 @@ class TestSwingCardRendering:
 
     def test_card_with_active_states_param(self, swing_mod, _patch_redis):
         """Swing card accepts active_swing_states parameter."""
-        from lib.services.engine.data.api.dashboard import _render_swing_card
+        from lib.services.data.api.dashboard import _render_swing_card
 
         active = {"Gold": _make_state("Gold")}
         asset = {
@@ -1122,7 +1122,7 @@ class TestSSESwingUpdate:
         """Verify the SSE module references dashboard:swing_update."""
         import inspect
 
-        from lib.services.engine.data.api import sse
+        from lib.services.data.api import sse
 
         source = inspect.getsource(sse)
         assert "dashboard:swing_update" in source
@@ -1141,7 +1141,7 @@ class TestRouterRegistration:
         """swing_actions_router is imported in data/main.py."""
         import inspect
 
-        from lib.services.engine.data import main as data_main
+        from lib.services.data import main as data_main
 
         source = inspect.getsource(data_main)
         assert "swing_actions_router" in source
@@ -1149,7 +1149,7 @@ class TestRouterRegistration:
 
     def test_swing_actions_router_has_routes(self):
         """The router has the expected route paths."""
-        from lib.services.engine.data.api.swing_actions import router
+        from lib.services.data.api.swing_actions import router
 
         paths = [route.path for route in router.routes]
         assert "/api/swing/accept/{asset_name}" in paths
@@ -1245,7 +1245,7 @@ class TestHTMLFragments:
     """Tests for the HTML fragment rendering helpers."""
 
     def test_success_toast_green(self):
-        from lib.services.engine.data.api.swing_actions import _success_toast
+        from lib.services.data.api.swing_actions import _success_toast
 
         html = _success_toast("Title", "Detail text", color="green")
         assert "Title" in html
@@ -1253,28 +1253,28 @@ class TestHTMLFragments:
         assert "swing-action-toast" in html
 
     def test_success_toast_yellow(self):
-        from lib.services.engine.data.api.swing_actions import _success_toast
+        from lib.services.data.api.swing_actions import _success_toast
 
         html = _success_toast("Warn", "Info", color="yellow")
         assert "Warn" in html
         assert "#facc15" in html  # yellow color
 
     def test_success_toast_red(self):
-        from lib.services.engine.data.api.swing_actions import _success_toast
+        from lib.services.data.api.swing_actions import _success_toast
 
         html = _success_toast("Closed", "Done", color="red")
         assert "Closed" in html
         assert "#f87171" in html  # red color
 
     def test_error_toast(self):
-        from lib.services.engine.data.api.swing_actions import _error_toast
+        from lib.services.data.api.swing_actions import _error_toast
 
         html = _error_toast("Something went wrong")
         assert "Something went wrong" in html
         assert "Error" in html
 
     def test_render_active_state_badge(self):
-        from lib.services.engine.data.api.swing_actions import _render_active_state_badge
+        from lib.services.data.api.swing_actions import _render_active_state_badge
 
         state_dict = {
             "phase": "active",
@@ -1291,7 +1291,7 @@ class TestHTMLFragments:
         assert "2,700" in html or "2700" in html
 
     def test_render_action_buttons_pending(self):
-        from lib.services.engine.data.api.swing_actions import _render_swing_action_buttons
+        from lib.services.data.api.swing_actions import _render_swing_action_buttons
 
         html = _render_swing_action_buttons("Gold", has_active_state=False, has_pending_signal=True)
         assert "Accept" in html
@@ -1299,7 +1299,7 @@ class TestHTMLFragments:
         assert "Close" not in html
 
     def test_render_action_buttons_active(self):
-        from lib.services.engine.data.api.swing_actions import _render_swing_action_buttons
+        from lib.services.data.api.swing_actions import _render_swing_action_buttons
 
         html = _render_swing_action_buttons("Gold", has_active_state=True, has_pending_signal=False, phase="active")
         assert "Close" in html
@@ -1307,13 +1307,13 @@ class TestHTMLFragments:
         assert "Accept" not in html
 
     def test_render_action_buttons_empty(self):
-        from lib.services.engine.data.api.swing_actions import _render_swing_action_buttons
+        from lib.services.data.api.swing_actions import _render_swing_action_buttons
 
         html = _render_swing_action_buttons("Gold", has_active_state=False, has_pending_signal=False)
         assert html == ""
 
     def test_render_action_buttons_closed_phase(self):
-        from lib.services.engine.data.api.swing_actions import _render_swing_action_buttons
+        from lib.services.data.api.swing_actions import _render_swing_action_buttons
 
         html = _render_swing_action_buttons("Gold", has_active_state=True, has_pending_signal=False, phase="closed")
         # Closed phase should not show active buttons

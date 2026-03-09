@@ -816,7 +816,7 @@ def run_cnn_inference(
                 )
                 # Prometheus
                 try:
-                    from lib.services.engine.data.api.metrics import (
+                    from lib.services.data.api.metrics import (
                         record_orb_cnn_prob,
                         record_orb_cnn_signal,
                     )
@@ -833,7 +833,7 @@ def run_cnn_inference(
     except ImportError:
         logger.debug("CNN module not available — skipping inference")
         try:
-            from lib.services.engine.data.api.metrics import record_orb_cnn_signal
+            from lib.services.data.api.metrics import record_orb_cnn_signal
 
             record_orb_cnn_signal("skipped")
         except Exception:
@@ -841,7 +841,7 @@ def run_cnn_inference(
     except Exception as cnn_exc:
         logger.debug("CNN inference error (non-fatal): %s", cnn_exc)
         try:
-            from lib.services.engine.data.api.metrics import record_orb_cnn_signal
+            from lib.services.data.api.metrics import record_orb_cnn_signal
 
             record_orb_cnn_signal("skipped")
         except Exception:
@@ -1191,7 +1191,7 @@ def handle_breakout_check(
                             )
                             # Prometheus
                             try:
-                                from lib.services.engine.data.api.metrics import record_orb_filter_result
+                                from lib.services.data.api.metrics import record_orb_filter_result
 
                                 record_orb_filter_result("rejected")
                             except Exception:
@@ -1206,7 +1206,7 @@ def handle_breakout_check(
                             filter_summary,
                         )
                         try:
-                            from lib.services.engine.data.api.metrics import record_orb_filter_result
+                            from lib.services.data.api.metrics import record_orb_filter_result
 
                             record_orb_filter_result("passed")
                         except Exception:

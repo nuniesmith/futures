@@ -34,7 +34,7 @@ All business logic modules live under organised sub-packages:
 Services (engine, data, web, training) are sub-packages:
 
     from lib.services.engine.focus import compute_daily_focus
-    from lib.services.engine.data.main import app
+    from lib.services.data.main import app
     from lib.services.web.main import app
     from lib.services.training.trainer_server import app
     from lib.services.training.dataset_generator import generate_dataset, DatasetConfig

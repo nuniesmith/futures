@@ -236,7 +236,7 @@ def _mock_redis():
 
 def _import_dashboard():
     """Lazily import dashboard module to avoid import-time Redis connections."""
-    from lib.services.engine.data.api.dashboard import (
+    from lib.services.data.api.dashboard import (
         _get_daily_plan_data,
         _render_asset_card,
         _render_daily_plan_header,
@@ -924,7 +924,7 @@ class TestFocusModeSummaryBadge:
     """Tests for the Focus Mode badge in the summary bar."""
 
     def test_focus_mode_badge_in_full_dashboard(self):
-        from lib.services.engine.data.api.dashboard import _render_full_dashboard
+        from lib.services.data.api.dashboard import _render_full_dashboard
 
         focus = _make_focus_data()
         session = {
@@ -942,7 +942,7 @@ class TestFocusModeSummaryBadge:
         assert "Focus Mode" in result
 
     def test_no_focus_mode_badge_when_inactive(self):
-        from lib.services.engine.data.api.dashboard import _render_full_dashboard
+        from lib.services.data.api.dashboard import _render_full_dashboard
 
         focus = _make_focus_data(focus_mode_active=False)
         session = {
@@ -970,7 +970,7 @@ class TestGetDailyPlanHtmlEndpoint:
     """Tests for the GET /api/daily-plan/html endpoint."""
 
     def test_returns_no_plan_message_when_empty(self):
-        from lib.services.engine.data.api.dashboard import get_daily_plan_html
+        from lib.services.data.api.dashboard import get_daily_plan_html
 
         with (
             patch(
@@ -989,7 +989,7 @@ class TestGetDailyPlanHtmlEndpoint:
         assert "No daily plan active" in body
 
     def test_returns_plan_header_when_available(self):
-        from lib.services.engine.data.api.dashboard import get_daily_plan_html
+        from lib.services.data.api.dashboard import get_daily_plan_html
 
         plan = _make_daily_plan(
             market_context="Risk-on. NQ leading.",
@@ -1016,7 +1016,7 @@ class TestGetDailyPlanHtmlEndpoint:
         assert "why-these-assets" in body
 
     def test_returns_why_these_assets_in_plan(self):
-        from lib.services.engine.data.api.dashboard import get_daily_plan_html
+        from lib.services.data.api.dashboard import get_daily_plan_html
 
         plan = _make_daily_plan()
         focus = _make_focus_data(daily_plan=plan)
@@ -1047,7 +1047,7 @@ class TestGetFocusHtmlFocusMode:
     """Tests for get_focus_html rendering with focus mode active."""
 
     def test_focus_html_uses_focus_mode_grid(self):
-        from lib.services.engine.data.api.dashboard import get_focus_html
+        from lib.services.data.api.dashboard import get_focus_html
 
         focus = _make_focus_data()
 
@@ -1067,7 +1067,7 @@ class TestGetFocusHtmlFocusMode:
         assert "Background Assets" in body
 
     def test_focus_html_flat_when_mode_inactive(self):
-        from lib.services.engine.data.api.dashboard import get_focus_html
+        from lib.services.data.api.dashboard import get_focus_html
 
         focus = _make_focus_data(focus_mode_active=False)
 
@@ -1087,7 +1087,7 @@ class TestGetFocusHtmlFocusMode:
         assert "asset-card-mgc" in body
 
     def test_focus_html_204_on_htmx_with_no_data(self):
-        from lib.services.engine.data.api.dashboard import get_focus_html
+        from lib.services.data.api.dashboard import get_focus_html
 
         mock_request = MagicMock()
         mock_request.headers = {"HX-Request": "true"}
@@ -1240,7 +1240,7 @@ class TestFullDashboardFocusMode:
         }
 
     def test_full_dashboard_contains_focus_mode_grid(self):
-        from lib.services.engine.data.api.dashboard import _render_full_dashboard
+        from lib.services.data.api.dashboard import _render_full_dashboard
 
         focus = _make_focus_data()
         html = _render_full_dashboard(focus, self._make_session())
@@ -1251,7 +1251,7 @@ class TestFullDashboardFocusMode:
         assert "daily-plan-header" in html
 
     def test_full_dashboard_without_focus_mode_is_flat(self):
-        from lib.services.engine.data.api.dashboard import _render_full_dashboard
+        from lib.services.data.api.dashboard import _render_full_dashboard
 
         focus = _make_focus_data(focus_mode_active=False)
         html = _render_full_dashboard(focus, self._make_session())
@@ -1261,14 +1261,14 @@ class TestFullDashboardFocusMode:
         assert "Scalp Focus" not in html
 
     def test_full_dashboard_no_data(self):
-        from lib.services.engine.data.api.dashboard import _render_full_dashboard
+        from lib.services.data.api.dashboard import _render_full_dashboard
 
         html = _render_full_dashboard(None, self._make_session())
 
         assert "Waiting for engine" in html
 
     def test_sse_daily_plan_listener_in_js(self):
-        from lib.services.engine.data.api.dashboard import _render_full_dashboard
+        from lib.services.data.api.dashboard import _render_full_dashboard
 
         focus = _make_focus_data()
         html = _render_full_dashboard(focus, self._make_session())
@@ -1278,7 +1278,7 @@ class TestFullDashboardFocusMode:
         assert "Daily plan updated" in html
 
     def test_focus_mode_badge_in_summary_bar(self):
-        from lib.services.engine.data.api.dashboard import _render_full_dashboard
+        from lib.services.data.api.dashboard import _render_full_dashboard
 
         focus = _make_focus_data()
         html = _render_full_dashboard(focus, self._make_session())

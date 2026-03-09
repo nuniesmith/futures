@@ -835,7 +835,7 @@ def load_bars(
     # in a pure offline / test context.
     if source not in ("csv", "engine"):
         try:
-            from lib.services.engine.data.resolver import DataResolver
+            from lib.services.data.resolver import DataResolver
 
             # Resolve the canonical ticker that DataResolver understands.
             # For Kraken symbols we pass the internal ticker (KRAKEN:XBTUSD);

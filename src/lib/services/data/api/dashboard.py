@@ -598,7 +598,7 @@ def _get_positions() -> list[dict[str, Any]]:
     # Try the positions router's hashed cache key as fallback
     try:
         from lib.core.cache import cache_get as cg2
-        from lib.services.engine.data.api.positions import _POSITIONS_CACHE_KEY
+        from lib.services.data.api.positions import _POSITIONS_CACHE_KEY
 
         raw2 = cg2(_POSITIONS_CACHE_KEY)
         if raw2:
@@ -749,7 +749,7 @@ def _get_orb_data() -> dict[str, Any] | None:
 def _fetch_bars_for_vp(symbol: str, days_back: int = 5) -> "Any":
     """Fetch stored 1m bars for volume profile computation."""
     try:
-        from lib.services.engine.data.api.bars import _fetch_stored_bars
+        from lib.services.data.api.bars import _fetch_stored_bars
 
         return _fetch_stored_bars(symbol, interval="1m", days_back=days_back)
     except Exception:
@@ -3192,7 +3192,7 @@ def _render_swing_card(
     # Phase 3D: Render action buttons (Accept/Ignore/Close/Move-to-BE)
     action_buttons_html = ""
     try:
-        from lib.services.engine.data.api.swing_actions import render_swing_action_buttons_for_card
+        from lib.services.data.api.swing_actions import render_swing_action_buttons_for_card
 
         action_buttons_html = render_swing_action_buttons_for_card(
             asset_name=symbol,
@@ -3472,7 +3472,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     # Check if live positions feature is enabled in settings
     _live_positions_enabled = False
     try:
-        from lib.services.engine.data.api.settings import _load_persisted_settings
+        from lib.services.data.api.settings import _load_persisted_settings
 
         _feat = _load_persisted_settings().get("features", {})
         _live_positions_enabled = _feat.get("enable_live_positions", False)
@@ -4877,7 +4877,7 @@ def get_positions_html():
     # Check feature toggle
     _live_positions_enabled = False
     try:
-        from lib.services.engine.data.api.settings import _load_persisted_settings
+        from lib.services.data.api.settings import _load_persisted_settings
 
         _feat = _load_persisted_settings().get("features", {})
         _live_positions_enabled = _feat.get("enable_live_positions", False)

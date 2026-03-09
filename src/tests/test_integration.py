@@ -322,7 +322,7 @@ class TestSSEReadsEngineFocus:
         focus = _make_focus_payload()
         publish_focus_to_redis(focus)
 
-        from lib.services.engine.data.api.sse import _get_focus_from_cache
+        from lib.services.data.api.sse import _get_focus_from_cache
 
         result = _get_focus_from_cache()
         assert result is not None
@@ -336,14 +336,14 @@ class TestSSEReadsEngineFocus:
 
         publish_focus_to_redis(_make_focus_payload())
 
-        from lib.services.engine.data.api.sse import _get_focus_from_cache
+        from lib.services.data.api.sse import _get_focus_from_cache
 
         result = _get_focus_from_cache()
         assert isinstance(result, str)
 
     def test_get_focus_from_cache_none_when_empty(self, redis_store, mock_cache):
         """When no focus has been published, returns None."""
-        from lib.services.engine.data.api.sse import _get_focus_from_cache
+        from lib.services.data.api.sse import _get_focus_from_cache
 
         result = _get_focus_from_cache()
         assert result is None
@@ -579,7 +579,7 @@ class TestFocusHTMLRendering:
     """Verify dashboard HTML endpoints return valid HTML with data attributes."""
 
     def test_render_asset_card_has_symbol(self, mock_cache):
-        from lib.services.engine.data.api.dashboard import _render_asset_card
+        from lib.services.data.api.dashboard import _render_asset_card
 
         asset = _make_focus_asset("MGC", "LONG", quality=0.72)
         html = _render_asset_card(asset)
@@ -588,21 +588,21 @@ class TestFocusHTMLRendering:
         assert "72" in html  # quality percentage
 
     def test_render_asset_card_has_id(self, mock_cache):
-        from lib.services.engine.data.api.dashboard import _render_asset_card
+        from lib.services.data.api.dashboard import _render_asset_card
 
         asset = _make_focus_asset("MGC")
         html = _render_asset_card(asset)
         assert 'id="asset-card-mgc"' in html
 
     def test_render_no_trade_banner(self, mock_cache):
-        from lib.services.engine.data.api.dashboard import _render_no_trade_banner
+        from lib.services.data.api.dashboard import _render_no_trade_banner
 
         html = _render_no_trade_banner("All low quality — sit today out")
         assert "NO TRADE" in html.upper() or "no-trade" in html.lower() or "no_trade" in html.lower()
         assert "low quality" in html.lower()
 
     def test_render_positions_panel(self, mock_cache):
-        from lib.services.engine.data.api.dashboard import _render_positions_panel
+        from lib.services.data.api.dashboard import _render_positions_panel
 
         # _render_positions_panel expects a list of position dicts, not a wrapper
         positions = [
@@ -619,7 +619,7 @@ class TestFocusHTMLRendering:
         assert "LONG" in html
 
     def test_render_risk_panel(self, mock_cache):
-        from lib.services.engine.data.api.dashboard import _render_risk_panel
+        from lib.services.data.api.dashboard import _render_risk_panel
 
         risk_status = {
             "can_trade": True,
@@ -632,7 +632,7 @@ class TestFocusHTMLRendering:
         assert "RISK" in html.upper() or "risk" in html
 
     def test_render_grok_panel(self, mock_cache):
-        from lib.services.engine.data.api.dashboard import _render_grok_panel
+        from lib.services.data.api.dashboard import _render_grok_panel
 
         grok_data = {
             "text": "MGC: LONG bias, 72% quality\nMNQ: SHORT bias, 68% quality",
@@ -645,14 +645,14 @@ class TestFocusHTMLRendering:
 
     def test_render_risk_panel_none(self, mock_cache):
         """Risk panel with None input should not crash."""
-        from lib.services.engine.data.api.dashboard import _render_risk_panel
+        from lib.services.data.api.dashboard import _render_risk_panel
 
         html = _render_risk_panel(None)
         assert isinstance(html, str)
 
     def test_render_grok_panel_none(self, mock_cache):
         """Grok panel with None input should not crash."""
-        from lib.services.engine.data.api.dashboard import _render_grok_panel
+        from lib.services.data.api.dashboard import _render_grok_panel
 
         html = _render_grok_panel(None)
         assert isinstance(html, str)
@@ -714,7 +714,7 @@ class TestGrokCompactIntegration:
         redis_store.cache_set("engine:grok_update", payload.encode(), ttl=900)
 
         # Read it back as SSE would
-        from lib.services.engine.data.api.sse import _get_grok_from_cache
+        from lib.services.data.api.sse import _get_grok_from_cache
 
         result = _get_grok_from_cache()
         assert result is not None
@@ -743,7 +743,7 @@ class TestEngineStatusIntegration:
             ttl=60,
         )
 
-        from lib.services.engine.data.api.sse import _get_engine_status
+        from lib.services.data.api.sse import _get_engine_status
 
         result = _get_engine_status()
         assert result is not None
@@ -766,7 +766,7 @@ class TestRiskSSEWiring:
         rm.register_open("MGC", "LONG", quantity=1, entry_price=2700.0, risk_dollars=150.0)
         rm.publish_to_redis()
 
-        from lib.services.engine.data.api.sse import _get_risk_from_cache
+        from lib.services.data.api.sse import _get_risk_from_cache
 
         result = _get_risk_from_cache()
         assert result is not None
@@ -794,7 +794,7 @@ class TestFullPipeline:
         assert ok is True
 
         # Step 3: Verify SSE can read it
-        from lib.services.engine.data.api.sse import _get_focus_from_cache
+        from lib.services.data.api.sse import _get_focus_from_cache
 
         raw = _get_focus_from_cache()
         assert raw is not None
@@ -821,7 +821,7 @@ class TestFullPipeline:
         publish_focus_to_redis(focus)
 
         # SSE should see no_trade
-        from lib.services.engine.data.api.sse import _get_focus_from_cache
+        from lib.services.data.api.sse import _get_focus_from_cache
 
         raw = _get_focus_from_cache()
         assert raw is not None, "Expected focus data in cache after publish"
@@ -863,7 +863,7 @@ class TestSSEFormatIntegration:
     """Verify SSE format produces valid events from real payloads."""
 
     def test_format_focus_event(self, mock_cache):
-        from lib.services.engine.data.api.sse import _format_sse
+        from lib.services.data.api.sse import _format_sse
 
         focus = _make_focus_payload()
         data = json.dumps(focus)
@@ -879,21 +879,21 @@ class TestSSEFormatIntegration:
                 break
 
     def test_format_grok_event(self, mock_cache):
-        from lib.services.engine.data.api.sse import _format_sse
+        from lib.services.data.api.sse import _format_sse
 
         grok = {"text": "MGC: bullish", "compact": True}
         event = _format_sse(data=json.dumps(grok), event="grok-update")
         assert "event: grok-update\n" in event
 
     def test_format_risk_event(self, mock_cache):
-        from lib.services.engine.data.api.sse import _format_sse
+        from lib.services.data.api.sse import _format_sse
 
         risk = {"can_trade": True, "daily_pnl": -50.0}
         event = _format_sse(data=json.dumps(risk), event="risk-update")
         assert "event: risk-update\n" in event
 
     def test_heartbeat_parseable(self, mock_cache):
-        from lib.services.engine.data.api.sse import _make_heartbeat_event
+        from lib.services.data.api.sse import _make_heartbeat_event
 
         event = _make_heartbeat_event()
         for line in event.split("\n"):
@@ -904,7 +904,7 @@ class TestSSEFormatIntegration:
                 break
 
     def test_session_event_parseable(self, mock_cache):
-        from lib.services.engine.data.api.sse import _make_session_event
+        from lib.services.data.api.sse import _make_session_event
 
         event = _make_session_event("active")
         for line in event.split("\n"):
@@ -982,7 +982,7 @@ class TestGrokSSEChannel:
         )
         redis_store.cache_set("engine:grok_update", payload.encode(), ttl=900)
 
-        from lib.services.engine.data.api.sse import _get_grok_from_cache
+        from lib.services.data.api.sse import _get_grok_from_cache
 
         result = _get_grok_from_cache()
         assert result is not None
@@ -1063,7 +1063,7 @@ class TestSafeJSONResponse:
         """NaN should be converted to None."""
         # Import from data-service main
         try:
-            from lib.services.engine.data.main import _sanitize
+            from lib.services.data.main import _sanitize
         except ImportError:
             # Might not be importable without full setup; define inline
             def _sanitize(obj: Any) -> Any:
@@ -1084,7 +1084,7 @@ class TestSafeJSONResponse:
 
     def test_sanitize_nested(self):
         try:
-            from lib.services.engine.data.main import _sanitize
+            from lib.services.data.main import _sanitize
         except ImportError:
 
             def _sanitize(obj: Any) -> Any:

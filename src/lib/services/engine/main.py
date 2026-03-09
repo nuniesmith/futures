@@ -108,7 +108,7 @@ def _get_live_risk_publisher():
 
             # Wire into the live_risk API module so /api/live-risk/refresh works
             try:
-                from lib.services.engine.data.api.live_risk import set_publisher
+                from lib.services.data.api.live_risk import set_publisher
 
                 set_publisher(_live_risk_publisher)
                 logger.info("LiveRiskPublisher registered with live_risk API module")
@@ -367,7 +367,7 @@ def _publish_regime_states() -> None:
 
         # Push into Prometheus gauges immediately (don't wait for scrape)
         try:
-            from lib.services.engine.data.api.metrics import update_regime
+            from lib.services.data.api.metrics import update_regime
 
             for sym, info in regime_map.items():
                 update_regime(
@@ -421,7 +421,7 @@ def _handle_publish_focus_update(engine, account_size: int) -> None:
     try:
         import asyncio
 
-        from lib.services.engine.data.api.tradingview import flush_github_if_dirty
+        from lib.services.data.api.tradingview import flush_github_if_dirty
 
         try:
             loop = asyncio.get_running_loop()
@@ -720,7 +720,7 @@ def _handle_check_risk_rules(engine, account_size: int = 50_000) -> None:
             raw = cache_get("positions:current")
             if not raw:
                 # Try the hashed key used by positions router
-                from lib.services.engine.data.api.positions import (
+                from lib.services.data.api.positions import (
                     _POSITIONS_CACHE_KEY,
                 )
 
@@ -1087,7 +1087,7 @@ def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "u
         # debounced publisher so signals.csv auto-updates for request.seed().
         if result.breakout_detected and result.direction:
             try:
-                from lib.services.engine.data.api.tradingview import (
+                from lib.services.data.api.tradingview import (
                     publish_signal_to_tv_sync,
                 )
 
@@ -1831,7 +1831,7 @@ def _handle_daily_report(engine) -> None:
         # date object and queries the DB internally for that day's events.
         report: dict = {}
         try:
-            from lib.services.engine.data.api.audit import _build_daily_report
+            from lib.services.data.api.audit import _build_daily_report
 
             today = datetime.now(tz=_EST).date()
             report = _build_daily_report(today)

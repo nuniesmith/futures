@@ -1743,7 +1743,7 @@ def publish_orb_alert(result: ORBResult, session: ORBSession | None = None) -> b
         # ── Phase TV-A: Push to TradingView signal store + GitHub ──────
         if result.breakout_detected and result.direction:
             try:
-                from lib.services.engine.data.api.tradingview import (
+                from lib.services.data.api.tradingview import (
                     publish_signal_to_tv_sync,
                 )
 

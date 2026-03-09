@@ -1233,7 +1233,7 @@ class TestRenderStructuredGrokBrief:
     """Test the dashboard HTML rendering for structured Grok data."""
 
     def test_risk_on_rendering(self):
-        from lib.services.engine.data.api.dashboard import _render_structured_grok_brief
+        from lib.services.data.api.dashboard import _render_structured_grok_brief
 
         grok_data = {
             "macro_bias": "risk_on",
@@ -1260,7 +1260,7 @@ class TestRenderStructuredGrokBrief:
         assert "aggressive" in html.lower()
 
     def test_risk_off_rendering(self):
-        from lib.services.engine.data.api.dashboard import _render_structured_grok_brief
+        from lib.services.data.api.dashboard import _render_structured_grok_brief
 
         html = _render_structured_grok_brief(
             {"macro_bias": "risk_off", "macro_summary": "Bearish day"},
@@ -1270,19 +1270,19 @@ class TestRenderStructuredGrokBrief:
         assert "CACHED" in html
 
     def test_mixed_rendering(self):
-        from lib.services.engine.data.api.dashboard import _render_structured_grok_brief
+        from lib.services.data.api.dashboard import _render_structured_grok_brief
 
         html = _render_structured_grok_brief({"macro_bias": "mixed"})
         assert "MIXED" in html
 
     def test_empty_data(self):
-        from lib.services.engine.data.api.dashboard import _render_structured_grok_brief
+        from lib.services.data.api.dashboard import _render_structured_grok_brief
 
         assert _render_structured_grok_brief({}) == ""
         assert _render_structured_grok_brief(None) == ""  # type: ignore[arg-type]
 
     def test_bias_agreement_indicators(self):
-        from lib.services.engine.data.api.dashboard import _render_structured_grok_brief
+        from lib.services.data.api.dashboard import _render_structured_grok_brief
 
         grok_data = {
             "macro_bias": "risk_on",
@@ -1296,7 +1296,7 @@ class TestRenderStructuredGrokBrief:
         assert "⚠️" in html  # Disagreement
 
     def test_collapsible_warnings(self):
-        from lib.services.engine.data.api.dashboard import _render_structured_grok_brief
+        from lib.services.data.api.dashboard import _render_structured_grok_brief
 
         grok_data = {
             "macro_bias": "risk_off",
@@ -1306,7 +1306,7 @@ class TestRenderStructuredGrokBrief:
         assert "<details" in html  # Should be collapsible for > 2 warnings
 
     def test_few_warnings_not_collapsible(self):
-        from lib.services.engine.data.api.dashboard import _render_structured_grok_brief
+        from lib.services.data.api.dashboard import _render_structured_grok_brief
 
         grok_data = {
             "macro_bias": "risk_on",
@@ -1316,7 +1316,7 @@ class TestRenderStructuredGrokBrief:
         assert "<details" not in html  # Should NOT be collapsible for <= 2
 
     def test_html_escaping(self):
-        from lib.services.engine.data.api.dashboard import _render_structured_grok_brief
+        from lib.services.data.api.dashboard import _render_structured_grok_brief
 
         grok_data = {
             "macro_bias": "risk_on",
@@ -1350,7 +1350,7 @@ class TestRenderSwingCardWithGrokInsight:
         }
 
     def test_swing_card_without_grok(self):
-        from lib.services.engine.data.api.dashboard import _render_swing_card
+        from lib.services.data.api.dashboard import _render_swing_card
 
         html = _render_swing_card(self._make_asset_dict())
         assert "Gold" in html
@@ -1358,7 +1358,7 @@ class TestRenderSwingCardWithGrokInsight:
         assert "Grok:" not in html  # No grok insight
 
     def test_swing_card_with_grok_insight(self):
-        from lib.services.engine.data.api.dashboard import _render_swing_card
+        from lib.services.data.api.dashboard import _render_swing_card
 
         html = _render_swing_card(
             self._make_asset_dict(),
@@ -1370,7 +1370,7 @@ class TestRenderSwingCardWithGrokInsight:
         assert "2720" in html
 
     def test_grok_insight_html_escaped(self):
-        from lib.services.engine.data.api.dashboard import _render_swing_card
+        from lib.services.data.api.dashboard import _render_swing_card
 
         html = _render_swing_card(
             self._make_asset_dict(),
@@ -1384,7 +1384,7 @@ class TestRenderFocusModeGridGrokIntegration:
     """Test that _render_focus_mode_grid passes Grok insights to swing cards."""
 
     def test_grok_insights_passed_to_swing_cards(self):
-        from lib.services.engine.data.api.dashboard import _render_focus_mode_grid
+        from lib.services.data.api.dashboard import _render_focus_mode_grid
 
         focus_data = {
             "focus_mode_active": True,

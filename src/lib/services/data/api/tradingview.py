@@ -31,7 +31,7 @@ Auth:
   - GitHub publisher: fine-grained PAT in GITHUB_SIGNALS_TOKEN env var
 
 Usage:
-    from lib.services.engine.data.api.tradingview import router
+    from lib.services.data.api.tradingview import router
     app.include_router(router)
 """
 

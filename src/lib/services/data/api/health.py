@@ -331,7 +331,7 @@ def health():
 
     # --- Update Prometheus gauges ---
     with contextlib.suppress(Exception):
-        from lib.services.engine.data.api.metrics import (
+        from lib.services.data.api.metrics import (
             update_engine_up,
             update_model_stale,
             update_postgres_status,

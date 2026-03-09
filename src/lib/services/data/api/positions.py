@@ -328,7 +328,7 @@ def update_positions(payload: PositionsPayload):
     # --- Risk evaluation ---
     risk_status: dict[str, Any] = {}
     try:
-        from lib.services.engine.data.api.risk import evaluate_position_risk
+        from lib.services.data.api.risk import evaluate_position_risk
 
         risk_status = evaluate_position_risk(position_dicts)
 
@@ -429,7 +429,7 @@ def execute_signal(req: ExecuteSignalRequest):
     # --- Optional pre-flight risk check ---
     if req.enforce_risk:
         try:
-            from lib.services.engine.data.api.risk import check_trade_entry_risk
+            from lib.services.data.api.risk import check_trade_entry_risk
 
             allowed, reason, details = check_trade_entry_risk(
                 symbol=req.asset or "UNKNOWN",

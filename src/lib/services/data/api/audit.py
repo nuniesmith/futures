@@ -21,7 +21,7 @@ consumers, plus write access for manual / programmatic event injection.
 
 Usage:
     # In main.py:
-    from lib.services.engine.data.api.audit import router as audit_router
+    from lib.services.data.api.audit import router as audit_router
     app.include_router(audit_router, prefix="/audit", tags=["Audit"])
 """
 

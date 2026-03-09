@@ -782,7 +782,7 @@ def get_journal_page():
     loads the HTMX journal fragment (GET /journal/html) on page load so the
     inner panel can still be refreshed/swapped by HTMX interactions.
     """
-    from lib.services.engine.data.api.dashboard import _build_page_shell
+    from lib.services.data.api.dashboard import _build_page_shell
 
     # Extra head: widen the co-page container slightly for the journal layout
     extra_head = """<style>

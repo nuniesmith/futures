@@ -1357,7 +1357,7 @@ class TestBackfillAPIEndpoints:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from lib.services.engine.data.api.health import router as health_router
+        from lib.services.data.api.health import router as health_router
 
         app = FastAPI()
         app.include_router(health_router)

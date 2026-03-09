@@ -44,7 +44,7 @@ All metrics are collected in-process via ``prometheus_client`` and the ASGI
 middleware automatically instruments request count + latency.
 
 Usage:
-    from lib.services.engine.data.api.metrics import router as metrics_router, PrometheusMiddleware
+    from lib.services.data.api.metrics import router as metrics_router, PrometheusMiddleware
     app.include_router(metrics_router)
     app.add_middleware(PrometheusMiddleware)
 

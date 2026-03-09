@@ -651,7 +651,7 @@ class TestRiskHelpers:
 
     def test_evaluate_position_risk_no_manager(self):
         """When RiskManager can't be imported, should return safe defaults."""
-        from lib.services.engine.data.api.risk import evaluate_position_risk
+        from lib.services.data.api.risk import evaluate_position_risk
 
         # Patch the getter to return None
         with patch(
@@ -665,7 +665,7 @@ class TestRiskHelpers:
 
     def test_evaluate_position_risk_with_positions(self):
         """Should sync positions and return risk evaluation."""
-        from lib.services.engine.data.api.risk import evaluate_position_risk
+        from lib.services.data.api.risk import evaluate_position_risk
         from lib.services.engine.risk import RiskManager
 
         rm = RiskManager(account_size=50_000)
@@ -688,7 +688,7 @@ class TestRiskHelpers:
             assert isinstance(result["warnings"], list)
 
     def test_check_trade_entry_risk_no_manager(self):
-        from lib.services.engine.data.api.risk import check_trade_entry_risk
+        from lib.services.data.api.risk import check_trade_entry_risk
 
         with patch(
             "lib.services.engine.data.api.risk._get_local_risk_manager",
@@ -699,7 +699,7 @@ class TestRiskHelpers:
             assert details.get("risk_available") is False
 
     def test_check_trade_entry_risk_allowed(self):
-        from lib.services.engine.data.api.risk import check_trade_entry_risk
+        from lib.services.data.api.risk import check_trade_entry_risk
         from lib.services.engine.risk import RiskManager
 
         # RiskManager with generous limits
@@ -718,7 +718,7 @@ class TestRiskHelpers:
             assert details["risk_available"] is True
 
     def test_check_trade_entry_risk_blocked_by_daily_loss(self):
-        from lib.services.engine.data.api.risk import check_trade_entry_risk
+        from lib.services.data.api.risk import check_trade_entry_risk
         from lib.services.engine.risk import RiskManager
 
         rm = RiskManager(
@@ -742,7 +742,7 @@ class TestRiskEventRecording:
     """Test the in-memory risk event audit trail."""
 
     def test_record_event(self):
-        from lib.services.engine.data.api.risk import (
+        from lib.services.data.api.risk import (
             _record_risk_event,
             _risk_events,
         )
@@ -760,7 +760,7 @@ class TestRiskEventRecording:
         assert last["symbol"] == "MGC"
 
     def test_event_limit(self):
-        from lib.services.engine.data.api.risk import (
+        from lib.services.data.api.risk import (
             _MAX_RISK_EVENTS,
             _record_risk_event,
             _risk_events,
@@ -787,7 +787,7 @@ class TestRiskStatusEndpoint:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from lib.services.engine.data.api.risk import router
+        from lib.services.data.api.risk import router
 
         app = FastAPI()
         app.include_router(router, prefix="/risk")
@@ -820,7 +820,7 @@ class TestRiskCheckEndpoint:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from lib.services.engine.data.api.risk import router
+        from lib.services.data.api.risk import router
 
         app = FastAPI()
         app.include_router(router, prefix="/risk")
@@ -865,7 +865,7 @@ class TestRiskHistoryEndpoint:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from lib.services.engine.data.api.risk import router
+        from lib.services.data.api.risk import router
 
         app = FastAPI()
         app.include_router(router, prefix="/risk")
@@ -916,7 +916,7 @@ class TestTradesRiskEnforcement:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from lib.services.engine.data.api.trades import router
+        from lib.services.data.api.trades import router
 
         app = FastAPI()
         app.include_router(router, prefix="")
@@ -989,13 +989,13 @@ class TestTradesEnforceRiskField:
     """Test the enforce_risk field on CreateTradeRequest."""
 
     def test_enforce_risk_default_false(self):
-        from lib.services.engine.data.api.trades import CreateTradeRequest
+        from lib.services.data.api.trades import CreateTradeRequest
 
         req = CreateTradeRequest(asset="Gold", direction="LONG", entry=2700.0)  # type: ignore[call-arg]
         assert req.enforce_risk is False
 
     def test_enforce_risk_can_be_true(self):
-        from lib.services.engine.data.api.trades import CreateTradeRequest
+        from lib.services.data.api.trades import CreateTradeRequest
 
         req = CreateTradeRequest(asset="Gold", direction="LONG", entry=2700.0, enforce_risk=True)  # type: ignore[call-arg]
         assert req.enforce_risk is True
@@ -1025,7 +1025,7 @@ class TestPositionsRiskEvaluation:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from lib.services.engine.data.api.positions import router
+        from lib.services.data.api.positions import router
 
         app = FastAPI()
         app.include_router(router, prefix="/positions")
@@ -1134,7 +1134,7 @@ class TestDashboardORBPanel:
     """Test the ORB panel HTML rendering (multi-session format)."""
 
     def test_render_orb_panel_none(self):
-        from lib.services.engine.data.api.dashboard import _render_orb_panel
+        from lib.services.data.api.dashboard import _render_orb_panel
 
         html = _render_orb_panel(None)
         assert "orb-panel" in html
@@ -1144,7 +1144,7 @@ class TestDashboardORBPanel:
 
     def test_render_orb_panel_with_multi_session_data(self):
         """Multi-session format with london + us keys."""
-        from lib.services.engine.data.api.dashboard import _render_orb_panel
+        from lib.services.data.api.dashboard import _render_orb_panel
 
         data = {
             "london": {
@@ -1189,7 +1189,7 @@ class TestDashboardORBPanel:
 
     def test_render_orb_panel_with_legacy_data(self):
         """Backward compat: single-session data without london/us/best keys."""
-        from lib.services.engine.data.api.dashboard import _render_orb_panel
+        from lib.services.data.api.dashboard import _render_orb_panel
 
         data = {
             "or_high": 2710.5,
@@ -1212,7 +1212,7 @@ class TestDashboardORBPanel:
         assert "OPENING RANGE" in html
 
     def test_render_orb_panel_with_breakout(self):
-        from lib.services.engine.data.api.dashboard import _render_orb_panel
+        from lib.services.data.api.dashboard import _render_orb_panel
 
         us_session = {
             "or_high": 2710.0,
@@ -1241,7 +1241,7 @@ class TestDashboardORBPanel:
         assert "animate-pulse" in html
 
     def test_render_orb_panel_with_error(self):
-        from lib.services.engine.data.api.dashboard import _render_orb_panel
+        from lib.services.data.api.dashboard import _render_orb_panel
 
         data = {
             "london": None,
@@ -1260,7 +1260,7 @@ class TestDashboardORBEndpoint:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from lib.services.engine.data.api.dashboard import router
+        from lib.services.data.api.dashboard import router
 
         app = FastAPI()
         app.include_router(router)
@@ -1302,14 +1302,14 @@ class TestSSEORBCache:
             sys.modules.pop("lib.core.cache", None)
 
     def test_get_orb_from_cache_none(self):
-        from lib.services.engine.data.api.sse import _get_orb_from_cache
+        from lib.services.data.api.sse import _get_orb_from_cache
 
         self._mock_cache.cache_get.return_value = None
         result = _get_orb_from_cache()
         assert result is None
 
     def test_get_orb_from_cache_with_data(self):
-        from lib.services.engine.data.api.sse import _get_orb_from_cache
+        from lib.services.data.api.sse import _get_orb_from_cache
 
         orb_data = {"type": "ORB", "symbol": "MGC", "breakout_detected": True, "session_key": "us"}
 
@@ -1330,7 +1330,7 @@ class TestSSEORBCache:
         assert parsed["best"]["symbol"] == "MGC"
 
     def test_get_orb_from_cache_london_session(self):
-        from lib.services.engine.data.api.sse import _get_orb_from_cache
+        from lib.services.data.api.sse import _get_orb_from_cache
 
         london_data = {"type": "ORB", "symbol": "MGC", "session_key": "london", "breakout_detected": True}
 
@@ -1348,7 +1348,7 @@ class TestSSEORBCache:
         assert parsed["best"]["session_key"] == "london"
 
     def test_get_orb_from_cache_both_sessions(self):
-        from lib.services.engine.data.api.sse import _get_orb_from_cache
+        from lib.services.data.api.sse import _get_orb_from_cache
 
         london_data = {"type": "ORB", "symbol": "MGC", "session_key": "london", "breakout_detected": False}
         us_data = {"type": "ORB", "symbol": "MGC", "session_key": "us", "breakout_detected": True}
@@ -1372,7 +1372,7 @@ class TestSSEORBCache:
 
     def test_get_orb_from_cache_legacy_fallback(self):
         """Legacy cache key (engine:orb) still works when session keys are absent."""
-        from lib.services.engine.data.api.sse import _get_orb_from_cache
+        from lib.services.data.api.sse import _get_orb_from_cache
 
         legacy_data = {"type": "ORB", "symbol": "MGC", "breakout_detected": True}
 
@@ -1398,7 +1398,7 @@ class TestRiskModels:
     """Test the Pydantic models for the risk API."""
 
     def test_risk_check_request_defaults(self):
-        from lib.services.engine.data.api.risk import RiskCheckRequest
+        from lib.services.data.api.risk import RiskCheckRequest
 
         req = RiskCheckRequest(symbol="MGC", side="LONG")  # type: ignore[call-arg]
         assert req.size == 1
@@ -1406,7 +1406,7 @@ class TestRiskModels:
         assert req.is_stack is False
 
     def test_risk_check_response_structure(self):
-        from lib.services.engine.data.api.risk import RiskCheckResponse
+        from lib.services.data.api.risk import RiskCheckResponse
 
         resp = RiskCheckResponse(  # type: ignore[call-arg]
             allowed=True,
@@ -1423,7 +1423,7 @@ class TestRiskModels:
         assert resp.total_risk == 100.0
 
     def test_risk_status_response_defaults(self):
-        from lib.services.engine.data.api.risk import RiskStatusResponse
+        from lib.services.data.api.risk import RiskStatusResponse
 
         resp = RiskStatusResponse()  # type: ignore[call-arg]
         assert resp.can_trade is True

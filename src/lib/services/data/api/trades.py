@@ -143,7 +143,7 @@ def api_create_trade(req: CreateTradeRequest):
     risk_details: dict[str, Any] | None = None
 
     try:
-        from lib.services.engine.data.api.risk import check_trade_entry_risk
+        from lib.services.data.api.risk import check_trade_entry_risk
 
         # Compute per-contract risk if stop loss is provided
         risk_per_contract = 0.0

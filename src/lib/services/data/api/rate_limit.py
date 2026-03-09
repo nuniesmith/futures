@@ -45,12 +45,12 @@ for heavy dashboards while still protecting against runaway scripts.
 
 Usage in main.py::
 
-    from lib.services.engine.data.api.rate_limit import setup_rate_limiting
+    from lib.services.data.api.rate_limit import setup_rate_limiting
     setup_rate_limiting(app)
 
 To apply custom limits to specific endpoints::
 
-    from lib.services.engine.data.api.rate_limit import get_limiter
+    from lib.services.data.api.rate_limit import get_limiter
     limiter = get_limiter()
 
     @router.post("/some/endpoint")

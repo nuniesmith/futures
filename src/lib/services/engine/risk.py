@@ -500,7 +500,7 @@ class RiskManager:
 
         # Update Prometheus P&L and consecutive-loss gauges
         try:
-            from lib.services.engine.data.api.metrics import update_consecutive_losses, update_daily_pnl
+            from lib.services.data.api.metrics import update_consecutive_losses, update_daily_pnl
 
             update_daily_pnl(status.get("daily_pnl", 0.0))
             update_consecutive_losses(status.get("consecutive_losses", 0))
