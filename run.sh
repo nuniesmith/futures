@@ -202,15 +202,31 @@ run_tests() {
 }
 
 # ---------------------------------------------------------------------------
-# Lint
+# Lint & Type Check
 # ---------------------------------------------------------------------------
 
-run_lint() {
-    log "Running ruff linter ..."
-    if python -m ruff check src/; then
-        ok "Linting passed"
+run_lint_and_typecheck() {
+    log "Running Ruff linter ..."
+    if python -m ruff check src/ scripts/; then
+        ok "Ruff lint passed"
     else
-        err "Linting failed — aborting"
+        err "Ruff lint failed — aborting"
+        exit 1
+    fi
+
+    log "Running Ruff format check ..."
+    if python -m ruff format --check src/ scripts/; then
+        ok "Ruff format passed"
+    else
+        err "Ruff format check failed — aborting"
+        exit 1
+    fi
+
+    log "Running mypy type checker ..."
+    if python -m mypy src scripts; then
+        ok "mypy passed"
+    else
+        err "mypy failed — aborting"
         exit 1
     fi
 }
@@ -376,8 +392,8 @@ case "$ACTION" in
         ;;
     test)
         ensure_venv
+        run_lint_and_typecheck
         run_tests
-        run_lint
         ok "All checks passed"
         ;;
     all)
@@ -385,21 +401,21 @@ case "$ACTION" in
         ensure_venv
         ensure_env
         echo ""
-        run_tests
+        run_lint_and_typecheck
         echo ""
-        run_lint
+        run_tests
         echo ""
         run_docker "true" "true"
         ;;
     docker)
-        # Full pipeline: venv → env → test → lint → build → up
+        # Full pipeline: venv → env → lint → test → build → up
         # Profiles (trainer / monitoring) activated by flags
         ensure_venv
         ensure_env
         echo ""
-        run_tests
+        run_lint_and_typecheck
         echo ""
-        run_lint
+        run_tests
         echo ""
         run_docker "$TRAINER" "$MONITORING"
         ;;

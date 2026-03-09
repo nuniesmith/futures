@@ -437,10 +437,15 @@ jobs:
                   deploy-command: |
                       cd ~/futures
 
+                      # Remove stale docker-compose.prod.yml if it exists — we use docker-compose.yml exclusively
+                      if [ -f docker-compose.prod.yml ]; then
+                        echo "🧹 Removing stale docker-compose.prod.yml..."
+                        rm -f docker-compose.prod.yml
+                      fi
+
                       # Stop existing services
                       echo "🐳 Stopping existing services..."
-                      docker compose -f docker-compose.prod.yml down 2>/dev/null || \
-                        docker compose down 2>/dev/null || true
+                      docker compose down 2>/dev/null || true
 
                       # Log in to Docker Hub and pull latest per-service images
                       echo "🐳 Pulling latest images from Docker Hub..."
@@ -457,15 +462,14 @@ jobs:
 
                       # Start services (trainer goes to the home laptop — not deployed here)
                       echo "🚀 Starting data, engine and web services..."
-                      docker compose -f docker-compose.prod.yml up -d --no-build --remove-orphans data engine web prometheus grafana 2>/dev/null || \
-                        docker compose up -d --no-build --remove-orphans data engine web prometheus grafana
+                      docker compose up -d --no-build --remove-orphans data engine web prometheus grafana
 
                   post-deploy-command: |
                       cd ~/futures
 
                       echo ""
                       echo "📊 Container status:"
-                      docker compose -f docker-compose.prod.yml ps data engine web 2>/dev/null || \
+                      docker compose ps data engine web 2>/dev/null || \
                         docker ps --filter "name=futures" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
                       echo ""
