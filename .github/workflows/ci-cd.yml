@@ -231,6 +231,14 @@ jobs:
                       dockerfile: docker/trainer/Dockerfile
                       platforms: linux/amd64
                       is_default: false
+                    - service: prometheus
+                      dockerfile: docker/monitoring/prometheus/Dockerfile
+                      platforms: linux/amd64,linux/arm64
+                      is_default: false
+                    - service: grafana
+                      dockerfile: docker/monitoring/grafana/Dockerfile
+                      platforms: linux/amd64,linux/arm64
+                      is_default: false
         steps:
             - name: 📥 Checkout code
               uses: actions/checkout@v4
@@ -433,8 +441,8 @@ jobs:
 
                       # Start services (trainer goes to the home laptop — not deployed here)
                       echo "🚀 Starting engine and web services..."
-                      docker compose -f docker-compose.prod.yml up -d --no-build --remove-orphans engine web 2>/dev/null || \
-                        docker compose up -d --no-build --remove-orphans
+                      docker compose -f docker-compose.prod.yml up -d --no-build --remove-orphans engine web prometheus grafana 2>/dev/null || \
+                        docker compose up -d --no-build --remove-orphans engine web prometheus grafana
 
                   post-deploy-command: |
                       cd ~/futures

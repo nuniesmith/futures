@@ -12,10 +12,12 @@
 #   grafana    — dashboards & visualization
 #
 # Docker Hub repo (built by CI/CD):
-#   nuniesmith/futures:engine   — engine + data API (arm64 + amd64)
-#   nuniesmith/futures:web      — HTMX dashboard (arm64 + amd64)
-#   nuniesmith/futures:trainer  — GPU training server (amd64 only)
-#   nuniesmith/futures:latest   — alias for :engine (default pull)
+#   nuniesmith/futures:engine     — engine + data API (arm64 + amd64)
+#   nuniesmith/futures:web        — HTMX dashboard (arm64 + amd64)
+#   nuniesmith/futures:trainer    — GPU training server (amd64 only)
+#   nuniesmith/futures:prometheus — Prometheus with baked-in config (arm64 + amd64)
+#   nuniesmith/futures:grafana    — Grafana with baked-in dashboards (arm64 + amd64)
+#   nuniesmith/futures:latest     — alias for :engine (default pull)
 #
 # Usage:
 #   docker compose up -d --build                            # Pi services
@@ -308,6 +310,7 @@ services:
     # UI at http://localhost:9095
     # -------------------------------------------------------------------------
     prometheus:
+        image: nuniesmith/futures:prometheus
         build:
             context: .
             dockerfile: docker/monitoring/prometheus/Dockerfile
@@ -335,6 +338,7 @@ services:
     # UI at http://localhost:3010  (admin / admin on first login)
     # -------------------------------------------------------------------------
     grafana:
+        image: nuniesmith/futures:grafana
         build:
             context: .
             dockerfile: docker/monitoring/grafana/Dockerfile
