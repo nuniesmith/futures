@@ -196,7 +196,7 @@ def client(mock_engine):
     Builds a lightweight app copy (no lifespan) so the real
     DashboardEngine is never instantiated during tests.
     """
-    import lib.services.engine.data.api.health as _health_mod
+    import lib.services.data.api.health as _health_mod
 
     _orig_get_engine_or_none = _health_mod._get_engine_or_none
     _health_mod._get_engine_or_none = lambda: mock_engine
@@ -1001,7 +1001,7 @@ class TestEngineNotReady:
 
     @pytest.fixture()
     def client_no_engine(self):
-        import lib.services.engine.data.api.health as _health_mod
+        import lib.services.data.api.health as _health_mod
 
         _orig = _health_mod._get_engine_or_none
         _health_mod._get_engine_or_none = lambda: None
