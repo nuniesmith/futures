@@ -1010,37 +1010,45 @@ class TestBreakoutResultExtra:
 
 
 class TestBreakoutTypeMapping:
-    """Verify engine ↔ training type mapping for all 13 types."""
+    """Verify BreakoutType enum is a single source of truth (Phase 1A).
 
-    def test_all_engine_types_map_to_training(self):
-        from lib.services.engine.breakout import to_training_type
+    The old bridge functions ``to_training_type()``, ``from_training_type()``,
+    and ``breakout_type_ordinal()`` have been removed.  Engine and training
+    share the same ``BreakoutType`` IntEnum from ``lib.core.breakout_types``.
+    """
 
-        for btype in BreakoutType:
-            tt = to_training_type(btype)
-            assert tt is not None, f"No training type mapping for {btype.value}"
+    def test_single_breakout_type_enum(self):
+        """Engine and core BreakoutType are the exact same class."""
+        from lib.core.breakout_types import BreakoutType as CoreBreakoutType
+        from lib.services.engine.breakout import BreakoutType as EngineBreakoutType
 
-    def test_all_training_types_map_to_engine(self):
-        from lib.core.breakout_types import BreakoutType as TrainingBreakoutType
-        from lib.services.engine.breakout import from_training_type
+        assert CoreBreakoutType is EngineBreakoutType
 
-        for tbt in TrainingBreakoutType:
-            ebt = from_training_type(tbt)
-            assert ebt is not None, f"No engine type mapping for {tbt.name}"
-
-    def test_roundtrip_mapping(self):
-        from lib.services.engine.breakout import from_training_type, to_training_type
+    def test_all_types_have_range_config(self):
+        from lib.core.breakout_types import get_range_config
 
         for btype in BreakoutType:
-            tt = to_training_type(btype)
-            back = from_training_type(tt)
-            assert back == btype, f"Roundtrip failed: {btype} → {tt} → {back}"
+            cfg = get_range_config(btype)
+            assert cfg is not None, f"No RangeConfig for {btype.name}"
+            assert cfg.breakout_type is btype
 
     def test_ordinal_values(self):
-        from lib.services.engine.breakout import breakout_type_ordinal
+        from lib.core.breakout_types import get_range_config
 
         for btype in BreakoutType:
-            ordinal = breakout_type_ordinal(btype)
-            assert 0.0 <= ordinal <= 1.0, f"Ordinal {ordinal} for {btype.value} out of [0, 1] range"
+            ordinal = get_range_config(btype).breakout_type_ord
+            assert 0.0 <= ordinal <= 1.0, f"Ordinal {ordinal} for {btype.name} out of [0, 1] range"
+
+    def test_ordinal_monotonically_increasing(self):
+        from lib.core.breakout_types import get_range_config
+
+        prev_ord = -1.0
+        for btype in BreakoutType:
+            cur_ord = get_range_config(btype).breakout_type_ord
+            assert cur_ord > prev_ord, (
+                f"Ordinal not monotonically increasing: {btype.name} ord={cur_ord} <= prev={prev_ord}"
+            )
+            prev_ord = cur_ord
 
 
 # ===========================================================================

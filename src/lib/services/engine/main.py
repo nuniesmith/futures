@@ -1893,7 +1893,7 @@ def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "u
         payload["published_at"] = datetime.now(tz=ZoneInfo("America/New_York")).isoformat()
         payload["orb_session"] = orb_session_key
 
-        key = f"engine:breakout:{result.breakout_type.lower()}:{result.symbol}"
+        key = f"engine:breakout:{result.breakout_type.name.lower()}:{result.symbol}"
         cache_set(key, json.dumps(payload).encode(), ttl=300)
 
         # Also publish to the generic breakout channel so the SSE picks it up
@@ -1907,7 +1907,7 @@ def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "u
 
         logger.info(
             "🔔 %s BREAKOUT: %s %s @ %.4f (range %.4f–%.4f)",
-            result.breakout_type.value,
+            result.breakout_type.name,
             result.direction,
             result.symbol,
             result.trigger_price,
@@ -1950,8 +1950,8 @@ def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "u
                 tv_signal = {
                     "timestamp": datetime.now(tz=ZoneInfo("America/New_York")).isoformat(),
                     "asset": asset_name,
-                    "breakout_type": result.breakout_type.value
-                    if hasattr(result.breakout_type, "value")
+                    "breakout_type": result.breakout_type.name
+                    if hasattr(result.breakout_type, "name")
                     else str(result.breakout_type),
                     "direction": result.direction,
                     "entry": round(entry, 4),
@@ -1967,7 +1967,7 @@ def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "u
                 }
                 publish_signal_to_tv_sync(
                     tv_signal,
-                    source=result.breakout_type.value.lower() if hasattr(result.breakout_type, "value") else "breakout",
+                    source=result.breakout_type.name.lower() if hasattr(result.breakout_type, "name") else "breakout",
                 )
             except ImportError:
                 logger.debug("TradingView module not available — skipping TV signal publish for breakout")
@@ -2208,7 +2208,7 @@ def _persist_breakout_result(result: "BreakoutResult", session_key: str = "") ->
             bar_count=result.range_bar_count,
             session=session_key,
             metadata=result.extra or {},
-            breakout_type=result.breakout_type.value,
+            breakout_type=result.breakout_type.name,
             mtf_score=result.mtf_score,
             macd_slope=result.macd_slope,
             divergence=result.divergence_type or "",
@@ -2240,351 +2240,69 @@ def _run_mtf_on_result(result: "BreakoutResult", bars_htf: "pd.DataFrame | None"
 def _handle_check_pdr(engine, session_key: str = "london_ny") -> None:
     """Check for Previous Day Range (PDR) breakouts across session assets.
 
-    The PDR uses yesterday's Globex high/low as the range anchor.  A close
-    beyond either level by at least ``min_depth_atr_pct × ATR`` triggers.
-
-    Strongest sessions: London Open (03:00 ET) and US Equity Open (09:30 ET)
-    where institutional orders cluster around yesterday's levels.
+    Delegates to the generic ``handle_breakout_check()`` pipeline (Phase 1D).
     """
-    logger.debug("▶ PDR breakout check [session=%s]...", session_key)
-    try:
-        import pandas as pd
+    from lib.core.breakout_types import BreakoutType
+    from lib.services.engine.handlers import handle_breakout_check
 
-        from lib.services.engine.breakout import detect_pdr_breakout
-
-        assets = _get_assets_for_session_key(session_key)
-        if not assets:
-            logger.debug("No assets for PDR check (session=%s)", session_key)
-            return
-
-        found = 0
-        for asset in assets:
-            symbol = asset.get("symbol", "")
-            ticker = asset.get("ticker", "")
-            if not symbol:
-                continue
-            try:
-                bars_1m = _fetch_bars_1m(engine, ticker, symbol)
-                if bars_1m is None or bars_1m.empty:
-                    continue
-
-                # Try to get pre-computed PDR levels from daily bars cache
-                prev_high: float | None = None
-                prev_low: float | None = None
-                try:
-                    import io
-
-                    from lib.core.cache import cache_get
-
-                    daily_key = f"engine:bars_daily:{ticker or symbol}"
-                    raw_daily = cache_get(daily_key)
-                    if raw_daily:
-                        raw_daily_str = raw_daily.decode("utf-8") if isinstance(raw_daily, bytes) else raw_daily
-                        bars_daily = pd.read_json(io.StringIO(raw_daily_str))
-                        if len(bars_daily) >= 2:
-                            prev_high = float(bars_daily["High"].iloc[-2])
-                            prev_low = float(bars_daily["Low"].iloc[-2])
-                except Exception:
-                    pass
-
-                result = detect_pdr_breakout(
-                    bars_1m,
-                    symbol=symbol,
-                    prev_day_high=prev_high,
-                    prev_day_low=prev_low,
-                )
-
-                # Fetch HTF bars for MTF enrichment
-                bars_htf = None
-                try:
-                    import io as _io
-
-                    from lib.core.cache import cache_get as _cg
-
-                    htf_raw = _cg(f"engine:bars_15m:{ticker or symbol}")
-                    if htf_raw:
-                        bars_htf = pd.read_json(
-                            _io.StringIO(htf_raw.decode("utf-8") if isinstance(htf_raw, bytes) else htf_raw)
-                        )
-                except Exception:
-                    pass
-
-                if bars_htf is None and bars_1m is not None:
-                    with contextlib.suppress(Exception):
-                        bars_htf = (
-                            bars_1m.resample("15min")
-                            .agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})
-                            .dropna()
-                        )
-
-                result = _run_mtf_on_result(result, bars_htf)
-                _persist_breakout_result(result, session_key=session_key)
-
-                if result.breakout_detected:
-                    found += 1
-                    _publish_breakout_result(result, orb_session_key=session_key)
-                    # Forward to PositionManager (stop-and-reverse)
-                    _dispatch_to_position_manager(result, bars_1m=bars_1m, session_key=session_key)
-                    try:
-                        from lib.core.alerts import send_signal
-
-                        send_signal(
-                            signal_key=f"pdr_{symbol}_{result.direction}",
-                            title=f"📊 PDR {result.direction}: {symbol}",
-                            message=(
-                                f"Previous Day Range Breakout!\n"
-                                f"Direction: {result.direction}\n"
-                                f"Trigger: {result.trigger_price:,.4f}\n"
-                                f"PDR: {result.range_low:,.4f} – {result.range_high:,.4f}\n"
-                                f"ATR: {result.atr_value:,.4f}"
-                                + (f"\nMTF Score: {result.mtf_score:.3f}" if result.mtf_score is not None else "")
-                            ),
-                            asset=symbol,
-                            direction=result.direction,
-                        )
-                    except Exception:
-                        pass
-            except Exception as exc:
-                logger.debug("PDR check failed for %s: %s", symbol, exc)
-
-        logger.debug("PDR check [%s] complete: %d breakout(s)", session_key, found)
-    except Exception as exc:
-        logger.debug("PDR handler error (non-fatal): %s", exc)
+    handle_breakout_check(engine, BreakoutType.PrevDay, session_key=session_key)
 
 
 def _handle_check_ib(engine, session_key: str = "us") -> None:
     """Check for Initial Balance (IB) breakouts across US session assets.
 
-    The Initial Balance is formed during the first 60 minutes of RTH
-    (09:30–10:30 ET).  Breakouts after 10:30 ET are the classic
-    Dalton/Steidlmayer IB extension trade.  Narrow IB ranges on trend days
-    produce the highest-conviction signals.
-
+    Delegates to the generic ``handle_breakout_check()`` pipeline (Phase 1D).
     Only fired by the scheduler after 10:30 ET when the IB is complete.
     """
-    logger.debug("▶ IB breakout check [session=%s]...", session_key)
-    try:
-        import pandas as pd
+    from lib.core.breakout_types import BreakoutType
+    from lib.services.engine.handlers import handle_breakout_check
 
-        from lib.services.engine.breakout import detect_ib_breakout
-
-        assets = _get_assets_for_session_key(session_key)
-        if not assets:
-            logger.debug("No assets for IB check (session=%s)", session_key)
-            return
-
-        found = 0
-        for asset in assets:
-            symbol = asset.get("symbol", "")
-            ticker = asset.get("ticker", "")
-            if not symbol:
-                continue
-            try:
-                bars_1m = _fetch_bars_1m(engine, ticker, symbol)
-                if bars_1m is None or bars_1m.empty:
-                    continue
-
-                result = detect_ib_breakout(bars_1m, symbol=symbol)
-
-                # Enrich with MTF
-                bars_htf = None
-                try:
-                    import io as _io
-
-                    from lib.core.cache import cache_get as _cg
-
-                    htf_raw = _cg(f"engine:bars_15m:{ticker or symbol}")
-                    if htf_raw:
-                        bars_htf = pd.read_json(
-                            _io.StringIO(htf_raw.decode("utf-8") if isinstance(htf_raw, bytes) else htf_raw)
-                        )
-                except Exception:
-                    pass
-
-                if bars_htf is None and bars_1m is not None:
-                    with contextlib.suppress(Exception):
-                        bars_htf = (
-                            bars_1m.resample("15min")
-                            .agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})
-                            .dropna()
-                        )
-
-                result = _run_mtf_on_result(result, bars_htf)
-                _persist_breakout_result(result, session_key=session_key)
-
-                if result.breakout_detected:
-                    found += 1
-                    _publish_breakout_result(result, orb_session_key=session_key)
-                    # Forward to PositionManager (stop-and-reverse)
-                    _dispatch_to_position_manager(result, bars_1m=bars_1m, session_key=session_key)
-                    try:
-                        from lib.core.alerts import send_signal
-
-                        ib_line = f"IB: {result.ib_low:,.4f} – {result.ib_high:,.4f}" if result.ib_high > 0 else ""
-                        send_signal(
-                            signal_key=f"ib_{symbol}_{result.direction}",
-                            title=f"📊 IB {result.direction}: {symbol}",
-                            message=(
-                                f"Initial Balance Breakout!\n"
-                                f"Direction: {result.direction}\n"
-                                f"Trigger: {result.trigger_price:,.4f}\n"
-                                + (f"{ib_line}\n" if ib_line else "")
-                                + f"ATR: {result.atr_value:,.4f}"
-                                + (f"\nMTF Score: {result.mtf_score:.3f}" if result.mtf_score is not None else "")
-                            ),
-                            asset=symbol,
-                            direction=result.direction,
-                        )
-                    except Exception:
-                        pass
-            except Exception as exc:
-                logger.debug("IB check failed for %s: %s", symbol, exc)
-
-        logger.debug("IB check [%s] complete: %d breakout(s)", session_key, found)
-    except Exception as exc:
-        logger.debug("IB handler error (non-fatal): %s", exc)
+    handle_breakout_check(engine, BreakoutType.InitialBalance, session_key=session_key)
 
 
 def _handle_check_consolidation(engine, session_key: str = "london_ny") -> None:
     """Check for Consolidation/Squeeze breakouts across session assets.
 
-    Uses Bollinger Band contraction (BB width < squeeze_atr_mult × ATR for
-    ≥ squeeze_min_bars consecutive bars) to identify compressed price action,
-    then detects the expansion bar that breaks out of the squeeze.
-
+    Delegates to the generic ``handle_breakout_check()`` pipeline (Phase 1D).
     Valid throughout the full active window — squeeze breakouts can fire at
     any time once a sustained contraction is detected.
     """
-    logger.debug("▶ Consolidation/squeeze breakout check [session=%s]...", session_key)
-    try:
-        import pandas as pd
+    from lib.core.breakout_types import BreakoutType
+    from lib.services.engine.handlers import handle_breakout_check
 
-        from lib.services.engine.breakout import detect_consolidation_breakout
-
-        assets = _get_assets_for_session_key(session_key)
-        if not assets:
-            logger.debug("No assets for CONS check (session=%s)", session_key)
-            return
-
-        found = 0
-        for asset in assets:
-            symbol = asset.get("symbol", "")
-            ticker = asset.get("ticker", "")
-            if not symbol:
-                continue
-            try:
-                bars_1m = _fetch_bars_1m(engine, ticker, symbol)
-                if bars_1m is None or bars_1m.empty:
-                    continue
-
-                result = detect_consolidation_breakout(bars_1m, symbol=symbol)
-
-                # Enrich with MTF
-                bars_htf = None
-                try:
-                    import io as _io
-
-                    from lib.core.cache import cache_get as _cg
-
-                    htf_raw = _cg(f"engine:bars_15m:{ticker or symbol}")
-                    if htf_raw:
-                        bars_htf = pd.read_json(
-                            _io.StringIO(htf_raw.decode("utf-8") if isinstance(htf_raw, bytes) else htf_raw)
-                        )
-                except Exception:
-                    pass
-
-                if bars_htf is None and bars_1m is not None:
-                    with contextlib.suppress(Exception):
-                        bars_htf = (
-                            bars_1m.resample("15min")
-                            .agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})
-                            .dropna()
-                        )
-
-                result = _run_mtf_on_result(result, bars_htf)
-                _persist_breakout_result(result, session_key=session_key)
-
-                if result.breakout_detected:
-                    found += 1
-                    _publish_breakout_result(result, orb_session_key=session_key)
-                    # Forward to PositionManager (stop-and-reverse)
-                    _dispatch_to_position_manager(result, bars_1m=bars_1m, session_key=session_key)
-                    try:
-                        from lib.core.alerts import send_signal
-
-                        squeeze_line = (
-                            f"Squeeze: {result.squeeze_bar_count} bars, BB width {result.squeeze_bb_width:.4f}"
-                            if result.squeeze_detected
-                            else ""
-                        )
-                        send_signal(
-                            signal_key=f"cons_{symbol}_{result.direction}",
-                            title=f"📊 SQUEEZE {result.direction}: {symbol}",
-                            message=(
-                                f"Consolidation Squeeze Breakout!\n"
-                                f"Direction: {result.direction}\n"
-                                f"Trigger: {result.trigger_price:,.4f}\n"
-                                f"Range: {result.range_low:,.4f} – {result.range_high:,.4f}\n"
-                                + (f"{squeeze_line}\n" if squeeze_line else "")
-                                + f"ATR: {result.atr_value:,.4f}"
-                                + (f"\nMTF Score: {result.mtf_score:.3f}" if result.mtf_score is not None else "")
-                            ),
-                            asset=symbol,
-                            direction=result.direction,
-                        )
-                    except Exception:
-                        pass
-            except Exception as exc:
-                logger.debug("CONS check failed for %s: %s", symbol, exc)
-
-        logger.debug("CONS check [%s] complete: %d breakout(s)", session_key, found)
-    except Exception as exc:
-        logger.debug("CONS handler error (non-fatal): %s", exc)
+    handle_breakout_check(engine, BreakoutType.Consolidation, session_key=session_key)
 
 
 def _handle_check_breakout_multi(engine, session_key: str = "us", types: list[str] | None = None) -> None:
     """Run multiple BreakoutType detectors in parallel for a session's assets.
 
-    Dispatches PDR, IB, and/or CONS checks concurrently using
-    ``concurrent.futures.ThreadPoolExecutor`` so a slow fetch for one asset
-    does not block the others.  ORB is intentionally excluded here — it has
-    its own session-specific handlers that run on the same 2-minute cadence.
+    Delegates to the generic ``handle_breakout_multi()`` pipeline (Phase 1D).
+    ORB is intentionally excluded — it has its own session-specific handlers.
 
     Args:
         engine: The engine singleton.
         session_key: Session key whose asset list to use.
-        types: List of breakout type strings to check ("PDR", "IB", "CONS").
+        types: List of breakout type strings to check ("PDR", "IB", "CONS",
+               "WEEKLY", "MONTHLY", "ASIAN", "BBSQUEEZE", "VA", "INSIDE",
+               "GAP", "PIVOT", "FIB").
                Defaults to ["PDR", "CONS"] if not specified.
     """
+    from lib.services.engine.breakout import breakout_type_from_short_name
+    from lib.services.engine.handlers import handle_breakout_multi
+
     if types is None:
         types = ["PDR", "CONS"]
 
-    logger.debug("▶ Multi-type breakout sweep [session=%s types=%s]...", session_key, types)
+    # Convert short name strings → BreakoutType IntEnum members
+    bt_list = []
+    for name in types:
+        try:
+            bt_list.append(breakout_type_from_short_name(name))
+        except (KeyError, ValueError):
+            logger.warning("Unknown breakout type short name: %s — skipping", name)
 
-    import concurrent.futures
-
-    handler_map = {
-        "PDR": lambda: _handle_check_pdr(engine, session_key=session_key),
-        "IB": lambda: _handle_check_ib(engine, session_key=session_key),
-        "CONS": lambda: _handle_check_consolidation(engine, session_key=session_key),
-    }
-
-    futures_map = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(types), thread_name_prefix="breakout") as executor:
-        for btype in types:
-            handler = handler_map.get(btype)
-            if handler is not None:
-                futures_map[executor.submit(handler)] = btype
-
-        for future in concurrent.futures.as_completed(futures_map, timeout=60):
-            btype = futures_map[future]
-            try:
-                future.result()
-            except Exception as exc:
-                logger.warning("Multi-type sweep [%s/%s] error: %s", session_key, btype, exc)
-
-    logger.debug("Multi-type breakout sweep [%s] complete", session_key)
+    if bt_list:
+        handle_breakout_multi(engine, session_key=session_key, types=bt_list)
 
 
 # Configurable gap-alert threshold (minutes).  Gaps larger than this value

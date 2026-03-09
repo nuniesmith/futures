@@ -1748,7 +1748,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     """Build a single CSV row from an ORBSimResult.
 
     The row includes all columns needed by BreakoutDataset.__getitem__ to
-    compute the 18-feature tabular vector per feature_contract.json v6,
+    compute the 24-feature tabular vector per feature_contract.json v7,
     mirroring C# PrepareCnnTabular() exactly:
 
       [0]  quality_pct_norm       ← quality_pct / 100
@@ -1770,6 +1770,13 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
       [15] asset_volatility_class ← low=0.0 / med=0.5 / high=1.0
       [16] hour_of_day            ← ET hour / 23  [0, 1]
       [17] tp3_atr_mult_norm      ← tp3_atr_mult / 5.0  [0, 1]
+      ── v7 additions (Daily Strategy layer) ──
+      [18] daily_bias_direction   ← from bias_analyzer: -1→0.0, 0→0.5, +1→1.0
+      [19] daily_bias_confidence  ← 0.0–1.0 scalar from bias analyzer
+      [20] prior_day_pattern      ← candle pattern ordinal / 9  [0, 1]
+      [21] weekly_range_position  ← price in prior week H/L range [0, 1]
+      [22] monthly_trend_score    ← EMA slope [-1,+1] mapped to [0, 1]
+      [23] crypto_momentum_score  ← crypto lead [-1,+1] mapped to [0, 1]
     """
     import math
 
@@ -1920,6 +1927,130 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     except Exception:
         tp3_atr_mult_raw = 0.0
 
+    # ── v7 features [18–23] — Daily Strategy layer ────────────────────────
+    # These features come from the daily bias analyzer and crypto momentum
+    # modules.  They require daily bars which may be attached to the result
+    # or loaded separately.  Falls back to neutral defaults if unavailable.
+
+    # [18] daily_bias_direction — SHORT=0.0, NEUTRAL=0.5, LONG=1.0
+    daily_bias_dir = 0.5
+    # [19] daily_bias_confidence — 0.0–1.0
+    daily_bias_conf = 0.0
+    # [20] prior_day_pattern — candle pattern ordinal / 9 → [0, 1]
+    prior_day_pat = 1.0  # neutral default
+    # [21] weekly_range_position — [0, 1]
+    weekly_range_pos = 0.5
+    # [22] monthly_trend_score — [-1,+1] → [0, 1]
+    monthly_trend = 0.5
+
+    try:
+        # Check if daily bars are attached to the result (set by the simulator)
+        _daily_bars = getattr(result, "_daily_bars", None)
+        _asset_name = getattr(result, "_asset_name", None) or result.symbol
+
+        if _daily_bars is not None and not _daily_bars.empty:
+            try:
+                from lib.analysis.breakout_cnn import (
+                    get_daily_bias_confidence,
+                    get_daily_bias_direction,
+                    get_monthly_trend_score,
+                    get_prior_day_pattern,
+                    get_weekly_range_position,
+                )
+
+                daily_bias_dir = get_daily_bias_direction(_asset_name, _daily_bars)
+                daily_bias_conf = get_daily_bias_confidence(_asset_name, _daily_bars)
+                prior_day_pat = get_prior_day_pattern(_asset_name, _daily_bars)
+                weekly_range_pos = get_weekly_range_position(_asset_name, _daily_bars)
+                monthly_trend = get_monthly_trend_score(_asset_name, _daily_bars)
+            except Exception:
+                pass
+        else:
+            # Try to use a pre-computed bias cache if attached
+            _bias_cache = getattr(result, "_bias_cache", None)
+            if _bias_cache is not None and _asset_name in _bias_cache:
+                try:
+                    bias = _bias_cache[_asset_name]
+                    daily_bias_dir = getattr(bias, "direction_feature", 0.5)
+                    daily_bias_conf = getattr(bias, "confidence_feature", 0.0)
+                    prior_day_pat = getattr(bias, "candle_pattern_feature", 1.0)
+                    weekly_range_pos = getattr(bias, "weekly_range_feature", 0.5)
+                    monthly_trend = getattr(bias, "monthly_trend_feature", 0.5)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # [23] crypto_momentum_score — [-1,+1] → [0, 1]
+    crypto_mom = 0.5
+    try:
+        from lib.analysis.breakout_cnn import get_crypto_momentum_score
+
+        crypto_mom = get_crypto_momentum_score(result.symbol)
+    except Exception:
+        pass
+
+    # ── v7.1 sub-features [24–27] — Phase 4B decomposition ───────────────
+    # These sub-features enrich existing features with additional nuance
+    # without replacing them.
+
+    # [24] breakout_type_category — time-based=0, range-based=0.5, squeeze=1.0
+    bt_category = 0.5
+    try:
+        from lib.analysis.breakout_cnn import get_breakout_type_category
+
+        bt_category = get_breakout_type_category(_bt_name)
+    except Exception:
+        pass
+
+    # [25] session_overlap_flag — 1.0 if London+NY overlap, else 0.0
+    session_overlap = 0.0
+    try:
+        from lib.analysis.breakout_cnn import get_session_overlap_flag
+
+        _session_key = getattr(result, "_session_key", "us")
+        # Also check the bar hour for overlap detection
+        _bar_hour_et = None
+        try:
+            bt = result.breakout_time
+            if bt is not None:
+                if isinstance(bt, str):
+                    from datetime import datetime as _dt
+
+                    bt = _dt.fromisoformat(bt)
+                if bt.tzinfo is not None:
+                    from zoneinfo import ZoneInfo as _ZI
+
+                    bt = bt.astimezone(_ZI("America/New_York"))
+                _bar_hour_et = bt.hour
+        except Exception:
+            pass
+        session_overlap = get_session_overlap_flag(_session_key, bar_hour_et=_bar_hour_et)
+    except Exception:
+        pass
+
+    # [26] atr_trend — ATR expanding=1.0, contracting=0.0 (10-bar lookback)
+    atr_trend_val = 0.5
+    try:
+        from lib.analysis.breakout_cnn import get_atr_trend
+
+        _bars_1m = getattr(result, "_bars_1m", None)
+        if _bars_1m is not None and not _bars_1m.empty:
+            atr_trend_val = get_atr_trend(_bars_1m, lookback=10)
+    except Exception:
+        pass
+
+    # [27] volume_trend — 5-bar volume slope, normalised [0, 1]
+    vol_trend_val = 0.5
+    try:
+        from lib.analysis.breakout_cnn import get_volume_trend
+
+        _bars_1m = getattr(result, "_bars_1m", None)
+        if _bars_1m is not None and not _bars_1m.empty:
+            vol_trend_val = get_volume_trend(_bars_1m, lookback=5)
+    except Exception:
+        pass
+
     return {
         # ── Identity / label ──────────────────────────────────────────────
         "image_path": image_path,
@@ -1966,6 +2097,18 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
         "asset_volatility_class": round(asset_vol_class, 4),  # [15]
         "hour_of_day": round(hour_of_day_norm, 4),  # [16]
         "tp3_atr_mult": round(tp3_atr_mult_raw, 4),  # [17] raw value; dataset normalises /5.0
+        # ── v7 tabular feature columns (Daily Strategy layer) ─────────────
+        "daily_bias_direction": round(daily_bias_dir, 4),  # [18] already [0, 1]
+        "daily_bias_confidence": round(daily_bias_conf, 4),  # [19] already [0, 1]
+        "prior_day_pattern": round(prior_day_pat, 4),  # [20] already [0, 1]
+        "weekly_range_position": round(weekly_range_pos, 4),  # [21] already [0, 1]
+        "monthly_trend_score": round(monthly_trend, 4),  # [22] already [0, 1]
+        "crypto_momentum_score": round(crypto_mom, 4),  # [23] already [0, 1]
+        # ── v7.1 sub-feature columns (Phase 4B decomposition) ─────────────
+        "breakout_type_category": round(bt_category, 4),  # [24] already {0, 0.5, 1.0}
+        "session_overlap_flag": round(session_overlap, 4),  # [25] already {0.0, 1.0}
+        "atr_trend": round(atr_trend_val, 4),  # [26] already [0, 1]
+        "volume_trend": round(vol_trend_val, 4),  # [27] already [0, 1]
     }
 
 

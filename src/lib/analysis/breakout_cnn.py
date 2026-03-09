@@ -101,7 +101,8 @@ except ImportError:
 # Ordered list of tabular feature names expected by the model.
 # The dataset and inference code must provide them in exactly this order.
 #
-# v6 contract (18 features) — extends v4's 14 features with 4 new slots.
+# v7 contract (24 features) — extends v6's 18 features with 6 new slots
+# from the Daily Strategy layer and crypto momentum analysis.
 # Aligns with NinjaTrader BreakoutStrategy PrepareCnnTabular() and
 # OrbCnnPredictor.NormaliseTabular() in C#.
 # This is the canonical contract for Python training and NT8 inference.
@@ -127,6 +128,18 @@ except ImportError:
 #  [15]  asset_volatility_class  low=0.0 / med=0.5 / high=1.0
 #  [16]  hour_of_day             ET hour / 23  →  [0, 1]
 #  [17]  tp3_atr_mult_norm       TP3 ATR multiplier / 5.0  →  [0, 1]
+#  ── v7 additions (slots 18–23) — Daily Strategy layer features ──────────
+#  [18]  daily_bias_direction    from bias_analyzer: -1→0, 0→0.5, +1→1.0
+#  [19]  daily_bias_confidence   0.0–1.0 scalar from bias analyzer
+#  [20]  prior_day_pattern       ordinal of yesterday's candle pattern / 9
+#  [21]  weekly_range_position   price position in prior week H/L  [0, 1]
+#  [22]  monthly_trend_score     20-day EMA slope [-1,+1] → [0, 1]
+#  [23]  crypto_momentum_score   from crypto_momentum: [-1,+1] → [0, 1]
+#  ── v7.1 additions (slots 24–27) — Phase 4B sub-feature decomposition ──
+#  [24]  breakout_type_category  time-based=0, range-based=0.5, squeeze=1.0
+#  [25]  session_overlap_flag    1.0 if London+NY overlap window, else 0.0
+#  [26]  atr_trend               ATR expanding=1.0, contracting=0.0 (10-bar)
+#  [27]  volume_trend            5-bar volume slope, normalised [0, 1]
 TABULAR_FEATURES: list[str] = [
     "quality_pct_norm",  # [0]  quality / 100
     "volume_ratio",  # [1]  breakout bar vol / avg vol
@@ -147,12 +160,26 @@ TABULAR_FEATURES: list[str] = [
     "asset_volatility_class",  # [15] low=0 / med=0.5 / high=1
     "hour_of_day",  # [16] ET hour / 23
     "tp3_atr_mult_norm",  # [17] TP3 multiplier / 5
+    # ── v7 additions — Daily Strategy layer ──────────────────────────────
+    "daily_bias_direction",  # [18] -1→0, 0→0.5, +1→1.0
+    "daily_bias_confidence",  # [19] 0.0–1.0 from bias analyzer
+    "prior_day_pattern",  # [20] candle pattern ordinal / 9
+    "weekly_range_position",  # [21] price in week range [0, 1]
+    "monthly_trend_score",  # [22] EMA slope [-1,+1] → [0, 1]
+    "crypto_momentum_score",  # [23] crypto lead [-1,+1] → [0, 1]
+    # ── v7.1 additions — Phase 4B sub-feature decomposition ──────────────
+    "breakout_type_category",  # [24] time=0, range=0.5, squeeze=1.0
+    "session_overlap_flag",  # [25] 1.0 if London+NY overlap
+    "atr_trend",  # [26] expanding=1.0, contracting=0.0
+    "volume_trend",  # [27] 5-bar vol slope [0, 1]
 ]
 
 NUM_TABULAR = len(TABULAR_FEATURES)
 
 # Feature contract version — must match NinjaTrader BreakoutStrategy.
-FEATURE_CONTRACT_VERSION = 6
+# v7.1 adds 4 sub-features (Phase 4B): breakout_type_category,
+# session_overlap_flag, atr_trend, volume_trend.
+FEATURE_CONTRACT_VERSION = 7
 
 # Asset class ordinal map — mirrors GetAssetClassNorm() in BreakoutStrategy.cs.
 # 0=equity_index, 1=fx, 2=metals_energy, 3=treasuries_ags, 4=crypto
@@ -272,6 +299,398 @@ def get_breakout_type_ordinal(breakout_type: str) -> float:
     Falls back to 0.0 (ORB) for unknown types.
     """
     return BREAKOUT_TYPE_ORDINALS.get(str(breakout_type).upper().strip(), 0.0)
+
+
+# ---------------------------------------------------------------------------
+# v7.1 feature helpers — Phase 4B sub-feature decomposition
+# ---------------------------------------------------------------------------
+
+# Breakout type → category mapping.
+# Categories capture *how* the range is formed:
+#   time-based (0.0):    range defined by a fixed time window
+#   range-based (0.5):   range defined by prior price levels / structures
+#   squeeze-based (1.0): range detected algorithmically via compression
+_BREAKOUT_TYPE_CATEGORY: dict[str, float] = {
+    # Time-based — fixed session/time windows define the range
+    "ORB": 0.0,
+    "ASIAN": 0.0,
+    "IB": 0.0,
+    # Range-based — prior price levels / structures define the range
+    "PDR": 0.5,
+    "WEEKLY": 0.5,
+    "MONTHLY": 0.5,
+    "VA": 0.5,
+    "INSIDE": 0.5,
+    "GAP": 0.5,
+    "PIVOT": 0.5,
+    "FIB": 0.5,
+    # Squeeze-based — algorithmically detected compression
+    "CONS": 1.0,
+    "BBSQUEEZE": 1.0,
+}
+
+
+def get_breakout_type_category(breakout_type: str) -> float:
+    """Return the breakout type category for the CNN tabular vector.
+
+    Categories decompose breakout_type_ord into a coarser grouping that
+    captures *how* the range is formed:
+      - time-based (0.0):    ORB, Asian, IB — fixed time window
+      - range-based (0.5):   PDR, Weekly, Monthly, VA, Inside, Gap, Pivot, Fib
+      - squeeze-based (1.0): Consolidation, BollingerSqueeze
+
+    This helps the CNN learn that squeeze breakouts share characteristics
+    (explosive expansion) regardless of the specific detection algorithm,
+    while time-based breakouts share session-dependency characteristics.
+
+    Args:
+        breakout_type: Short name (``"ORB"``, ``"PDR"``, ``"CONS"``, …)
+                       or canonical name (``"PrevDay"``, ``"Consolidation"``, …).
+
+    Returns:
+        Float in {0.0, 0.5, 1.0}.  Falls back to 0.5 (range-based) for
+        unknown types.
+    """
+    upper = str(breakout_type).upper().strip()
+    if upper in _BREAKOUT_TYPE_CATEGORY:
+        return _BREAKOUT_TYPE_CATEGORY[upper]
+    # Try canonical name → short name mapping
+    _CANONICAL_TO_SHORT = {
+        "PREVDAY": "PDR",
+        "INITIALBALANCE": "IB",
+        "CONSOLIDATION": "CONS",
+        "BOLLINGERSQUEEZE": "BBSQUEEZE",
+        "VALUEAREA": "VA",
+        "INSIDEDAY": "INSIDE",
+        "GAPREJECTION": "GAP",
+        "PIVOTPOINTS": "PIVOT",
+        "FIBONACCI": "FIB",
+    }
+    short = _CANONICAL_TO_SHORT.get(upper, upper)
+    return _BREAKOUT_TYPE_CATEGORY.get(short, 0.5)
+
+
+def get_session_overlap_flag(
+    session_key: str | None = None,
+    *,
+    bar_hour_et: int | None = None,
+) -> float:
+    """Return 1.0 if the bar is in the London+NY overlap window, else 0.0.
+
+    The London-NY overlap (roughly 08:00–12:00 ET / 13:00–17:00 UTC) is the
+    highest-volume window of the trading day.  Breakouts during this window
+    have significantly higher follow-through rates because of the liquidity
+    depth from both European and American institutional flow.
+
+    This sub-feature enriches ``session_ordinal`` by explicitly flagging the
+    overlap, which the model can use as a multiplicative signal quality boost.
+
+    Detection logic (any of these → 1.0):
+      - ``session_key == "london_ny"``
+      - ``bar_hour_et`` is in [8, 9, 10, 11] (08:00–11:59 ET)
+
+    Args:
+        session_key: ORBSession.key (e.g. ``"london_ny"``).
+        bar_hour_et: Hour of the bar in US/Eastern (0–23).
+
+    Returns:
+        1.0 if in the overlap window, 0.0 otherwise.
+    """
+    if session_key is not None and session_key.lower().strip() == "london_ny":
+        return 1.0
+    if bar_hour_et is not None and 8 <= bar_hour_et <= 11:
+        return 1.0
+    return 0.0
+
+
+def get_atr_trend(
+    bars: "pd.DataFrame | None" = None,
+    *,
+    lookback: int = 10,
+) -> float:
+    """Return whether ATR is expanding (1.0) or contracting (0.0) over the last N bars.
+
+    Computes the per-bar true range for the most recent ``lookback`` bars,
+    then compares the mean of the second half to the first half.  If the
+    recent half has higher average TR, ATR is expanding (→ 1.0); if lower,
+    it's contracting (→ 0.0).  Equal → 0.5.
+
+    This sub-feature enriches ``atr_pct`` (which is a point-in-time snapshot)
+    by adding the *direction* of volatility change.  Expanding ATR into a
+    breakout is bullish for continuation; contracting ATR suggests the move
+    may be exhausting.
+
+    Args:
+        bars:     1-minute OHLCV DataFrame (needs at least ``lookback`` rows).
+        lookback: Number of bars to measure the TR trend over (default 10).
+
+    Returns:
+        Float in [0.0, 1.0].  1.0 = expanding, 0.0 = contracting, 0.5 = flat.
+        Falls back to 0.5 if insufficient data.
+    """
+    if bars is None or len(bars) < lookback + 1:
+        return 0.5
+
+    try:
+        tail = bars.iloc[-(lookback + 1) :]
+        highs = tail["High"].astype(float).values
+        lows = tail["Low"].astype(float).values
+        closes = tail["Close"].astype(float).values
+
+        # Compute per-bar true range (skip first bar — no prior close)
+        tr = np.empty(lookback)
+        for i in range(lookback):
+            j = i + 1  # offset into tail (skip row 0 which is the "prior close" anchor)
+            tr[i] = max(
+                highs[j] - lows[j],
+                abs(highs[j] - closes[j - 1]),
+                abs(lows[j] - closes[j - 1]),
+            )
+
+        half = lookback // 2
+        first_half_mean = float(np.mean(tr[:half]))
+        second_half_mean = float(np.mean(tr[half:]))
+
+        if first_half_mean <= 0:
+            return 0.5
+
+        ratio = second_half_mean / first_half_mean
+        # Map ratio to [0, 1]: ratio > 1 = expanding, ratio < 1 = contracting
+        # Use a sigmoid-like clamp: ratio 0.5 → 0.0, ratio 1.0 → 0.5, ratio 1.5 → 1.0
+        normalised = max(0.0, min(1.0, (ratio - 0.5) / 1.0))
+        return normalised
+    except Exception:
+        return 0.5
+
+
+def get_volume_trend(
+    bars: "pd.DataFrame | None" = None,
+    *,
+    lookback: int = 5,
+) -> float:
+    """Return the normalised volume trend over the last N bars [0, 1].
+
+    Computes a simple linear slope of volume over the last ``lookback`` bars,
+    then normalises to [0, 1] where:
+      - 0.0 = volume declining sharply
+      - 0.5 = volume flat
+      - 1.0 = volume rising sharply
+
+    This sub-feature enriches ``volume_ratio`` (which is a single-bar snapshot)
+    by adding the *trend* of volume leading into the breakout.  Rising volume
+    into a breakout is bullish for continuation; declining volume suggests a
+    false breakout / low-conviction move.
+
+    Args:
+        bars:     1-minute OHLCV DataFrame (needs at least ``lookback`` rows).
+        lookback: Number of bars to measure the volume trend over (default 5).
+
+    Returns:
+        Float in [0.0, 1.0].  0.5 = flat, >0.5 = rising, <0.5 = falling.
+        Falls back to 0.5 if insufficient data or no Volume column.
+    """
+    if bars is None or len(bars) < lookback:
+        return 0.5
+
+    try:
+        if "Volume" not in bars.columns:
+            return 0.5
+
+        vol = bars["Volume"].astype(float).values[-lookback:]
+
+        # Skip if all zero (no volume data)
+        if np.sum(vol) <= 0:
+            return 0.5
+
+        # Simple linear regression slope: y = vol, x = 0..lookback-1
+        x = np.arange(lookback, dtype=float)
+        x_mean = x.mean()
+        vol_mean = vol.mean()
+
+        if vol_mean <= 0:
+            return 0.5
+
+        numerator = float(np.sum((x - x_mean) * (vol - vol_mean)))
+        denominator = float(np.sum((x - x_mean) ** 2))
+
+        if denominator <= 0:
+            return 0.5
+
+        slope = numerator / denominator
+
+        # Normalise slope relative to mean volume:
+        # slope_pct = slope / vol_mean gives the fractional change per bar.
+        # A slope_pct of +0.2 means volume is growing 20% per bar — very strong.
+        # Map [-0.3, +0.3] → [0.0, 1.0] with clamp.
+        slope_pct = slope / vol_mean
+        normalised = max(0.0, min(1.0, (slope_pct + 0.3) / 0.6))
+        return normalised
+    except Exception:
+        return 0.5
+
+
+# ---------------------------------------------------------------------------
+# v7 feature helpers — Daily Strategy layer
+# ---------------------------------------------------------------------------
+
+
+def get_daily_bias_direction(
+    asset_name: str,
+    bars_daily: "pd.DataFrame | None" = None,
+    *,
+    _bias_cache: dict[str, Any] | None = None,
+) -> float:
+    """Return normalised daily bias direction for the CNN tabular vector.
+
+    Maps BiasDirection to [0, 1]:  SHORT → 0.0, NEUTRAL → 0.5, LONG → 1.0.
+    Falls back to 0.5 (neutral) if the bias analyzer is unavailable or errors.
+
+    Args:
+        asset_name: Human-readable asset name (e.g. ``"Gold"``, ``"S&P"``).
+        bars_daily: Daily OHLCV bars (≥10 rows preferred).
+        _bias_cache: Optional pre-computed DailyBias dict keyed by asset name.
+    """
+    if _bias_cache is not None and asset_name in _bias_cache:
+        bias = _bias_cache[asset_name]
+        return getattr(bias, "direction_feature", 0.5)
+    try:
+        from lib.strategies.daily.bias_analyzer import compute_daily_bias
+
+        if bars_daily is not None and not bars_daily.empty:
+            bias = compute_daily_bias(asset_name, bars_daily)
+            return bias.direction_feature
+    except Exception:
+        pass
+    return 0.5
+
+
+def get_daily_bias_confidence(
+    asset_name: str,
+    bars_daily: "pd.DataFrame | None" = None,
+    *,
+    _bias_cache: dict[str, Any] | None = None,
+) -> float:
+    """Return daily bias confidence [0, 1] for the CNN tabular vector.
+
+    Falls back to 0.0 if unavailable.
+    """
+    if _bias_cache is not None and asset_name in _bias_cache:
+        bias = _bias_cache[asset_name]
+        return getattr(bias, "confidence_feature", 0.0)
+    try:
+        from lib.strategies.daily.bias_analyzer import compute_daily_bias
+
+        if bars_daily is not None and not bars_daily.empty:
+            bias = compute_daily_bias(asset_name, bars_daily)
+            return bias.confidence_feature
+    except Exception:
+        pass
+    return 0.0
+
+
+def get_prior_day_pattern(
+    asset_name: str,
+    bars_daily: "pd.DataFrame | None" = None,
+    *,
+    _bias_cache: dict[str, Any] | None = None,
+) -> float:
+    """Return normalised prior-day candle pattern ordinal [0, 1].
+
+    Uses the ordinal encoding from ``bias_analyzer.CANDLE_PATTERN_ORDINAL``:
+        inside=0, doji=1, engulfing_bull=2, engulfing_bear=3, hammer=4,
+        shooting_star=5, strong_close_up=6, strong_close_down=7,
+        outside_day=8, neutral=9.
+    Normalised as ordinal / 9.
+
+    Falls back to 1.0 (neutral=9/9) if unavailable.
+    """
+    if _bias_cache is not None and asset_name in _bias_cache:
+        bias = _bias_cache[asset_name]
+        return getattr(bias, "candle_pattern_feature", 1.0)
+    try:
+        from lib.strategies.daily.bias_analyzer import compute_daily_bias
+
+        if bars_daily is not None and not bars_daily.empty:
+            bias = compute_daily_bias(asset_name, bars_daily)
+            return bias.candle_pattern_feature
+    except Exception:
+        pass
+    return 1.0  # neutral pattern
+
+
+def get_weekly_range_position(
+    asset_name: str,
+    bars_daily: "pd.DataFrame | None" = None,
+    *,
+    _bias_cache: dict[str, Any] | None = None,
+) -> float:
+    """Return where price sits within the prior week's H/L range [0, 1].
+
+    0.0 = at weekly low, 1.0 = at weekly high.
+    Falls back to 0.5 (midpoint) if unavailable.
+    """
+    if _bias_cache is not None and asset_name in _bias_cache:
+        bias = _bias_cache[asset_name]
+        return getattr(bias, "weekly_range_feature", 0.5)
+    try:
+        from lib.strategies.daily.bias_analyzer import compute_daily_bias
+
+        if bars_daily is not None and not bars_daily.empty:
+            bias = compute_daily_bias(asset_name, bars_daily)
+            return bias.weekly_range_feature
+    except Exception:
+        pass
+    return 0.5
+
+
+def get_monthly_trend_score(
+    asset_name: str,
+    bars_daily: "pd.DataFrame | None" = None,
+    *,
+    _bias_cache: dict[str, Any] | None = None,
+) -> float:
+    """Return normalised monthly trend score [0, 1].
+
+    Raw score is the slope of the 20-day EMA on daily bars, in [-1, +1].
+    Mapped to [0, 1] as (raw + 1) / 2.
+    Falls back to 0.5 (flat) if unavailable.
+    """
+    if _bias_cache is not None and asset_name in _bias_cache:
+        bias = _bias_cache[asset_name]
+        return getattr(bias, "monthly_trend_feature", 0.5)
+    try:
+        from lib.strategies.daily.bias_analyzer import compute_daily_bias
+
+        if bars_daily is not None and not bars_daily.empty:
+            bias = compute_daily_bias(asset_name, bars_daily)
+            return bias.monthly_trend_feature
+    except Exception:
+        pass
+    return 0.5
+
+
+def get_crypto_momentum_score(
+    ticker: str,
+    bars_1m: "pd.DataFrame | None" = None,
+) -> float:
+    """Return normalised crypto momentum score [0, 1] for the CNN.
+
+    Raw score from ``crypto_momentum.CryptoMomentumSignal.to_tabular_feature()``
+    is in [-1, +1].  Mapped to [0, 1] as (raw + 1) / 2.
+
+    For non-crypto assets, this captures whether crypto momentum is leading
+    the broader risk-on/risk-off move.  Returns 0.5 (neutral) if unavailable.
+    """
+    try:
+        from lib.analysis.crypto_momentum import compute_crypto_momentum
+
+        signal = compute_crypto_momentum(ticker)
+        if signal is not None:
+            raw = signal.to_tabular_feature()  # [-1, +1]
+            return max(0.0, min(1.0, (raw + 1.0) / 2.0))
+    except Exception:
+        pass
+    return 0.5
 
 
 def get_asset_class_id(ticker: str) -> float:
@@ -1523,12 +1942,12 @@ def _load_model(
 
 
 def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[float]:
-    """Normalise a raw v6 tabular feature vector for inference.
+    """Normalise a raw tabular feature vector for inference.
 
     Applies the same transforms as OrbCnnPredictor.NormaliseTabular() in C#
     so that Python inference and NT8 inference are identical.
 
-    v6 input order (18 features — must match TABULAR_FEATURES exactly):
+    v7.1 input order (28 features — must match TABULAR_FEATURES exactly):
         [0]  quality_pct_norm      — quality / 100, already in [0, 1]
         [1]  volume_ratio          — raw ratio (log-normalised here)
         [2]  atr_pct               — ATR / price fraction (×100 here)
@@ -1547,26 +1966,97 @@ def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[floa
         [15] asset_volatility_class — low=0/med=0.5/high=1.0 passthrough
         [16] hour_of_day           — ET hour/23 [0, 1] passthrough
         [17] tp3_atr_mult_norm     — TP3 mult/5.0 [0, 1] passthrough
+        [18] daily_bias_direction  — SHORT=0, NEUTRAL=0.5, LONG=1.0 passthrough
+        [19] daily_bias_confidence — [0, 1] passthrough
+        [20] prior_day_pattern     — ordinal/9 [0, 1] passthrough
+        [21] weekly_range_position — [0, 1] passthrough
+        [22] monthly_trend_score   — [0, 1] passthrough
+        [23] crypto_momentum_score — [0, 1] passthrough
+        [24] breakout_type_category — {0, 0.5, 1.0} passthrough
+        [25] session_overlap_flag  — 0 or 1 passthrough
+        [26] atr_trend             — [0, 1] passthrough
+        [27] volume_trend          — [0, 1] passthrough
 
-    For backward compat, 8-feature (v5) and 14-feature (v4) vectors are
-    zero-padded to 18 with sensible defaults before normalisation.
+    For backward compat, 8-feature (v5), 14-feature (v4), 18-feature (v6),
+    and 24-feature (v7) vectors are zero-padded to 28 with sensible defaults
+    before normalisation.
 
-    Returns a list of 18 floats ready for the model tabular input tensor.
+    Returns a list of NUM_TABULAR floats ready for the model tabular input tensor.
     """
     f = list(raw_features)
 
-    # Backward compat padding
+    # Backward compat padding — extend shorter vectors with neutral defaults
     if len(f) == 8:
-        # v5 (8 features) → pad to 18 with sensible defaults
-        # [8..13] = v4 extras with defaults, [14..17] = v6 extras with defaults
-        f.extend([1.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0])
+        # v5 (8 features) → pad to 28
+        # [8..13] v4 extras, [14..17] v6 extras, [18..23] v7 extras, [24..27] v7.1 extras
+        f.extend(
+            [
+                1.0,
+                0.0,
+                0.5,
+                0.5,
+                0.0,
+                0.0,  # [8..13]
+                0.0,
+                0.5,
+                0.5,
+                0.0,  # [14..17]
+                0.5,
+                0.0,
+                1.0,
+                0.5,
+                0.5,
+                0.5,  # [18..23] v7 neutral defaults
+                0.5,
+                0.0,
+                0.5,
+                0.5,  # [24..27] v7.1 neutral defaults
+            ]
+        )
     elif len(f) == 14:
-        # v4 (14 features) → pad [14..17] with v6 defaults
-        f.extend([0.0, 0.5, 0.5, 0.0])
+        # v4 (14 features) → pad [14..27]
+        f.extend(
+            [
+                0.0,
+                0.5,
+                0.5,
+                0.0,  # [14..17] v6 defaults
+                0.5,
+                0.0,
+                1.0,
+                0.5,
+                0.5,
+                0.5,  # [18..23] v7 neutral defaults
+                0.5,
+                0.0,
+                0.5,
+                0.5,  # [24..27] v7.1 neutral defaults
+            ]
+        )
+    elif len(f) == 18:
+        # v6 (18 features) → pad [18..27]
+        f.extend(
+            [
+                0.5,
+                0.0,
+                1.0,
+                0.5,
+                0.5,
+                0.5,  # [18..23] v7 neutral defaults
+                0.5,
+                0.0,
+                0.5,
+                0.5,  # [24..27] v7.1 neutral defaults
+            ]
+        )
+    elif len(f) == 24:
+        # v7 (24 features) → pad [24..27] with v7.1 neutral defaults
+        f.extend([0.5, 0.0, 0.5, 0.5])
 
     if len(f) != NUM_TABULAR:
         raise ValueError(
-            f"Expected {NUM_TABULAR} tabular features (v6), 14 (v4 compat), or 8 (v5 compat); "
+            f"Expected {NUM_TABULAR} tabular features (v7.1), 24 (v7 compat), "
+            f"18 (v6 compat), 14 (v4 compat), or 8 (v5 compat); "
             f"got {len(f)}. Required order: {TABULAR_FEATURES}"
         )
 
@@ -1637,6 +2127,18 @@ def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[floa
         vol_class,  # [15] asset_volatility_class
         hour_of_day,  # [16] hour_of_day
         tp3_norm,  # [17] tp3_atr_mult_norm
+        # ── v7 features (slots 18–23) — passthrough with clamp [0, 1] ────
+        max(0.0, min(1.0, f[18])),  # [18] daily_bias_direction
+        max(0.0, min(1.0, f[19])),  # [19] daily_bias_confidence
+        max(0.0, min(1.0, f[20])),  # [20] prior_day_pattern
+        max(0.0, min(1.0, f[21])),  # [21] weekly_range_position
+        max(0.0, min(1.0, f[22])),  # [22] monthly_trend_score
+        max(0.0, min(1.0, f[23])),  # [23] crypto_momentum_score
+        # ── v7.1 sub-features (slots 24–27) — passthrough with clamp ─────
+        max(0.0, min(1.0, f[24])),  # [24] breakout_type_category
+        max(0.0, min(1.0, f[25])),  # [25] session_overlap_flag
+        max(0.0, min(1.0, f[26])),  # [26] atr_trend
+        max(0.0, min(1.0, f[27])),  # [27] volume_trend
     ]
 
 
@@ -1929,6 +2431,56 @@ def generate_feature_contract(output_path: str | None = None) -> dict[str, Any]:
         "asset_volatility_classes": ASSET_VOLATILITY_CLASS,
         # v6: full breakout type configs (ordinals, bracket params, box styles)
         "breakout_types": _breakout_types_section,
+        # v7: daily strategy layer feature descriptions
+        "v7_feature_descriptions": {
+            "daily_bias_direction": "Daily bias from bias_analyzer: SHORT=0.0, NEUTRAL=0.5, LONG=1.0",
+            "daily_bias_confidence": "Confidence of daily bias analysis, 0.0-1.0 scalar",
+            "prior_day_pattern": (
+                "Yesterday's candle pattern ordinal / 9: inside=0, doji=1, "
+                "engulfing_bull=2, engulfing_bear=3, hammer=4, shooting_star=5, "
+                "strong_close_up=6, strong_close_down=7, outside_day=8, neutral=9"
+            ),
+            "weekly_range_position": "Price position within prior week's H/L range: 0.0=at low, 1.0=at high",
+            "monthly_trend_score": "Normalised slope of 20-day EMA on daily bars: [-1,+1] mapped to [0,1]",
+            "crypto_momentum_score": "Crypto momentum leading indicator: [-1,+1] mapped to [0,1], 0.5=neutral",
+        },
+        # v7.1: Phase 4B sub-feature decomposition descriptions
+        "v71_sub_feature_descriptions": {
+            "breakout_type_category": (
+                "Coarse grouping of breakout_type_ord: time-based=0.0 (ORB, Asian, IB), "
+                "range-based=0.5 (PDR, Weekly, Monthly, VA, Inside, Gap, Pivot, Fib), "
+                "squeeze-based=1.0 (Consolidation, BollingerSqueeze)"
+            ),
+            "session_overlap_flag": (
+                "1.0 if the bar is in the London+NY overlap window (08:00-12:00 ET), "
+                "0.0 otherwise. Captures the highest-volume intraday window."
+            ),
+            "atr_trend": (
+                "ATR direction over last 10 bars: 1.0=expanding (volatility increasing), "
+                "0.0=contracting (volatility decreasing), 0.5=flat. "
+                "Enriches atr_pct with trend context."
+            ),
+            "volume_trend": (
+                "5-bar volume slope normalised to [0,1]: 1.0=rising sharply, "
+                "0.5=flat, 0.0=declining sharply. Enriches volume_ratio with "
+                "trend context - rising volume into breakout is bullish for continuation."
+            ),
+        },
+        # v7.1: breakout type category mapping
+        "breakout_type_categories": {
+            "time_based": ["ORB", "Asian", "InitialBalance"],
+            "range_based": [
+                "PrevDay",
+                "Weekly",
+                "Monthly",
+                "ValueArea",
+                "InsideDay",
+                "GapRejection",
+                "PivotPoints",
+                "Fibonacci",
+            ],
+            "squeeze_based": ["Consolidation", "BollingerSqueeze"],
+        },
         "generated_at": _dt.now(tz=__import__("datetime").timezone.utc).isoformat(),
     }
 

@@ -58,7 +58,7 @@ Public API
         DEFAULT_CONFIGS,
     )
 
-    config = DEFAULT_CONFIGS[BreakoutType.IB]
+    config = DEFAULT_CONFIGS[BreakoutType.InitialBalance]
     result = detect_range_breakout(bars_1m, symbol="MES=F", config=config)
     if result.breakout_detected:
         print(result.direction, result.trigger_price)
@@ -70,15 +70,13 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from datetime import time as dt_time
-from enum import StrEnum
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
-from lib.core.breakout_types import BreakoutType as TrainingBreakoutType
-from lib.core.breakout_types import get_range_config
+from lib.core.breakout_types import BreakoutType, RangeConfig, get_range_config
 
 logger = logging.getLogger("engine.breakout")
 
@@ -87,344 +85,91 @@ _UTC = ZoneInfo("UTC")
 
 
 # ===========================================================================
-# Enumerations
+# Phase 1A — BreakoutType is now the canonical IntEnum from core.
+#
+# The old engine StrEnum has been removed.  All code in this module (and
+# callers) uses ``lib.core.breakout_types.BreakoutType`` (IntEnum) directly.
+#
+# Short-name aliases ("ORB", "PDR", "CONS", …) are retained so that
+# Redis/SSE payloads still serialise as ``"type": "ORB"`` via ``.name``.
+#
+# The former bridge functions ``to_training_type()``,
+# ``from_training_type()``, and ``breakout_type_ordinal()`` have been
+# removed — use the canonical ``BreakoutType`` enum and
+# ``get_range_config(bt).breakout_type_ord`` directly.
 # ===========================================================================
 
-
-class BreakoutType(StrEnum):
-    """All supported breakout range types (engine runtime).
-
-    This is the *engine-side* enum used for live detection and logging.
-    For CNN training ordinals and ONNX feature values, use the canonical
-    ``lib.core.breakout_types.BreakoutType`` (IntEnum) instead.
-
-    Use ``to_training_type()`` / ``from_training_type()`` to convert.
-    """
-
-    ORB = "ORB"  # Opening Range Breakout (session-parameterised)
-    PDR = "PDR"  # Previous Day Range
-    IB = "IB"  # Initial Balance (first 60 min RTH)
-    CONS = "CONS"  # Consolidation / Squeeze expansion
-    WEEKLY = "WEEKLY"  # Prior week's high/low
-    MONTHLY = "MONTHLY"  # Prior month's high/low
-    ASIAN = "ASIAN"  # Asian session range (19:00–02:00 ET)
-    BBSQUEEZE = "BBSQUEEZE"  # Bollinger Band squeeze → expansion
-    VA = "VA"  # Value Area (VAH/VAL from volume profile)
-    INSIDE = "INSIDE"  # Inside Day breakout
-    GAP = "GAP"  # Gap Rejection / fill breakout
-    PIVOT = "PIVOT"  # Classic floor pivot R1/S1
-    FIB = "FIB"  # Fibonacci 38.2%–61.8% retracement zone
+# Re-export so existing ``from lib.services.engine.breakout import BreakoutType``
+# keeps working — it now IS the core IntEnum.
+__all__ = ["BreakoutType", "RangeConfig", "BreakoutResult", "detect_range_breakout", "DEFAULT_CONFIGS"]
 
 
 # ---------------------------------------------------------------------------
-# Mapping between engine StrEnum ↔ training IntEnum
+# Short-name aliases for the IntEnum members so that engine code that
+# previously wrote ``BreakoutType.PDR`` (StrEnum value "PDR") can still
+# use ``BreakoutType.PDR`` which is now ``BreakoutType.PrevDay``.
+# These are module-level constants — not enum members.
 # ---------------------------------------------------------------------------
-
-_ENGINE_TO_TRAINING: dict[BreakoutType, TrainingBreakoutType] = {
-    BreakoutType.ORB: TrainingBreakoutType.ORB,
-    BreakoutType.PDR: TrainingBreakoutType.PrevDay,
-    BreakoutType.IB: TrainingBreakoutType.InitialBalance,
-    BreakoutType.CONS: TrainingBreakoutType.Consolidation,
-    BreakoutType.WEEKLY: TrainingBreakoutType.Weekly,
-    BreakoutType.MONTHLY: TrainingBreakoutType.Monthly,
-    BreakoutType.ASIAN: TrainingBreakoutType.Asian,
-    BreakoutType.BBSQUEEZE: TrainingBreakoutType.BollingerSqueeze,
-    BreakoutType.VA: TrainingBreakoutType.ValueArea,
-    BreakoutType.INSIDE: TrainingBreakoutType.InsideDay,
-    BreakoutType.GAP: TrainingBreakoutType.GapRejection,
-    BreakoutType.PIVOT: TrainingBreakoutType.PivotPoints,
-    BreakoutType.FIB: TrainingBreakoutType.Fibonacci,
+_SHORT_NAME_TO_BREAKOUT_TYPE: dict[str, BreakoutType] = {
+    "ORB": BreakoutType.ORB,
+    "PDR": BreakoutType.PrevDay,
+    "IB": BreakoutType.InitialBalance,
+    "CONS": BreakoutType.Consolidation,
+    "WEEKLY": BreakoutType.Weekly,
+    "MONTHLY": BreakoutType.Monthly,
+    "ASIAN": BreakoutType.Asian,
+    "BBSQUEEZE": BreakoutType.BollingerSqueeze,
+    "VA": BreakoutType.ValueArea,
+    "INSIDE": BreakoutType.InsideDay,
+    "GAP": BreakoutType.GapRejection,
+    "PIVOT": BreakoutType.PivotPoints,
+    "FIB": BreakoutType.Fibonacci,
 }
 
-_TRAINING_TO_ENGINE: dict[TrainingBreakoutType, BreakoutType] = {v: k for k, v in _ENGINE_TO_TRAINING.items()}
+_BREAKOUT_TYPE_TO_SHORT_NAME: dict[BreakoutType, str] = {v: k for k, v in _SHORT_NAME_TO_BREAKOUT_TYPE.items()}
 
 
-def to_training_type(bt: BreakoutType) -> TrainingBreakoutType:
-    """Convert an engine ``BreakoutType`` to the canonical training ``IntEnum``.
+def breakout_type_from_short_name(name: str) -> BreakoutType:
+    """Resolve a short engine name (``"PDR"``, ``"CONS"``, …) to a ``BreakoutType``.
 
-    This is needed when passing breakout type ordinals to the CNN model
-    or writing to the feature contract.
+    Also accepts the canonical ``.name`` form (``"PrevDay"``, ``"Consolidation"``, …).
     """
-    return _ENGINE_TO_TRAINING[bt]
+    upper = name.strip().upper()
+    if upper in _SHORT_NAME_TO_BREAKOUT_TYPE:
+        return _SHORT_NAME_TO_BREAKOUT_TYPE[upper]
+    # Fall back to canonical name lookup
+    from lib.core.breakout_types import breakout_type_from_name
+
+    return breakout_type_from_name(name)
 
 
-def from_training_type(tbt: TrainingBreakoutType) -> BreakoutType:
-    """Convert a training ``BreakoutType`` (IntEnum) back to the engine ``StrEnum``."""
-    return _TRAINING_TO_ENGINE[tbt]
-
-
-def breakout_type_ordinal(bt: BreakoutType) -> float:
-    """Return the normalised CNN ordinal [0, 1] for an engine ``BreakoutType``."""
-    return get_range_config(to_training_type(bt)).breakout_type_ord
-
-
-# ===========================================================================
-# Configuration
-# ===========================================================================
-
-
-@dataclass(frozen=True)
-class RangeConfig:
-    """Configuration for a single breakout-type detector.
-
-    All threshold values carry sensible defaults tuned for micro CME
-    futures on 1-minute bars.  Override via ``dataclasses.replace()``.
-    """
-
-    # --- Identity ---
-    breakout_type: BreakoutType = BreakoutType.ORB
-    label: str = ""  # human-readable name for logging / alerts
-
-    # --- ATR ---
-    atr_period: int = 14  # look-back bars for ATR computation
-    atr_multiplier: float = 0.5  # breakout threshold = atr_multiplier × ATR
-
-    # --- Range quality gates ---
-    min_depth_atr_pct: float = 0.15  # close must clear level by ≥ N×ATR
-    min_body_ratio: float = 0.55  # body/range ≥ this on breakout bar
-    max_range_atr_ratio: float = 2.0  # range cap  (skip if too wide)
-    min_range_atr_ratio: float = 0.05  # range floor (skip if too narrow)
-    min_bars: int = 3  # minimum bars to form range
-
-    # --- IB-specific ---
-    ib_duration_minutes: int = 60  # Initial Balance window length (min)
-    ib_start_time: dt_time = dt_time(9, 30)  # RTH open
-
-    # --- PDR-specific ---
-    pdr_session_start: dt_time = dt_time(18, 0)  # Globex-day start (ET)
-    pdr_session_end: dt_time = dt_time(17, 0)  # Globex-day end (ET)
-
-    # --- Consolidation / Squeeze ---
-    squeeze_lookback: int = 20  # bars to measure contraction over
-    squeeze_atr_mult: float = 1.5  # BB must be < mult×ATR to qualify as squeeze
-    squeeze_bb_period: int = 20  # Bollinger Band period
-    squeeze_bb_std: float = 2.0  # Bollinger Band std-dev multiplier
-    squeeze_min_bars: int = 5  # min consecutive squeeze bars needed
-
-    # --- Weekly-specific ---
-    weekly_lookback_days: int = 5  # trading days to look back for prior week H/L
-
-    # --- Monthly-specific ---
-    monthly_lookback_days: int = 20  # trading days to look back for prior month H/L
-
-    # --- Asian-specific ---
-    asian_start_time: dt_time = dt_time(19, 0)  # Asian range start (ET) — wraps midnight
-    asian_end_time: dt_time = dt_time(2, 0)  # Asian range end (ET)
-
-    # --- BollingerSqueeze-specific (BB inside KC) ---
-    bbsqueeze_bb_period: int = 20
-    bbsqueeze_bb_std: float = 2.0
-    bbsqueeze_kc_period: int = 20
-    bbsqueeze_kc_atr_mult: float = 1.5
-    bbsqueeze_min_squeeze_bars: int = 6  # min consecutive bars where BB inside KC
-
-    # --- ValueArea-specific ---
-    va_value_area_pct: float = 0.70  # percentage of volume for value area
-    va_n_bins: int = 50  # price bins for volume profile computation
-
-    # --- InsideDay-specific ---
-    inside_min_compression: float = 0.30  # today range / yesterday range floor
-    inside_max_compression: float = 0.85  # today range / yesterday range cap
-
-    # --- GapRejection-specific ---
-    gap_min_atr_pct: float = 0.15  # minimum gap size as fraction of ATR
-    gap_fill_threshold_pct: float = 0.50  # how much of gap must fill to confirm rejection
-    gap_rejection_bars: int = 3  # bars to confirm rejection at gap edge
-
-    # --- PivotPoints-specific ---
-    pivot_formula: str = "classic"  # "classic", "woodie", "camarilla"
-
-    # --- Fibonacci-specific ---
-    fib_upper: float = 0.618  # upper retracement level
-    fib_lower: float = 0.382  # lower retracement level
-    fib_swing_lookback: int = 100  # bars to search for prior swing H/L
-    fib_min_swing_atr_mult: float = 1.5  # min swing size in ATR multiples
-
-    def __str__(self) -> str:
-        name = self.label or self.breakout_type.value
-        return f"RangeConfig[{name}]"
+def breakout_type_short_name(bt: BreakoutType) -> str:
+    """Return the short engine name for a ``BreakoutType`` (e.g. ``"PDR"`` for ``PrevDay``)."""
+    return _BREAKOUT_TYPE_TO_SHORT_NAME.get(bt, bt.name)
 
 
 # ---------------------------------------------------------------------------
-# Pre-built defaults — one per BreakoutType
+# Phase 1A cleanup: ``to_training_type()``, ``from_training_type()``, and
+# ``breakout_type_ordinal()`` have been removed.  They were identity
+# functions after the StrEnum → IntEnum merge.
+#
+# Callers should use:
+#   - ``BreakoutType`` directly (no conversion needed)
+#   - ``get_range_config(bt).breakout_type_ord`` for the normalised ordinal
 # ---------------------------------------------------------------------------
 
-DEFAULT_CONFIGS: dict[BreakoutType, RangeConfig] = {
-    BreakoutType.ORB: RangeConfig(
-        breakout_type=BreakoutType.ORB,
-        label="Opening Range Breakout",
-        atr_period=14,
-        atr_multiplier=0.5,
-        min_depth_atr_pct=0.15,
-        min_body_ratio=0.55,
-        max_range_atr_ratio=1.8,
-        min_range_atr_ratio=0.05,
-        min_bars=5,
-    ),
-    BreakoutType.PDR: RangeConfig(
-        breakout_type=BreakoutType.PDR,
-        label="Previous Day Range",
-        atr_period=14,
-        atr_multiplier=0.4,
-        min_depth_atr_pct=0.20,  # PDR levels need meaningful penetration
-        min_body_ratio=0.50,
-        max_range_atr_ratio=3.0,  # daily ranges can be wide
-        min_range_atr_ratio=0.10,
-        min_bars=1,
-    ),
-    BreakoutType.IB: RangeConfig(
-        breakout_type=BreakoutType.IB,
-        label="Initial Balance",
-        atr_period=14,
-        atr_multiplier=0.5,
-        min_depth_atr_pct=0.15,
-        min_body_ratio=0.52,
-        max_range_atr_ratio=2.5,
-        min_range_atr_ratio=0.05,
-        min_bars=10,  # need ≥10 bars in 60-min IB window
-        ib_duration_minutes=60,
-        ib_start_time=dt_time(9, 30),
-    ),
-    BreakoutType.CONS: RangeConfig(
-        breakout_type=BreakoutType.CONS,
-        label="Consolidation/Squeeze",
-        atr_period=14,
-        atr_multiplier=0.6,  # squeeze breakouts tend to be explosive
-        min_depth_atr_pct=0.18,
-        min_body_ratio=0.55,
-        max_range_atr_ratio=1.2,  # squeeze range must be narrow
-        min_range_atr_ratio=0.02,
-        min_bars=5,
-        squeeze_lookback=20,
-        squeeze_atr_mult=1.5,
-        squeeze_bb_period=20,
-        squeeze_bb_std=2.0,
-        squeeze_min_bars=5,
-    ),
-    # -------------------------------------------------------------------
-    # New researched breakout types (9 additional)
-    # -------------------------------------------------------------------
-    BreakoutType.WEEKLY: RangeConfig(
-        breakout_type=BreakoutType.WEEKLY,
-        label="Weekly Range",
-        atr_period=14,
-        atr_multiplier=0.5,
-        min_depth_atr_pct=0.20,
-        min_body_ratio=0.50,
-        max_range_atr_ratio=8.0,  # weekly ranges can be very wide
-        min_range_atr_ratio=1.0,
-        min_bars=1,
-        weekly_lookback_days=5,
-    ),
-    BreakoutType.MONTHLY: RangeConfig(
-        breakout_type=BreakoutType.MONTHLY,
-        label="Monthly Range",
-        atr_period=14,
-        atr_multiplier=0.5,
-        min_depth_atr_pct=0.20,
-        min_body_ratio=0.50,
-        max_range_atr_ratio=15.0,  # monthly ranges are the widest
-        min_range_atr_ratio=2.0,
-        min_bars=1,
-        monthly_lookback_days=20,
-    ),
-    BreakoutType.ASIAN: RangeConfig(
-        breakout_type=BreakoutType.ASIAN,
-        label="Asian Session Range",
-        atr_period=14,
-        atr_multiplier=0.45,
-        min_depth_atr_pct=0.15,
-        min_body_ratio=0.50,
-        max_range_atr_ratio=2.5,
-        min_range_atr_ratio=0.20,
-        min_bars=10,  # need decent bar count in 7-hour window
-        asian_start_time=dt_time(19, 0),
-        asian_end_time=dt_time(2, 0),
-    ),
-    BreakoutType.BBSQUEEZE: RangeConfig(
-        breakout_type=BreakoutType.BBSQUEEZE,
-        label="Bollinger Squeeze",
-        atr_period=14,
-        atr_multiplier=0.6,  # squeeze breakouts are explosive
-        min_depth_atr_pct=0.18,
-        min_body_ratio=0.55,
-        max_range_atr_ratio=0.90,  # squeeze range must be narrow
-        min_range_atr_ratio=0.05,
-        min_bars=6,
-        bbsqueeze_bb_period=20,
-        bbsqueeze_bb_std=2.0,
-        bbsqueeze_kc_period=20,
-        bbsqueeze_kc_atr_mult=1.5,
-        bbsqueeze_min_squeeze_bars=6,
-    ),
-    BreakoutType.VA: RangeConfig(
-        breakout_type=BreakoutType.VA,
-        label="Value Area",
-        atr_period=14,
-        atr_multiplier=0.4,
-        min_depth_atr_pct=0.15,
-        min_body_ratio=0.50,
-        max_range_atr_ratio=3.0,
-        min_range_atr_ratio=0.30,
-        min_bars=1,
-        va_value_area_pct=0.70,
-        va_n_bins=50,
-    ),
-    BreakoutType.INSIDE: RangeConfig(
-        breakout_type=BreakoutType.INSIDE,
-        label="Inside Day",
-        atr_period=14,
-        atr_multiplier=0.45,
-        min_depth_atr_pct=0.15,
-        min_body_ratio=0.52,
-        max_range_atr_ratio=1.5,
-        min_range_atr_ratio=0.30,
-        min_bars=1,
-        inside_min_compression=0.30,
-        inside_max_compression=0.85,
-    ),
-    BreakoutType.GAP: RangeConfig(
-        breakout_type=BreakoutType.GAP,
-        label="Gap Rejection",
-        atr_period=14,
-        atr_multiplier=0.4,
-        min_depth_atr_pct=0.15,
-        min_body_ratio=0.50,
-        max_range_atr_ratio=2.0,
-        min_range_atr_ratio=0.10,
-        min_bars=1,
-        gap_min_atr_pct=0.15,
-        gap_fill_threshold_pct=0.50,
-        gap_rejection_bars=3,
-    ),
-    BreakoutType.PIVOT: RangeConfig(
-        breakout_type=BreakoutType.PIVOT,
-        label="Pivot Points",
-        atr_period=14,
-        atr_multiplier=0.4,
-        min_depth_atr_pct=0.15,
-        min_body_ratio=0.50,
-        max_range_atr_ratio=3.5,
-        min_range_atr_ratio=0.20,
-        min_bars=1,
-        pivot_formula="classic",
-    ),
-    BreakoutType.FIB: RangeConfig(
-        breakout_type=BreakoutType.FIB,
-        label="Fibonacci Retracement",
-        atr_period=14,
-        atr_multiplier=0.4,
-        min_depth_atr_pct=0.15,
-        min_body_ratio=0.50,
-        max_range_atr_ratio=2.5,
-        min_range_atr_ratio=0.15,
-        min_bars=1,
-        fib_upper=0.618,
-        fib_lower=0.382,
-        fib_swing_lookback=100,
-        fib_min_swing_atr_mult=1.5,
-    ),
-}
+
+# ===========================================================================
+# Phase 1B — DEFAULT_CONFIGS now delegates to the core RangeConfig registry.
+#
+# The engine-side ``RangeConfig`` class has been removed.  ``RangeConfig`` is
+# now imported from ``lib.core.breakout_types`` (re-exported at module level).
+# ``DEFAULT_CONFIGS`` is a convenience dict that maps each ``BreakoutType``
+# to its canonical ``RangeConfig`` from the core registry — callers can also
+# use ``get_range_config(bt)`` directly.
+# ===========================================================================
+
+DEFAULT_CONFIGS: dict[BreakoutType, RangeConfig] = {bt: get_range_config(bt) for bt in BreakoutType}
 
 
 # ===========================================================================
@@ -438,11 +183,15 @@ class BreakoutResult:
 
     Mirrors the fields of ``ORBResult`` so the same publishing / filtering /
     persistence pipeline can consume both without branching.
+
+    ``breakout_type`` is the canonical ``lib.core.breakout_types.BreakoutType``
+    (IntEnum).  For JSON serialisation, use ``.name`` for human-readable
+    strings (``"ORB"``, ``"PrevDay"``, …) and ``.value`` for integer ordinals.
     """
 
     # --- Identity ---
     symbol: str = ""
-    breakout_type: BreakoutType = BreakoutType.ORB
+    breakout_type: BreakoutType = BreakoutType.ORB  # IntEnum from core
     label: str = ""  # human-readable label from config
 
     # --- Range ---
@@ -511,9 +260,18 @@ class BreakoutResult:
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialise to a JSON-compatible dict."""
+        """Serialise to a JSON-compatible dict.
+
+        ``"type"`` is serialised as the human-readable ``.name`` (e.g. ``"ORB"``,
+        ``"PrevDay"``) for backward compatibility with Redis/SSE consumers.
+        ``"type_ordinal"`` carries the integer value for programmatic use.
+        """
+        # Use short engine name for backward compat ("PDR" not "PrevDay") if available
+        type_str = _BREAKOUT_TYPE_TO_SHORT_NAME.get(self.breakout_type, self.breakout_type.name)
         d: dict[str, Any] = {
-            "type": self.breakout_type.value,
+            "type": type_str,
+            "type_name": self.breakout_type.name,
+            "type_ordinal": int(self.breakout_type.value),
             "label": self.label,
             "symbol": self.symbol,
             "range_high": round(self.range_high, 4),
@@ -554,17 +312,17 @@ class BreakoutResult:
             d["cnn_confidence"] = self.cnn_confidence
             d["cnn_signal"] = bool(self.cnn_signal) if self.cnn_signal is not None else False
         # Type-specific
-        if self.breakout_type in (BreakoutType.CONS, BreakoutType.BBSQUEEZE):
+        if self.breakout_type in (BreakoutType.Consolidation, BreakoutType.BollingerSqueeze):
             d["squeeze_detected"] = bool(self.squeeze_detected)
             d["squeeze_bar_count"] = int(self.squeeze_bar_count)
             d["squeeze_bb_width"] = round(self.squeeze_bb_width, 4)
             d["bb_upper"] = round(self.bb_upper, 4)
             d["bb_lower"] = round(self.bb_lower, 4)
-        if self.breakout_type == BreakoutType.PDR:
+        if self.breakout_type == BreakoutType.PrevDay:
             d["prev_day_high"] = round(self.prev_day_high, 4)
             d["prev_day_low"] = round(self.prev_day_low, 4)
             d["prev_day_range"] = round(self.prev_day_range, 4)
-        if self.breakout_type == BreakoutType.IB:
+        if self.breakout_type == BreakoutType.InitialBalance:
             d["ib_high"] = round(self.ib_high, 4)
             d["ib_low"] = round(self.ib_low, 4)
             d["ib_complete"] = bool(self.ib_complete)
@@ -722,7 +480,7 @@ def _build_pdr_range(
 
     # Identify the current Globex-day start: the most recent bar whose time
     # equals or is just after pdr_session_start.
-    session_start = config.pdr_session_start  # 18:00 ET
+    session_start = config.pdr_session_start or dt_time(18, 0)  # 18:00 ET
 
     # Find the latest 18:00 ET boundary within the bar history
     idx_time_pdr = pd.DatetimeIndex(bars_et.index).time
@@ -767,7 +525,7 @@ def _build_ib_range(
     if len(bars_et) < 1:
         return 0.0, 0.0, 0, False
 
-    ib_start = config.ib_start_time
+    ib_start = config.ib_start_time or dt_time(9, 30)
     ib_end_minutes = ib_start.hour * 60 + ib_start.minute + config.ib_duration_minutes
     ib_end_h, ib_end_m = divmod(ib_end_minutes, 60)
     ib_end = dt_time(int(ib_end_h), int(ib_end_m))
@@ -947,8 +705,8 @@ def _build_asian_range(
     if len(bars_et) < 1:
         return 0.0, 0.0, 0, False
 
-    start = config.asian_start_time  # 19:00 ET
-    end = config.asian_end_time  # 02:00 ET
+    start = config.asian_start_time or dt_time(19, 0)  # 19:00 ET
+    end = config.asian_end_time or dt_time(2, 0)  # 02:00 ET
     now_time = bars_et.index[-1].to_pydatetime().time()
 
     idx_time = pd.DatetimeIndex(bars_et.index).time
@@ -1455,6 +1213,8 @@ def detect_range_breakout(
     # IB override: supply pre-computed IB high/low
     ib_high: float | None = None,
     ib_low: float | None = None,
+    # Backward-compat: accept old short name string for breakout_type
+    breakout_type_name: str | None = None,
 ) -> BreakoutResult:
     """Unified breakout detector for ORB, PDR, IB, and Consolidation types.
 
@@ -1481,13 +1241,17 @@ def detect_range_breakout(
     from datetime import datetime as _dt
 
     if config is None:
-        config = DEFAULT_CONFIGS[BreakoutType.ORB]
+        if breakout_type_name is not None:
+            bt = breakout_type_from_short_name(breakout_type_name)
+            config = DEFAULT_CONFIGS.get(bt, DEFAULT_CONFIGS[BreakoutType.ORB])
+        else:
+            config = DEFAULT_CONFIGS[BreakoutType.ORB]
 
     now_str = _dt.now(tz=_ET).isoformat()
     result = BreakoutResult(
         symbol=symbol,
         breakout_type=config.breakout_type,
-        label=config.label or config.breakout_type.value,
+        label=config.label or config.breakout_type.name,
         evaluated_at=now_str,
     )
 
@@ -1517,7 +1281,7 @@ def detect_range_breakout(
             result.range_complete = complete
             result.range_bar_count = bar_count
 
-        elif btype == BreakoutType.PDR:
+        elif btype == BreakoutType.PrevDay:
             if prev_day_high is not None and prev_day_low is not None:
                 r_high, r_low = prev_day_high, prev_day_low
                 bar_count = 1
@@ -1535,7 +1299,7 @@ def detect_range_breakout(
             result.range_bar_count = bar_count
             scan_start = None  # PDR: always scan latest bars
 
-        elif btype == BreakoutType.IB:
+        elif btype == BreakoutType.InitialBalance:
             if ib_high is not None and ib_low is not None:
                 r_high, r_low = ib_high, ib_low
                 bar_count = 0
@@ -1550,11 +1314,12 @@ def detect_range_breakout(
             result.range_bar_count = bar_count
 
             # IB breakout scan starts after IB window closes
-            ib_end_min = config.ib_start_time.hour * 60 + config.ib_start_time.minute + config.ib_duration_minutes
+            _ib_start = config.ib_start_time or dt_time(9, 30)
+            ib_end_min = _ib_start.hour * 60 + _ib_start.minute + config.ib_duration_minutes
             ib_end_h, ib_end_m = divmod(int(ib_end_min), 60)
             scan_start = dt_time(ib_end_h, ib_end_m)
 
-        elif btype == BreakoutType.CONS:
+        elif btype == BreakoutType.Consolidation:
             (
                 r_high,
                 r_low,
@@ -1579,7 +1344,7 @@ def detect_range_breakout(
                 result.error = "No squeeze detected — cannot form consolidation range"
                 return result
 
-        elif btype == BreakoutType.WEEKLY:
+        elif btype == BreakoutType.Weekly:
             r_high, r_low, bar_count, complete = _build_weekly_range(bars, config)
             result.range_complete = complete
             result.range_bar_count = bar_count
@@ -1587,7 +1352,7 @@ def detect_range_breakout(
             result.extra["weekly_low"] = round(r_low, 4)
             scan_start = None
 
-        elif btype == BreakoutType.MONTHLY:
+        elif btype == BreakoutType.Monthly:
             r_high, r_low, bar_count, complete = _build_monthly_range(bars, config)
             result.range_complete = complete
             result.range_bar_count = bar_count
@@ -1595,16 +1360,16 @@ def detect_range_breakout(
             result.extra["monthly_low"] = round(r_low, 4)
             scan_start = None
 
-        elif btype == BreakoutType.ASIAN:
+        elif btype == BreakoutType.Asian:
             r_high, r_low, bar_count, complete = _build_asian_range(bars, config)
             result.range_complete = complete
             result.range_bar_count = bar_count
             result.extra["asian_high"] = round(r_high, 4)
             result.extra["asian_low"] = round(r_low, 4)
             # Scan for breakout after the Asian window closes
-            scan_start = config.asian_end_time
+            scan_start = config.asian_end_time or dt_time(2, 0)
 
-        elif btype == BreakoutType.BBSQUEEZE:
+        elif btype == BreakoutType.BollingerSqueeze:
             (
                 r_high,
                 r_low,
@@ -1628,7 +1393,7 @@ def detect_range_breakout(
                 result.error = "No BB-inside-KC squeeze detected"
                 return result
 
-        elif btype == BreakoutType.VA:
+        elif btype == BreakoutType.ValueArea:
             (
                 r_high,
                 r_low,
@@ -1645,7 +1410,7 @@ def detect_range_breakout(
             result.extra["val"] = round(val, 4)
             scan_start = None
 
-        elif btype == BreakoutType.INSIDE:
+        elif btype == BreakoutType.InsideDay:
             (
                 r_high,
                 r_low,
@@ -1669,7 +1434,7 @@ def detect_range_breakout(
                 result.error = "No inside day detected — today's range not inside yesterday's"
                 return result
 
-        elif btype == BreakoutType.GAP:
+        elif btype == BreakoutType.GapRejection:
             (
                 r_high,
                 r_low,
@@ -1691,7 +1456,7 @@ def detect_range_breakout(
                 result.error = "No significant gap detected"
                 return result
 
-        elif btype == BreakoutType.PIVOT:
+        elif btype == BreakoutType.PivotPoints:
             (
                 r_high,
                 r_low,
@@ -1710,7 +1475,7 @@ def detect_range_breakout(
             result.extra["prev_close"] = round(prev_close, 4)
             scan_start = None
 
-        elif btype == BreakoutType.FIB:
+        elif btype == BreakoutType.Fibonacci:
             (
                 r_high,
                 r_low,
@@ -1801,7 +1566,7 @@ def detect_range_breakout(
 
         logger.info(
             "🔔 %s BREAKOUT [%s]: %s %s @ %.4f (range %.4f–%.4f, ATR %.4f)",
-            config.breakout_type.value,
+            breakout_type_short_name(config.breakout_type),
             config.label or btype,
             direction,
             symbol,
@@ -1835,7 +1600,7 @@ def detect_pdr_breakout(
     config: RangeConfig | None = None,
 ) -> BreakoutResult:
     """Shortcut: detect a Previous Day Range breakout."""
-    cfg = config or DEFAULT_CONFIGS[BreakoutType.PDR]
+    cfg = config or DEFAULT_CONFIGS[BreakoutType.PrevDay]
     return detect_range_breakout(
         bars,
         symbol,
@@ -1853,7 +1618,7 @@ def detect_ib_breakout(
     config: RangeConfig | None = None,
 ) -> BreakoutResult:
     """Shortcut: detect an Initial Balance breakout."""
-    cfg = config or DEFAULT_CONFIGS[BreakoutType.IB]
+    cfg = config or DEFAULT_CONFIGS[BreakoutType.InitialBalance]
     return detect_range_breakout(
         bars,
         symbol,
@@ -1869,22 +1634,22 @@ def detect_consolidation_breakout(
     config: RangeConfig | None = None,
 ) -> BreakoutResult:
     """Shortcut: detect a Consolidation/Squeeze breakout."""
-    cfg = config or DEFAULT_CONFIGS[BreakoutType.CONS]
+    cfg = config or DEFAULT_CONFIGS[BreakoutType.Consolidation]
     return detect_range_breakout(bars, symbol, cfg)
 
 
 def detect_all_breakout_types(
     bars: pd.DataFrame,
     symbol: str,
-    types: list[BreakoutType] | None = None,
-    configs: dict[BreakoutType, RangeConfig] | None = None,
+    types: "list[BreakoutType] | None" = None,
+    configs: "dict[BreakoutType, RangeConfig] | None" = None,
     prev_day_high: float | None = None,
     prev_day_low: float | None = None,
     ib_high: float | None = None,
     ib_low: float | None = None,
     orb_session_start: dt_time | None = None,
     orb_session_end: dt_time | None = None,
-) -> dict[BreakoutType, BreakoutResult]:
+) -> "dict[BreakoutType, BreakoutResult]":
     """Run all (or a subset of) breakout type detectors for a single symbol.
 
     Args:
@@ -1909,7 +1674,9 @@ def detect_all_breakout_types(
     results: dict[BreakoutType, BreakoutResult] = {}
 
     for btype in types:
-        cfg = merged_configs.get(btype, DEFAULT_CONFIGS.get(btype, RangeConfig(breakout_type=btype)))
+        cfg = merged_configs.get(
+            btype, DEFAULT_CONFIGS.get(btype, RangeConfig(breakout_type=btype, breakout_type_ord=btype.value / 12.0))
+        )
         try:
             result = detect_range_breakout(
                 bars,

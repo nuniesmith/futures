@@ -2,8 +2,7 @@
 
 > **Single repo**: `github.com/nuniesmith/futures`
 > **Docker Hub**: `nuniesmith/futures` — `:engine` · `:web` · `:trainer`
-> **NinjaTrader deploy**: `scripts/deploy_nt8.bat` → `scripts/deploy_nt8.ps1` (pulls all C# source + ONNX from this repo)
-> **Infrastructure**: Local (Tailscale mesh) — Pi (engine + web), GPU rig (trainer), Windows (NT8)
+> **Infrastructure**: Local (Tailscale mesh) — Pi (engine + web), GPU rig (trainer)
 
 ---
 
@@ -13,25 +12,22 @@
 futures/
 ├── src/
 │   ├── lib/
-│   │   ├── core/          # BreakoutType, RangeConfig, session, models, alerts, cache
+│   │   ├── core/          # BreakoutType, RangeConfig, session, models, alerts, cache, asset_registry
 │   │   ├── analysis/      # breakout_cnn, breakout_filters, chart_renderer, mtf_analyzer, regime, scorer, …
-│   │   ├── strategies/    # rb/ (range breakout scalping), daily/ (swing/intraday), backtesting, costs
+│   │   ├── strategies/
+│   │   │   ├── rb/        # range breakout scalping (detector, range_builders, publisher)
+│   │   │   ├── daily/     # bias_analyzer, daily_plan, swing_detector
+│   │   │   └── costs.py   # slippage, commission modelling
 │   │   ├── services/
-│   │   │   ├── engine/    # main, handlers, scheduler, position_manager, backfill, risk, focus, …
+│   │   │   ├── engine/    # main, handlers, scheduler, position_manager, backfill, risk, focus, live_risk, …
 │   │   │   ├── web/       # HTMX dashboard, FastAPI reverse-proxy (port 8080)
 │   │   │   └── data/      # FastAPI data API (positions, SSE, bridge, trades, journal, kraken, …)
 │   │   └── integrations/  # kraken_client, massive_client, grok_helper
-│   └── ninja/
-│       ├── BreakoutStrategy.cs   # NT8 strategy (single-file, all deps inlined)
-│       ├── RubyIndicator.cs      # NT8 chart indicator
-│       └── addons/
-│           ├── Bridge.cs         # NT8 HTTP bridge AddOn (port 5680)
-│           └── DataPreloader.cs  # NT8 history seeder AddOn
-├── models/                # champion .pt, .onnx, feature_contract.json (Git LFS)
+│   └── pine/
+│       └── ruby_futures.pine   # TradingView Pine Script indicator (primary live trading UI)
+├── models/                # champion .pt, feature_contract.json (Git LFS)
 ├── scripts/
-│   ├── deploy_nt8.bat     # Windows launcher (double-click to deploy NT8)
-│   ├── deploy_nt8.ps1     # NT8 deploy: pulls C# + DLLs + ONNX from this repo
-│   ├── sync_models.sh     # Pi-side: pull .pt + .onnx from this repo → restart engine
+│   ├── sync_models.sh     # Pi-side: pull .pt from this repo → restart engine
 │   └── …
 ├── config/                # Prometheus, Grafana, Alertmanager
 ├── docker/                # Dockerfiles per service
@@ -40,740 +36,520 @@ futures/
 
 ---
 
-## 🎯 Current Focus — Manual Trading & Scaling
+## 🎯 Goal — Python Co-Pilot + TradingView Live Trading
 
-The immediate goal is **manual trading with CNN signal support**, scaling from 1 TPT account to the full two-stage cap. No automation violations — the system informs manual entries, not executes them.
+The system is a **manual trading co-pilot**. It informs entries, it doesn't execute them. The live trading workflow is entirely browser-native — no Windows, no NinjaTrader required.
+
+```
+Python Engine (Pi)
+    ├── Computes: daily bias, ORB levels, PDR, IB, CNN signals, entry/stop/TP
+    ├── Dashboard: focus mode cards, risk strip, swing actions, Grok brief
+    └── Writes signals.csv → GitHub (nuniesmith/futures-signals)
+               ↓ request.seed() reads (2-5 min lag)
+
+TradingView (browser, Linux-native)
+    ├── Ruby Futures indicator (Pine Script)
+    │   ├── Draws engine levels: ORB box, PDR, IB, entry/stop/TP lines
+    │   ├── CNN signal labels + futures contract sizing on every signal
+    │   └── Tradovate broker connected → fills show natively in TV
+    └── PickMyTrade webhook → copies fills to all accounts simultaneously
+
+Python Dashboard (tiled alongside TV)
+    └── Real-time CNN probabilities, risk strip, focus cards, swing signals
+```
 
 **Two-stage scaling plan:**
-- **Stage 1 — TPT**: 5 × $150K accounts = $750K total buying power. Scale one account at a time as each passes eval and proves consistent.
-- **Stage 2 — Apex**: 20 × $300K accounts = ~$6M total buying power. 100% of first $25K/account, 90% after. Payout every 8 trading days per account — e.g. 10 × $50K accounts = $20K/cycle.
-- **Copy layer**: TradingView (manual entry) → PickMyTrade webhook → all accounts via Tradovate simultaneously. Own-accounts-only copy trading is explicitly allowed by both Apex and TPT. One manual entry, all accounts execute proportionally sized.
-- **No NinjaTrader/Windows Server required for this stack** — TradingView runs in browser, Tradovate is web-native, PickMyTrade handles copy. Eliminates Windows overhead entirely for the live trading workflow.
+- **Stage 1 — TPT**: 5 × $150K accounts = $750K total buying power.
+- **Stage 2 — Apex**: 20 × $300K accounts = ~$6M total buying power.
+- **Copy layer**: TradingView manual entry → PickMyTrade webhook → all accounts via Tradovate simultaneously. Own-accounts-only copy trading is explicitly allowed by both Apex and TPT.
 
-**Priority reorder for unblocking manual trading (do these first):**
-1. ~~**Phase 3A + 3B** — top-4 asset focus + dashboard focus mode.~~ **3A ✅ done** — `select_daily_focus_assets()` composite ranking. **3B next** — dashboard UI update.
-2. ~~**Phase 5C + 5E** — micro vs regular contract sizing side-by-side + risk strip.~~ **✅ done** — dual sizing, live risk strip, position overlays all shipped.
-3. ~~**Phase 2A + 2B** — daily bias analyzer + trade plan.~~ **✅ done** — `bias_analyzer.py` + `daily_plan.py` + 66 tests.
-4. **TradingView Ruby Futures indicator** — draw engine levels (ORB, PDR, entry/stop/TP) directly on TV chart. CNN labels + futures contract sizing on every signal.
-5. ~~**Phase 1E + 1F** — safe renames.~~ **✅ done** — backward-compat shims in place.
-
-**Remaining priority (updated):**
-1. **Phase 3B** — Dashboard focus mode. Wire the daily plan into the HTMX UI: focused asset cards (large), swing candidate cards, background collapse. This is the highest-impact UI change remaining.
-2. **Phase 2C** — Swing detector. Pullback/breakout/gap entry logic + 15:30 ET time stop. Completes the daily strategy layer.
-3. **Phase 3C** — Grok integration for daily selection. Optional macro brief in pre-market plan.
-4. **Phase TV-A → TV-E** — TradingView Ruby Futures indicator + signals.csv publisher. The live trading chart UI.
-
-**Defer until profitable/scaled:**
-- Phase 1A–1D, 1G (RB refactor) — correct architecture but zero trading benefit right now.
-- Phase 4/7/8 (CNN v7, per-asset distillation) — valuable, not blocking manual trading.
-- Phase 6 (Kraken portfolio) — when crypto capital grows.
+**Milestone before going live on demo funds:**
+1. Codebase cleanup (Phase 1 refactors — reduce complexity before retraining)
+2. CNN v7.1 retrain (28 features, targeting ≥89% accuracy)
+3. TradingView `signals.csv` publisher + Ruby Futures indicator wired end-to-end
+4. Full workflow test on Tradovate demo
 
 ---
 
 ## Current State
 
-- **Monorepo**: All source — engine, web, trainer, lib, C# strategies, deploy scripts — lives here. No separate repos.
-- **Models**: `models/breakout_cnn_best.pt` + `.onnx` + `feature_contract.json` committed (Git LFS). Engine pulls via `sync_models.sh`, NT8 pulls via `deploy_nt8.ps1`. Latest champion: **87.1% accuracy**, 87.15% precision, 87.27% recall, 25 epochs, v6 18-feature, 41 checkpoints saved.
+- **Monorepo**: All source — engine, web, trainer, lib, Pine Script, deploy scripts.
+- **Models**: `models/breakout_cnn_best.pt` + `feature_contract.json` committed (Git LFS). Latest champion: **87.1% accuracy**, 87.15% precision, 87.27% recall, 25 epochs, v6 18-feature. Retrain on v7.1 (28-feature) pending — this is the next major milestone.
 - **Docker**: `:engine` (data API + CNN inference), `:web` (HTMX dashboard), `:trainer` (GPU training server). Runs on Pi (engine + web) and GPU rig (trainer).
-- **Feature Contract**: v6, 18 tabular features. `models/feature_contract.json` is the canonical source for both Python and C#.
-- **CNN Model**: EfficientNetV2-S + tabular head. ONNX export for NT8. `OrbCnnPredictor` auto-detects tabular dimension from ONNX metadata at load time. Training pipeline: generate dataset → train → evaluate → gate check (≥80% acc, ≥75% prec, ≥70% rec) → promote → export ONNX + feature_contract.json.
-- **Breakout Types**: 13 — ORB, PrevDay, InitialBalance, Consolidation, Weekly, Monthly, Asian, BollingerSqueeze, ValueArea, InsideDay, GapRejection, PivotPoints, Fibonacci. Fully wired in engine detection, training, dataset generator, C# enum, CNN tabular vector, chart renderer, `UpdateRangeWindow`, and `CheckBreakout`.
-- **NT8 Strategy**: `BreakoutStrategy.cs` — 5 core instruments (`MGC, MES, MNQ, MYM, 6E`), v6 18-feature tabular vector, all 13 `BreakoutType` range builders fully implemented (no stubs remain), 13 chart renderer box styles, 3-phase bracket walk (TP1 → breakeven → EMA9 trail to TP3), per-type `tp3_atr_mult` loaded from `feature_contract.json` via `ParseTp3MultsFromContract` + `ApplyTp3MultsToStates`, crash-resilient. TPT Mode built-in ($50k/2, $100k/3, $150k/4 micros).
-- **NT8 Bridge**: `Bridge.cs` AddOn — HTTP listener (port 5680), position push to dashboard (`POST /api/positions/update`), 15s heartbeat, `SignalBus.IsRiskBlocked` risk gate, Prometheus `/metrics`, all endpoints including `/execute_signal`, `/flatten`, `/cancel_orders`, `/status`, `/orders`, `/health`.
-- **NT8 Deploy**: `deploy_nt8.bat` / `deploy_nt8.ps1` — downloads C# source, DLLs, ONNX model, `feature_contract.json` from this repo and installs into NT8.
-- **TP3 + EMA9 Trailing**: 3-phase bracket in both Python `position_manager.py` and C# `BreakoutStrategy.cs`. Phase 1 (SL/TP1) → Phase 2 (breakeven) → Phase 3 (EMA9 trail to TP3).
-- **Position Manager**: `position_manager.py` — always-in 1-lot micro positions, reversal gates (CNN ≥ 0.85, MTF ≥ 0.60, 30min cooldown), Redis persistence, `OrderCommand` emitter for Bridge.
-- **Dashboard**: HTMX + FastAPI — live signals, 13 breakout type filter pills, 9 session tabs, MTF score column, trade journal, Kraken crypto chart + correlation panel, Grok AI analyst, CNN dataset preview, positions panel, Bridge status badge, flatten/cancel buttons, market regime (HMM), performance panel, volume profile, equity curve, asset focus cards with entry/stop/TP levels.
-- **Kraken Integration**: `KrakenDataProvider` REST client (public + private endpoints), `KrakenFeedManager` WebSocket feed (OHLC + trades), 9 crypto pairs (ETH, SOL, LINK, AVAX, DOT, ADA + more), API key/secret from env vars, auto-start on engine boot when `ENABLE_KRAKEN_CRYPTO=1`. REST API connected, WS live with 5097+ bars and 7214+ trades streaming.
-- **Massive Integration**: `MassiveDataProvider` REST client (futures OHLCV, snapshots, contracts), `MassiveFeedManager` WebSocket (bars, trades, quotes), front-month resolution, used as primary bars source for training.
-- **Data Service**: Unified data layer inside engine service — checks Redis cache first, then Postgres, then fetches from external APIs (Massive for futures, Kraken for crypto). Startup cache warming from Postgres (7 days). Bar data persisted to both Redis (hot) and Postgres (durable).
-- **Training**: `trainer_server.py` FastAPI HTTP server (port 8200). `dataset_generator.py` covers all 13 types + all 9 sessions + Kraken. Session-specific thresholds. Type embedding. Synthetic augmentation. Balanced sampling. Full pipeline: generate → split (85/15 stratified) → train → evaluate → gate → promote → ONNX export.
-- **Monitoring**: Prometheus + Grafana. "Training Data Health" dashboard provisioned.
-- **CI/CD**: Lint → Test → Build & push 3 Docker images → Deploy to Pi via Tailscale SSH → Health checks → Discord notifications. All on push to `main`.
-- **Tailscale**: NT8 Windows at `100.127.182.112`, Pi (Docker) at `100.100.84.48`, all services communicate over Tailscale mesh. HTTP only (no domain/TLS needed for local mesh).
+- **Feature Contract**: v7.1, 28 tabular features. `models/feature_contract.json` is the canonical source. Expanded from v6 (18) with 6 daily strategy features (bias direction/confidence, prior day pattern, weekly range position, monthly trend score, crypto momentum) and 4 sub-features (breakout type category, session overlap flag, ATR trend, volume trend).
+- **CNN Model**: EfficientNetV2-S + tabular head. `OrbCnnPredictor` auto-detects tabular dimension from checkpoint metadata at load time. Training pipeline: generate dataset → train → evaluate → gate check (≥80% acc, ≥75% prec, ≥70% rec) → promote. Python `_normalise_tabular_for_inference()` handles v6→v7→v7.1 backward-compat padding so the old model works with the new code.
+- **Breakout Types**: 13 — ORB, PrevDay, InitialBalance, Consolidation, Weekly, Monthly, Asian, BollingerSqueeze, ValueArea, InsideDay, GapRejection, PivotPoints, Fibonacci. Fully wired in engine detection, training, dataset generator, CNN tabular vector, chart renderer.
+- **Position Manager**: `position_manager.py` — always-in 1-lot micro positions, reversal gates (CNN ≥ 0.85, MTF ≥ 0.60, 30min cooldown), Redis persistence, `OrderCommand` emitter (informational — feeds dashboard, not live execution).
+- **Dashboard**: HTMX + FastAPI — live signals, 13 breakout type filter pills, 9 session tabs, MTF score column, trade journal, Kraken crypto chart + correlation panel, Grok AI analyst, CNN dataset preview, positions panel, flatten/cancel buttons, market regime (HMM), performance panel, volume profile, equity curve, asset focus cards with entry/stop/TP levels, focus mode, risk strip, swing action buttons.
+- **Kraken Integration**: `KrakenDataProvider` REST + `KrakenFeedManager` WebSocket feed. 9 crypto pairs streaming.
+- **Massive Integration**: `MassiveDataProvider` REST + `MassiveFeedManager` WebSocket. Front-month resolution, primary bars source for training.
+- **Data Service**: Unified data layer — Redis cache → Postgres → external APIs. Startup cache warming from Postgres (7 days).
+- **Training**: `trainer_server.py` FastAPI (port 8200). `dataset_generator.py` covers all 13 types + 9 sessions + Kraken. Full pipeline: generate → split (85/15 stratified) → train → evaluate → gate → promote.
+- **CI/CD**: Lint → Test → Build & push 3 Docker images → Deploy to Pi via Tailscale SSH → Health checks → Discord notifications.
+- **Tailscale**: Pi (Docker) at `100.100.84.48`, GPU rig for training. All services communicate over Tailscale mesh.
 
 ---
 
 ## Architecture Issues Identified (Pre-Refactor)
 
 ### Triple duplication of breakout types & config
-Three separate files define breakout type enums, range configs, ATR computation, and quality gates independently:
-- `lib/core/breakout_types.py` — canonical `BreakoutType` (IntEnum) + `RangeConfig` with TP/SL/box styling (CNN/training canonical source)
-- `lib/services/engine/breakout.py` — **second** `BreakoutType` (StrEnum) + **second** `RangeConfig` with detection thresholds (engine runtime)
-- `lib/services/engine/orb.py` — **third** dataclass `ORBSession` with its own ATR params, quality gates, breakout detection
+- `lib/core/breakout_types.py` — canonical `BreakoutType` (IntEnum) + `RangeConfig` (CNN/training source)
+- `lib/services/engine/breakout.py` — **second** `BreakoutType` (StrEnum) + **second** `RangeConfig` (engine runtime)
+- `lib/services/engine/orb.py` — **third** dataclass `ORBSession` with its own ATR params
 
-Bridge mapping dicts (`_ENGINE_TO_TRAINING`, `_TRAINING_TO_ENGINE`) exist purely to convert between the two BreakoutType enums. These should not exist.
+Bridge mapping dicts (`_ENGINE_TO_TRAINING`, `_TRAINING_TO_ENGINE`) exist purely to convert between the two enums. These should not exist.
 
 ### `orb.py` is an isolated silo (1800+ lines)
-- Has its own `ORBResult`, `detect_opening_range_breakout()`, `compute_atr()`, quality gates, Redis publishing
-- `breakout.py` was built to "generalize" ORB but actually lives alongside it with parallel code paths
-- `main.py` has **10 separate `_handle_check_orb_*` functions** (one per session) that all delegate to the same `_handle_check_orb`
+Has its own `ORBResult`, `detect_opening_range_breakout()`, `compute_atr()`. `breakout.py` was built to generalise ORB but lives alongside it with parallel code paths. `main.py` has **10 separate `_handle_check_orb_*` functions** that all delegate to the same `_handle_check_orb`.
 
 ### `main.py` is a 3285-line god module
-- `_handle_check_pdr`, `_handle_check_ib`, `_handle_check_consolidation` are 90% copy-paste
-- Each handler repeats the same: fetch bars → detect → get HTF bars → MTF enrich → persist → publish → dispatch to PM → send alert
-- ~400 lines of duplicate handler code that should be one generic function
+`_handle_check_pdr`, `_handle_check_ib`, `_handle_check_consolidation` are 90% copy-paste. Each handler repeats: fetch bars → detect → get HTF bars → MTF enrich → persist → publish → dispatch to PM → send alert. ~400 lines of duplicate code that should be one generic function.
 
 ### `analysis/orb_filters.py` is misnamed
-- The filters (NR7, premarket range, session window, lunch filter, MTF bias, VWAP confluence) are NOT ORB-specific
-- They apply to any range breakout type — the name creates false coupling
+The filters (NR7, premarket range, session window, lunch filter, MTF bias, VWAP confluence) are NOT ORB-specific. They apply to any range breakout type.
 
-### No daily/swing strategy layer
-- Everything is built for intraday scalping breakouts
-- No structure for the "daily bias trade" concept you want (historical analysis → directional conviction → big move, small position)
+### Web UI focus is too broad for live trading *(partially resolved)*
+`focus.py` composite ranking and focus mode grid are implemented. Remaining: wire Grok optional macro brief cleanly into the pre-market plan.
 
-### Web UI focus is too broad for live trading
-- `focus.py` computes focus for ALL assets (10+ CME + crypto)
-- No mechanism to narrow to 3-4 focused assets per day for live trading simplicity
-- Too much information on screen when you're trying to execute quick decisions
-
-### Risk system is not real-time position-aware
-- `RiskManager` tracks open positions but doesn't feed back into focus cards or position sizing in real time
-- When you have a live position, the dashboard still shows static entry/stop/TP levels from the morning focus computation — not dynamically adjusted for current risk exposure
-- No concept of "remaining risk budget" — if you're already in 2 trades, the focus cards should show reduced position sizes for the next entry
-- Position sizing only shows micro contracts — no side-by-side micro vs regular contract comparison for quick decision-making on NinjaTrader
-- `RiskManager` and `PositionManager` are separate systems that don't talk to each other in real time
-
-### Asset model is ticker-centric, not generalized
-- The system thinks in tickers (`MGC=F`, `MES=F`) not generalized assets ("Gold", "S&P")
-- Both `MICRO_CONTRACT_SPECS` and `FULL_CONTRACT_SPECS` exist but are selected by a global `CONTRACT_MODE` env var — you can't see both at once
-- When live trading on NinjaTrader, you know which symbol to use (micro vs regular) based on your account — the dashboard should show you both options with dollar values
-- No unified "Gold" asset that links MGC (micro), GC (full), and KRAKEN:XAUUSD (spot) together
-
-### CNN treats all assets as flat feature vectors
-- `asset_class_id` is a single ordinal (0=equity, 1=fx, 2=metals, 3=treasuries, 4=crypto) — too coarse
-- No cross-asset learning: the CNN can't see that gold and silver are correlated metals, or that MES and MNQ move together
-- No mechanism to discover hidden correlations or regime-dependent relationships between asset classes
-- The model doesn't learn "what makes gold gold" — it just knows gold is class 2 (metals/energy)
-
-### No Kraken spot portfolio management
-- Kraken integration is read-only (OHLCV + ticker data for analysis)
-- `get_balance()`, `get_trade_balance()` private endpoints exist but aren't used
-- No concept of maintaining target crypto allocations or rebalancing
-- Futures hard-stop at 4 PM ET is set up, but no equivalent portfolio rules for 24/7 crypto spot holdings
+### Risk system is not real-time position-aware *(resolved)*
+`LiveRiskState` wired, dual micro/regular sizing on cards, live position overlays, risk strip all shipped.
 
 ---
 
-## 🔴 High Priority — RB System Refactor
+## 🔴 Pre-Retrain Cleanup — RB System Refactor
 
-The core architectural change: **ORB becomes a sub-type of RB (Range Breakout)**, not the other way around. All 13 breakout types are peers under the RB system. On top of this fast-scalping RB system, we add a separate Daily Strategy layer for slower intraday swing trades.
+Reduce complexity before the v7.1 retrain. These make the codebase easier to reason about during training experiments and reduce the chance of bugs introduced by the duplicate enum/config split.
 
 ### Phase 1A: Merge BreakoutType Enums → Single Source of Truth
-- [ ] **Eliminate the engine StrEnum** in `services/engine/breakout.py` — use `core/breakout_types.BreakoutType` (IntEnum) everywhere
-  - Remove `class BreakoutType(StrEnum)` from `breakout.py`
+- [ ] Eliminate the engine `StrEnum` in `services/engine/breakout.py` — use `core/breakout_types.BreakoutType` (IntEnum) everywhere
   - Remove `_ENGINE_TO_TRAINING` / `_TRAINING_TO_ENGINE` mapping dicts
   - Remove `to_training_type()` / `from_training_type()` / `breakout_type_ordinal()` bridge functions
   - Update all engine callers to import from `lib.core.breakout_types`
-  - `BreakoutResult.breakout_type` changes from StrEnum → IntEnum
-  - `BreakoutResult.to_dict()` uses `.name` for JSON serialization (human-readable) and `.value` for ordinals
-  - Keep backward compat in Redis/SSE payloads: `"type": "ORB"` still works (use `.name`)
+  - `BreakoutResult.to_dict()` uses `.name` for JSON serialisation and `.value` for ordinals
 
 ### Phase 1B: Merge `RangeConfig` → Single Dataclass
-- [ ] **Unify the two RangeConfig dataclasses** — one in `core/breakout_types.py`, one in `engine/breakout.py`
-  - The core `RangeConfig` has: TP/SL mults, box styling, CNN ordinals, EMA trail config
-  - The engine `RangeConfig` has: detection thresholds (ATR mult, body ratio, range caps, squeeze params)
-  - Merge detection-threshold fields INTO the core `RangeConfig` — it becomes the single config for everything
-  - All 13 `_*_CONFIG` registry entries in `breakout_types.py` get the detection fields added
-  - Engine `breakout.py` imports from `core/breakout_types` and reads from the unified config
-  - `get_range_config(BreakoutType.ORB)` returns everything: thresholds, TP/SL, box style, CNN ordinal
-  - Kill the engine-side `RangeConfig` entirely
+- [ ] Unify the two `RangeConfig` dataclasses into `core/breakout_types.py`
+  - Merge detection-threshold fields (ATR mult, body ratio, range caps, squeeze params) INTO the core `RangeConfig`
+  - All 13 `_*_CONFIG` registry entries get the detection fields added
+  - Kill the engine-side `RangeConfig` entirely — `get_range_config(BreakoutType.ORB)` returns everything
 
 ### Phase 1C: Merge ORB Detection into Unified RB Detector
-- [ ] **Make ORB just another RB type** — `detect_opening_range_breakout()` becomes `detect_range_breakout(config=ORB_CONFIG)`
-  - Extract range-building functions from `orb.py` and `breakout.py` into `strategies/rb/range_builders.py`:
-    - `_build_orb_range()` — from orb.py's `compute_opening_range()`, session-parameterized
-    - `_build_pdr_range()` — from breakout.py
-    - `_build_ib_range()` — from breakout.py
-    - `_build_consolidation_range()` — from breakout.py
-    - `_build_weekly_range()`, `_build_monthly_range()`, `_build_asian_range()` — from breakout.py
-    - `_build_bbsqueeze_range()`, `_build_va_range()`, `_build_inside_day_range()` — from breakout.py
-    - `_build_gap_rejection_range()`, `_build_pivot_range()`, `_build_fibonacci_range()` — from breakout.py
-  - Single `detect_range_breakout(bars, symbol, config)` in `strategies/rb/detector.py`:
-    - Dispatches to the correct range builder based on `config.breakout_type`
-    - Applies quality gates (depth, body ratio, range size) uniformly
-    - Returns a unified `BreakoutResult` regardless of type
-  - ORB session logic (wraps_midnight, session windows, `ORBSession` instances) stays but moves into the ORB range builder
-  - `ORBResult` is retired — `BreakoutResult` covers all types including ORB
-  - `MultiSessionORBResult` renamed to `MultiSessionResult` — works for any type scanned across sessions
-  - ATR computation: single `compute_atr()` in `strategies/rb/detector.py` (deduplicate the 3 copies)
+- [ ] `detect_opening_range_breakout()` becomes `detect_range_breakout(config=ORB_CONFIG)`
+  - Extract all `_build_*_range()` functions into `strategies/rb/range_builders.py`
+  - Single `detect_range_breakout(bars, symbol, config)` in `strategies/rb/detector.py`
+  - `ORBResult` retired — `BreakoutResult` covers all types
+  - Single `compute_atr()` in `strategies/rb/detector.py` (deduplicate 3 copies)
 
 ### Phase 1D: Extract Generic Handler Pipeline from `main.py`
-- [ ] **One handler function for all 13 breakout types** — eliminate ~400 lines of copy-paste
-  - Create `services/engine/handlers.py` with a single `handle_breakout_check()`:
-    ```
-    def handle_breakout_check(engine, breakout_type: BreakoutType, session_key: str):
-        assets = get_assets_for_session_key(session_key)
-        for asset in assets:
-            bars_1m = fetch_bars_1m(engine, ticker, symbol)
-            config = get_range_config(breakout_type)
-            result = detect_range_breakout(bars_1m, symbol, config)
-            bars_htf = get_htf_bars(bars_1m, ticker)
-            result = run_mtf_on_result(result, bars_htf)
-            persist_breakout_result(result, session_key)
-            if result.breakout_detected:
-                publish_breakout_result(result, session_key)
-                dispatch_to_position_manager(result, bars_1m, session_key)
-                send_breakout_alert(result, breakout_type)
-    ```
-  - `_handle_check_pdr`, `_handle_check_ib`, `_handle_check_consolidation` in `main.py` become one-liners:
-    - `handle_breakout_check(engine, BreakoutType.PrevDay, "london_ny")`
-    - `handle_breakout_check(engine, BreakoutType.InitialBalance, "us")`
-    - `handle_breakout_check(engine, BreakoutType.Consolidation, "london_ny")`
-  - `_handle_check_orb` calls `handle_breakout_check(engine, BreakoutType.ORB, session.key)` with the ORB session config attached
-  - 10 `_handle_check_orb_*` thin wrappers stay (they just pass the session object) but become 2-liners
-  - Extract shared helpers to `handlers.py`: `fetch_bars_1m`, `get_htf_bars`, `run_mtf_on_result`, `persist_breakout_result`, `publish_breakout_result`, `send_breakout_alert`
-  - `_handle_check_breakout_multi` delegates to the generic handler for each type in the list
+- [ ] One handler function for all 13 breakout types — eliminate ~400 lines of copy-paste
+  - Create `services/engine/handlers.py` with a single `handle_breakout_check(engine, breakout_type, session_key)`
+  - `_handle_check_pdr`, `_handle_check_ib`, `_handle_check_consolidation` become one-liners
+  - Extract shared helpers: `fetch_bars_1m`, `get_htf_bars`, `run_mtf_on_result`, `persist_breakout_result`, `publish_breakout_result`, `send_breakout_alert`
 
-### Phase 1E: Rename `orb_filters.py` → `breakout_filters.py`
-- [ ] **Rename and update imports** — these filters apply to ALL range breakout types
-  - `lib/analysis/orb_filters.py` → `lib/analysis/breakout_filters.py`
-  - `ORBFilterResult` → `BreakoutFilterResult`
-  - `apply_all_filters()` signature stays the same — it already accepts a generic result dict
-  - Update all imports in: `main.py`, `__init__.py` files, tests
-  - Add backward-compat re-export in `lib/analysis/__init__.py` if needed during transition
+### Phase 1E: Rename `orb_filters.py` → `breakout_filters.py` ✅
+- [x] `ORBFilterResult` → `BreakoutFilterResult`. Backward-compat shim in place.
 
-### Phase 1F: Rename `orb_simulator.py` → `rb_simulator.py`
-- [ ] **Rename training simulator** — it already handles PDR, IB, Consolidation batch sims
-  - `lib/services/training/orb_simulator.py` → `lib/services/training/rb_simulator.py`
-  - `simulate_orb_outcome` → `simulate_rb_outcome` (keep old name as alias during transition)
-  - `ORBSimResult` → `RBSimResult`
-  - Update imports in: `dataset_generator.py`, `trainer_server.py`, tests
+### Phase 1F: Rename `orb_simulator.py` → `rb_simulator.py` ✅
+- [x] `simulate_orb_outcome` → `simulate_rb_outcome`. Shim in place.
 
 ### Phase 1G: Create `lib/strategies/` Package
-- [ ] **Move trading logic into strategies package** — clean separation of strategy code from infrastructure
-  - Create `lib/strategies/__init__.py`
-  - Create `lib/strategies/rb/__init__.py` — the Range Breakout scalping system
-  - Create `lib/strategies/rb/detector.py` — unified `detect_range_breakout()`
-  - Create `lib/strategies/rb/range_builders.py` — all `_build_*_range()` functions
-  - Create `lib/strategies/rb/publisher.py` — Redis pub + alerting (extracted from main.py)
+- [ ] Clean separation of strategy code from infrastructure
+  - `lib/strategies/rb/` — Range Breakout scalping system (detector, range_builders, publisher)
   - Move `lib/trading/costs.py` → `lib/strategies/costs.py`
-  - Move `lib/trading/strategies.py` → `lib/strategies/strategy_defs.py` (backtesting strategy classes)
-  - Move `lib/trading/engine.py` → `lib/strategies/backtesting.py` (DashboardEngine, run_backtest, etc.)
-  - Keep `lib/trading/` as a deprecated redirect (thin `__init__.py` that re-exports from `strategies/`) until all imports are updated
-  - Rename `multi_session.py` → `session.py` and `ORBSession` → `RBSession` (keep old names as aliases)
+  - Move `lib/trading/strategies.py` → `lib/strategies/strategy_defs.py`
+  - Move `lib/trading/engine.py` → `lib/strategies/backtesting.py`
+  - Rename `ORBSession` → `RBSession` (keep old name as alias)
 
 ---
 
-## 🔴 High Priority — Daily Strategy Layer
+## 🔴 CNN Retrain — v7.1 Feature Contract (THE Milestone)
+
+This is the gate before going live. Everything above unblocks a cleaner training run. Everything below this can be tested once a retrained model is running.
+
+### Phase 4A: New Features from Daily Strategy Layer ✅
+- [x] 6 new v7 features (features [18]–[23]): `daily_bias_direction`, `daily_bias_confidence`, `prior_day_pattern`, `weekly_range_position`, `monthly_trend_score`, `crypto_momentum_score`
+- [x] `feature_contract.json` updated to v7.1 (28 features)
+- [x] `dataset_generator.py` `_build_row()` computes all 6 features with neutral fallbacks
+- [x] `_normalise_tabular_for_inference()` handles v6→v7→v7.1 backward-compat padding
+
+### Phase 4B: Sub-Features and Richer Encoding ✅
+- [x] 4 sub-features (features [24]–[27]): `breakout_type_category`, `session_overlap_flag`, `atr_trend`, `volume_trend`
+- [x] All 4 computed in `dataset_generator.py` `_build_row()` with neutral fallbacks
+
+### Phase 4C: Retrain on v7.1 Contract
+- [ ] **Generate new dataset** with all 28 features across all 25 symbols, 13 types, 9 sessions
+  - Daily bias features computed from historical daily bars (look back 1 day per sample)
+  - Weekly/monthly features from aligned historical weekly/monthly bars
+  - Crypto momentum features from aligned Kraken data
+- [ ] **Train** with same EfficientNetV2-S + tabular head architecture, larger tabular input (28 features)
+- [ ] **Gate check**: ≥88% acc, ≥85% prec, ≥82% rec (higher bar than v6 — more features, more signal)
+- [ ] **Promote** to `breakout_cnn_best.pt` + updated `feature_contract.json` v7.1
+- [ ] Deploy to Pi via `sync_models.sh` → engine hot-reload via `ModelWatcher`
+
+---
+
+## 🔴 TradingView Integration — Live Trading UI
+
+The Pine Script indicator is the primary live trading chart. The Python dashboard runs alongside it for CNN context and risk management.
+
+### Phase TV-A: `signals.csv` GitHub Publisher
+- [ ] **Add `signals_publisher.py`** to engine — writes engine signals to a GitHub-hosted CSV on every signal fire
+  - On breakout signal + CNN gate pass: append row to `signals.csv`:
+    `timestamp, symbol, direction, breakout_type, session, entry, stop, tp1, tp2, tp3, cnn_prob, atr`
+  - Push to `nuniesmith/futures-signals` repo via GitHub API (or git push via deploy key)
+  - Keep last 500 rows — prune older entries on each push
+  - Rate-limit: max one push per 30 seconds (debounce for multiple simultaneous signals)
+  - `GITHUB_SIGNALS_TOKEN` env var for auth, `ENABLE_SIGNALS_PUBLISHER=1` feature flag
+  - TradingView `request.seed()` reads this with a 2-5 min natural lag — acceptable for signal levels
+
+### Phase TV-B: Ruby Futures Indicator — Engine Signal Overlay
+- [ ] **Add engine signal layer to `ruby_futures.pine`** using `request.seed()` to read `signals.csv`
+  - Parse the CSV: filter to current chart symbol + recent timestamps (last 5 bars)
+  - Draw on chart: entry line (dashed), stop line (red), TP1/TP2/TP3 levels (green dashes)
+  - Signal label box: breakout type name, CNN probability, contract sizing
+  - **Micro + regular sizing on every label**: "3× MGC ($330 risk) / 1× GC ($1,100 risk)"
+  - Colour-code by direction: green labels for LONG, red for SHORT
+  - Only show signals from last N hours (configurable input, default 4h) to avoid chart clutter
+
+### Phase TV-C: Ruby Futures Indicator — Core Futures Layer
+- [ ] **Pure price calculations** that run at zero delay (no `request.seed()` dependency)
+  - ORB box: session open high/low as shaded rectangle, extends until broken
+  - PDR: prior day high/low as dashed lines (extend right across chart)
+  - Initial Balance: first 60-min RTH high/low
+  - Asian range: 19:00–02:00 ET H/L as background shading
+  - VWAP: session VWAP line (standard Pine `ta.vwap`)
+  - EMA 9/21/50 on chart (toggleable)
+  - Session separators with session name labels (London, NY, etc.)
+  - Futures contract info panel (input): symbol, micro point value, tick size → shows ATR in ticks and dollars
+
+### Phase TV-D: TradingView → Python Engine Webhook
+- [ ] **Add `POST /api/tv/alert` endpoint** to data service
+  - TV alert message format: `{"symbol": "MGC", "action": "LONG_ENTRY", "price": 2891.5, "note": "ORB breakout"}`
+  - Engine logs the alert, triggers a fresh CNN inference on that symbol, pushes result to dashboard via `dashboard:tv_alert` SSE channel
+  - Auth: `TV_WEBHOOK_SECRET` env var as query param or header
+  - Informational only — no order execution
+
+### Phase TV-E: Dashboard + TradingView Side-by-Side Workflow
+- [ ] **Document and validate the full manual trading workflow**
+  - Left monitor: TradingView with Ruby Futures indicator + Tradovate demo connected
+  - Right monitor: Python dashboard (focus mode, risk strip, swing signals)
+  - Pre-market: dashboard daily bias + Grok brief → informs TV watchlist
+  - During session: TV draws engine levels (via `request.seed()`) → execute manually in Tradovate demo
+  - Dashboard tracks signals + updates risk strip
+  - Zero dependency on NinjaTrader or Windows for live trading
+
+---
+
+## 🟡 Daily Strategy Layer (Completed)
 
 ### Phase 2A: Daily Bias Analyzer ✅
-- [x] **Create `lib/strategies/daily/bias_analyzer.py`** — "what direction for today?" per asset
-  - Inputs: prior day's OHLCV, prior week's OHLCV, monthly trend, ATR regime
-  - Prior day candle classification: inside day, outside day, doji, bullish engulfing, bearish engulfing, hammer, shooting star, strong close (upper/lower 25% of range)
-  - Weekly range position: where price closed relative to the prior week's high/low (0.0 = at low, 1.0 = at high)
-  - Monthly trend score: slope of 20-day EMA on daily bars, normalized [-1, +1]
-  - Volume confirmation: was yesterday's volume above/below the 20-day average?
-  - Overnight gap context: gap direction and size relative to ATR (from Globex open vs prior close)
-  - Output: `DailyBias` dataclass per asset — direction (LONG/SHORT/NEUTRAL), confidence (0-1), reasoning string, key levels (support/resistance derived from prior day H/L, weekly H/L)
-  - Pure computation — no side effects, fully testable
-  - **Implemented:** `src/lib/strategies/daily/bias_analyzer.py` — `BiasDirection`, `CandlePattern`, `KeyLevels`, `DailyBias` dataclasses, `compute_daily_bias()`, `compute_all_daily_biases()`, `rank_assets_by_conviction()`. 6 component scoring: candle pattern (25%), weekly position (20%), monthly trend (25%), volume (10%), overnight gap (10%), ATR trend (10%). Direction threshold ±0.15 with ATR expansion multiplier. CNN feature helpers: `direction_feature`, `confidence_feature`, `candle_pattern_feature`, `weekly_range_feature`, `monthly_trend_feature`. Fully tested.
-
 ### Phase 2B: Daily Trade Plan Generator ✅
-- [x] **Create `lib/strategies/daily/daily_plan.py`** — orchestrates daily trade selection
-  - Morning routine (runs at pre-market, ~05:00-06:00 ET):
-    1. Run `bias_analyzer` on all 10+ tracked assets
-    2. Optionally call Grok for macro context (economic calendar, overnight news, sector rotation)
-    3. Score each asset for daily swing potential: bias confidence × ATR opportunity × volume regime × catalyst presence
-    4. Select 1-2 daily swing candidates (biggest expected move, highest conviction direction)
-    5. Compute entry zone, stop, TP for daily swing (wider than scalp: SL at 1.75× ATR, TP1 at 2.5×, TP2 at 4×, TP3 at 5.5× ATR)
-    6. Position size: small (1-3 micro contracts, capped) — these are "big move, small risk" trades
-  - Output: `DailyPlan` dataclass — swing_candidates (1-2 assets), scalp_focus (3-4 assets for RB system), market_context from Grok, no_trade_flags
-  - Persist to Redis key `engine:daily_plan` for dashboard consumption
-  - Separate from the RB scalping system — daily trades run on different timeframe and risk profile
-  - **Implemented:** `src/lib/strategies/daily/daily_plan.py` — `DailyPlan`, `SwingCandidate`, `ScalpFocusAsset` dataclasses. `generate_daily_plan()` orchestrator: fetches daily/weekly data → runs `compute_all_daily_biases()` → optional Grok context via `_call_grok`/`run_morning_briefing` → `select_daily_focus_assets()` composite ranking → swing candidate level computation with wider SL/TP. `generate_and_publish_daily_plan()` convenience wrapper. `DailyPlan.publish_to_redis()` writes `engine:daily_plan`, `engine:focus_assets`, `engine:swing_assets` keys with 18h TTL + PubSub event. `DailyPlan.load_from_redis()` round-trip reconstruction. `_build_swing_candidate()` computes entry zones, SL, TP1-TP3 using asset registry for tick-aware rounding and dual sizing. Entry styles: pullback, gap continuation, breakout. `_fetch_grok_context()` with `run_morning_briefing` primary and `_call_grok` fallback. 66 tests passing.
-
 ### Phase 2C: Swing Detector ✅
-- [x] **Create `lib/strategies/daily/swing_detector.py`** — entry/exit logic for daily trades
-  - Uses the daily bias + key levels from `bias_analyzer` to define trade parameters
-  - Entry styles:
-    - **Pullback entry**: wait for price to pull back to a key level (prior day H/L, VWAP, EMA) in the direction of the daily bias, then enter on confirmation bar
-    - **Breakout entry**: enter when price breaks the prior day high (for long bias) or low (for short bias) with volume confirmation
-    - **Gap continuation**: if overnight gap aligns with daily bias and doesn't fill in first 30min, enter on first pullback
-  - Exit logic:
-    - TP1 at 2× ATR (scale 50%), TP2 at 3.5× ATR (scale remaining), or trail with EMA-21 on 15m bars
-    - SL at 1.5× ATR from entry — wider than scalp trades
-    - Time stop: close by 15:30 ET if neither TP nor SL hit (no overnight holds)
-  - These trades coexist with the always-running RB scalping system — different position tracking, different risk budget
-  - Daily trades use a separate risk allocation (e.g., 0.5% of account vs 0.75% for scalps)
-  - **Implemented:** `src/lib/strategies/daily/swing_detector.py` — Three entry detectors: `detect_pullback_entry()` (key level proximity + retrace depth 25–75% + confirmation bar with body ≥ 50%), `detect_breakout_entry()` (prior day H/L break + volume ≥ 1.3× avg + bar close quality), `detect_gap_continuation()` (gap ≥ 0.3× ATR + unfilled + 6-bar settle + pullback resumption). Combined `detect_swing_entries()` orchestrator with time-stop gate (no new entries after 15:30 ET) and configurable `enabled_styles`. Exit engine `evaluate_swing_exits()`: stop loss → TP1 scale-out 50% → TP2 close remainder → EMA-21 trailing (with ATR-based fallback) → time stop. `SwingSignal`, `SwingExitSignal`, `SwingState` dataclasses with full serialization. State management: `create_swing_state()`, `update_swing_state()` with phase transitions (WATCHING → ENTRY_READY → ACTIVE → TP1_HIT → TRAILING → CLOSED), breakeven stop on TP1, one-directional trailing stop tightening. Multi-asset `scan_swing_entries_all_assets()` and `enrich_swing_candidates()` for DailyPlan integration. Redis publish/load: `engine:swing_signals`, `engine:swing_states` keys + `dashboard:swing_update` PubSub. Constants: SL 1.5× ATR, TP1 2× ATR, TP2 3.5× ATR, risk 0.5%, max 3 micros, EMA-21 trail. Exported via `__init__.py`. 150 tests passing, 0 regressions on existing 148 tests (daily plan + dashboard focus mode).
 
 ---
 
-## 🔴 High Priority — Web UI Focus Narrowing & Live Risk
+## 🟡 Dashboard Focus Mode (Completed)
 
-### Phase 3A: Top-4 Asset Selection for Live Trading ✅
-- [x] **Add `select_daily_focus_assets()` to `focus.py`** — narrows the full asset list to 3-4 per day
-  - Composite ranking score (0-100) per asset:
-    - Signal quality weight (30%): from existing `compute_signal_quality()`
-    - ATR opportunity (25%): normalized ATR as % of price — higher = more tradeable
-    - RB setup density (20%): how many breakout types are forming ranges near current price
-    - Session fit (15%): is this asset's best session (London for gold/FX, US for indices) currently active?
-    - Catalyst presence (10%): from `scorer.py` economic event calendar
-  - Select top 3-4 by composite score — these become the "focused assets" for the trading day
-  - The daily swing candidates (from Phase 2B) may be different from the scalp focus assets
-  - Persist to Redis: `engine:focus_assets` (list of 3-4 tickers for scalping) + `engine:swing_assets` (1-2 for daily)
-  - The full watchlist still runs in the background (signals fire, CNN infers, data flows) — but the UI only shows the focused set
-  - **Implemented:** `select_daily_focus_assets()` in `src/lib/strategies/daily/daily_plan.py` — composite ranking with 5 weighted factors, `_compute_session_fit_score()` (maps 30+ assets to asian/london/us sessions, scores primary=100, secondary=70, mismatch=20), `_compute_atr_opportunity_score()` (NATR-based 0-100 with piecewise scaling), `_compute_rb_setup_density_score()` (reads `engine:breakout_state:{asset}` from Redis, falls back to 40 without Redis), `_compute_catalyst_score()` (reads `engine:catalyst_scores` hash), `_compute_signal_quality_for_asset()` (runs wave + volatility + signal quality analysis from cache). Swing scoring: conviction 35%, ATR 30%, volume 15%, catalyst 10%, weekly position 10%. Min thresholds: scalp ≥ 20, swing ≥ 30. `get_daily_plan_focus_assets()` added to `focus.py` — loads from Redis or generates fresh plan. `compute_daily_focus()` extended with `use_daily_plan=True` flag: tags assets as `scalp_focus`/`swing`/`background` with `focus_rank`, sorts focused first. 66 tests passing.
-
+### Phase 3A: Top-4 Asset Selection ✅
 ### Phase 3B: Dashboard Focus Mode ✅
-- [x] **Update web UI to show focused assets prominently** — simplify live trading view
-  - Top section: 3-4 focused asset cards (large, prominent, with live price + RB signals + bias)
-  - Each focused card shows:
-    - Current price + direction bias (from daily plan)
-    - Active RB signals (any of the 13 types that are firing or forming)
-    - Key levels: prior day H/L, session VWAP, ORB range edges
-    - CNN probability for the latest signal
-    - Position status from Bridge (if in a trade)
-  - Below: 1-2 daily swing candidate cards (different styling — labeled "DAILY SWING", wider TP levels)
-  - Collapsed/minimized section: remaining assets from the full watchlist (expandable if needed)
-  - "Why these assets?" tooltip/section explaining the composite score ranking
-  - Live trading mode auto-hides review panels (already implemented) — now also auto-focuses on the selected assets
-  - **Implemented:** Focus mode grid in `src/lib/services/engine/data/api/dashboard.py`:
-    - `_render_focus_mode_grid()` — tiered layout: scalp focus cards (prominent, 2-col), swing candidate cards (amber/gold styling), collapsed background assets in `<details>` element
-    - `_render_daily_plan_header()` — Grok morning brief card (LIVE/CACHED badge) + focus chip summary strip with ranked scalp chips and swing chips, formatted plan time
-    - `_render_why_these_assets()` — collapsible `<details>` panel showing composite score breakdown table (Signal 30%, ATR 25%, RB Density 20%, Session 15%, Catalyst 10%) with mini score bars per asset, swing candidate rows with direction/confidence/reasoning/entry styles
-    - `_render_swing_card()` — amber-bordered card with TP1/TP2/TP3 (wider than scalp), entry style chips, swing score + confidence badge, reasoning line, "DAILY SWING" label; supports live position overlay
-    - `_render_asset_card()` extended: focus category badge (#N FOCUS for scalp, 🕐 SWING for swing), `data-focus-category` attribute
-    - `_get_daily_plan_data()` — reads `engine:daily_plan` from Redis for dashboard display
-    - `get_daily_plan_html()` — new `GET /api/daily-plan/html` endpoint returning plan header + "Why these assets?" panel
-    - `get_focus_html()` updated to use `_render_focus_mode_grid()` when focus mode active
-    - `_render_full_dashboard()` updated: uses focus mode grid, 🎯 Focus Mode badge in summary bar
-    - SSE: `daily-plan-update` event listener added to JS — triggers focus grid refresh + market event feed entry
-    - `publish_focus_to_redis()` in `focus.py` extended: publishes `dashboard:daily_plan` PubSub event when `focus_mode_active=True`
-    - 82 new tests in `src/tests/test_dashboard_focus_mode.py` (all passing): `_get_daily_plan_data`, `_render_daily_plan_header`, `_render_why_these_assets`, `_render_swing_card`, `_render_asset_card` focus badges, `_render_focus_mode_grid`, `publish_focus_to_redis` daily plan event, `get_daily_plan_html` endpoint, `get_focus_html` focus mode, full dashboard integration, edge cases (all-scalp, all-background, singular labels, zero TP3, no entry styles, rank 999)
-
-### Phase 3C: Grok Integration for Daily Selection
-- [ ] **Add Grok analysis call during daily plan generation** — optional but valuable
-  - During pre-market `daily_plan.py` run, if `XAI_API_KEY` is set:
-    - Send Grok a prompt with: overnight price action summary, economic calendar for the day, sector/asset correlation snapshot, prior day's performance per asset
-    - Ask for: macro bias (risk-on/risk-off), top 2-3 assets to watch, key levels to monitor, events that could cause big moves
-    - Grok response gets parsed and folded into the `DailyPlan.market_context` field
-  - Dashboard shows Grok's morning brief in a dedicated card above the focused assets
-  - During live trading, the existing "⚡ Update" button in Grok panel can be used for ad-hoc analysis of specific setups
-  - This is supplementary — the system works fine without Grok, it just adds macro context
+### Phase 3C: Grok Integration for Daily Selection ✅ *(structured JSON → DailyPlan)*
+### Phase 3D: Swing Action Buttons ✅
 
 ---
 
-## 🔴 High Priority — Live Risk-Aware Position Sizing
-
-The goal: when you're live trading for a few hours in the morning, everything is real-time, fast, and always keeping you up to date. Position sizes adjust dynamically based on current risk exposure. You see micro AND regular contract values side by side so you know exactly what to type into NinjaTrader. The strategy runs itself — you poke in when you see something good. Helps manage emotions.
+## 🟡 Live Risk-Aware Position Sizing (Completed)
 
 ### Phase 5A: Generalized Asset Model ✅
-- [x] **Create `lib/core/asset_registry.py`** — unified asset abstraction that links micro, regular, and spot variants
-  - `Asset` dataclass: generalized name ("Gold", "S&P", "Bitcoin"), asset_class (metals, equity_index, fx, energy, treasuries, ags, crypto)
-  - Each `Asset` holds a dict of `ContractVariant` objects:
-    - `micro`: ticker="MGC=F", point_value=10, tick=0.10, margin=1100
-    - `full`: ticker="GC=F", point_value=100, tick=0.10, margin=11000
-    - `spot`: ticker="KRAKEN:XAUUSD" (for crypto assets, or None for pure futures)
-  - `ASSET_REGISTRY: dict[str, Asset]` — single lookup: `ASSET_REGISTRY["Gold"].micro.ticker` → `"MGC=F"`
-  - Replaces the split between `MICRO_CONTRACT_SPECS`, `FULL_CONTRACT_SPECS`, `KRAKEN_CONTRACT_SPECS`
-  - `get_asset_by_ticker("MGC=F")` → returns the "Gold" `Asset` regardless of which variant was passed
-  - `get_variants("Gold")` → `{"micro": ContractVariant(...), "full": ContractVariant(...)}` — for dashboard display
-  - Backward-compat: `CONTRACT_SPECS`, `ASSETS`, `TICKER_TO_NAME` still work but delegate to the registry
-  - Asset class grouping: `get_asset_group("metals")` → `["Gold", "Silver", "Copper"]` — for cross-referencing
-  - **Implemented:** `src/lib/core/asset_registry.py` — `Asset`, `ContractVariant`, `AssetClass`, `ASSET_REGISTRY`, `_TICKER_TO_NAME` reverse lookup, `dual_sizing()`, `compute_position_size()`, `get_asset()`, `get_asset_by_ticker()`, `get_asset_group()`, `get_micro_spec()`, `get_full_spec()`, Tradovate/training short aliases. Tested: Gold MGC=F→Gold, GC=F→Gold, KRAKEN:XBTUSD→Bitcoin lookups all pass.
-
 ### Phase 5B: Real-Time Risk Budget Integration ✅
-- [x] **Wire `RiskManager` ↔ `PositionManager` into a unified live risk state** — published to Redis every tick
-  - New `LiveRiskState` dataclass that merges:
-    - From `RiskManager`: account_size, daily_pnl, max_daily_loss, can_trade, block_reason, consecutive_losses
-    - From `PositionManager`: all active `MicroPosition` objects with current P&L, bracket phase, R-multiple
-    - Computed fields: `remaining_risk_budget` = max_risk_per_trade × (max_open_trades − current_open), `total_unrealized_pnl`, `total_margin_used`, `margin_remaining`
-  - Published to Redis key `engine:live_risk` every 5 seconds (or on every Bridge position update push)
-  - SSE channel `dashboard:live_risk` for real-time push to web UI
-  - `RiskManager.sync_positions()` already receives Bridge position updates — enhance to recompute `LiveRiskState` on every sync
-  - When a position is opened/closed, immediately recompute and publish — don't wait for the next 5s interval
-  - **Implemented:** `src/lib/services/engine/live_risk.py` — `LiveRiskState`, `PositionSnapshot`, `compute_live_risk()`, `LiveRiskPublisher`, `load_from_redis()`. `src/lib/services/engine/data/api/live_risk.py` — API endpoints `/api/live-risk`, `/api/live-risk/html`, `/api/live-risk/summary`, `/api/live-risk/refresh`. Publisher wired into `engine/main.py` via `_get_live_risk_publisher()`, ticked every loop iteration, force-publishes on position changes. Also wired into data-service `lifespan` for embedded mode. Tested: compute, serialize, publish all pass.
-
 ### Phase 5C: Dynamic Position Sizing on Focus Cards ✅
-- [x] **Focus cards update in real time based on live risk state** — not just the morning pre-market computation
-  - `compute_asset_focus()` gets a new optional param: `live_risk: LiveRiskState | None`
-  - When `live_risk` is provided:
-    - `remaining_risk_budget` replaces static `max_risk_per_trade` for position sizing
-    - If already in a position on this asset: card shows LIVE position info (direction, entry, current P&L, bracket phase, R-multiple) instead of entry zone
-    - If at max open trades: position_size shows 0 with "MAX POSITIONS" badge
-    - If daily loss limit hit: all cards show "RISK BLOCKED" overlay
-  - **Show both micro and regular contract sizing side by side:**
-    - "📏 Micro: 3× MGC @ $330 risk" / "📏 Full: 1× GC @ $1,100 risk" — computed from the same stop distance
-    - Use `Asset.micro` and `Asset.full` from the registry to compute both simultaneously
-    - Trader knows which to use based on their account tier — just reads the number and types it into TradingView/Tradovate
-  - Dollar P&L estimates for TP1/TP2 shown for BOTH contract sizes:
-    - "TP1: +$660 (micro 3×) / +$2,200 (full 1×)"
-  - Card refreshes via SSE `dashboard:live_risk` — no page reload, no polling, instant updates
-  - When Bridge pushes a position update, the relevant asset card flips from "setup" mode to "live position" mode within 1-2 seconds
-  - **Implemented:** `src/lib/services/engine/focus.py` — `compute_asset_focus()` accepts `live_risk: LiveRiskState | None`, `_compute_dual_sizing()` uses asset registry `dual_sizing()`, `_build_live_position_overlay()` builds position overlay dict. `compute_daily_focus()` also accepts `live_risk`. Engine handlers `_handle_compute_daily_focus` and `_handle_publish_focus_update` pass `_live_risk_publisher.last_state` into focus computation. Dashboard `_render_dual_sizing_row()` renders micro/full side-by-side with TP dollar estimates. Focus payload includes `dual_sizing`, `risk_blocked`, `max_positions_reached`, `has_live_position`, `live_position` fields. Tested: Gold 11× MGC=$1,100 / 1× GC=$1,000 dual sizing verified.
-
 ### Phase 5D: Live Position Overlay on Focus Cards ✅
-- [x] **When in a trade, the focus card becomes a position management card** — real-time P&L and bracket status
-  - Header changes from "🟢 LONG setup" to "🟢 LONG LIVE" with red pulse animation badge
-  - Shows: entry price, current price, unrealized P&L ($), R-multiple, hold duration, bracket phase
-  - Bracket progress bar: `[Entry]---[TP1 ✓]---[TP2 ✓]---[Trail]` with color-coded current phase
-  - Stop loss level shown with entry/current/stop row
-  - "Close Position" button (fires Bridge `/flatten` for that instrument) — TODO: wire button action
-  - "Move to Breakeven" manual override button (fires Bridge stop modification) — TODO: wire button action
-  - When position closes (TP hit, SL hit, or manual close): card flips back to "setup" mode automatically (position disappears from LiveRiskState)
-  - All updates driven by position push → Redis → SSE/HTMX polling — 5s latency via HTMX, instant via SSE
-  - **Implemented:** `src/lib/services/engine/data/api/dashboard.py` — `_render_live_position_overlay()` renders LIVE badge, P&L with color, R-multiple badge, bracket progress bar, entry/current/stop row. `_render_asset_card()` swaps levels section for live position overlay when `has_live_position=True`. Card border color changes to match position side. Header shows "● LIVE" / "🚫 BLOCKED" / "⚠️ MAX POS" badges. Opacity override: live position cards are never dimmed even if quality < 55%. Tested: overlay renders with correct P&L, R-multiple, bracket phase progress.
-
 ### Phase 5E: Risk Dashboard Strip ✅
-- [x] **Add a persistent risk strip at the top of the trading dashboard** — always visible, always current
-  - Horizontal bar showing: Daily P&L ($), Open Positions (N/max), Risk Exposure (%), Margin Used/Available, Consecutive Losses, Session Time Remaining
-  - Color-coded: green (healthy) → yellow (approaching limits) → red (blocked)
-  - Flashes/pulses when a risk state changes (new position opened, loss taken, limit approaching)
-  - "RISK BLOCKED" full-width red banner when `can_trade` is false — hard to miss
-  - Updates via HTMX polling every 5s + SSE channel `dashboard:live_risk` for real-time push
-  - **Implemented:** `src/lib/services/engine/data/api/live_risk.py` — `get_live_risk_html()` renders full risk strip HTML with health-colored background (green/yellow/red), Daily P&L, Open Positions, Risk Budget, Margin, Consecutive Losses, Session Time. `get_position_html()` renders per-position overlays. Dashboard HTML includes `<div hx-get="/api/live-risk/html" hx-trigger="load, every 5s">` container. `LiveRiskState.publish_to_redis()` pushes to `dashboard:live_risk` PubSub channel and `dashboard:risk_warning` on block. Engine `_tick_live_risk_publisher()` called every loop iteration, `force_publish()` on position changes for 1-2s latency.
 
 ---
 
-## 🟡 Medium Priority — CNN Expansion (v7 Feature Contract)
+## 🟡 Post-Live: CNN Asset-Class Intelligence (v8+)
 
-### Phase 4A: New Features from Daily Strategy Layer
-- [ ] **Expand CNN tabular features from 18 → 24** — leverage the new daily/historical analysis
-  - Feature #19: `daily_bias_direction` — from `bias_analyzer.py`, encoded as -1 (short), 0 (neutral), +1 (long), normalized to [0, 1]
-  - Feature #20: `daily_bias_confidence` — 0.0 to 1.0 scalar from bias analyzer
-  - Feature #21: `prior_day_pattern` — ordinal encoding of yesterday's candle pattern (inside=0, doji=1, engulfing_bull=2, engulfing_bear=3, hammer=4, shooting_star=5, strong_close_up=6, strong_close_down=7), normalized to [0, 1]
-  - Feature #22: `weekly_range_position` — where price sits within prior week's high/low range, 0.0 (at low) to 1.0 (at high)
-  - Feature #23: `monthly_trend_score` — normalized slope of 20-day EMA on daily bars, [-1, +1] mapped to [0, 1]
-  - Feature #24: `crypto_momentum_score` — from `crypto_momentum.py` (already built, needs wiring into feature contract)
-  - Update `feature_contract.json` to v7 with 24 features
-  - Update `breakout_cnn.py` `TABULAR_FEATURES` list
-  - Update `dataset_generator.py` `_build_row()` to compute and include new features
-  - Update C# `BreakoutStrategy.cs` to build 24-element tabular vector (add daily bias fields)
-  - ONNX auto-adapt already handles dimension changes — just needs new feature_contract.json
-
-### Phase 4B: Sub-Features and Richer Encoding
-- [ ] **Add sub-feature decomposition for existing features** — make the CNN see more nuance
-  - `breakout_type_ord` → split into `breakout_type_category` (time-based=0, range-based=0.5, squeeze-based=1.0) + existing ordinal
-  - `session_ordinal` → add `session_overlap_flag` (1.0 if London+NY overlap, 0.0 otherwise) — captures the highest-volume window
-  - `atr_regime` → add `atr_trend` (is ATR expanding or contracting over last 10 bars? 1.0 = expanding, 0.0 = contracting)
-  - `volume_surge_ratio` → add `volume_trend` (5-bar volume slope — rising volume into breakout is bullish for continuation)
-  - These sub-features don't replace existing ones — they add alongside for richer representation
-  - Target: v7 contract with ~28-30 total features (24 base + 4-6 sub-features)
-
-### Phase 4C: Retrain on v7 Contract
-- [ ] **Full retrain with expanded feature set** — target ≥89% accuracy
-  - Generate new dataset with all 24+ features across all 25 symbols, 13 types, 9 sessions
-  - Daily bias features computed from historical daily bars (look back 1 day for each sample's date)
-  - Weekly/monthly features computed from historical weekly/monthly bars
-  - Crypto momentum features computed from aligned Kraken data
-  - Train with same architecture (EfficientNetV2-S + tabular head) but larger tabular input
-  - Gate check: ≥88% acc, ≥85% prec, ≥82% rec (higher bar than v6 since we have more features)
-  - Export ONNX + feature_contract.json v7
-  - Deploy to NT8 via `deploy_nt8.ps1` — C# auto-adapts to new tabular dimension
-
----
-
-## 🟡 Medium Priority — CNN Asset-Class Intelligence (v8+)
-
-The CNN currently treats `asset_class_id` as a single flat ordinal — it knows gold is "2" but doesn't know *why* gold is gold. Phase 7 adds hierarchical asset understanding so the model can learn what makes each asset class unique, how assets within a class relate, and discover hidden cross-asset correlations and regime-dependent states.
+Deferred until the v7.1 model is live and profitable. These add significant value but don't block demo trading.
 
 ### Phase 7A: Hierarchical Asset Embedding
-- [ ] **Replace flat `asset_class_id` with a learned embedding** — let the CNN discover asset relationships
-  - Instead of a single ordinal (0-4), give the CNN a richer asset identity:
-    - `asset_class_embedding` — 4-dim learned vector per asset class (metals, equity_index, fx, energy, crypto, treasuries, ags → 7 classes)
-    - `asset_id_embedding` — 8-dim learned vector per individual asset (Gold, Silver, Copper, S&P, Nasdaq, etc.)
-    - These embeddings are trained end-to-end with the CNN — the model discovers what makes gold similar to silver but different from crude oil
-  - Replace the tabular head's flat `asset_class_id` + `asset_volatility_class` with the embedding vectors
-  - Embedding lookup table stored in `feature_contract.json` so C# can reconstruct the same vectors
-  - Net feature count change: remove 2 flat features, add 12 embedding dims → net +10 features
-  - **Why this matters**: the model currently can't distinguish between "Gold breakout during London" and "S&P breakout during London" at the asset-identity level — it only sees class=2 vs class=0. With embeddings, it learns Gold's unique volatility structure, session preferences, and correlation patterns
+- [ ] Replace flat `asset_class_id` ordinal with a 4-dim class embedding + 8-dim per-asset embedding, trained end-to-end
+- [ ] Embedding lookup table stored in `feature_contract.json`
 
 ### Phase 7B: Cross-Asset Correlation Features
-- [ ] **Add real-time cross-asset correlation signals as CNN features** — discover hidden states
-  - For each breakout signal, compute rolling correlations with related assets:
-    - Gold signal → include: Silver correlation (30-bar rolling Pearson), Copper correlation, DXY proxy (6E inverse), S&P correlation
-    - S&P signal → include: Nasdaq correlation, Russell correlation, VIX proxy (from options-derived vol), Gold inverse correlation
-    - Crude signal → include: Natural Gas correlation, S&P correlation (risk-on/off proxy)
-  - New tabular features (per signal):
-    - `primary_peer_corr` — correlation with the most-related peer asset (Gold↔Silver, S&P↔Nasdaq, etc.), [-1, 1] → [0, 1]
-    - `cross_class_corr` — correlation with the strongest cross-class mover (e.g., Gold↔S&P when they diverge = risk-off signal), [-1, 1] → [0, 1]
-    - `correlation_regime` — is the correlation structure normal (0.5), elevated (1.0), or broken/inverted (0.0)? Detected by comparing current 30-bar corr to 200-bar baseline
-  - These features let the CNN see regime shifts: when Gold and S&P suddenly correlate strongly, that's a risk-off flight-to-safety regime. When they decorrelate, it's normal. When they invert, something is breaking.
-  - Peer asset mapping defined in `asset_registry.py`: `Asset.peers` → `["Silver", "Copper"]` for Gold, etc.
-  - Pure computation in `lib/analysis/cross_asset.py` — no side effects
+- [ ] Rolling Pearson correlations with peer assets as CNN features: `primary_peer_corr`, `cross_class_corr`, `correlation_regime`
+- [ ] Peer asset mapping in `asset_registry.py`: `Asset.peers` → `["Silver", "Copper"]` for Gold, etc.
+- [ ] Pure computation in `lib/analysis/cross_asset.py`
 
 ### Phase 7C: Asset Fingerprint Analysis
-- [ ] **Create `lib/analysis/asset_fingerprint.py`** — profile what makes each asset unique for the CNN
-  - Per-asset fingerprint vector (computed daily, cached):
-    - `typical_daily_range_atr` — how many ATR does this asset typically move in a day? (Gold ~1.2, Nasdaq ~1.8, 6E ~0.7)
-    - `session_concentration` — what fraction of the daily range happens in London vs US vs overnight? (Gold: 40% London, S&P: 70% US)
-    - `breakout_follow_through_rate` — historically, what % of breakouts on this asset continue vs fade? (per breakout type)
-    - `mean_reversion_tendency` — does this asset tend to revert (choppy) or trend (momentum)? Rolling Hurst exponent, normalized [0, 1]
-    - `volume_profile_shape` — is volume U-shaped (equity open/close), L-shaped (London open), or flat (crypto 24/7)?
-    - `overnight_gap_tendency` — how often does this asset gap overnight, and do gaps fill or continue?
-  - These are NOT tabular features directly — they're used to create the asset embedding training labels
-  - The fingerprint analysis runs during off-hours and is persisted to Redis/Postgres
-  - Dashboard: "Asset DNA" panel showing the fingerprint radar chart for each focused asset
-  - **Key insight**: if we can quantify "what makes gold gold", we can detect when gold is acting like something else (regime anomaly) and flag it
+- [ ] `lib/analysis/asset_fingerprint.py` — per-asset daily profile vector: typical daily range, session concentration, breakout follow-through rate, mean-reversion tendency (Hurst), volume profile shape, overnight gap tendency
+- [ ] Dashboard: "Asset DNA" radar chart per focused asset
 
 ### Phase 7D: Correlation Anomaly Detection
-- [ ] **Detect when cross-asset correlations break from historical norms** — hidden state discovery
-  - Maintain a rolling correlation matrix across all 10 core assets (updated every 5 min during active session)
-  - Compare current 30-bar correlation matrix to the 200-bar baseline → compute anomaly score per pair
-  - When a correlation pair deviates by >2σ from baseline, flag as "correlation break":
-    - Gold↔S&P suddenly +0.8 (normally ~0.0) → "flight to safety" regime
-    - Crude↔Nasdaq suddenly −0.6 (normally +0.3) → "energy divergence" regime
-    - BTC↔MES suddenly +0.9 (normally +0.5) → "risk-on euphoria" regime
-  - Publish anomalies to Redis `engine:correlation_anomalies` for dashboard display
-  - Dashboard: correlation heatmap panel showing current vs baseline, with anomalous cells highlighted
-  - Feed anomaly flags into CNN as additional context features at v8 retrain
-  - This is where you find the "hidden states" — regime shifts that aren't visible from any single asset's price action alone
+- [ ] Rolling correlation matrix across all 10 core assets (updated every 5 min)
+- [ ] Compare 30-bar vs 200-bar baseline → anomaly score per pair
+- [ ] Publish `engine:correlation_anomalies` → dashboard heatmap panel
 
 ---
 
-## 🟡 Medium Priority — Per-Asset Training + Knowledge Distillation Pipeline (v8+ Champion Model)
+## 🟡 Post-Live: Per-Asset Training + Knowledge Distillation (v8+ Champion Model)
 
-The current training pipeline trains a single model on all assets combined. This phase trains one model per asset, then distills them into a single champion model exported as one clean `.onnx` file. The distilled student gets ~95% of the ensemble's accuracy at normal inference speed with no multi-model export complexity.
-
-### Overall Strategy
+Train one model per asset, distill into a single champion `.pt`. Gives ~95% of per-asset accuracy at normal inference speed with no multi-model complexity.
 
 ```
 Asset 1 (MGC) → train → best_mgc.pt  ─┐
 Asset 2 (MNQ) → train → best_mnq.pt  ─┤
-Asset 3 (MES) → train → best_mes.pt  ─┼→ Distill → champ_combined.pt → .onnx
+Asset 3 (MES) → train → best_mes.pt  ─┼→ Distill → champ_combined.pt
 Asset N (...)  → train → best_xxx.pt  ─┘
 ```
 
 ### Phase 8A: Per-Asset Training Loop (`train_per_asset.py`)
-- [ ] **Train one model per asset, save to `models/per_asset/`**
-  - Assets: `['MGC', 'MNQ', 'MES', 'MYM', 'M2K', 'MBT', 'MET']`
-  - Config: `epochs=60` (best_epoch was 24/25 on combined — give per-asset more room), `patience=12`, `lr=0.0001`, `days_back=180`, `bars_source='massive'`
-  - `min_accuracy=0.75` gate per asset (lower than combined gate — less data per asset)
-  - Save each model as `breakout_cnn_{asset.lower()}_best.pt`
-  - Write `models/per_asset/asset_results.json` manifest: accuracy, precision, recall, best_epoch, sample_count per asset
-  - Print ranked summary after all assets complete
+- [ ] Assets: `['MGC', 'MNQ', 'MES', 'MYM', 'M2K', 'MBT', 'MET']`
+- [ ] `epochs=60`, `patience=12`, `min_accuracy=0.75` gate per asset
+- [ ] Write `models/per_asset/asset_results.json` manifest
 
 ### Phase 8B: Knowledge Distillation (`distill_combined.py`)
-- [ ] **Train a single student model from all per-asset teacher models**
-  - `DistillationTrainer` class:
-    - Load all teacher `.pt` files, freeze weights (`requires_grad = False`)
-    - Student = same `BreakoutCNN(num_features=18)` architecture (or v7 if Phase 4 is done first)
-    - `temperature=4.0` — softens teacher probability distributions so student learns the *shape* of predictions, not just hard winners; critical for cross-asset generalization
-    - `alpha=0.7` — 70% distillation loss (KL divergence) + 30% hard label cross-entropy
-    - `get_ensemble_logits()` — average teacher logits across all qualified teachers (could weight by per-asset accuracy in future)
-    - `distillation_loss()` — KL divergence scaled by `T²` (standard distillation practice) + cross-entropy
-  - Training loop: `AdamW`, `CosineAnnealingLR`, gradient clipping at 1.0, early stopping with `patience=10`
-  - Input: `ConcatDataset` of all assets mixed together
-  - **Qualified teachers only** — gate at `min_teacher_accuracy=0.75`; assets that didn't hit the gate hurt distillation more than they help
-  - Save best student to `models/champ_combined.pt`
+- [ ] `DistillationTrainer`: load all teacher `.pt` files (frozen), student = same architecture
+- [ ] `temperature=4.0`, `alpha=0.7` (70% KL divergence + 30% cross-entropy)
+- [ ] Qualified teachers only: `min_teacher_accuracy=0.75`
+- [ ] Save best student to `models/champ_combined.pt`
 
-### Phase 8C: ONNX Export (`export_onnx.py`)
-- [ ] **Export distilled champion model to `models/champ_combined.onnx`**
-  - Dummy input: `(1, 3, 224, 224)` matching EfficientNetV2-S input (adjust channel count if different)
-  - `opset_version=17`, `do_constant_folding=True` (optimization pass)
-  - `dynamic_axes` on both `chart_image` and `breakout_logits` — allows variable batch sizes at inference without re-export (matters for real-time tick scoring vs batch backtesting)
-  - Input name: `'chart_image'`, output name: `'breakout_logits'`
-  - **Verify with onnxruntime**: run dummy input through both PyTorch and ORT, assert `max_diff < 1e-4`
-  - Print warning if any non-exportable ops are detected (diff ≥ 1e-4)
-
-### Phase 8D: Master Orchestrator (`run_full_pipeline.py`)
-- [ ] **Single script that runs all four phases end-to-end**
-  - Phase 1: Per-asset training loop → `asset_results` dict
-  - Phase 2: Rank assets by accuracy, print bar chart, filter to qualified teachers
-  - Phase 3: Build `ConcatDataset`, run `DistillationTrainer`, save `champ_combined.pt`
-  - Phase 4: Call `export_to_onnx()`, verify output, save `champ_combined.onnx`
-  - Write `models/pipeline_summary.json`: assets_trained, teachers_qualified, ranked_assets, champ_model path, onnx_export path
-  - Entry point: `python run_full_pipeline.py` with hardcoded asset list and config dict
-  - Config:
-    ```
-    assets: ['MGC', 'MNQ', 'MES', 'MYM', 'M2K', 'MBT', 'MET']
-    epochs: 60
-    learning_rate: 0.0001
-    patience: 12
-    days_back: 180
-    min_teacher_accuracy: 0.75
-    ```
-
-### Key Design Decisions (reference)
-- **Distillation over ensemble**: an ensemble of 6 models = 6x inference cost and a nightmare to export cleanly to ONNX. Distillation gives ~95% of the accuracy in one clean `.onnx` file at normal speed.
-- **Temperature=4.0**: softer probability distributions let the student learn cross-asset generalization from the shape of predictions, not just which class won.
-- **Qualified teacher gate**: per-asset models that underperform (e.g., 72% acc) hurt distillation more than they help — filter them out automatically via `min_teacher_accuracy`.
-- **`dynamic_axes` in ONNX export**: variable batch size at inference time without re-exporting — critical for real-time tick scoring vs batch backtesting.
+### Phase 8C: Master Orchestrator (`run_full_pipeline.py`)
+- [ ] Single script: per-asset training → rank + filter teachers → distill → promote
+- [ ] Write `models/pipeline_summary.json`
 
 ---
 
-## 🟡 Medium Priority — Existing Tasks
+## 🟢 Low Priority — Scaling & Copy Trading
 
-### NT8 Validation
-- [ ] **Test v6 ONNX auto-adapt** — deploy `BreakoutStrategy.cs` to NT8, compile, verify:
-  - Startup log shows `CNN tabular dim: model expects 18, C# builds 18`
-  - Per-type TP3 mults loaded from `feature_contract.json` (log each type's mult at startup)
-  - Entry logs show `[positions: N/5]`
-  - No `OCO ID cannot be reused` or `signal name longer than 50` errors
-  - Run for a full session and review output logs
-- [ ] **Parity-test Phase 3 EMA9 trailing** — run Python engine + C# strategy side-by-side on same OHLCV data, compare Phase 3 trail stop levels and exit prices. Target: ≤ 1 tick divergence per bar.
-  - `test_phase3_ema9_parity.py` — 130 tests all green; warm-up sequences use trending bars
-
-### NT8 Bridge Trading Tests
-- [ ] **Bridge `/flatten` from web UI** — ensure the Flatten All button in the dashboard triggers Bridge `FlattenAll` which closes every position across all instruments immediately (already wired, needs live test)
-  - Python-side wiring fully tested offline: `src/tests/test_bridge_trading.py` — TestFlattenAll (6 tests) covers heartbeat liveness gate, port resolution from heartbeat, proxy forwarding to Bridge `/flatten`, default reason, connection error handling (503/504)
-  - Dashboard HTML wiring verified: `_render_positions_panel()` in `dashboard.py` renders `hx-post="/api/positions/flatten"` button with `hx-confirm`, disabled when Bridge offline
-  - Live test script ready: `scripts/test_bridge_live.py` — run with `--bridge HOST:PORT --data URL` when NT8 is up on Sim (also `--local` for same-machine testing)
-  - **Remaining**: fire up NT8 on Sim, run `python scripts/test_bridge_live.py`, verify flatten closes all positions across all instruments
-- [ ] **Manual trade from dashboard** — when the strategy is always running and I place a manual entry from the web UI via `/execute_signal`, it should coexist with automated entries. Verify:
-  - Manual entry gets its own `PositionPhase` tracking
-  - Automated entries continue alongside manual positions
-  - Both respect `MaxConcurrentPositions = 5`
-  - Python-side wiring fully tested offline: `src/tests/test_bridge_trading.py` — TestExecuteSignal (6 tests) covers market long, short with all fields, risk check enforcement, risk check bypass (enforce_risk=False), direction validation, connection errors
-  - C# wiring verified by code review: `Bridge.cs` `ListenLoop` parses `/execute_signal` POST → creates `SignalBus.Signal` → `SignalBus.Enqueue()` → `BreakoutStrategy.OnBarUpdate` calls `_engine.DrainSignalBus()` → `ProcessSignal()` → `SubmitOrderUnmanaged()` with unique signal name `Signal-{dir}-{id}` (capped at 49 chars)
-  - `FireEntry()` registers each entry in `_positionPhases[signalId]` with its own `PositionPhase` struct — manual Bridge entries use `signalId = "brg-{guid}"`, automated entries use `signalId = "brk-{dir}-{timestamp}-{instrument}-{type}"`
-  - `MaxConcurrentPositions` gate at top of `FireEntry()`: `if (_activePositionCount >= MaxConcurrentPositions) return;` — applies to both automated and manual entries
-  - **Remaining**: live test with NT8 on Sim — run `scripts/test_bridge_live.py --local` (or `--bridge HOST:PORT --data URL`), verify both entry types get PositionPhase in Output Window
-
----
-
-## 🔴 High Priority — TradingView Ruby Futures Indicator (`src/pine/ruby_futures.pine`)
-
-The TradingView Pine Script indicator that draws engine signal levels directly on your TV chart. This is the primary live trading UI — your Python dashboard runs alongside TV for real-time CNN context, and Tradovate is connected in TV for execution. No NinjaTrader required for this workflow.
-
-**Architecture:**
-```
-Python Engine (Pi)
-    ├── Computes: ORB levels, PDR, IB, CNN signal, entry/stop/TP
-    ├── Writes → GitHub repo (nuniesmith/futures-signals) on every signal fire
-    │           └── signals.csv  ← request.seed() reads this (2-5 min lag)
-    │
-    └── FastAPI endpoint ← TradingView webhooks POST here (outbound from TV)
-
-TradingView (browser, Linux-native)
-    ├── Ruby Futures indicator (Pine Script)
-    │   ├── Pure price calculations: ORB box, PDR, IB, Asian range — zero delay
-    │   ├── request.seed() reads signals.csv → draws entry/stop/TP lines + CNN label
-    │   └── Futures contract sizing (micro + regular) on every signal label
-    │
-    ├── Tradovate broker connected → positions show natively in TV
-    └── Python dashboard tiled alongside (real-time CNN + risk strip)
-```
-
-**Key Pine Script constraints:**
-- Pine Script cannot make external HTTP requests — but CAN send webhooks outbound and reference `request.seed()` data
-- `request.seed()` reads from a GitHub repo (`nuniesmith/futures-signals`) — 2-5 minute delay, good enough for levels display
-- Pure price calculations (ORB box, ranges, S/R) run at zero delay — only engine signal overlay has the lag
-- TradingView alerts/webhooks fire outbound to the Python engine FastAPI endpoint on user-defined conditions
-
-### Phase TV-A: `signals.csv` GitHub Publisher (Python Engine)
-- [ ] **Create `nuniesmith/futures-signals` GitHub repo** — public, updated by the engine on every signal fire
-  - `signals.csv` schema: `timestamp, asset, breakout_type, direction, entry, stop, tp1, tp2, tp3, cnn_prob, atr, session`
-  - Engine writes via GitHub REST API (authenticated with a fine-grained PAT scoped to just this repo)
-  - Triggered from `publish_breakout_result()` in `handlers.py` (or `main.py` until Phase 1D) — runs after CNN inference completes
-  - Keep last N signals (e.g. 50 rows) — rotate oldest out on each write so the CSV stays small and `request.seed()` loads fast
-  - Store PAT in env var `GITHUB_SIGNALS_TOKEN` — never committed
-
-### Phase TV-B: Ruby Futures Indicator — Engine Signal Overlay
-- [ ] **Extend `src/pine/ruby_futures.pine` with `request.seed()` engine signal layer**
-  - `request.seed("nuniesmith/futures-signals", "signals.csv", ...)` call to pull latest signal rows
-  - Parse columns: entry, stop, tp1, tp2, tp3, cnn_prob, direction, breakout_type
-  - Draw horizontal lines for current asset's most recent signal: entry (blue), stop (red), TP1/TP2/TP3 (green gradient)
-  - Label each line with dollar value per contract: `"TP1  5182.50  +$312 micro / +$3,125 reg"`
-  - CNN probability badge: `"CNN 91.2% LONG  ORB"` label pinned near entry line
-  - Auto-filter by current chart symbol — only show signals matching the active TV instrument
-  - Lines auto-expire after the signal's session closes (use timestamp + session duration to determine expiry)
-  - Toggle via input: `show_engine_signals = input.bool(true, "Show Engine Signals", group="Engine")`
-
-### Phase TV-C: Ruby Futures Indicator — Core Futures Layer
-- [ ] **Complete `src/pine/ruby_futures.pine` base futures features** (already partially built per file header)
-  - Contract specs table: `MGC, MES, MNQ, MYM, M2K, 6E, 6B, 6J, MBT, MET` — tick size, tick value, micro multiplier, regular multiplier
-  - Micro + regular sizing on every signal label: `"LONG  1 MGC = $12.40 risk  |  1 GC = $124.00"`
-  - Asian range box (19:00–02:00 ET) — already in file header, verify drawing logic
-  - Prev Day Mid line — thin dashed line at midpoint of prior day's range
-  - ORB box drawn in pure Pine from price data (zero delay) — session-configurable open time
-  - Daily P&L / risk strip in dashboard: consecutive losses, daily loss %, contracts used vs max
-  - Live position tracker: entry price, contract count, bracket phase (1/2/3), unrealised P&L in dollars
-
-### Phase TV-D: TradingView → Python Engine Webhook
-- [ ] **Add FastAPI endpoint to receive TradingView outbound webhooks**
-  - `POST /api/tv/alert` — receives TV alert JSON payload
-  - TV alert message format: `{"symbol": "MGC", "action": "LONG_ENTRY", "price": 2891.5, "note": "ORB breakout"}`
-  - Engine logs the alert, optionally triggers a fresh CNN inference on that symbol, pushes result to dashboard via SSE
-  - This is informational only — no order execution. Keeps you in the loop when TV fires an alert while you're watching the dashboard.
-  - Auth: shared secret in `TV_WEBHOOK_SECRET` env var, passed as query param or header from TV alert URL
-
-### Phase TV-E: Dashboard + TradingView Side-by-Side Workflow
-- [ ] **Document and test the full manual trading workflow**
-  - Left monitor: TradingView with Ruby Futures indicator + Tradovate connected
-  - Right monitor: Python dashboard (focus mode, 3-4 assets, risk strip)
-  - Pre-market: dashboard shows daily bias + Grok brief → informs TV watchlist
-  - During session: TV draws engine levels (via `request.seed()`) → you execute manually in Tradovate
-  - PickMyTrade copies your Tradovate fill to all other accounts simultaneously
-  - Dashboard tracks positions (via Bridge or manual position entry) + updates P&L strip
-  - Goal: zero dependency on NinjaTrader or Windows Server for live trading
-
----
-
-## 🟢 Low Priority
-
-### Two-Stage Scaling Strategy (Manual Trading → Copy to All Accounts)
-
-**The overall goal:** trade manually with CNN signal support, copy one trade to all funded accounts simultaneously. No automation violations — this is copying your own trades to your own accounts, which is explicitly allowed by both Apex and TPT.
-
-**Stage 1 — TPT (current focus):**
-- Max 5 funded PAs at $150K each → $750K total buying power
-- Scale one account at a time as each passes evaluation and proves consistent
-
-**Stage 2 — Apex (longer term):**
-- Max 20 funded PAs per household across all platforms (Rithmic, Tradovate, WealthCharts combined)
-- Max account size $300K → up to ~$6M total buying power across 20 accounts
-- 100% of first $25K profit per account, 90% after — payout every 8 trading days per account
-- Example at scale: 10 × $50K accounts → $2,000 withdrawal per account every 8 trading days = $20,000/cycle
-
-**Copy trading stack — TradingView + PickMyTrade + Tradovate:**
-```
-You trade manually on TradingView
-        ↓
-TradingView webhook fires on your trade
-        ↓
-PickMyTrade receives signal
-        ↓
-Copies to all Apex accounts via Tradovate simultaneously
-        ↓
-Position sized proportionally per account (quantity multipliers)
-```
-- PickMyTrade connects TradingView → Tradovate with real-time replication and proper per-account sizing
-- One manual entry executes across all accounts simultaneously — that's the multiplier
-- **No NinjaTrader, no Windows Server, no Wine** — TradingView runs in browser, Tradovate is web/Linux-friendly, PickMyTrade handles the copy layer. Eliminates the expensive Windows Server overhead entirely.
-
-**Key Apex/TPT rules to stay compliant:**
-- All positions closed before 4:59 PM ET — no overnight holds
-- No swing trading — no holds over session breaks or weekends
-- No hedging — can't be long on one account and short on another across correlated instruments simultaneously
-- Consistency rule — keep sizing consistent across days; don't open max size day 1 then drop to micros (triggers disqualification review)
-- Copy trading your own accounts = allowed. Copying another trader's signals or letting others copy yours = banned.
-
-- [ ] **Evaluate PickMyTrade** — sign up, test TradingView → Tradovate copy on a single Apex eval account before scaling
-  - Verify webhook latency (TradingView alert → fill) is acceptable for intraday futures
+### PickMyTrade + Account Scaling
+- [ ] Sign up for PickMyTrade, test TradingView → Tradovate copy on a single Apex eval account
+  - Verify webhook latency (TV alert → fill) for intraday futures
   - Test quantity multiplier config for different account sizes
   - Confirm all 20 Apex accounts can be connected simultaneously
-- [ ] **TradingView setup** — configure alerts/webhooks on breakout signals to trigger PickMyTrade
-  - CNN dashboard signals should inform manual entries on TradingView (dashboard + TV side by side)
-  - Alerts fire the copy, not an automated strategy — stays compliant
-- [ ] **Scale TPT to 5 accounts** — pass eval on each, connect via PickMyTrade copy layer
-- [ ] **Scale Apex to 20 accounts** — evaluate progressively, connect each to PickMyTrade as funded
-
-### Multi-Source Breakout Detection Enhancements
-- [ ] **Wire `crypto_momentum_score` into engine scoring pipeline** — currently computed but not fed into live decisions
-  - Add as optional boost to breakout signal quality scoring (engine-side, before CNN v7 adds it as a feature)
-  - Dashboard: show crypto momentum indicator on focused asset cards when crypto data is available
-  - Strongest value: Asian session crypto breakout → London/US equity open prediction
+- [ ] Configure TV alerts/webhooks to trigger PickMyTrade on manual entries
+- [ ] Scale TPT to 5 accounts (pass eval on each, connect via PickMyTrade)
+- [ ] Scale Apex to 20 accounts progressively
 
 ### Kraken Spot Portfolio Management (Phase 6)
-- [ ] **Create `lib/strategies/crypto/portfolio_manager.py`** — maintain target % allocations for spot crypto holdings
-  - Kraken private API already has `get_balance()`, `get_trade_balance()`, `get_open_orders()` — need to add `add_order()` and `cancel_order()` to `KrakenDataProvider`
-  - `CryptoPortfolioConfig` dataclass:
-    - Target allocations: `{"BTC": 0.50, "ETH": 0.30, "SOL": 0.10, "LINK": 0.05, "AVAX": 0.05}` (% of total crypto portfolio value)
-    - Rebalance threshold: 5% deviation from target triggers rebalance consideration
-    - Max trade size per rebalance: 10% of total portfolio (don't dump everything at once)
-    - Rebalance cooldown: minimum 4 hours between rebalances
-    - DCA mode: option to buy fixed USD amount on schedule (daily/weekly) into target allocations
-  - `check_rebalance()` — compare current holdings to targets, return list of needed trades
-  - `execute_rebalance()` — place limit orders on Kraken to bring allocations back to target
-  - **No hard stop equivalent** — crypto runs 24/7, but:
-    - Risk rules: max drawdown alert (if total crypto portfolio drops >10% from peak, alert + pause rebalancing)
-    - Volatility filter: don't rebalance during extreme vol (BTC ATR > 2σ from 20-day mean)
-    - Integration with futures strategy: when the futures system detects a strong crypto momentum signal (from `crypto_momentum.py`), optionally overweight that asset temporarily
-  - Dashboard: Kraken portfolio card showing current allocations vs targets, P&L, rebalance status
-  - Separate from futures — this is a "set it and forget it" spot portfolio that runs alongside the active trading
-  - All Kraken trading gated behind `ENABLE_KRAKEN_TRADING=1` env var (separate from `ENABLE_KRAKEN_CRYPTO` which is read-only data)
+- [ ] `lib/strategies/crypto/portfolio_manager.py` — target % allocations, rebalance logic
+- [ ] Add `add_order()` and `cancel_order()` to `KrakenDataProvider`
+- [ ] `CryptoPortfolioConfig`: target allocations, 5% rebalance threshold, 4h cooldown, DCA mode
+- [ ] Dashboard: Kraken portfolio card with allocations vs targets, P&L, rebalance status
+- [ ] Gated behind `ENABLE_KRAKEN_TRADING=1` env var
+
+### Crypto Momentum Wiring
+- [ ] Wire `crypto_momentum_score` into engine live scoring pipeline (currently computed, not fed into decisions)
+- [ ] Show crypto momentum indicator on focused asset cards
+
+---
+
+## Execution Order (Getting to Demo Live)
+
+**Step 1 — Codebase cleanup (do before retraining to reduce noise):**
+- Phase 1D — extract generic handler from `main.py` (~400 lines eliminated, lower bug surface)
+- Phase 1A — merge BreakoutType enums (kills the mapping dict hell)
+- Phase 1B — merge RangeConfig (one config per type, full stop)
+- Phase 1C — unified RB detector (ORB is just another type)
+- Phase 1G — create `lib/strategies/` package
+
+**Step 2 — CNN v7.1 retrain (the milestone):**
+- Phase 4C — generate dataset, train, gate, promote `breakout_cnn_best.pt`
+- Deploy to Pi via `sync_models.sh`
+
+**Step 3 — TradingView integration (live trading UI):**
+- Phase TV-A — `signals.csv` GitHub publisher
+- Phase TV-C — Ruby Futures core futures layer (pure price, zero delay)
+- Phase TV-B — engine signal overlay via `request.seed()`
+- Phase TV-D — TV → Python webhook endpoint
+- Phase TV-E — end-to-end workflow test on Tradovate demo
+
+**Step 4 — Go live on demo funds, observe, tune thresholds**
+
+**Step 5 — Post-demo (when profitable/consistent):**
+- Phase 7A–7D — CNN asset intelligence
+- Phase 8A–8C — per-asset distillation
+- Phase 6 — Kraken portfolio
+- PickMyTrade → multi-account scaling
+
+---
+
+## 🗺️ System Logic Map — End-to-End Data & Signal Flow
+
+### 1. Data Ingestion
+
+```
+External Sources
+  ├─ Yahoo Finance (yfinance)    ← primary for CME futures (1m, 5m, 15m, daily)
+  ├─ Kraken REST / WebSocket     ← crypto spot via kraken_client.py
+  └─ MassiveAPI (massive_client) ← alternative / historical bars
+
+         ↓
+  lib/core/cache.py → get_data(ticker, interval, period)
+         │  Fetches bars, caches in Redis
+         │  Keys: engine:bars_1m:<TICKER>, engine:bars_15m:<TICKER>, engine:bars_daily:<TICKER>
+         ↓
+  lib/trading/engine.py → DashboardEngine
+         │  _fetch_tf_safe() / _refresh_data() / _loop()
+         ↓
+  Redis (pub/sub + key-value) — central message bus
+```
+
+### 2. Engine Startup & Scheduler
+
+```
+src/lib/services/engine/main.py → main()
+  ├─ Env: ACCOUNT_SIZE, ENGINE_INTERVAL, ENGINE_PERIOD
+  ├─ Creates DashboardEngine, ScheduleManager, RiskManager, PositionManager, ModelWatcher
+  └─ Main loop:
+       ├─ scheduler.get_pending_actions()   ← time-of-day aware
+       ├─ _check_redis_commands()           ← dashboard-triggered overrides
+       ├─ Execute pending actions via dispatch table
+       ├─ _handle_update_positions()        ← bracket/trailing stop updates
+       ├─ _tick_live_risk_publisher()       ← publish LiveRiskState every loop
+       └─ _publish_engine_status()          ← push state to Redis for web UI
+
+Session Modes (Eastern Time):
+  EVENING     18:00–00:00  →  CME, Sydney, Tokyo, Shanghai ORB sessions
+  PRE_MARKET  00:00–03:00  →  Daily focus, Grok brief, generate_daily_plan()
+  ACTIVE      03:00–12:00  →  Frankfurt, London, London-NY, US ORB + all 13 breakout types
+  OFF_HOURS   12:00–18:00  →  Backfill, training, optimization, daily report
+```
+
+### 3. Daily Focus Computation
+
+```
+PRE_MARKET (00:00–03:00 ET) → generate_daily_plan()
+  │
+  ├─ compute_all_daily_biases()       ← 6-component scoring per asset
+  ├─ Grok macro brief (optional)      ← if XAI_API_KEY set
+  ├─ select_daily_focus_assets()      ← 5-factor composite ranking (0-100)
+  │    signal quality 30%, ATR opportunity 25%, RB density 20%, session fit 15%, catalyst 10%
+  ├─ _build_swing_candidate()         ← wider SL/TP (1.75×/2.5×/4×/5.5× ATR)
+  └─ DailyPlan.publish_to_redis()     ← engine:daily_plan, engine:focus_assets (18h TTL)
+```
+
+### 4. Breakout Detection (13 Types, 10 Sessions)
+
+```
+CHECK_ORB_* / CHECK_PDR / CHECK_IB / CHECK_CONSOLIDATION / CHECK_BREAKOUT_MULTI
+  │
+  ├─ Fetch 1m bars from Redis cache
+  ├─ detect_range_breakout(bars, symbol, config)
+  │    └─ _build_*_range() → _scan_for_breakout() → BreakoutResult
+  │
+  ├─ apply_all_filters() ← NR7, premarket, session window, lunch, MTF bias, VWAP
+  │
+  │  IF passed:
+  │    ├─ predict_breakout(image, tabular_28, session_key)  ← CNN inference
+  │    │    threshold per session (us:0.82 → sydney:0.72)
+  │    │
+  │    │  IF cnn_signal:
+  │    │    ├─ RiskManager.can_enter_trade()
+  │    │    ├─ PositionManager.process_signal()  ← bracket, P&L tracking (informational)
+  │    │    ├─ signals_publisher.write_signal()  ← append to signals.csv → GitHub push
+  │    │    ├─ publish_breakout_result()          ← Redis pub/sub → dashboard SSE
+  │    │    └─ alerts.send_signal()               ← push notification
+```
+
+### 5. CNN Inference (Python)
+
+```
+predict_breakout(image_path, tabular_28, session_key)
+  │
+  ├─ Image branch: chart_renderer_parity.py → 224×224 Ruby-style chart snapshot
+  │    → ImageNet normalisation → (1, 3, 224, 224) tensor
+  │
+  ├─ Tabular branch (28 features, v7.1 contract):
+  │    _normalise_tabular_for_inference(features) → (1, 28) float tensor
+  │    [0-17]  v6 features (quality, volume, ATR, CVD, direction, session, etc.)
+  │    [18-23] v7 daily features (bias direction/confidence, prior day pattern,
+  │             weekly range position, monthly trend, crypto momentum)
+  │    [24-27] v7.1 sub-features (breakout type category, session overlap,
+  │             ATR trend, volume trend)
+  │
+  ├─ Forward pass:
+  │    EfficientNetV2-S(image) → (1, 1280)
+  │    tabular_head(tabular)   → (1, 32)
+  │    classifier(combined)    → (1, 2) → softmax → P(clean breakout)
+  │
+  └─ Returns: { prob, signal, confidence, threshold }
+       signal = True if prob ≥ session threshold
+```
+
+### 6. Live Risk State
+
+```
+LiveRiskPublisher (ticked every engine loop, force-publish on position change)
+  │
+  ├─ compute_live_risk(risk_manager, position_manager)
+  │    → LiveRiskState: daily_pnl, open_positions, remaining_risk_budget,
+  │                     total_unrealized_pnl, margin_used, can_trade, block_reason
+  │
+  ├─ Publish to Redis: engine:live_risk
+  ├─ SSE channel: dashboard:live_risk → risk strip updates every 5s
+  └─ Focus cards: dual micro/regular sizing reflects remaining_risk_budget
+```
+
+### 7. Dashboard → TradingView Signal Flow
+
+```
+Engine fires CNN-gated signal
+  │
+  ├─ signals_publisher.append_and_push(signal)
+  │    → signals.csv committed to nuniesmith/futures-signals (GitHub API)
+  │
+  └─ TradingView ruby_futures.pine (request.seed(), 2-5 min lag)
+       → Parses signals.csv, matches current chart symbol
+       → Draws entry/stop/TP lines + CNN label + dual contract sizing
+       → Trader sees the level, decides manually whether to execute in Tradovate
+```
+
+### 8. Training Pipeline
+
+```
+trainer_server.py → _run_training_pipeline(TrainRequest)
+  │
+  ├─ dataset_generator.py → generate_dataset(symbols, days_back, config)
+  │    For each of 25 symbols × 13 types × 9 sessions:
+  │      ├─ load_bars() ← DataResolver (Redis → Postgres → Massive/Kraken)
+  │      ├─ rb_simulator.py → bracket replay → good/bad labels
+  │      ├─ chart_renderer_parity.py → 224×224 PNG per sample
+  │      └─ _build_row() → 28 tabular features
+  │
+  ├─ split_dataset(85/15 stratified)
+  ├─ train_model(epochs, batch_size, lr)
+  │    Phase 1: freeze CNN backbone, train tabular head + classifier
+  │    Phase 2: unfreeze, fine-tune everything at lower LR
+  ├─ evaluate_model() → acc / prec / rec
+  ├─ Gate check → promote to breakout_cnn_best.pt
+  └─ ModelWatcher detects new .pt → engine hot-reloads
+```
+
+### 9. Infrastructure
+
+```
+Docker Compose (3 containers):
+  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+  │   :engine    │  │    :web      │  │   :trainer   │
+  │  main.py     │  │  FastAPI     │  │  FastAPI     │
+  │  scheduler   │  │  dashboard   │  │  dataset gen │
+  │  risk mgr    │  │  focus cards │  │  CNN train   │
+  │  position mgr│  │  settings    │  │  promote .pt │
+  │  all handlers│  │  risk strip  │  │              │
+  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+         └──────────────────┼─────────────────┘
+                            ↓
+                      ┌──────────┐
+                      │  Redis   │
+                      └──────────┘
+                      ┌──────────┐
+                      │ Postgres │  (audit trail: risk_events, orb_events, journal)
+                      └──────────┘
+
+Tailscale mesh:
+  Pi       → engine + web (always on, 24/7 scheduling)
+  GPU rig  → trainer (on-demand)
+```
 
 ---
 
@@ -781,846 +557,90 @@ Position sized proportionally per account (quantity multipliers)
 
 ### Daily Bias Analyzer (`src/lib/strategies/daily/bias_analyzer.py`)
 - [x] `BiasDirection`, `CandlePattern`, `KeyLevels`, `DailyBias` dataclasses
-- [x] `compute_daily_bias()` — 6-component weighted scoring: candle pattern (25%), weekly position (20%), monthly trend (25%), volume (10%), overnight gap (10%), ATR trend (10%)
-- [x] `compute_all_daily_biases()` — batch analysis for all assets
-- [x] `rank_assets_by_conviction()` — Phase 3A helper
-- [x] CNN feature helpers: `direction_feature`, `confidence_feature`, `candle_pattern_feature`, `weekly_range_feature`, `monthly_trend_feature`
+- [x] `compute_daily_bias()` — 6-component weighted scoring (candle 25%, weekly 20%, monthly 25%, volume 10%, gap 10%, ATR 10%)
+- [x] `compute_all_daily_biases()`, `rank_assets_by_conviction()`, CNN feature helpers
 
-### Daily Plan Generator + Focus Asset Selection (`src/lib/strategies/daily/daily_plan.py`, `src/lib/services/engine/focus.py`)
-- [x] `DailyPlan`, `SwingCandidate`, `ScalpFocusAsset` dataclasses with full `to_dict()` serialization
-- [x] `generate_daily_plan()` orchestrator: fetches data → bias analysis → optional Grok → composite ranking → swing levels
-- [x] `select_daily_focus_assets()` — 5-factor composite ranking (signal quality 30%, ATR opportunity 25%, RB density 20%, session fit 15%, catalyst 10%)
-- [x] `_compute_session_fit_score()` — 30+ assets mapped to asian/london/us sessions
-- [x] `_compute_atr_opportunity_score()` — NATR-based piecewise 0–100 scoring
-- [x] `_build_swing_candidate()` — wider SL/TP (1.75×/2.5×/4×/5.5× ATR), tick-aware rounding, entry style detection
-- [x] `DailyPlan.publish_to_redis()` / `load_from_redis()` — `engine:daily_plan`, `engine:focus_assets`, `engine:swing_assets` with 18h TTL
-- [x] `get_daily_plan_focus_assets()` in `focus.py` — loads from Redis or generates fresh plan
-- [x] `compute_daily_focus(use_daily_plan=True)` — tags assets as `scalp_focus`/`swing`/`background`, sorts focused first
-- [x] `generate_and_publish_daily_plan()` convenience wrapper for engine scheduler
-- [x] 66 tests passing (`tests/test_daily_plan.py`)
+### Daily Plan Generator + Focus Asset Selection
+- [x] `DailyPlan`, `SwingCandidate`, `ScalpFocusAsset` dataclasses with full serialisation
+- [x] `generate_daily_plan()` orchestrator, `select_daily_focus_assets()` 5-factor composite ranking
+- [x] `DailyPlan.publish_to_redis()` / `load_from_redis()` — 18h TTL
+- [x] `get_daily_plan_focus_assets()` in `focus.py`, `compute_daily_focus(use_daily_plan=True)`
+- [x] 66 tests passing
 
-### Dashboard Focus Mode (`src/lib/services/engine/data/api/dashboard.py`, `src/lib/services/engine/focus.py`)
-- [x] `_render_focus_mode_grid()` — tiered layout replacing flat asset grid: scalp focus cards (prominent, 2-col), swing candidate cards (amber/gold styling), collapsed background assets in `<details>` element
-- [x] `_render_daily_plan_header()` — Grok morning brief card (LIVE/CACHED badge) + focus chip summary strip with ranked scalp chips (#1, #2, #3) and swing chips (🕐), formatted plan time
-- [x] `_render_why_these_assets()` — collapsible `<details>` panel: composite score breakdown table (Signal 30%, ATR 25%, RB Density 20%, Session 15%, Catalyst 10%) with mini score bars per asset; swing candidate rows with direction/confidence/reasoning/entry styles
-- [x] `_render_swing_card()` — amber-bordered card with TP1/TP2/TP3 (wider than scalp), entry style chips, swing score + confidence badge, reasoning line, "DAILY SWING" label; supports live position overlay
-- [x] `_render_asset_card()` extended: `#N FOCUS` badge for scalp_focus, `🕐 SWING` badge for swing, `data-focus-category` data attribute
-- [x] `_get_daily_plan_data()` — reads `engine:daily_plan` from Redis for dashboard display
-- [x] `get_daily_plan_html()` — new `GET /api/daily-plan/html` endpoint returning plan header + "Why these assets?" panel
-- [x] `get_focus_html()` updated to use `_render_focus_mode_grid()` when focus mode active
-- [x] `_render_full_dashboard()` updated: uses focus mode grid, 🎯 Focus Mode badge in summary bar
-- [x] SSE: `daily-plan-update` event listener in JS — triggers focus grid refresh + market event feed entry
-- [x] `publish_focus_to_redis()` in `focus.py` extended: publishes `dashboard:daily_plan` PubSub event when `focus_mode_active=True`
-- [x] 82 tests passing (`tests/test_dashboard_focus_mode.py`)
-
-### Swing Action Buttons & API (`src/lib/services/engine/data/api/swing_actions.py`, `src/lib/services/engine/swing.py`)
-- [x] **Phase 3D: HTMX action buttons on swing cards** — Accept Signal / Ignore / Close Position / Move Stop to BE
-- [x] Swing state mutation functions in `swing.py`: `accept_swing_signal()`, `ignore_swing_signal()`, `close_swing_position()`, `move_stop_to_breakeven()`, `update_swing_stop()`, `get_swing_state_detail()`, `get_swing_history()`, `get_pending_signals()`
-- [x] Pending signal management: signals detected during `tick_swing_detector()` Phase A are cached in `_pending_swing_signals` dict for dashboard display; accepted signals are promoted to active `SwingState`, ignored signals are removed
-- [x] New API router `swing_actions.py` with 10 endpoints: `POST /api/swing/accept/{asset}`, `POST /api/swing/ignore/{asset}`, `POST /api/swing/close/{asset}`, `POST /api/swing/stop-to-be/{asset}`, `POST /api/swing/update-stop/{asset}`, `GET /api/swing/pending`, `GET /api/swing/active`, `GET /api/swing/detail/{asset}`, `GET /api/swing/history`, `GET /api/swing/status-badge/{asset}`
-- [x] All POST endpoints return HTML fragments (success/error toasts + updated action buttons) for HTMX in-place swap — no full page reload needed
-- [x] Dashboard `_render_swing_card()` updated: action buttons rendered via `render_swing_action_buttons_for_card()`, live status badge polls `/api/swing/status-badge/{asset}` every 30s via `hx-trigger="load, every 30s"`
-- [x] `_render_focus_mode_grid()` fetches active states + pending signals once and passes to all swing cards for efficient rendering
-- [x] SSE handler in `sse.py` now explicitly handles `dashboard:swing_update` pub/sub channel → emits `swing-update` SSE event
-- [x] Router registered in `data/main.py` as `swing_actions_router` under `"Swing Actions"` tag
-- [x] Signal lifecycle: detect → pending → accept/ignore → active → manage (stop-to-BE, update-stop) → close → archive to Redis history (last 100, 7-day TTL)
-- [x] Safety: concurrent swing limit enforced on accept (max 3), phase validation on stop moves (must be active/tp1_hit/trailing), stop price validation (correct side of entry, not zero/negative)
-- [x] 88 tests passing (`tests/test_swing_actions.py`): state mutations, API endpoints via TestClient, HTML fragment rendering, dashboard integration, SSE handling, router registration, full signal lifecycle, edge cases
-
-### SSE Swing + TV Alert Wiring (`dashboard.py`, `sse.py`, `swing.py`)
-- [x] **Dashboard JS `swing-update` SSE listener** — auto-refreshes focus grid when swing signals are detected, states are created/updated/closed, or manual actions (accept/ignore/close/stop-to-BE) are performed; parses structured action metadata to show rich messages in market events feed (✅ accepted, 🏁 closed, ⏭️ ignored, 🔒 stop→BE, ⚡ signal detected, 📊 exit)
-- [x] **Dashboard JS `tv-alert` SSE listener** — shows TradingView webhook alerts in the market events feed in real-time; parses action/symbol/price/note from payload, color-codes LONG (green) / SHORT (red) / other (blue)
-- [x] **SSE server `dashboard:tv_alert` channel handler** in `sse.py` — forwards TV webhook alerts from Redis PubSub to dashboard clients as `tv-alert` SSE events (TV alert endpoint already publishes to `dashboard:tv_alert` via `_publish_to_redis()`)
-- [x] **Structured swing action publishing** via `_publish_swing_action()` helper in `swing.py` — every swing mutation (accept, ignore, close, stop-to-BE, stop update, signal detection, exit) now publishes a structured JSON event to `dashboard:swing_update` with action type, asset name, direction, phase, and relevant metadata so the JS listener can show contextual messages
-- [x] All 397 tests passing across swing actions (88), dashboard focus mode (82), swing detector (150), grok integration (77)
+### Dashboard Focus Mode
+- [x] `_render_focus_mode_grid()` — tiered layout: scalp focus (prominent), swing cards (amber), background collapse
+- [x] `_render_daily_plan_header()` — Grok morning brief card + focus chip strip
+- [x] `_render_why_these_assets()` — collapsible score breakdown table with mini score bars
+- [x] `_render_swing_card()` — amber-bordered with TP1/TP2/TP3, entry style chips, confidence badge
+- [x] SSE `daily-plan-update` listener, `GET /api/daily-plan/html` endpoint
+- [x] 82 tests passing
 
 ### Swing Detector (`src/lib/strategies/daily/swing_detector.py`)
-- [x] Three entry detectors: `detect_pullback_entry()` (key level proximity within 0.3× ATR + retrace depth 25–75% of impulse + confirmation bar with body ≥ 50% closing in bias direction), `detect_breakout_entry()` (prior day H/L break + volume ≥ 1.3× 20-bar avg + bar close in top/bottom 60% of range), `detect_gap_continuation()` (gap ≥ 0.3× ATR aligned with bias + unfilled at 50% threshold + 6-bar settle period + pullback into gap zone with resumption bar)
-- [x] Combined `detect_swing_entries()` orchestrator — runs all three detectors, time-stop gate (no new entries after 15:30 ET), configurable `enabled_styles` filter, results sorted by confidence descending
-- [x] Exit engine `evaluate_swing_exits()` — priority-ordered checks: stop loss (terminal) → TP1 scale-out 50% (ACTIVE phase only) → TP2 close remainder (TP1_HIT/TRAILING phase) → EMA-21 trailing stop (with ATR-based fallback when bars insufficient) → time stop (15:30 ET, no overnight holds)
-- [x] `SwingSignal` dataclass — entry style, direction, confidence, entry zone, stop/TP levels, R:R ratios, position size, reasoning, key level used, confirmation bar index, phase
-- [x] `SwingExitSignal` dataclass — reason, exit price, P&L estimate, R-multiple, scale fraction, trailing stop price
-- [x] `SwingState` dataclass — tracks active/pending swing trade lifecycle with highest/lowest price tracking
-- [x] State management: `create_swing_state()` from confirmed signal, `update_swing_state()` with phase transitions (WATCHING → ENTRY_READY → ACTIVE → TP1_HIT → TRAILING → CLOSED), breakeven stop on TP1 hit, one-directional trailing stop tightening
-- [x] Multi-asset scanning: `scan_swing_entries_all_assets()` (top-N signals across all assets), `enrich_swing_candidates()` (enriches DailyPlan swing candidates with live entry signals)
-- [x] Redis integration: `publish_swing_signals()` / `load_swing_signals()` round-trip via `engine:swing_signals` key, `publish_swing_states()` via `engine:swing_states` key, `dashboard:swing_update` PubSub channel, 18h TTL
-- [x] Constants per spec: SL 1.5× ATR, TP1 2× ATR, TP2 3.5× ATR, risk 0.5% of account, max 3 micro contracts, EMA-21 trail period, pullback retrace bounds 25–75%, breakout volume threshold 1.3×, gap minimum 0.3× ATR
-- [x] Exported via `lib/strategies/daily/__init__.py` — `SwingSignal`, `SwingExitSignal`, `SwingState`, `SwingEntryStyle`, `SwingExitReason`, `SwingPhase`, all detection/exit/state functions
-- [x] 150 tests passing (`tests/test_swing_detector.py`), 0 regressions on existing 148 tests
+- [x] Three entry detectors: `detect_pullback_entry()`, `detect_breakout_entry()`, `detect_gap_continuation()`
+- [x] Exit engine `evaluate_swing_exits()`: stop loss → TP1 scale 50% → TP2 close → EMA-21 trail → time stop
+- [x] State machine: WATCHING → ENTRY_READY → ACTIVE → TP1_HIT → TRAILING → CLOSED
+- [x] Redis publish/load, `engine:swing_signals`, `engine:swing_states`
+- [x] 150 tests passing
 
-### Trainer UI Separation (`src/lib/training/trainer_server.py`, `src/lib/services/data/api/trainer.py`, `src/lib/services/web/main.py`)
-- [x] `trainer_server.py` HTML endpoint (`trainer_ui`) removed — trainer is now pure API server
-- [x] `src/lib/services/data/api/trainer.py` created — full HTML trainer dashboard page at `GET /trainer`, config endpoints, `/trainer/api/*` proxy
-- [x] `src/lib/services/data/main.py` — `trainer_router` imported and registered; trainer paths added to `api_info`
-- [x] `src/lib/services/web/main.py` — `/trainer` and `/trainer/*` now proxy to data service (not directly to trainer:8200); trainer httpx client removed; `TRAINER_SERVICE_URL` env var removed from web service env block
+### Swing Action Buttons
+- [x] `swing_actions.py` router — 10 endpoints: accept, ignore, close, stop-to-BE, update-stop, status
+- [x] HTMX fragments (success/error toasts + updated buttons) — no full page reload
+- [x] Signal lifecycle: detect → pending → accept/ignore → active → manage → close → archive
+- [x] SSE `swing-update` listener, structured action publishing via `_publish_swing_action()`
+- [x] 88 tests passing
+
+### Grok Structured Daily-Plan Analysis
+- [x] `grok_helper.py` — parsed JSON → `DailyPlan.market_context`, dashboard rendering
+- [x] 77 tests passing
+
+### Generalized Asset Model (`src/lib/core/asset_registry.py`)
+- [x] `Asset`, `ContractVariant`, `AssetClass`, `ASSET_REGISTRY`
+- [x] `dual_sizing()`, `compute_position_size()`, `get_asset_by_ticker()`, `get_asset_group()`
+- [x] Replaces split `MICRO_CONTRACT_SPECS` / `FULL_CONTRACT_SPECS`
+
+### Live Risk Integration
+- [x] `LiveRiskState`, `LiveRiskPublisher`, `compute_live_risk()` — `src/lib/services/engine/live_risk.py`
+- [x] API endpoints: `/api/live-risk`, `/api/live-risk/html`, `/api/live-risk/summary`
+- [x] Force-publish on position changes (1-2s latency)
+
+### Dynamic Position Sizing + Live Position Overlays
+- [x] `_compute_dual_sizing()` — micro + regular side-by-side on focus cards
+- [x] `_render_live_position_overlay()` — LIVE badge, P&L, R-multiple, bracket progress bar
+- [x] Risk strip (`get_live_risk_html()`) — health-coloured, HTMX polling + SSE
+
+### CNN v7.1 Feature Contract
+- [x] Features [18]–[23]: daily strategy features in `breakout_cnn.py` + `dataset_generator.py`
+- [x] Features [24]–[27]: sub-features (breakout type category, session overlap, ATR trend, volume trend)
+- [x] `feature_contract.json` updated to v7.1 (28 features)
+- [x] `_normalise_tabular_for_inference()` v6→v7→v7.1 backward-compat padding
+
+### CNN Model — v6 Champion
+- [x] 22-symbol training, 13 types, 9 sessions, 25 epochs
+- [x] **87.1% accuracy**, 87.15% precision, 87.27% recall — all gates passed
+- [x] `breakout_cnn_best.pt` promoted, `feature_contract.json` v6 generated
 
 ### Unified Data Resolver (`src/lib/services/data/resolver.py`)
-- [x] `DataResolver` class — Redis → Postgres → Massive/Kraken API three-tier resolution with automatic backfill
-- [x] `ResolveMetadata` dataclass — source, rows, cache_hit, backfilled_redis/postgres, duration_ms, error
-- [x] `resolve()`, `resolve_with_meta()`, `resolve_batch()`, `resolve_batch_with_meta()` public methods
-- [x] `get_resolver()` module-level singleton + `resolve()` shortcut
-- [x] No import cycle with `dataset_generator.py` — symbol map inlined in resolver
+- [x] `DataResolver` — Redis → Postgres → Massive/Kraken API three-tier resolution
+- [x] `resolve()`, `resolve_batch()`, `resolve_with_meta()`
 
-### Kraken Training Pipeline Integration (`src/lib/training/dataset_generator.py`, `src/lib/analysis/breakout_cnn.py`, `models/feature_contract.json`)
-- [x] `dataset_generator.py` — `_is_kraken_symbol()`, `_load_bars_from_kraken()`, `_SYMBOL_TO_TICKER` short aliases (BTC→KRAKEN:XBTUSD etc.), `load_bars()` Kraken routing
-- [x] `trainer_server.py` — `DEFAULT_SYMBOLS` updated: 22 CME micros + BTC, ETH, SOL (25 total)
-- [x] `breakout_cnn.py` — `ASSET_CLASS_ORDINALS` + `ASSET_VOLATILITY_CLASS` include all Kraken tickers
-- [x] `models/feature_contract.json` — regenerated with 42-entry `asset_class_map` + `asset_volatility_classes` including all Kraken internal tickers and short aliases
-- [x] CI/CD — `KRAKEN_API_KEY` + `KRAKEN_API_SECRET` both injected in pre-deploy step and passed through docker-compose to engine + trainer
+### Kraken Training Pipeline Integration
+- [x] `dataset_generator.py` — Kraken routing, `_is_kraken_symbol()`, `_load_bars_from_kraken()`
+- [x] 25 total training symbols: 22 CME micros + BTC, ETH, SOL
 
-### ONNX ↔ PyTorch Parity Check (`scripts/check_onnx_parity.py`)
-- [x] `scripts/check_onnx_parity.py` created — loads `.pt` via `_build_model_from_checkpoint` and `.onnx` via `onnxruntime`, runs 64 synthetic v6 18-feature batches, asserts max abs diff < 1e-4
-- [x] Feature contract validation: checks version, feature count (18), and optionally name order against `TABULAR_FEATURES`
-- [x] `--verbose` flag prints per-batch min/max/diff; `--n-samples`, `--threshold`, `--device` (auto/cpu/cuda/mps) args
-- [x] Exit 0 = pass (safe to deploy to NT8), Exit 1 = fail (re-export ONNX)
+### Web UI — Trading / Review Mode
+- [x] `⚡ Trading` / `🔍 Review` pill toggle — auto-detects from ET hour
+- [x] CSS visibility gates: review panels hidden in trading mode
+- [x] Decimal precision fix for forex tickers (5–7dp)
 
-### NT8 TPT Hard Stop — 4:00 PM ET session close (`src/ninja/BreakoutStrategy.cs`)
-- [x] `CheckTptHardStop()` method added in new `#region TPT hard stop` block
-- [x] Converts bar time to ET via `TimeZoneInfo.ConvertTimeFromUtc` with `"Eastern Standard Time"` zone
-- [x] 16:00–17:59 ET: sets `RiskBlocked=true` + `RiskBlockReason="TPT_SESSION_CLOSED"`, calls `_engine.FlattenAll("TPT_HARD_STOP_16:00")` if `_activePositionCount > 0`; retries on next bar if FlattenAll throws
-- [x] 18:00+ ET: clears `TPT_SESSION_CLOSED` block so new Globex session trading is allowed
-- [x] Called from BIP0 path in `OnBarUpdate()` when `TptMode == true`; wrapped in try/catch for crash resilience
-
-### Web UI — Trading / Review Mode + Dashboard Cleanup (`src/lib/services/data/api/dashboard.py`)
-- [x] `⚡ Trading` / `🔍 Review` pill toggle added to dashboard header; persisted in `localStorage['dashMode']`; auto-detects from ET hour on first visit
-- [x] CSS: `body.mode-trading .review-only { display: none }` / `body.mode-review .trading-only { display: none }` — zero JS overhead, pure CSS visibility
-- [x] Review-only panels: Dataset Preview, Crypto Chart, Correlation, Volume Profile, Performance, Trade Journal, Market Regime
-- [x] Grok `hx-trigger` changed from `every 60s` → `load`; Review Mode restores polling via `setDashboardMode()` JS
-- [x] Static "Next Session / Schedule" panel removed from sidebar
-- [x] `_price_decimals(tick_size)` helper + `tick_size` param to `_compute_entry_zone()` — forex (6E, 6B, 6J) now correctly uses 5–7 decimal places
-- [x] `target1_dollars` / `target2_dollars` computed in `compute_asset_focus()` and displayed as `~$N` badges on TP1/TP2 in asset cards; stop shows `-$risk`
-
-### CNN Model — Full Retrain (v6, 87.1% accuracy)
-- [x] 22-symbol training: MGC, SIL, MHG, MCL, MNG, MES, MNQ, M2K, MYM, 6E, 6B, 6J, 6A, 6C, 6S, ZN, ZB, ZC, ZS, ZW, MBT, MET
-- [x] All 13 breakout types, all 9 sessions, 90 days lookback, 25 epochs
-- [x] 85/15 stratified train/val split
-- [x] Validation gates: 87.1% acc (≥80%), 87.15% prec (≥75%), 87.27% rec (≥70%) — all passed
-- [x] Champion promoted: `breakout_cnn_best.pt` + `breakout_cnn_best.onnx` (80.7 MB)
-- [x] `feature_contract.json` v6 regenerated with all 13 type configs
-- [x] `breakout_cnn_best_meta.json` written with full training config and metrics
-- [x] 41 checkpoint `.pt` files saved during training (timestamped with accuracy)
-- [x] ONNX export: opset 17, dynamic batch axes, validated with `onnx.checker`
-
-### NT8 — Stop-and-Reverse (SAR) always-in micro position (`src/ninja/BreakoutStrategy.cs`)
-- [x] `ReversalState` sealed class — direction, signalId, entryPrice, ATR, SL, lastReversalTime, reversalCount; `RMultiple(price)` + `IsWinning(price)` helpers; `Open()` / `Close()` lifecycle methods
-- [x] `_sarStates[]` allocated at DataLoaded alongside `_states[]`; SAR constants mirror Python PM env vars: `CSarMinCnnProb=0.85`, `CSarWinningCnnProb=0.92`, `CSarHighWinnerCnnProb=0.95`, `CSarMinMtfScore=0.60`, `CSarCooldownMinutes=30`, `CSarChaseMaxAtrFraction=0.50`, `CSarChaseMinCnnProb=0.90`
-- [x] `ShouldReverse()` — 5 gates matching Python `_should_reverse`: direction, CNN prob, cooldown, MTF, high-winner protection
-- [x] `DecideEntryType()` — limit-at-range-edge / market-chase logic matching Python `_decide_entry_type`
-- [x] `TryReversePosition()` — flatten → clean phase tracking → reset fired flags → pre-decrement active count → FireEntry → update cooldown
-- [x] `CheckBreakout()` SAR path: when `rs.FiredLong`/`rs.FiredShort` already set, check `sar.IsShort`/`sar.IsLong` and evaluate reversal gates; fresh entries still use original path
-- [x] `PassesCnnFilter()` overload with `out double cnnProbOut` for SAR reversal gate evaluation
-- [x] `FireEntry()` → `sarRef.Open()` stamps direction + signalId on fill; `OnOrderUpdate` closes SAR state on flatten/SL/TP; per-bar `Positions[bip]` sync as belt-and-suspenders
-
-### NT8 — MTF (15-minute) EMA/MACD alignment scoring (`src/ninja/BreakoutStrategy.cs`)
-- [x] **`InstrumentState` MTF fields** — EMA-9/21/50 incremental state, MACD-12/26/9 incremental state, histogram ring-buffer (3 bars) for slope, EMA-50 5-bar ring-buffer for slope, `MtfScore` sentinel (-1 = ready, 1.0 = warm-up pass-through), `MtfBip` back-reference to the 15m BIP index
-- [x] **15m `AddDataSeries`** — one 15m series added per tracked instrument in `Configure` immediately after each 1m series; primary instrument (BIP0) gets its 15m series separately; all use the same trading-hours template as the 1m series
-- [x] **`_mtfBipBySymbol` map** — built at `DataLoaded` by scanning `BarsArray` for `BarsPeriod.Value == 15`; wires `st.MtfBip` on every matching `InstrumentState`
-- [x] **`UpdateMtf(int mtfBip, InstrumentState st)`** — called from `OnBarUpdate` whenever a 15m BIP fires a new closed bar; incremental EMA-9/21/50, MACD-12/26/9, histogram ring-buffer; writes `-1` sentinel to `MtfScore` once both EMA-50 (≥50 bars) and MACD signal (≥35 bars) are warmed up; `1.0` pass-through during warm-up
-
-### ONNX Parity Check (`scripts/check_onnx_parity.py`)
-- [x] Validated: 64 synthetic 18-feature batches → max abs diff < 1e-4 between .pt and .onnx
-
-### Kraken — Full Data Integration for Training
-- [x] Kraken API key/secret via CI/CD
-- [x] Kraken data in training pipeline — `dataset_generator.py` fully wired for Kraken OHLCV
-- [x] Unified data resolver for training — `src/lib/services/data/resolver.py`
-
-### Multi-Source Breakout Detection (Futures + Crypto)
-- [x] `src/lib/analysis/crypto_momentum.py` — full crypto momentum scorer module
-  - `CryptoMomentumScorer`, `compute_single_crypto_momentum()`, `score_futures_from_crypto()`
-  - Session-aware scoring, rolling Pearson correlation, weighted composite
-  - `CryptoMomentumSignal.to_tabular_feature()` returns normalized [-1, +1] for v7 feature
-- [x] `src/tests/test_crypto_momentum.py` — 109 tests all green
-- [x] Generalized model across asset classes — CNN trained on 25 symbols across 5 asset classes
+### Trainer UI Separation
+- [x] `trainer_server.py` HTML endpoint removed — pure API server
+- [x] `src/lib/services/data/api/trainer.py` — full dashboard page at `GET /trainer`
 
 ### Web UI — Settings Page
-- [x] `src/lib/services/data/api/settings.py` — 5 tabbed sections: Engine, Services, Features, Risk & Trading, API Keys
-- [x] All settings persisted to Redis via `settings:overrides` key
-- [x] `src/lib/services/web/main.py` — 9 new proxy routes for settings endpoints
-
-### Web UI — Trainer Separation & New Pages
-- [x] Trainer UI extracted into its own data-service page
-- [x] Settings page with full 5-tab configuration interface
-
----
-
-## Execution Order
-
-The refactor phases are ordered by dependency and risk:
-
-**✅ Completed (safe renames, no logic changes):**
-1. ~~**Phase 1E**~~ ✅ — Renamed `orb_filters.py` → `breakout_filters.py` (shim in place)
-2. ~~**Phase 1F**~~ ✅ — Renamed `orb_simulator.py` → `rb_simulator.py` (shim in place)
-
-**RB System Merge (core refactor, sequential — deferred):**
-3. **Phase 1D** — Extract generic handler pipeline from `main.py` (biggest immediate LOC reduction, ~400 lines eliminated)
-4. **Phase 1A** — Merge BreakoutType enums (foundational for everything else)
-5. **Phase 1B** — Merge RangeConfig dataclasses (depends on 1A)
-6. **Phase 1C** — Merge ORB detection into unified RB detector (depends on 1A + 1B)
-7. **Phase 1G** — Create `lib/strategies/` package (depends on 1C, moves files into new structure)
-
-**✅ Completed (Daily Strategy + Focus + Live Risk):**
-8. ~~**Phase 2A**~~ ✅ — Daily bias analyzer (`bias_analyzer.py`, 6-component scoring, CNN feature helpers)
-9. ~~**Phase 5A**~~ ✅ — Generalized asset model (`asset_registry.py`, `Asset`, `ContractVariant`, `dual_sizing()`)
-10. ~~**Phase 2B**~~ ✅ — Daily plan generator (`daily_plan.py`, `generate_daily_plan()`, `SwingCandidate`, `ScalpFocusAsset`, Redis persistence, 66 tests)
-11. ~~**Phase 3A**~~ ✅ — Top-4 asset selection (`select_daily_focus_assets()`, composite ranking, session fit, ATR opportunity, RB density, catalyst scoring)
-12. ~~**Phase 5B**~~ ✅ — Real-time risk budget integration (`live_risk.py`, `LiveRiskState`, `LiveRiskPublisher`)
-13. ~~**Phase 5C**~~ ✅ — Dynamic position sizing with micro/regular dual display on focus cards
-14. ~~**Phase 5D**~~ ✅ — Live position overlay on focus cards (bracket progress, R-multiple, P&L)
-15. ~~**Phase 5E**~~ ✅ — Risk dashboard strip (health-colored, HTMX polling + SSE)
-
-**✅ Completed (Dashboard Focus Mode):**
-16. ~~**Phase 3B**~~ ✅ — Dashboard focus mode (`_render_focus_mode_grid()` tiered layout, `_render_daily_plan_header()` Grok brief + focus chips, `_render_why_these_assets()` scoring breakdown, `_render_swing_card()` amber-styled swing cards, SSE `daily-plan-update` event, `GET /api/daily-plan/html` endpoint, 82 tests)
-
-**✅ Completed (Swing Detector + Grok + Action Buttons):**
-17. ~~**Phase 2C**~~ ✅ — Swing detector (`swing_detector.py`, 3 entry styles, exit engine, state management, 150 tests)
-18. ~~**Phase 3C**~~ ✅ — Grok structured daily-plan analysis (`grok_helper.py`, parsed JSON → DailyPlan, dashboard rendering)
-19. ~~**Phase 3D**~~ ✅ — Swing action buttons (`swing_actions.py`, Accept/Ignore/Close/Stop→BE HTMX endpoints, pending signal management, SSE `swing-update` event, 88 tests)
-
-**Next up (unblocks manual trading):**
-20. **Phase TV-A** — `signals.csv` GitHub publisher (independent)
-21. **Phase TV-B** — Ruby Futures indicator — engine signal overlay (depends on TV-A)
-22. **Phase TV-C** — Ruby Futures indicator — core futures layer (independent, partially built)
-23. **Phase TV-D** — TradingView → Python engine webhook (independent)
-24. **Phase TV-E** — Dashboard + TradingView side-by-side workflow (depends on TV-B + 3B)
-
-**CNN Intelligence (depends on daily strategy layer — now complete):**
-25. **Phase 4A** — CNN v7 features from daily strategy layer (depends on 2A ✅ — **dep met**)
-26. **Phase 4B** — Sub-features and richer encoding (depends on 4A)
-27. **Phase 4C** — Retrain on v7 contract (depends on 4A + 4B)
-28. **Phase 7A** — Hierarchical asset embedding (depends on 5A ✅ — **dep met**)
-29. **Phase 7B** — Cross-asset correlation features (depends on 7A)
-30. **Phase 7C** — Asset fingerprint analysis (independent, can start with 7A)
-31. **Phase 7D** — Correlation anomaly detection (depends on 7B + 7C)
-
-**Low Priority / When Profitable:**
-32. **Phase 6** — Kraken spot portfolio management (independent, needs `add_order` in Kraken client)
-33. **Trade Copier** — post first funded account
-
-Phase TV-A is the next high-impact step — wiring the GitHub `signals.csv` publisher end-to-end so TradingView can overlay engine signals. The swing action buttons (Phase 3D) complete the manual trading workflow for swing trades. Phase 4A (CNN v7 features) can start in parallel.
-
----
-
-## 🗺️ System Logic Map — End-to-End Data & Signal Flow
-
-> **Purpose**: Reference map of how data enters the system, flows through
-> analysis / risk / breakout detection / CNN inference / position management,
-> and ultimately reaches the NinjaTrader execution layer. Use this to
-> research each subsystem in isolation.
-
----
-
-### 1. Data Ingestion
-
-```
-External Sources
-  ├─ Yahoo Finance (yfinance)  ← primary for CME futures (1m, 5m, 15m, daily)
-  ├─ Kraken REST / WebSocket   ← crypto spot (BTC, ETH, SOL, etc.) via kraken_client.py
-  └─ MassiveAPI (massive_client.py) ← alternative / historical bars
-
-         │
-         ▼
-
-  lib/core/cache.py  →  get_data(ticker, interval, period)
-         │                 Fetches bars, caches in Redis as JSON
-         │                 Keys: engine:bars_1m:<TICKER>
-         │                        engine:bars_15m:<TICKER>
-         │                        engine:bars_daily:<TICKER>
-         ▼
-
-  lib/trading/engine.py  →  DashboardEngine
-         │  _fetch_tf_safe()  — safe wrapper around get_data with retry
-         │  _refresh_data()   — periodic bar refresh into Redis cache
-         │  _loop()           — main engine refresh cycle
-         ▼
-
-  Redis (pub/sub + key-value)
-         │  Central message bus for all services
-         │  Bars, focus, signals, risk state, position state
-         └─ engine:daily_focus, engine:risk:*, engine:positions:*
-```
-
-**Key files to research:**
-- `src/lib/core/cache.py` — data fetch & Redis caching
-- `src/lib/integrations/kraken_client.py` — Kraken OHLCV + WebSocket
-- `src/lib/integrations/massive_client.py` — MassiveAPI client
-- `src/lib/trading/engine.py` → `DashboardEngine._refresh_data()` — refresh loop
-- `src/lib/core/models.py` — `ASSETS`, `CORE_WATCHLIST`, `ACTIVE_WATCHLIST`, `MICRO_CONTRACT_SPECS`, ticker mappings
-
----
-
-### 2. Engine Startup & Scheduler
-
-```
-src/lib/services/engine/main.py  →  main()
-  │
-  ├─ Reads env: ACCOUNT_SIZE, ENGINE_INTERVAL, ENGINE_PERIOD
-  ├─ Creates DashboardEngine via get_engine()
-  ├─ Creates ScheduleManager (session-aware action scheduler)
-  ├─ Initialises RiskManager (risk rules engine)
-  ├─ Initialises PositionManager (micro stop-and-reverse positions)
-  ├─ Starts ModelWatcher (filesystem watcher for CNN hot-reload)
-  │
-  └─ Main loop:
-       while not shutdown:
-         ├─ scheduler.get_pending_actions()   ← time-of-day aware
-         ├─ _check_redis_commands()           ← dashboard-triggered overrides
-         ├─ Execute each pending action via action_handlers dispatch table
-         ├─ _handle_update_positions()        ← bracket / trailing stop updates
-         ├─ _publish_engine_status()          ← push state to Redis for web UI
-         └─ time.sleep(scheduler.sleep_interval)
-
-Session Modes (Eastern Time):
-  EVENING     18:00–00:00  →  CME, Sydney, Tokyo, Shanghai ORB sessions
-  PRE_MARKET  00:00–03:00  →  Daily focus computation, Grok morning brief
-  ACTIVE      03:00–12:00  →  Frankfurt, London, London-NY, US ORB + all breakout types
-  OFF_HOURS   12:00–18:00  →  Backfill, optimization, CNN training, daily report
-```
-
-**Key files to research:**
-- `src/lib/services/engine/main.py` → `main()` — the god loop & action dispatch
-- `src/lib/services/engine/scheduler.py` → `ScheduleManager`, `ActionType`, `SessionMode`
-
----
-
-### 3. Daily Focus Computation
-
-```
-ActionType.COMPUTE_DAILY_FOCUS  (runs once, pre-market 00:00–03:00 ET)
-  │
-  ▼
-focus.py → compute_daily_focus(account_size, symbols)
-  │
-  │  For each asset in ASSETS:
-  │    ├─ get_data(ticker, "5m", "5d")          ← 5-min bars, 5 days
-  │    ├─ wave_analysis.calculate_wave_analysis() ← wave ratio, bias, dominance
-  │    ├─ volatility.kmeans_volatility_clusters() ← ATR percentile, vol cluster
-  │    ├─ signal_quality.compute_signal_quality() ← composite quality score (0–100%)
-  │    ├─ _derive_bias() → LONG / SHORT / NEUTRAL
-  │    ├─ _compute_entry_zone() → entry_low, entry_high, stop, tp1, tp2
-  │    └─ _compute_position_size() → contracts, risk_dollars
-  │
-  │  Sort by quality (best first), then wave_ratio
-  │  should_not_trade() check (all assets skip → no-trade day)
-  │
-  ▼
-publish_focus_to_redis()
-  │  Writes JSON to engine:daily_focus
-  │  Contains: per-asset bias, levels, position sizes, quality scores
-  └─ Web UI reads this for dashboard focus cards
-```
-
-**Key files to research:**
-- `src/lib/services/engine/focus.py` — `compute_asset_focus()`, `compute_daily_focus()`
-- `src/lib/analysis/wave_analysis.py` — wave ratio & trend detection
-- `src/lib/analysis/volatility.py` — K-means ATR clustering
-- `src/lib/analysis/signal_quality.py` — composite quality scorer
-
----
-
-### 4. Breakout Detection System
-
-The system detects **13 breakout types** across **10 global sessions**.
-
-#### 4A. Opening Range Breakout (ORB) — Intraday Core
-
-```
-ActionType.CHECK_ORB_*  (every 2 min within each session's scan window)
-  │
-  ▼
-main.py → _handle_check_orb(engine, orb_session)
-  │
-  │  For each asset in engine:daily_focus:
-  │    ├─ Fetch 1m bars from Redis cache (engine:bars_1m:<TICKER>)
-  │    │
-  │    ├─ orb.py → detect_opening_range_breakout(bars_1m, symbol, session)
-  │    │    ├─ compute_opening_range()    ← H/L of first N minutes of session
-  │    │    ├─ _check_or_size()           ← range vs ATR quality gate
-  │    │    ├─ _check_breakout_bar_quality() ← body ratio, volume, wick
-  │    │    └─ Returns ORBResult (breakout_detected, direction, trigger, etc.)
-  │    │
-  │    ├─ _persist_orb_event()  ← audit trail to Postgres/SQLite
-  │    │
-  │    │  IF breakout_detected:
-  │    │    │
-  │    │    ▼
-  │    ├─ orb_filters.py → apply_all_filters()  ← Quality Filter Gate
-  │    │    ├─ check_nr7()              ← NR7 (narrowest range of 7 days) flag
-  │    │    ├─ check_premarket_range()  ← premarket range vs OR size
-  │    │    ├─ check_session_window()   ← time-of-day allowed window
-  │    │    ├─ check_lunch_filter()     ← avoid 11:30–13:00 ET chop
-  │    │    ├─ check_multi_tf_bias()    ← 15m EMA alignment with direction
-  │    │    ├─ check_mtf_analyzer()     ← MACD slope + divergence on HTF
-  │    │    └─ check_vwap_confluence()  ← price vs session VWAP alignment
-  │    │    Gate mode: "majority" (>50% pass) or "all" (every filter passes)
-  │    │
-  │    │  IF filter_passed:
-  │    │    │
-  │    │    ▼
-  │    ├─ CNN Inference (see §6 below)
-  │    │    breakout_cnn.py → predict_breakout(image, tabular_18, session_key)
-  │    │    Uses per-session probability threshold from feature_contract.json
-  │    │
-  │    │  IF cnn_signal (or CNN disabled):
-  │    │    │
-  │    │    ▼
-  │    ├─ publish_orb_alert()           ← Redis pub/sub → web UI alert
-  │    ├─ _dispatch_to_position_manager() ← PositionManager.process_signal()
-  │    └─ alerts.send_signal()          ← push notification / email
-  │
-  ▼
-10 ORB Sessions (all follow same pipeline):
-  CME Open          18:00–20:00 ET
-  Sydney/ASX Open   18:30–20:30 ET
-  Tokyo/TSE Open    19:00–21:00 ET
-  Shanghai/HK Open  21:00–23:00 ET
-  Frankfurt/Xetra   03:00–04:30 ET
-  London Open       03:00–05:00 ET
-  London–NY Cross   08:00–10:00 ET
-  US Equity Open    09:30–11:00 ET  (primary session)
-  CME Settlement    14:00–15:30 ET
-  Crypto UTC0/UTC12 (Kraken-only sessions)
-```
-
-#### 4B. Range Breakout Types (PDR, IB, Consolidation, + 9 More)
-
-```
-ActionType.CHECK_PDR / CHECK_IB / CHECK_CONSOLIDATION / CHECK_BREAKOUT_MULTI
-  │
-  ▼
-main.py → _handle_check_pdr() / _handle_check_ib() / _handle_check_consolidation()
-  │        _handle_check_breakout_multi()  ← runs multiple types in one sweep
-  │
-  │  For each asset in session's asset list:
-  │    ├─ _fetch_bars_1m()  ← Redis cache or engine fallback
-  │    ├─ (PDR) Fetch daily bars for prev_day_high / prev_day_low
-  │    │
-  │    ├─ breakout.py → detect_range_breakout(bars, symbol, config)
-  │    │    ├─ _compute_atr()               ← 14-bar ATR for thresholds
-  │    │    ├─ _build_*_range()             ← range builder per type:
-  │    │    │    _build_orb_range()          (ORB)
-  │    │    │    _build_pdr_range()          (Previous Day)
-  │    │    │    _build_ib_range()           (Initial Balance, 60 min RTH)
-  │    │    │    _build_consolidation_range() (BB squeeze contraction)
-  │    │    │    _build_weekly_range()       (Prior week H/L)
-  │    │    │    _build_monthly_range()      (Prior month H/L)
-  │    │    │    _build_asian_range()        (19:00–02:00 ET H/L)
-  │    │    │    _build_bbsqueeze_range()    (BB inside Keltner Channel)
-  │    │    │    _build_va_range()           (Value Area VAH/VAL)
-  │    │    │    _build_inside_day_range()   (Today inside yesterday)
-  │    │    │    _build_gap_rejection_range() (Overnight gap fill/reject)
-  │    │    │    _build_pivot_range()        (Floor pivot R1/S1)
-  │    │    │    _build_fibonacci_range()    (38.2–61.8% retracement)
-  │    │    │
-  │    │    ├─ _scan_for_breakout()         ← close beyond range ± ATR depth
-  │    │    └─ Returns BreakoutResult
-  │    │
-  │    ├─ _run_mtf_on_result()  ← enrich with MTF score, MACD slope, divergence
-  │    ├─ _persist_breakout_result()  ← audit trail
-  │    │
-  │    │  IF breakout_detected:
-  │    ├─ _publish_breakout_result()         ← Redis pub/sub
-  │    ├─ _dispatch_to_position_manager()    ← stop-and-reverse
-  │    └─ alerts.send_signal()               ← notification
-  │
-  ▼
-RangeConfig (per-type defaults in breakout.py):
-  Each BreakoutType has its own:
-    atr_period, atr_multiplier, min_depth_atr_pct, min_body_ratio,
-    max_range_atr_ratio, min_range_atr_ratio, plus type-specific params
-    (e.g. ib_duration_minutes=60, asian_start_time=19:00, fib_upper=0.618)
-```
-
-**Key files to research:**
-- `src/lib/services/engine/orb.py` — ORB detection, session definitions, `detect_opening_range_breakout()`
-- `src/lib/services/engine/breakout.py` — `BreakoutType` enum, `RangeConfig`, `detect_range_breakout()`, all `_build_*_range()` functions
-- `src/lib/analysis/orb_filters.py` — quality filter gate: NR7, premarket, session window, lunch, MTF bias, VWAP
-- `src/lib/analysis/mtf_analyzer.py` — multi-timeframe EMA/MACD scoring
-- `src/lib/core/breakout_types.py` — canonical IntEnum for CNN training ordinals
-
----
-
-### 5. Risk Management
-
-```
-RiskManager  (src/lib/services/engine/risk.py)
-  │
-  │  Initialised at engine startup with:
-  │    account_size, risk_pct_per_trade (1%), max_daily_loss,
-  │    max_open_trades, no_entry_after (cutoff time), session_end
-  │
-  │  can_enter_trade(symbol, side, size, risk_per_contract, ...)
-  │    ├─ Rule 1: Daily P&L ≤ max_daily_loss  → BLOCKED
-  │    ├─ Rule 2: Open positions ≥ max_open_trades  → BLOCKED
-  │    ├─ Rule 3: Per-trade risk > account × risk_pct  → BLOCKED
-  │    ├─ Rule 4: Past no_entry_after cutoff time  → BLOCKED
-  │    ├─ Rule 5: Session has ended  → BLOCKED
-  │    ├─ Rule 6: Stacking rules (min R-multiple, min wave ratio)  → BLOCKED
-  │    └─ Rule 7: 3 consecutive losses circuit breaker  → BLOCKED
-  │    Returns: (allowed: bool, reason: str)
-  │
-  │  register_open(symbol, side, size, entry_price, ...)
-  │  register_close(symbol, exit_price, pnl, ...)
-  │  update_unrealized(pnl)
-  │  sync_positions(positions_dict)
-  │
-  │  publish_to_redis()  → engine:risk:status
-  │    Exposes: daily_pnl, open_positions, consecutive_losses,
-  │             open_trade_count, risk budget remaining
-  │
-  ▼
-_handle_check_risk_rules()  (main.py, runs every loop iteration)
-  │  Checks all risk rules, publishes risk state
-  │  If daily loss hit → sets no-trade flag, sends alert
-  │
-_handle_check_no_trade()
-  │  Evaluates should_not_trade() from focus data
-  │  If all assets have quality < threshold → no-trade day
-```
-
-**Key files to research:**
-- `src/lib/services/engine/risk.py` — `RiskManager`, all 7 risk rules, P&L tracking
-- `src/lib/services/engine/main.py` → `_handle_check_risk_rules()`, `_handle_check_no_trade()`
-
----
-
-### 6. CNN Model — Inference (Live)
-
-```
-Breakout detected + filters passed
-  │
-  ▼
-breakout_cnn.py → predict_breakout(image_path, tabular_18, session_key)
-  │
-  ├─ _load_model()  ← loads breakout_cnn_best.pt (cached, hot-reloaded by ModelWatcher)
-  │    Model: HybridBreakoutCNN (EfficientNetV2-S backbone + tabular branch)
-  │
-  ├─ Image branch:
-  │    chart_renderer_parity.py renders a 224×224 Ruby-style chart snapshot
-  │    showing the breakout bar, range box, VWAP, EMA lines
-  │    → get_inference_transform() → ImageNet normalisation → (1, 3, 224, 224) tensor
-  │
-  ├─ Tabular branch (18 features, v6 contract):
-  │    _normalise_tabular_for_inference(features)
-  │    ┌─────────────────────────────────────────────────────────┐
-  │    │  [0]  quality_pct_norm      quality_pct / 100           │
-  │    │  [1]  volume_ratio          breakout bar vol / 20-avg   │
-  │    │  [2]  atr_pct               ATR as fraction of price    │
-  │    │  [3]  cvd_delta             normalised CVD delta [-1,1] │
-  │    │  [4]  nr7_flag              1.0 if NR7 day              │
-  │    │  [5]  direction_flag        1.0=LONG, 0.0=SHORT         │
-  │    │  [6]  session_ordinal       Globex day position [0,1]   │
-  │    │  [7]  london_overlap_flag   1.0 if 08:00–09:00 ET      │
-  │    │  [8]  or_range_atr_ratio    OR range / ATR              │
-  │    │  [9]  premarket_range_ratio premarket range / OR range  │
-  │    │  [10] bar_of_day            minutes since open / 1380   │
-  │    │  [11] day_of_week           Mon=0..Fri=4 / 4            │
-  │    │  [12] vwap_distance         (price-VWAP) / ATR          │
-  │    │  [13] asset_class_id        asset class ordinal / 4     │
-  │    │  [14] breakout_type_ord     BreakoutType ordinal / 12   │
-  │    │  [15] asset_volatility_class low=0 / med=0.5 / high=1   │
-  │    │  [16] hour_of_day           ET hour / 23                │
-  │    │  [17] tp3_atr_mult_norm     TP3 ATR mult / 5.0          │
-  │    └─────────────────────────────────────────────────────────┘
-  │    → (1, 18) float tensor
-  │
-  ├─ Forward pass:
-  │    img_features = EfficientNetV2-S(image)           → (1, 1280)
-  │    tab_features = tabular_head(tabular)             → (1, 32)
-  │    combined     = cat(img_features, tab_features)   → (1, 1312)
-  │    logits       = classifier(combined)              → (1, 2)
-  │    prob_good    = softmax(logits)[0, 1]             → P(clean breakout)
-  │
-  ├─ Per-session thresholds (from feature_contract.json):
-  │    us: 0.82  london: 0.82  london_ny: 0.82  frankfurt: 0.80
-  │    cme_settle: 0.78  cme: 0.75  tokyo: 0.74  shanghai: 0.74  sydney: 0.72
-  │
-  └─ Returns: { prob, signal, confidence ("high"/"medium"/"low"), threshold }
-       signal = True if prob_good ≥ session threshold
-
-NT8 Side (C#):
-  BreakoutStrategy.cs loads breakout_cnn_best.onnx via OnnxRuntime
-  OrbCnnPredictor inlines the same 18-feature normalisation (PrepareCnnTabular)
-  OrbChartRenderer renders a matching 224×224 chart bitmap
-  CnnSessionThresholds mirrors the same per-session threshold table
-  → Same model, same features, same thresholds — Python trains, C# infers
-```
-
-**Key files to research:**
-- `src/lib/analysis/breakout_cnn.py` → `predict_breakout()`, `HybridBreakoutCNN`, `_normalise_tabular_for_inference()`
-- `src/lib/analysis/chart_renderer.py` / `chart_renderer_parity.py` — chart image rendering
-- `models/feature_contract.json` — the v6 contract (18 features, thresholds, ordinals)
-- `src/ninja/BreakoutStrategy.cs` — NT8 C# side: `OrbCnnPredictor`, `OrbChartRenderer`, `CnnSessionThresholds`
-
----
-
-### 7. CNN Model — Training Pipeline
-
-```
-ActionType.TRAIN_BREAKOUT_CNN  (off-hours, or triggered from trainer web UI)
-  │
-  ▼
-trainer_server.py → _run_training_pipeline(TrainRequest)
-  │
-  │  ─── Step 1: Dataset Generation ───
-  │    dataset_generator.py → generate_dataset(symbols, days_back, config)
-  │      │
-  │      │  For each symbol:
-  │      │    ├─ load_bars()  ← multi-source resolver:
-  │      │    │    engine cache → Postgres DB → CSV files → MassiveAPI → Kraken
-  │      │    │
-  │      │    ├─ generate_dataset_for_symbol(symbol, bars_1m, bars_daily, config)
-  │      │    │    │
-  │      │    │    ├─ _run_simulators_for_breakout_type()
-  │      │    │    │    For each breakout type (ORB/PDR/IB/CONS/all 13):
-  │      │    │    │      orb_simulator.py runs historical simulation
-  │      │    │    │      walks forward through bars, detects ranges,
-  │      │    │    │      classifies outcome as "good" (clean follow-through)
-  │      │    │    │      or "bad" (fail / chop) using TP/SL bracket replay
-  │      │    │    │    For ORB with session="all": simulates all 9 Globex sessions
-  │      │    │    │
-  │      │    │    ├─ For each simulated result:
-  │      │    │    │    chart_renderer_parity.py → render 224×224 PNG snapshot
-  │      │    │    │    _build_row() → CSV row with:
-  │      │    │    │      image_path, label (good/bad), 18 tabular features,
-  │      │    │    │      breakout_type, session, symbol metadata
-  │      │    │    │
-  │      │    │    └─ Caps: max_samples_per_label, per_type_label, per_session_label
-  │      │    │
-  │      │    └─ Writes: <output_dir>/labels.csv + <output_dir>/images/*.png
-  │      │
-  │      └─ Returns DatasetStats (total_images, label_distribution, duration)
-  │
-  │  ─── Step 1b: Train/Val Split ───
-  │    split_dataset(labels.csv, val_fraction=0.15, stratify=True)
-  │    → train.csv (85%) + val.csv (15%), stratified by label
-  │
-  │  ─── Step 2: Model Training ───
-  │    breakout_cnn.py → train_model(train.csv, val.csv, epochs, batch_size, lr)
-  │      │
-  │      │  BreakoutDataset (PyTorch Dataset):
-  │      │    __getitem__: load image → transform, parse 18 tabular features,
-  │      │    read label → (image_tensor, tabular_tensor, label)
-  │      │
-  │      │  HybridBreakoutCNN:
-  │      │    EfficientNetV2-S (ImageNet pre-trained) + tabular MLP + classifier
-  │      │
-  │      │  Two-phase training:
-  │      │    Phase 1 (freeze_epochs=2): CNN backbone frozen, train tabular head + classifier
-  │      │    Phase 2 (remaining epochs): unfreeze backbone, fine-tune everything at lower LR
-  │      │
-  │      │  Optimizer: AdamW (lr=3e-4, weight_decay=1e-5)
-  │      │  Scheduler: CosineAnnealingLR
-  │      │  Loss
-: CrossEntropyLoss (label_smoothing=0.05)
-  │      │  Saves checkpoint every epoch: breakout_cnn_<timestamp>_acc<N>.pt
-  │      │
-  │      └─ Returns TrainResult (model_path, best_epoch, epochs_trained)
-  │
-  │  ─── Step 3: Evaluation ───
-  │    breakout_cnn.py → evaluate_model(candidate.pt, val.csv)
-  │    → val_accuracy, val_precision, val_recall
-  │
-  │  ─── Step 4: Promotion Gates ───
-  │    ├─ accuracy  ≥ min_acc (default ~80%)
-  │    ├─ precision ≥ min_prec
-  │    └─ recall    ≥ min_rec
-  │    All pass → candidate promoted to breakout_cnn_best.pt
-  │    Any fail → candidate rejected (unless force_promote=True)
-  │
-  │  ─── Step 5: Feature Contract Export ───
-  │    generate_feature_contract() → models/feature_contract.json
-  │    (tabular features, thresholds, ordinals, asset maps — consumed by engine + NT8)
-  │
-  │  ─── Step 6: ONNX Export ───
-  │    export_onnx_model(best.pt) → models/breakout_cnn_best.onnx
-  │    (consumed by NinjaTrader 8 via OnnxRuntime for live C# inference)
-  │
-  └─ ModelWatcher (filesystem watcher on models/ dir)
-       Detects new .pt files → invalidate_model_cache() → engine hot-reloads
-```
-
-**Key files to research:**
-- `src/lib/services/training/trainer_server.py` — `_run_training_pipeline()`, web API for training
-- `src/lib/services/training/dataset_generator.py` — `generate_dataset()`, `generate_dataset_for_symbol()`, `_run_simulators_for_breakout_type()`, `_build_row()`, `split_dataset()`
-- `src/lib/services/training/orb_simulator.py` — historical ORB simulation (bracket replay for labeling)
-- `src/lib/analysis/breakout_cnn.py` → `train_model()`, `evaluate_model()`, `BreakoutDataset`, `export_onnx_model()`
-- `src/lib/services/engine/model_watcher.py` — filesystem watcher for CNN hot-reload
-
----
-
-### 8. Position Management & Execution
-
-```
-Signal passes all gates (filters + CNN + risk)
-  │
-  ▼
-PositionManager  (src/lib/services/engine/position_manager.py)
-  │
-  ├─ process_signal(signal, bars_1m, range_config)
-  │    ├─ _decide_entry_type()  ← new entry vs reverse vs skip
-  │    ├─ _should_reverse()     ← if opposite direction to current position
-  │    ├─ _open_position()      ← creates MicroPosition with bracket:
-  │    │    entry_price, stop_loss (SL), TP1, TP2, TP3
-  │    │    SL = range opposite side + sl_atr_mult × ATR
-  │    │    TP1/TP2/TP3 = entry ± tp1/tp2/tp3_atr_mult × ATR
-  │    └─ _reverse_position()   ← close current + open opposite (SAR)
-  │
-  ├─ update_all(bars_by_ticker)  — called every engine loop iteration
-  │    For each active MicroPosition:
-  │      ├─ _update_bracket_phase()
-  │      │    BracketPhase.INITIAL  → waiting for TP1
-  │      │    BracketPhase.TP1_HIT  → move stop to breakeven
-  │      │    BracketPhase.TP2_HIT  → engage EMA9 trailing stop
-  │      │    BracketPhase.TRAILING → trail stop on EMA9
-  │      ├─ _check_stop_hit()    → close if price hits stop
-  │      ├─ _check_tp3_hit()     → close if price hits TP3 (full target)
-  │      └─ _compute_ema9()      → EMA(9) for trailing stop calculation
-  │
-  ├─ close_for_session_end()  ← hard stop at session close (4:00 PM ET)
-  │
-  └─ Generates OrderCommand objects → published to Redis
-       → NT8 Bridge picks up orders via Redis pub/sub
-       → BreakoutStrategy.cs executes on NinjaTrader 8
-
-NT8 Execution (C#):
-  BreakoutStrategy.cs
-    ├─ Mode: BuiltIn / SignalBusRelay / Both
-    │    BuiltIn: runs its own ORB detection + CNN filter
-    │    SignalBusRelay: executes signals from Ruby indicator via SignalBus
-    │    Both: runs both simultaneously
-    ├─ BridgeOrderEngine: bracket order management (SL, TP1, TP2, TP3, EMA trail)
-    ├─ OrbCnnPredictor: ONNX inference with same 18-feature contract
-    ├─ OrbChartRenderer: renders same 224×224 chart for CNN input
-    └─ Risk: TPT funded account rules, 25% contract sizing, session hard stop
-```
-
-**Key files to research:**
-- `src/lib/services/engine/position_manager.py` — `PositionManager`, `MicroPosition`, `BracketPhase`, `OrderCommand`
-- `src/ninja/BreakoutStrategy.cs` — NT8 strategy: ORB detection, CNN gate, bracket orders, SAR
-- `src/ninja/RubyIndicator.cs` — Ruby indicator (SignalBus source)
-
----
-
-### 9. Backtesting & Optimization (Strategies Layer)
-
-```
-ActionType.RUN_OPTIMIZATION / RUN_BACKTEST  (off-hours)
-  │
-  ▼
-trading/engine.py → run_optimization() / run_backtest()
-  │
-  ├─ 9 backtesting strategies (backtesting.py framework):
-  │    TrendEMACross    — dual EMA crossover with ADX filter
-  │    RSIReversal      — RSI oversold/overbought mean reversion
-  │    BreakoutStrategy — range breakout (20-bar high/low)
-  │    VWAPReversion    — VWAP + Bollinger Band mean reversion
-  │    ORBStrategy      — opening range breakout in backtest form
-  │    MACDMomentum     — MACD histogram momentum
-  │    PullbackEMA      — EMA pullback + engulfing / hammer patterns
-  │    EventReaction    — pre-event vol compression → post-event breakout
-  │    ICTTrendEMA      — EMA cross + ICT confluence (FVG, OB, liquidity sweeps)
-  │
-  ├─ run_optimization():
-  │    Uses Optuna to find best params per strategy per asset
-  │    Objective: score_backtest() — Sharpe, win rate, profit factor, drawdown
-  │    Results cached in Redis for dashboard display
-  │
-  └─ run_backtest():
-       Runs strategies with optimized params on fresh data
-       Stores results for web UI review
-```
-
-**Key files to research:**
-- `src/lib/trading/strategies.py` — all 9 strategy classes, `suggest_params()`, `score_backtest()`
-- `src/lib/trading/engine.py` — `run_optimization()`, `run_backtest()`, `DashboardEngine`
-- `src/lib/analysis/confluence.py` — multi-timeframe confluence scoring
-- `src/lib/analysis/ict.py` — ICT concepts (FVG, order blocks, liquidity sweeps)
-
----
-
-### 10. Analysis Modules (Supporting)
-
-```
-analysis/
-  ├─ wave_analysis.py     — Elliott-inspired wave ratio, trend direction, market phase
-  ├─ volatility.py        — K-means ATR clustering (LOW/MEDIUM/HIGH), vol percentile
-  ├─ signal_quality.py    — composite quality score combining wave + vol + momentum
-  ├─ confluence.py        — HTF bias, entry setup, multi-TF filter (EMA/RSI/ATR alignment)
-  ├─ mtf_analyzer.py      — 15-min EMA slope + MACD histogram scoring for breakout enrichment
-  ├─ scorer.py            — PreMarketScorer: NATR, RVOL, gap, catalyst, momentum scores
-  ├─ regime.py            — market regime detection (trending/ranging/volatile)
-  ├─ cvd.py               — Cumulative Volume Delta calculation
-  ├─ volume_profile.py    — Volume profile, POC, Value Area (VAH/VAL)
-  ├─ ict.py               — ICT concepts: FVG, order blocks, liquidity sweeps, BOS/CHoCH
-  ├─ crypto_momentum.py   — Crypto-specific momentum indicators
-  ├─ chart_renderer.py    — mplfinance chart rendering (original)
-  └─ chart_renderer_parity.py — pixel-perfect Ruby-parity chart renderer (CNN training)
-```
-
----
-
-### 11. Full Signal Flow Summary (Happy Path)
-
-```
-Yahoo/Kraken bars → Redis cache
-          │
-  Scheduler fires CHECK_ORB_US (09:30 ET, every 2 min)
-          │
-  Fetch 1m bars for each focus asset
-          │
-  detect_opening_range_breakout()  →  ORBResult (LONG breakout detected)
-          │
-  _persist_orb_event()  →  audit DB
-          │
-  apply_all_filters()  →  5/7 hard filters pass (majority gate)
-          │
-  predict_breakout()  →  P(good) = 0.87 ≥ 0.82 (US threshold) → signal=True
-          │
-  RiskManager.can_enter_trade()  →  allowed=True (within all 7 rules)
-          │
-  PositionManager.process_signal()  →  MicroPosition opened
-          │                              entry=5420.50, SL=5415.25, TP1=5428.00,
-          │                              TP2=5433.50, TP3=5441.75
-          │
-  _publish_pm_orders()  →  Redis pub/sub → NT8 Bridge
-          │
-  BreakoutStrategy.cs (NT8)  →  executes bracket order on live market
-          │
-  update_all() every 1 min:
-    TP1 hit → move stop to breakeven
-    TP2 hit → engage EMA9 trailing stop
-    TP3 hit or EMA9 trail stop → close position
-          │
-  register_close() → update daily P&L, publish risk state
-```
-
----
-
-### 12. Infrastructure & Services
-
-```
-Docker Compose (3 containers + supporting services):
-  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐
-  │   :engine    │  │    :web      │  │   :trainer   │
-  │  main.py     │  │  FastAPI     │  │  FastAPI     │
-  │  scheduler   │  │  dashboard   │  │  train API   │
-  │  risk mgr    │  │  focus cards │  │  dataset gen │
-  │  position mgr│  │  settings    │  │  CNN train   │
-  │  all handlers│  │  review mode │  │  ONNX export │
-  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
-         │                 │                  │
-         └────────┬────────┘                  │
-                  ▼                           │
-            ┌──────────┐                      │
-            │  Redis   │◄─────────────────────┘
-            └──────────┘
-            ┌──────────┐
-            │ Postgres │  (audit trail: risk_events, orb_events, daily_journal)
-            └──────────┘
-
-  Tailscale mesh:
-    Pi        → engine + web (always on, 24/7 scheduling)
-    GPU rig   → trainer (on-demand training runs)
-    Windows   → NinjaTrader 8 (BreakoutStrategy.cs, live execution)
-```
+- [x] `settings.py` — 5 tabbed sections: Engine, Services, Features, Risk & Trading, API Keys
+- [x] All settings persisted to Redis via `settings:overrides`
+
+### SSE Swing + TV Alert Wiring
+- [x] `swing-update` SSE listener — auto-refreshes focus grid, parses action metadata for market events feed
+- [x] `tv-alert` SSE listener — shows TradingView webhook alerts in market events feed
+- [x] `dashboard:tv_alert` Redis PubSub channel handler in `sse.py`

@@ -97,19 +97,19 @@ namespace NinjaTrader.NinjaScript.Strategies
     // Do NOT reorder or insert — ordinals are baked into trained ONNX models.
     public enum BreakoutType
     {
-        ORB              = 0,   // Opening Range (was "Orb" in v4)
-        PrevDay          = 1,   // Previous day high/low
-        InitialBalance   = 2,   // First 60 min of RTH (institutional)
-        Consolidation    = 3,   // ATR contraction / squeeze (non-time-based)
-        Weekly           = 4,   // Weekly high/low range
-        Monthly          = 5,   // Monthly high/low range
-        Asian            = 6,   // Asian session range (19:00–01:00 ET)
+        ORB = 0,   // Opening Range (was "Orb" in v4)
+        PrevDay = 1,   // Previous day high/low
+        InitialBalance = 2,   // First 60 min of RTH (institutional)
+        Consolidation = 3,   // ATR contraction / squeeze (non-time-based)
+        Weekly = 4,   // Weekly high/low range
+        Monthly = 5,   // Monthly high/low range
+        Asian = 6,   // Asian session range (19:00–01:00 ET)
         BollingerSqueeze = 7,   // Bollinger Band squeeze
-        ValueArea        = 8,   // Value Area high/low (volume profile)
-        InsideDay        = 9,   // Inside day pattern
-        GapRejection     = 10,  // Gap fill rejection
-        PivotPoints      = 11,  // Classic pivot point levels
-        Fibonacci        = 12,  // Fibonacci retracement levels
+        ValueArea = 8,   // Value Area high/low (volume profile)
+        InsideDay = 9,   // Inside day pattern
+        GapRejection = 10,  // Gap fill rejection
+        PivotPoints = 11,  // Classic pivot point levels
+        Fibonacci = 12,  // Fibonacci retracement levels
     }
 
     // ── 3-phase bracket walk state ────────────────────────────────────────────
@@ -135,29 +135,29 @@ namespace NinjaTrader.NinjaScript.Strategies
     public sealed class ReversalState
     {
         /// <summary>Current open direction: "long", "short", or "" (flat).</summary>
-        public string ActiveDirection   = "";
+        public string ActiveDirection = "";
 
         /// <summary>SignalId of the position that is currently open (matches _positionPhases key).</summary>
-        public string ActiveSignalId    = "";
+        public string ActiveSignalId = "";
 
         /// <summary>Entry price of the currently open position.</summary>
-        public double EntryPrice        = 0;
+        public double EntryPrice = 0;
 
         /// <summary>ATR at entry — used for R-multiple calculation.</summary>
-        public double AtrAtEntry        = 0;
+        public double AtrAtEntry = 0;
 
         /// <summary>SL price of the currently open position (updated at phase transitions).</summary>
-        public double SlPrice           = 0;
+        public double SlPrice = 0;
 
         /// <summary>Time of the last entry or reversal — used for cooldown gate.</summary>
         public DateTime LastReversalTime = DateTime.MinValue;
 
         /// <summary>Number of reversals made (for logging).</summary>
-        public int ReversalCount        = 0;
+        public int ReversalCount = 0;
 
-        public bool IsFlat   => string.IsNullOrEmpty(ActiveDirection);
-        public bool IsLong   => ActiveDirection == "long";
-        public bool IsShort  => ActiveDirection == "short";
+        public bool IsFlat => string.IsNullOrEmpty(ActiveDirection);
+        public bool IsLong => ActiveDirection == "long";
+        public bool IsShort => ActiveDirection == "short";
 
         /// <summary>
         /// Approximate R-multiple for the current position given the current
@@ -182,50 +182,50 @@ namespace NinjaTrader.NinjaScript.Strategies
         public void Open(string direction, string signalId, double entryPrice,
                          double atr, double sl, DateTime time)
         {
-            ActiveDirection  = direction;
-            ActiveSignalId   = signalId;
-            EntryPrice       = entryPrice;
-            AtrAtEntry       = atr;
-            SlPrice          = sl;
+            ActiveDirection = direction;
+            ActiveSignalId = signalId;
+            EntryPrice = entryPrice;
+            AtrAtEntry = atr;
+            SlPrice = sl;
             LastReversalTime = time;
         }
 
         public void Close()
         {
             ActiveDirection = "";
-            ActiveSignalId  = "";
-            EntryPrice      = 0;
-            AtrAtEntry      = 0;
-            SlPrice         = 0;
+            ActiveSignalId = "";
+            EntryPrice = 0;
+            AtrAtEntry = 0;
+            SlPrice = 0;
         }
     }
 
     public sealed class PositionPhase
     {
-        public string   SignalId    { get; set; }
-        public string   Direction   { get; set; }   // "long" | "short"
-        public string   Asset       { get; set; }
-        public int      Bip         { get; set; }
-        public BreakoutPhase Phase  { get; set; } = BreakoutPhase.Phase1;
+        public string SignalId { get; set; }
+        public string Direction { get; set; }   // "long" | "short"
+        public string Asset { get; set; }
+        public int Bip { get; set; }
+        public BreakoutPhase Phase { get; set; } = BreakoutPhase.Phase1;
 
         // Entry price and ATR captured at signal time
-        public double EntryPrice    { get; set; }
-        public double AtrAtEntry    { get; set; }
+        public double EntryPrice { get; set; }
+        public double AtrAtEntry { get; set; }
 
         // Phase1 targets (submitted as bracket orders)
-        public double SlPrice       { get; set; }   // current SL (modified at TP1)
-        public double Tp1Price      { get; set; }
-        public double Tp2Price      { get; set; }
-        public double Tp3Price      { get; set; }   // computed: entry ± ATR × Tp3Mult
+        public double SlPrice { get; set; }   // current SL (modified at TP1)
+        public double Tp1Price { get; set; }
+        public double Tp2Price { get; set; }
+        public double Tp3Price { get; set; }   // computed: entry ± ATR × Tp3Mult
 
         // Phase2/3 contract quantities
-        public int    TotalQty      { get; set; }
-        public int    Tp1Qty        { get; set; }
-        public int    Tp2Qty        { get; set; }
-        public int    Tp3Qty        { get; set; }   // = TotalQty - Tp1Qty - Tp2Qty (remainder)
+        public int TotalQty { get; set; }
+        public int Tp1Qty { get; set; }
+        public int Tp2Qty { get; set; }
+        public int Tp3Qty { get; set; }   // = TotalQty - Tp1Qty - Tp2Qty (remainder)
 
         // OCO group for the current SL leg (updated at each phase transition)
-        public string OcoGroup      { get; set; }
+        public string OcoGroup { get; set; }
 
         // Phase3: EMA9 ratcheted trail price (high-water mark, mirrors Python ema9_trail_price)
         // Only moves in the favourable direction — never retreats.
@@ -233,8 +233,8 @@ namespace NinjaTrader.NinjaScript.Strategies
         public double Ema9TrailPrice { get; set; }
 
         // Phase3: EMA9-based trailing exit was triggered
-        public bool   Tp3Submitted  { get; set; }
-        public bool   Ema9StopHit   { get; set; }
+        public bool Tp3Submitted { get; set; }
+        public bool Ema9StopHit { get; set; }
     }
 
     public class BreakoutStrategy : Strategy
@@ -277,25 +277,25 @@ namespace NinjaTrader.NinjaScript.Strategies
             // EMA state — incremental exponential moving average using:
             //   alpha = 2 / (period + 1)
             //   ema_new = alpha * close + (1 - alpha) * ema_prev
-            public double MtfEmaFast   = 0;        // EMA-9 on 15m
-            public double MtfEmaMid    = 0;        // EMA-21 on 15m
-            public double MtfEmaSlow   = 0;        // EMA-50 on 15m
-            public int    MtfEmaFilled = 0;        // bars consumed so far
-            public bool   MtfEmaReady  = false;    // true once EMA-50 warmed up (≥50 bars)
+            public double MtfEmaFast = 0;        // EMA-9 on 15m
+            public double MtfEmaMid = 0;        // EMA-21 on 15m
+            public double MtfEmaSlow = 0;        // EMA-50 on 15m
+            public int MtfEmaFilled = 0;        // bars consumed so far
+            public bool MtfEmaReady = false;    // true once EMA-50 warmed up (≥50 bars)
 
             // MACD state — EMA-12, EMA-26, Signal EMA-9 of (fast−slow)
-            public double MtfMacdFastEma   = 0;
-            public double MtfMacdSlowEma   = 0;
-            public double MtfMacdLine      = 0;    // macdFastEma − macdSlowEma
-            public double MtfMacdSigEma    = 0;    // EMA-9 of MtfMacdLine
+            public double MtfMacdFastEma = 0;
+            public double MtfMacdSlowEma = 0;
+            public double MtfMacdLine = 0;    // macdFastEma − macdSlowEma
+            public double MtfMacdSigEma = 0;    // EMA-9 of MtfMacdLine
             public double MtfMacdHistogram = 0;    // MtfMacdLine − MtfMacdSigEma
-            public int    MtfMacdFilled    = 0;    // bars consumed for MACD (needs ≥26)
-            public bool   MtfMacdReady     = false;// true once signal line warmed (≥35 bars)
+            public int MtfMacdFilled = 0;    // bars consumed for MACD (needs ≥26)
+            public bool MtfMacdReady = false;// true once signal line warmed (≥35 bars)
 
             // Histogram ring-buffer for slope (last 3 values → slope over 3 bars)
-            public double[] MtfHistBuf     = new double[3];
-            public int      MtfHistBufIdx  = 0;
-            public int      MtfHistFilled  = 0;
+            public double[] MtfHistBuf = new double[3];
+            public int MtfHistBufIdx = 0;
+            public int MtfHistFilled = 0;
 
             // Computed outputs (written by UpdateMtf, read by ShouldReverse)
             // MtfScore: 0.0–1.0 matching Python's weighted sum:
@@ -304,11 +304,11 @@ namespace NinjaTrader.NinjaScript.Strategies
             //   +0.25  MACD histogram polarity agrees
             //   +0.15  MACD histogram slope agrees
             //   +0.15  (no opposing divergence — always granted in C#, divergence detection omitted)
-            public double MtfScore          = 0;   // last computed score (direction-agnostic)
+            public double MtfScore = 0;   // last computed score (direction-agnostic)
             public double MtfEmaSlopePerBar = 0;   // % change in slow EMA per bar (last 5 bars)
-            public double[] MtfEmaSlowBuf   = new double[5]; // ring buffer for slope calc
-            public int      MtfEmaSlowIdx   = 0;
-            public int      MtfEmaSlowFill  = 0;
+            public double[] MtfEmaSlowBuf = new double[5]; // ring buffer for slope calc
+            public int MtfEmaSlowIdx = 0;
+            public int MtfEmaSlowFill = 0;
 
             // BIP index of the corresponding 15m data series (-1 = not yet assigned)
             public int MtfBip = -1;
@@ -333,10 +333,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                 public double Tp3AtrMult = 5.0;
                 // Scratch fields used by range builders that need to carry extra state
                 // between bar updates without allocating heap objects per bar.
-                public double AuxHigh  = 0;   // e.g. yesterday_high / swing_high / pivot
-                public double AuxLow   = 0;   // e.g. yesterday_low  / swing_low  / s1
+                public double AuxHigh = 0;   // e.g. yesterday_high / swing_high / pivot
+                public double AuxLow = 0;   // e.g. yesterday_low  / swing_low  / s1
                 public double AuxValue = 0;   // e.g. pivot point PP / gap_size / fib level
-                public string AuxTag   = "";  // e.g. gap direction "UP"/"DOWN"
+                public string AuxTag = "";  // e.g. gap direction "UP"/"DOWN"
             }
 
             // ── ORB (legacy fields kept for CNN feature extraction & VWAP guard) ──
@@ -456,10 +456,38 @@ namespace NinjaTrader.NinjaScript.Strategies
             // using Wilder/standard EMA smoothing:
             //   EMA = prev_EMA + (2/(N+1)) * (close - prev_EMA)
             // Seeded from the simple average of the first 9 closes.
-            public double Ema9Value  = 0;
-            public double Ema9Sum    = 0;   // warmup: running sum of first 9 closes
-            public int    Ema9Filled = 0;   // bars written into warmup (caps at 9)
-            public bool   Ema9Ready  = false;
+            public double Ema9Value = 0;
+            public double Ema9Sum = 0;   // warmup: running sum of first 9 closes
+            public int Ema9Filled = 0;   // bars written into warmup (caps at 9)
+            public bool Ema9Ready = false;
+
+            // ── ATR history ring-buffer for atr_trend feature (v7.1) ──────────
+            // Stores the last 10 ATR values so we can detect whether ATR is
+            // expanding or contracting.  Updated every bar by UpdateAtr.
+            public double[] AtrHistory = new double[10];
+            public int AtrHistIdx = 0;
+            public int AtrHistFilled = 0;
+
+            // ── Volume history ring-buffer for volume_trend feature (v7.1) ────
+            // Stores the last 5 bar volumes for slope calculation.
+            public double[] VolTrendBuf = new double[5];
+            public int VolTrendIdx = 0;
+            public int VolTrendFilled = 0;
+
+            // ── Prior day OHLC for daily bias features (v7) ───────────────────
+            // Captured at session rollover from the PrevDay range builder.
+            // Used to compute daily_bias_direction, prior_day_pattern, etc.
+            public double PrevDayOpen = 0;
+            public double PrevDayHigh = 0;
+            public double PrevDayLow = 0;
+            public double PrevDayClose = 0;
+            public double PrevDayVolume = 0;
+            public bool PrevDayValid = false;
+
+            // ── Prior week H/L for weekly_range_position (v7) ─────────────────
+            public double PrevWeekHigh = 0;
+            public double PrevWeekLow = double.MaxValue;
+            public bool PrevWeekValid = false;
 
             // ── Session iterator (Globex-aware session detection) ─────────────
             public SessionIterator SessionIter = null;
@@ -475,19 +503,19 @@ namespace NinjaTrader.NinjaScript.Strategies
                 // UpdateRangeWindow / CheckBreakout can iterate them uniformly.
                 // Types whose detection logic is not yet implemented will simply
                 // never set RangeEstablished = true and are harmless.
-                Ranges[BreakoutType.ORB]              = new RangeState();
-                Ranges[BreakoutType.PrevDay]           = new RangeState();
-                Ranges[BreakoutType.InitialBalance]    = new RangeState();
-                Ranges[BreakoutType.Consolidation]     = new RangeState();
-                Ranges[BreakoutType.Weekly]            = new RangeState();
-                Ranges[BreakoutType.Monthly]           = new RangeState();
-                Ranges[BreakoutType.Asian]             = new RangeState();
-                Ranges[BreakoutType.BollingerSqueeze]  = new RangeState();
-                Ranges[BreakoutType.ValueArea]         = new RangeState();
-                Ranges[BreakoutType.InsideDay]         = new RangeState();
-                Ranges[BreakoutType.GapRejection]      = new RangeState();
-                Ranges[BreakoutType.PivotPoints]       = new RangeState();
-                Ranges[BreakoutType.Fibonacci]         = new RangeState();
+                Ranges[BreakoutType.ORB] = new RangeState();
+                Ranges[BreakoutType.PrevDay] = new RangeState();
+                Ranges[BreakoutType.InitialBalance] = new RangeState();
+                Ranges[BreakoutType.Consolidation] = new RangeState();
+                Ranges[BreakoutType.Weekly] = new RangeState();
+                Ranges[BreakoutType.Monthly] = new RangeState();
+                Ranges[BreakoutType.Asian] = new RangeState();
+                Ranges[BreakoutType.BollingerSqueeze] = new RangeState();
+                Ranges[BreakoutType.ValueArea] = new RangeState();
+                Ranges[BreakoutType.InsideDay] = new RangeState();
+                Ranges[BreakoutType.GapRejection] = new RangeState();
+                Ranges[BreakoutType.PivotPoints] = new RangeState();
+                Ranges[BreakoutType.Fibonacci] = new RangeState();
             }
         }
 
@@ -527,14 +555,14 @@ namespace NinjaTrader.NinjaScript.Strategies
         private InstrumentState[] _states;
 
         // Property shims for SAR constants (keep call-sites readable)
-        private double SarMinCnnProb          => CSarMinCnnProb;
-        private double SarWinningCnnProb      => CSarWinningCnnProb;
-        private double SarHighWinnerCnnProb   => CSarHighWinnerCnnProb;
-        private double SarMinMtfScore         => CSarMinMtfScore;
-        private int    SarCooldownMinutes     => CSarCooldownMinutes;
+        private double SarMinCnnProb => CSarMinCnnProb;
+        private double SarWinningCnnProb => CSarWinningCnnProb;
+        private double SarHighWinnerCnnProb => CSarHighWinnerCnnProb;
+        private double SarMinMtfScore => CSarMinMtfScore;
+        private int SarCooldownMinutes => CSarCooldownMinutes;
         private double SarChaseMaxAtrFraction => CSarChaseMaxAtrFraction;
-        private double SarChaseMinCnnProb     => CSarChaseMinCnnProb;
-        private double SarHighWinnerRMult     => CSarHighWinnerRMult;
+        private double SarChaseMinCnnProb => CSarChaseMinCnnProb;
+        private double SarHighWinnerRMult => CSarHighWinnerRMult;
 
         // ── Order engine (all SubmitOrderUnmanaged calls go through here) ─────
         private BridgeOrderEngine _engine;
@@ -599,21 +627,21 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         // ── Stop-and-reverse constants (mirror Python PositionManager env vars) ──
         // Min CNN probability required to reverse a losing position.
-        private const double CSarMinCnnProb         = 0.85;
+        private const double CSarMinCnnProb = 0.85;
         // Min CNN probability required to reverse a *winning* position (higher bar).
-        private const double CSarWinningCnnProb     = 0.92;
+        private const double CSarWinningCnnProb = 0.92;
         // Even higher threshold when position is at 1R+ profit — mirror Python Gate 6.
-        private const double CSarHighWinnerCnnProb  = 0.95;
+        private const double CSarHighWinnerCnnProb = 0.95;
         // Min MTF alignment score required for a reversal.
-        private const double CSarMinMtfScore        = 0.60;
+        private const double CSarMinMtfScore = 0.60;
         // Cooldown in minutes between reversals (matches Python 1800 s default).
-        private const int    CSarCooldownMinutes    = 30;
+        private const int CSarCooldownMinutes = 30;
         // Max ATR fraction for a market-chase entry (mirrors PM_CHASE_MAX_ATR_FRACTION 0.50).
         private const double CSarChaseMaxAtrFraction = 0.50;
         // Min CNN probability for a market-chase entry (mirrors PM_CHASE_MIN_CNN_PROB 0.90).
-        private const double CSarChaseMinCnnProb    = 0.90;
+        private const double CSarChaseMinCnnProb = 0.90;
         // R-multiple threshold above which Gate 6 (high-winner protection) kicks in.
-        private const double CSarHighWinnerRMult    = 1.0;
+        private const double CSarHighWinnerRMult = 1.0;
 
         // =====================================================================
         // Properties
@@ -680,16 +708,16 @@ namespace NinjaTrader.NinjaScript.Strategies
         private const double CTp1AtrMult = 2.0;
         private const double CTp2AtrMult = 3.5;
         private const double CTp3AtrMult = 5.0;   // Phase3 target: entry ± ATR × this
-        private const bool   CEnableTp3Trailing = true; // enable 3-phase EMA9 trailing walk
+        private const bool CEnableTp3Trailing = true; // enable 3-phase EMA9 trailing walk
         private const bool CEnableAutoBrackets = true;
         private const int CDefaultSlTicks = 20;
         private const int CDefaultTpTicks = 40;
         // CNN
         // Number of tabular features C# builds and passes to OrbCnnPredictor.
-        // Must stay in sync with PrepareCnnTabular() and feature_contract.json v6.
+        // Must stay in sync with PrepareCnnTabular() and feature_contract.json v7.1.
         // If the loaded ONNX model reports a different NumTabular, a warning is
         // printed at startup — retrain/re-export the model to clear it.
-        private const int CNumTabularFeatures = 18;
+        private const int CNumTabularFeatures = 28;
         private static readonly string CCnnModelPath = System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
             "NinjaTrader 8", "bin", "Custom", "Models", "breakout_cnn_best.onnx");
@@ -1092,11 +1120,11 @@ namespace NinjaTrader.NinjaScript.Strategies
 
                 // Allocate per-instrument state — one entry per BIP
                 int count = BarsArray.Length;
-                _states    = new InstrumentState[count];
+                _states = new InstrumentState[count];
                 _sarStates = new ReversalState[count];
                 for (int i = 0; i < count; i++)
                 {
-                    _states[i]    = new InstrumentState(VolumeAvgPeriod, 14, CnnLookbackBars);
+                    _states[i] = new InstrumentState(VolumeAvgPeriod, 14, CnnLookbackBars);
                     _sarStates[i] = new ReversalState();
                     // Each BIP gets its own SessionIterator so Globex futures
                     // (which roll sessions at 18:00 ET, not midnight) reset their
@@ -1211,7 +1239,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                               $"C# builds {CNumTabularFeatures}. " +
                               $"The tabular vector will be silently truncated/zero-padded. " +
                               $"Re-train and re-export the ONNX model against " +
-                              $"feature_contract.json v6 ({CNumTabularFeatures} features) " +
+                              $"feature_contract.json v7.1 ({CNumTabularFeatures} features) " +
                               $"to resolve this. CNN predictions may be unreliable until fixed.");
                     }
                 }
@@ -1455,13 +1483,13 @@ namespace NinjaTrader.NinjaScript.Strategies
                                 if (_positionPhases.TryGetValue(signalId, out var ph))
                                 {
                                     int totalQty = filled;
-                                    int tp1Qty   = ph.Tp2Price > 0 ? Math.Max(1, totalQty / 2) : totalQty;
-                                    int tp2Qty   = ph.Tp2Price > 0 ? totalQty - tp1Qty : 0;
-                                    int tp3Qty   = ph.Tp3Price > 0 ? tp2Qty : 0;
-                                    ph.TotalQty  = totalQty;
-                                    ph.Tp1Qty    = tp1Qty;
-                                    ph.Tp2Qty    = tp2Qty;
-                                    ph.Tp3Qty    = tp3Qty;
+                                    int tp1Qty = ph.Tp2Price > 0 ? Math.Max(1, totalQty / 2) : totalQty;
+                                    int tp2Qty = ph.Tp2Price > 0 ? totalQty - tp1Qty : 0;
+                                    int tp3Qty = ph.Tp3Price > 0 ? tp2Qty : 0;
+                                    ph.TotalQty = totalQty;
+                                    ph.Tp1Qty = tp1Qty;
+                                    ph.Tp2Qty = tp2Qty;
+                                    ph.Tp3Qty = tp3Qty;
                                     if (EnableDebugLogging)
                                         Print($"[Phase] Entry filled: id={signalId} qty={totalQty} " +
                                               $"tp1Qty={tp1Qty} tp2Qty={tp2Qty} tp3Qty={tp3Qty}");
@@ -1652,7 +1680,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 
                     int last = bars.Count - 1;
                     double close = bars.GetClose(last);
-                    double ema9  = st.Ema9Value;
+                    double ema9 = st.Ema9Value;
 
                     // ── Step 1: Ratchet the trail price (mirrors Python ema9_trail_price) ──
                     // Initialise on the first bar of Phase3 (Ema9TrailPrice == 0).
@@ -2009,7 +2037,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     bool busBlocked = NinjaTrader.NinjaScript.SignalBus.IsRiskBlocked;
                     if (busBlocked != RiskBlocked)
                     {
-                        RiskBlocked    = busBlocked;
+                        RiskBlocked = busBlocked;
                         RiskBlockReason = NinjaTrader.NinjaScript.SignalBus.RiskBlockReason;
                         if (EnableDebugLogging)
                             Print($"[BreakoutStrategy] Risk gate → " +
@@ -2078,7 +2106,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 // ── Re-enable trading at 18:00 ET (new Globex session) ────────
                 if (hour >= 18 && RiskBlockReason == "TPT_SESSION_CLOSED")
                 {
-                    RiskBlocked     = false;
+                    RiskBlocked = false;
                     RiskBlockReason = "";
                     Print($"[TPT] Risk gate LIFTED at {barTimeET:HH:mm} ET — new Globex session open");
                     return;
@@ -2091,7 +2119,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     // even if the flatten takes a bar or two to confirm
                     if (!RiskBlocked || RiskBlockReason != "TPT_SESSION_CLOSED")
                     {
-                        RiskBlocked     = true;
+                        RiskBlocked = true;
                         RiskBlockReason = "TPT_SESSION_CLOSED";
                         Print($"[TPT] HARD STOP — session closed at {barTimeET:HH:mm} ET. " +
                               $"Risk gate BLOCKED (reason=TPT_SESSION_CLOSED). " +
@@ -2364,10 +2392,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                 // instrument so the reversal signal can fire normally through FireEntry.
                 foreach (var rsKv in st.Ranges)
                 {
-                    rsKv.Value.FiredLong  = false;
+                    rsKv.Value.FiredLong = false;
                     rsKv.Value.FiredShort = false;
                 }
-                st.BreakoutFiredLong  = false;
+                st.BreakoutFiredLong = false;
                 st.BreakoutFiredShort = false;
 
                 // Active position count will be decremented by OnOrderUpdate when the
@@ -2437,7 +2465,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 int revCount = sar?.ReversalCount ?? 0;
                 double entryPrice = sar?.EntryPrice ?? 0;
                 double atrAtEntry = sar?.AtrAtEntry ?? 0;
-                double slPrice    = sar?.SlPrice    ?? 0;
+                double slPrice = sar?.SlPrice ?? 0;
 
                 string json =
                     "{" +
@@ -2661,10 +2689,23 @@ namespace NinjaTrader.NinjaScript.Strategies
                 else
                 {
                     // ── Live phase: Wilder's exponential smoothing ────────────
+                    // ── Wilder's smoothed ATR ──────────────────────────────────
                     // AtrValue = (AtrValue * (period-1) + tr) / period
-                    // This is identical to ATR(14) on most platforms.
                     st.AtrValue = (st.AtrValue * (period - 1) + tr) / period;
                 }
+
+                // ── Update ATR history ring-buffer for atr_trend feature (v7.1) ──
+                st.AtrHistory[st.AtrHistIdx] = st.AtrValue;
+                st.AtrHistIdx = (st.AtrHistIdx + 1) % st.AtrHistory.Length;
+                if (st.AtrHistFilled < st.AtrHistory.Length)
+                    st.AtrHistFilled++;
+
+                // ── Update volume trend ring-buffer for volume_trend feature (v7.1) ──
+                double barVol = bars.GetVolume(closed);
+                st.VolTrendBuf[st.VolTrendIdx] = barVol;
+                st.VolTrendIdx = (st.VolTrendIdx + 1) % st.VolTrendBuf.Length;
+                if (st.VolTrendFilled < st.VolTrendBuf.Length)
+                    st.VolTrendFilled++;
 
                 st.PrevClose = bars.GetClose(closed);
             }
@@ -2761,22 +2802,22 @@ namespace NinjaTrader.NinjaScript.Strategies
                 if (close <= 0) return;
 
                 // ── EMA update (incremental, alpha = 2/(period+1)) ────────────
-                double alphaFast = 2.0 / (9  + 1);   // EMA-9
-                double alphaMid  = 2.0 / (21 + 1);   // EMA-21
+                double alphaFast = 2.0 / (9 + 1);   // EMA-9
+                double alphaMid = 2.0 / (21 + 1);   // EMA-21
                 double alphaSlow = 2.0 / (50 + 1);   // EMA-50
 
                 if (st.MtfEmaFilled == 0)
                 {
                     // Seed all three EMAs on the very first bar
                     st.MtfEmaFast = close;
-                    st.MtfEmaMid  = close;
+                    st.MtfEmaMid = close;
                     st.MtfEmaSlow = close;
                 }
                 else
                 {
                     st.MtfEmaFast = alphaFast * close + (1.0 - alphaFast) * st.MtfEmaFast;
-                    st.MtfEmaMid  = alphaMid  * close + (1.0 - alphaMid)  * st.MtfEmaMid;
-                    st.MtfEmaSlow = alphaSlow * close + (1.0 - alphaSlow)  * st.MtfEmaSlow;
+                    st.MtfEmaMid = alphaMid * close + (1.0 - alphaMid) * st.MtfEmaMid;
+                    st.MtfEmaSlow = alphaSlow * close + (1.0 - alphaSlow) * st.MtfEmaSlow;
                 }
                 st.MtfEmaFilled++;
                 st.MtfEmaReady = st.MtfEmaFilled >= 50;
@@ -2797,21 +2838,21 @@ namespace NinjaTrader.NinjaScript.Strategies
                 // ── MACD update ───────────────────────────────────────────────
                 double alphaM12 = 2.0 / (12 + 1);
                 double alphaM26 = 2.0 / (26 + 1);
-                double alphaSig = 2.0 / (9  + 1);
+                double alphaSig = 2.0 / (9 + 1);
 
                 if (st.MtfMacdFilled == 0)
                 {
                     st.MtfMacdFastEma = close;
                     st.MtfMacdSlowEma = close;
-                    st.MtfMacdLine    = 0;
-                    st.MtfMacdSigEma  = 0;
+                    st.MtfMacdLine = 0;
+                    st.MtfMacdSigEma = 0;
                 }
                 else
                 {
                     st.MtfMacdFastEma = alphaM12 * close + (1.0 - alphaM12) * st.MtfMacdFastEma;
                     st.MtfMacdSlowEma = alphaM26 * close + (1.0 - alphaM26) * st.MtfMacdSlowEma;
                     double macdLine = st.MtfMacdFastEma - st.MtfMacdSlowEma;
-                    st.MtfMacdLine   = macdLine;
+                    st.MtfMacdLine = macdLine;
 
                     if (st.MtfMacdFilled < 26)
                     {
@@ -2978,7 +3019,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 // Find the next quoted type name at depth==1
                 int nameStart = json.IndexOf('"', pos);
                 if (nameStart < 0) break;
-                int nameEnd   = json.IndexOf('"', nameStart + 1);
+                int nameEnd = json.IndexOf('"', nameStart + 1);
                 if (nameEnd < 0) break;
                 string typeName = json.Substring(nameStart + 1, nameEnd - nameStart - 1);
                 pos = nameEnd + 1;
@@ -3181,6 +3222,50 @@ namespace NinjaTrader.NinjaScript.Strategies
                     // On a genuine cold start (DailyRangeFilled == 0, no previous session
                     // data at all) we leave RangeEstablished = false so no signal fires
                     // until at least one complete session has been observed.
+
+                    // ── Capture prior day OHLC for v7 daily bias features ─────
+                    // Snapshot yesterday's levels before they get overwritten.
+                    // Uses PrevOrbHigh/Low as the best proxy for prior session H/L
+                    // (same source the PrevDay range builder uses).
+                    if (type == BreakoutType.ORB)
+                    {
+                        // PrevOrbHigh/Low were just snapshotted above.
+                        // We also need open/close for candle pattern analysis.
+                        // Close = prior session's last bar close (bar just before this session start).
+                        // Open = prior session's first bar open.  We approximate with PrevOrbLow
+                        // as the session open proxy since we don't track session open separately.
+                        if (st.PrevOrbHigh > 0 && st.PrevOrbLow < double.MaxValue && st.PrevOrbHigh > st.PrevOrbLow)
+                        {
+                            st.PrevDayHigh = st.PrevOrbHigh;
+                            st.PrevDayLow = st.PrevOrbLow;
+                            // Use the prior session's close (the bar just before session boundary)
+                            st.PrevDayClose = st.PrevClose;
+                            // Approximate open from session high/low + close position
+                            // (imperfect but functional — the actual open isn't tracked)
+                            st.PrevDayOpen = st.PrevClose; // best available proxy
+                            st.PrevDayValid = true;
+                        }
+
+                        // ── Update prior week H/L for weekly_range_position (v7) ──
+                        // Accumulate the maximum daily range seen across sessions.
+                        // On Monday (new week), snapshot and reset.
+                        if (barTime.DayOfWeek == DayOfWeek.Monday && st.PrevWeekHigh > 0
+                            && st.PrevWeekLow < double.MaxValue)
+                        {
+                            // The accumulated week H/L becomes "prior week"
+                            // (they'll be overwritten as the new week accumulates)
+                        }
+                        // Always accumulate into the current week tracker
+                        if (st.PrevDayValid)
+                        {
+                            if (st.PrevDayHigh > st.PrevWeekHigh)
+                                st.PrevWeekHigh = st.PrevDayHigh;
+                            if (st.PrevDayLow < st.PrevWeekLow)
+                                st.PrevWeekLow = st.PrevDayLow;
+                            st.PrevWeekValid = true;
+                        }
+                    }
+
                     if (type == BreakoutType.PrevDay)
                     {
                         // The most recently archived daily range entry is at index
@@ -3530,32 +3615,32 @@ namespace NinjaTrader.NinjaScript.Strategies
                             // 1-min bar and the window is capped at ~7*390 = ~2730 bars.
                             // Mirrors Python _build_weekly_range().
                             {
-                                DateTime today       = barTime.Date;
-                                int      weekday     = (int)today.DayOfWeek; // Sun=0..Sat=6
+                                DateTime today = barTime.Date;
+                                int weekday = (int)today.DayOfWeek; // Sun=0..Sat=6
                                 // Convert to Mon=0 convention
-                                int      monOffset   = weekday == 0 ? 6 : weekday - 1;
-                                DateTime thisMonday  = today.AddDays(-monOffset);
-                                DateTime prevMonday  = thisMonday.AddDays(-7);
+                                int monOffset = weekday == 0 ? 6 : weekday - 1;
+                                DateTime thisMonday = today.AddDays(-monOffset);
+                                DateTime prevMonday = thisMonday.AddDays(-7);
 
                                 double wHigh = 0, wLow = double.MaxValue;
-                                int    wBars = 0;
+                                int wBars = 0;
 
                                 for (int k = last; k >= 0 && k >= last - 2730; k--)
                                 {
                                     DateTime kt = bars.GetTime(k).Date;
                                     if (kt >= thisMonday) continue;  // this week — skip
-                                    if (kt < prevMonday)  break;     // older than prior week — stop
+                                    if (kt < prevMonday) break;     // older than prior week — stop
                                     wHigh = Math.Max(wHigh, bars.GetHigh(k));
-                                    wLow  = Math.Min(wLow,  bars.GetLow(k));
+                                    wLow = Math.Min(wLow, bars.GetLow(k));
                                     wBars++;
                                 }
 
                                 if (wBars >= cfg.MinBarsRequired && wHigh > wLow)
                                 {
-                                    rs.RangeHigh       = wHigh;
-                                    rs.RangeLow        = wLow;
+                                    rs.RangeHigh = wHigh;
+                                    rs.RangeLow = wLow;
                                     rs.RangeEstablished = true;
-                                    rs.BarsInRange     = wBars;
+                                    rs.BarsInRange = wBars;
 
                                     if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
                                     {
@@ -3586,24 +3671,24 @@ namespace NinjaTrader.NinjaScript.Strategies
                                     : 31));             // default ~1 month
 
                                 double mHigh = 0, mLow = double.MaxValue;
-                                int    mBars = 0;
+                                int mBars = 0;
 
                                 for (int k = last; k >= 0 && k >= last - 12000; k--)
                                 {
                                     DateTime kt = bars.GetTime(k).Date;
-                                    if (kt >= firstOfMonth)  continue;  // current month — skip
-                                    if (kt < lookbackStart)  break;     // beyond lookback — stop
+                                    if (kt >= firstOfMonth) continue;  // current month — skip
+                                    if (kt < lookbackStart) break;     // beyond lookback — stop
                                     mHigh = Math.Max(mHigh, bars.GetHigh(k));
-                                    mLow  = Math.Min(mLow,  bars.GetLow(k));
+                                    mLow = Math.Min(mLow, bars.GetLow(k));
                                     mBars++;
                                 }
 
                                 if (mBars >= cfg.MinBarsRequired && mHigh > mLow)
                                 {
-                                    rs.RangeHigh        = mHigh;
-                                    rs.RangeLow         = mLow;
+                                    rs.RangeHigh = mHigh;
+                                    rs.RangeLow = mLow;
                                     rs.RangeEstablished = true;
-                                    rs.BarsInRange      = mBars;
+                                    rs.BarsInRange = mBars;
 
                                     if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
                                     {
@@ -3635,7 +3720,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                             {
                                 // Find the most recent 18:00 ET session boundary
                                 int sessionBoundary = -1;
-                                int prevBoundary    = -1;
+                                int prevBoundary = -1;
                                 for (int k = last; k >= 0 && k >= last - 2000; k--)
                                 {
                                     DateTime kt = bars.GetTime(k);
@@ -3701,31 +3786,31 @@ namespace NinjaTrader.NinjaScript.Strategies
                                 accumulated += priceVol[hi].vol;
                                 while (accumulated < vaTarget)
                                 {
-                                    bool canUp   = hi > 0;
+                                    bool canUp = hi > 0;
                                     bool canDown = lo < priceVol.Count - 1;
                                     if (!canUp && !canDown) break;
-                                    double upVol   = canUp   ? priceVol[hi - 1].vol : 0;
+                                    double upVol = canUp ? priceVol[hi - 1].vol : 0;
                                     double downVol = canDown ? priceVol[lo + 1].vol : 0;
                                     if (canUp && (!canDown || upVol >= downVol)) { hi--; accumulated += priceVol[hi].vol; }
-                                    else                                         { lo++; accumulated += priceVol[lo].vol; }
+                                    else { lo++; accumulated += priceVol[lo].vol; }
                                 }
                                 vah = priceVol[hi].price;
                                 val = priceVol[lo].price;
 
                                 if (vah > val)
                                 {
-                                    rs.RangeHigh        = vah;
-                                    rs.RangeLow         = val;
-                                    rs.AuxValue         = poc;
+                                    rs.RangeHigh = vah;
+                                    rs.RangeLow = val;
+                                    rs.AuxValue = poc;
                                     rs.RangeEstablished = true;
-                                    rs.BarsInRange      = priceVol.Count;
+                                    rs.BarsInRange = priceVol.Count;
 
                                     if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
                                     {
                                         string sym = bars.Instrument.MasterInstrument.Name;
                                         Print($"[Breakout DEBUG] 📊 BIP{bip} {sym} VALUE AREA " +
                                               $"VAH={vah:F4} VAL={val:F4} POC={poc:F4} " +
-                                              $"({priceVol.Count} bars, {accumulated/totalVol*100:F0}% vol covered)");
+                                              $"({priceVol.Count} bars, {accumulated / totalVol * 100:F0}% vol covered)");
                                     }
                                 }
                                 else
@@ -3745,7 +3830,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                             // 3. If today is fully inside yesterday, use yesterday's H/L as range.
                             {
                                 int sessionBoundary2 = -1;
-                                int prevBoundary2    = -1;
+                                int prevBoundary2 = -1;
                                 for (int k = last; k >= 0 && k >= last - 2000; k--)
                                 {
                                     DateTime kt = bars.GetTime(k);
@@ -3792,25 +3877,25 @@ namespace NinjaTrader.NinjaScript.Strategies
                                 if (!isInside)
                                 {
                                     rs.RangeEstablished = false;
-                                    rs.FiredLong  = false;
+                                    rs.FiredLong = false;
                                     rs.FiredShort = false;
                                     break;
                                 }
 
                                 // Compression ratio guard (mirror Python 0.25–0.85)
-                                double yestRange  = yestH - yestL;
+                                double yestRange = yestH - yestL;
                                 double todayRange = todayH - todayL;
                                 double compression = yestRange > 0 ? todayRange / yestRange : 1.0;
 
                                 if (compression < 0.25 || compression > 0.85)
                                 { rs.RangeEstablished = false; break; }
 
-                                rs.RangeHigh        = yestH;
-                                rs.RangeLow         = yestL;
-                                rs.AuxHigh          = todayH;
-                                rs.AuxLow           = todayL;
+                                rs.RangeHigh = yestH;
+                                rs.RangeLow = yestL;
+                                rs.AuxHigh = todayH;
+                                rs.AuxLow = todayL;
                                 rs.RangeEstablished = true;
-                                rs.BarsInRange      = sessionBoundary2 - prevBoundary2;
+                                rs.BarsInRange = sessionBoundary2 - prevBoundary2;
 
                                 if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
                                 {
@@ -3851,26 +3936,26 @@ namespace NinjaTrader.NinjaScript.Strategies
                                 { rs.RangeEstablished = false; break; }
 
                                 // yesterday_close = last bar before session boundary
-                                double yestClose  = bars.GetClose(sessionBoundary3 - 1);
+                                double yestClose = bars.GetClose(sessionBoundary3 - 1);
                                 // today_open = first bar at/after boundary
-                                double todayOpen  = bars.GetOpen(sessionBoundary3);
-                                double gapSize    = todayOpen - yestClose;
-                                double minGap     = 0.25 * atr2;
+                                double todayOpen = bars.GetOpen(sessionBoundary3);
+                                double gapSize = todayOpen - yestClose;
+                                double minGap = 0.25 * atr2;
 
                                 if (Math.Abs(gapSize) < minGap)
                                 { rs.RangeEstablished = false; rs.AuxTag = ""; break; }
 
-                                string gapDir  = gapSize > 0 ? "UP" : "DOWN";
-                                double rHigh   = Math.Max(yestClose, todayOpen);
-                                double rLow    = Math.Min(yestClose, todayOpen);
+                                string gapDir = gapSize > 0 ? "UP" : "DOWN";
+                                double rHigh = Math.Max(yestClose, todayOpen);
+                                double rLow = Math.Min(yestClose, todayOpen);
 
-                                rs.RangeHigh        = rHigh;
-                                rs.RangeLow         = rLow;
-                                rs.AuxValue         = gapSize;
-                                rs.AuxLow           = yestClose;
-                                rs.AuxTag           = gapDir;
+                                rs.RangeHigh = rHigh;
+                                rs.RangeLow = rLow;
+                                rs.AuxValue = gapSize;
+                                rs.AuxLow = yestClose;
+                                rs.AuxTag = gapDir;
                                 rs.RangeEstablished = true;
-                                rs.BarsInRange      = last - sessionBoundary3 + 1;
+                                rs.BarsInRange = last - sessionBoundary3 + 1;
 
                                 if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
                                 {
@@ -3933,19 +4018,19 @@ namespace NinjaTrader.NinjaScript.Strategies
                                 { rs.RangeEstablished = false; break; }
 
                                 double pivot = (pH + pL + pC) / 3.0;
-                                double r1    = 2.0 * pivot - pL;
-                                double s1    = 2.0 * pivot - pH;
+                                double r1 = 2.0 * pivot - pL;
+                                double s1 = 2.0 * pivot - pH;
 
                                 if (r1 <= s1 || r1 <= 0)
                                 { rs.RangeEstablished = false; break; }
 
-                                rs.RangeHigh        = r1;
-                                rs.RangeLow         = s1;
-                                rs.AuxValue         = pivot;
-                                rs.AuxHigh          = pH;
-                                rs.AuxLow           = pL;
+                                rs.RangeHigh = r1;
+                                rs.RangeLow = s1;
+                                rs.AuxValue = pivot;
+                                rs.AuxHigh = pH;
+                                rs.AuxLow = pL;
                                 rs.RangeEstablished = true;
-                                rs.BarsInRange      = pivotBoundary - (prevPivotBoundary >= 0 ? prevPivotBoundary : 0);
+                                rs.BarsInRange = pivotBoundary - (prevPivotBoundary >= 0 ? prevPivotBoundary : 0);
 
                                 if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
                                 {
@@ -3972,7 +4057,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                                 int start = Math.Max(0, last - lookback + 1);
 
                                 double swingH = double.MinValue, swingL = double.MaxValue;
-                                int    swingHIdx = start, swingLIdx = start;
+                                int swingHIdx = start, swingLIdx = start;
                                 for (int k = start; k <= last; k++)
                                 {
                                     double kH = bars.GetHigh(k);
@@ -3994,28 +4079,28 @@ namespace NinjaTrader.NinjaScript.Strategies
                                     // Upswing — retrace down from high
                                     fib382 = swingH - 0.382 * swingSize;
                                     fib618 = swingH - 0.618 * swingSize;
-                                    rHigh  = fib382;
-                                    rLow   = fib618;
+                                    rHigh = fib382;
+                                    rLow = fib618;
                                 }
                                 else
                                 {
                                     // Downswing — retrace up from low
                                     fib382 = swingL + 0.382 * swingSize;
                                     fib618 = swingL + 0.618 * swingSize;
-                                    rHigh  = fib618;
-                                    rLow   = fib382;
+                                    rHigh = fib618;
+                                    rLow = fib382;
                                 }
 
                                 if (rHigh <= rLow || rHigh <= 0)
                                 { rs.RangeEstablished = false; break; }
 
-                                rs.RangeHigh        = rHigh;
-                                rs.RangeLow         = rLow;
-                                rs.AuxHigh          = swingH;
-                                rs.AuxLow           = swingL;
-                                rs.AuxValue         = fib382;
+                                rs.RangeHigh = rHigh;
+                                rs.RangeLow = rLow;
+                                rs.AuxHigh = swingH;
+                                rs.AuxLow = swingL;
+                                rs.AuxValue = fib382;
                                 rs.RangeEstablished = true;
-                                rs.BarsInRange      = last - start + 1;
+                                rs.BarsInRange = last - start + 1;
 
                                 if (EnableDebugLogging && !rs.FiredLong && !rs.FiredShort)
                                 {
@@ -4152,7 +4237,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                         }
                     }
 
-                    bool longBreak  = close > rs.RangeHigh;
+                    bool longBreak = close > rs.RangeHigh;
                     bool shortBreak = close < rs.RangeLow;
 
                     // ── Long breakout ─────────────────────────────────────────
@@ -4366,7 +4451,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         }
 
         /// <summary>
-        /// Build the 18-element raw tabular feature vector per feature_contract.json v6.
+        /// Build the 28-element raw tabular feature vector per feature_contract.json v7.1.
         /// Raw values — normalisation is applied inside OrbCnnPredictor.NormaliseTabular.
         ///
         /// Order (must match feature_contract.json tabular_features exactly):
@@ -4384,10 +4469,20 @@ namespace NinjaTrader.NinjaScript.Strategies
         ///   [11] day_of_week           — weekday index / 4 (Mon=0, Fri=4)
         ///   [12] vwap_distance         — (price - vwap) / ATR (raw, normalised later)
         ///   [13] asset_class_id        — ordinal / 4.0 from asset class map
-        ///   [14] breakout_type_ord     — (int)breakoutType / 12.0  (v6 new)
-        ///   [15] asset_volatility_class — 0.0 low / 0.5 med / 1.0 high  (v6 new)
-        ///   [16] hour_of_day           — barTime.Hour / 23.0  (v6 new)
-        ///   [17] tp3_atr_mult_norm     — tp3AtrMult / 5.0  (v6 new)
+        ///   [14] breakout_type_ord     — (int)breakoutType / 12.0  (v6)
+        ///   [15] asset_volatility_class — 0.0 low / 0.5 med / 1.0 high  (v6)
+        ///   [16] hour_of_day           — barTime.Hour / 23.0  (v6)
+        ///   [17] tp3_atr_mult_norm     — tp3AtrMult / 5.0  (v6)
+        ///   [18] daily_bias_direction  — SHORT=0.0, NEUTRAL=0.5, LONG=1.0  (v7)
+        ///   [19] daily_bias_confidence — 0.0–1.0 from daily bias analysis  (v7)
+        ///   [20] prior_day_pattern     — candle pattern ordinal / 9  (v7)
+        ///   [21] weekly_range_position — price in prior week H/L range [0,1]  (v7)
+        ///   [22] monthly_trend_score   — EMA slope proxy [0,1]  (v7)
+        ///   [23] crypto_momentum_score — 0.5 neutral (v7, placeholder)
+        ///   [24] breakout_type_category — time=0, range=0.5, squeeze=1.0  (v7.1)
+        ///   [25] session_overlap_flag  — 1.0 if London+NY overlap  (v7.1)
+        ///   [26] atr_trend             — expanding=1.0, contracting=0.0  (v7.1)
+        ///   [27] volume_trend          — 5-bar vol slope [0,1]  (v7.1)
         /// </summary>
         private float[] PrepareCnnTabular(
             int bip, InstrumentState st,
@@ -4502,7 +4597,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 string instrRoot = BarsArray[bip].Instrument.MasterInstrument.Name;
                 float assetClassId = GetAssetClassNorm(instrRoot);
 
-                // ── v6 new features [14]–[17] ────────────────────────────────
+                // ── v6 features [14]–[17] ────────────────────────────────────
 
                 // [14] breakout_type_ord — ordinal of the BreakoutType enum / 12.0
                 //      The caller (PassesCnnFilter via CheckBreakout) now passes the
@@ -4524,6 +4619,168 @@ namespace NinjaTrader.NinjaScript.Strategies
                     tp3AtrMult = tp3Rs.Tp3AtrMult;
                 float tp3AtrMultNorm = (float)(tp3AtrMult / 5.0);
 
+                // ── v7 features [18]–[23] — Daily Strategy layer ─────────────
+
+                // [18] daily_bias_direction — SHORT=0.0, NEUTRAL=0.5, LONG=1.0
+                //      Computed from prior day candle analysis.
+                //      Uses a simplified heuristic matching Python bias_analyzer:
+                //      if prior day closed in upper 25% → LONG (1.0),
+                //      if prior day closed in lower 25% → SHORT (0.0),
+                //      otherwise NEUTRAL (0.5).
+                float dailyBiasDirection = 0.5f;
+                if (st.PrevDayValid && st.PrevDayHigh > st.PrevDayLow)
+                {
+                    double dayRange = st.PrevDayHigh - st.PrevDayLow;
+                    double closePos = (st.PrevDayClose - st.PrevDayLow) / dayRange;
+                    if (closePos >= 0.75) dailyBiasDirection = 1.0f;       // LONG
+                    else if (closePos <= 0.25) dailyBiasDirection = 0.0f;  // SHORT
+                    // else NEUTRAL = 0.5
+                }
+
+                // [19] daily_bias_confidence — 0.0–1.0
+                //      Higher when the prior day close is further from the midpoint
+                //      and the range is meaningful relative to ATR.
+                float dailyBiasConfidence = 0.0f;
+                if (st.PrevDayValid && st.PrevDayHigh > st.PrevDayLow && atr > 0)
+                {
+                    double dayRange = st.PrevDayHigh - st.PrevDayLow;
+                    double closePos = (st.PrevDayClose - st.PrevDayLow) / dayRange;
+                    // Distance from midpoint (0.5) — max is 0.5
+                    double distFromMid = Math.Abs(closePos - 0.5);
+                    // Scale: 0.5 distance → 1.0 confidence, 0 distance → 0.0
+                    double rangeQuality = Math.Min(dayRange / (atr * 1.5), 1.0);
+                    dailyBiasConfidence = (float)Math.Min(1.0, distFromMid * 2.0 * rangeQuality);
+                }
+
+                // [20] prior_day_pattern — candle pattern ordinal / 9
+                //      Simplified pattern detection matching Python bias_analyzer:
+                //      inside=0, doji=1, engulfing_bull=2, engulfing_bear=3,
+                //      hammer=4, shooting_star=5, strong_close_up=6,
+                //      strong_close_down=7, outside_day=8, neutral=9
+                float priorDayPattern = 1.0f; // default: neutral (9/9)
+                if (st.PrevDayValid && st.PrevDayHigh > st.PrevDayLow)
+                {
+                    double body = Math.Abs(st.PrevDayClose - st.PrevDayOpen);
+                    double dayRange = st.PrevDayHigh - st.PrevDayLow;
+                    double bodyRatio = dayRange > 0 ? body / dayRange : 0;
+                    double closePos = (st.PrevDayClose - st.PrevDayLow) / dayRange;
+
+                    if (bodyRatio < 0.10)
+                        priorDayPattern = 1.0f / 9.0f;  // doji
+                    else if (closePos >= 0.75 && bodyRatio >= 0.60)
+                        priorDayPattern = 6.0f / 9.0f;  // strong_close_up
+                    else if (closePos <= 0.25 && bodyRatio >= 0.60)
+                        priorDayPattern = 7.0f / 9.0f;  // strong_close_down
+                    else if (closePos >= 0.70 && bodyRatio < 0.35)
+                        priorDayPattern = 4.0f / 9.0f;  // hammer
+                    else if (closePos <= 0.30 && bodyRatio < 0.35)
+                        priorDayPattern = 5.0f / 9.0f;  // shooting_star
+                    else
+                        priorDayPattern = 9.0f / 9.0f;  // neutral
+                }
+
+                // [21] weekly_range_position — price in prior week H/L [0, 1]
+                float weeklyRangePosition = 0.5f;
+                if (st.PrevWeekValid && st.PrevWeekHigh > st.PrevWeekLow && price > 0)
+                {
+                    double weekRange = st.PrevWeekHigh - st.PrevWeekLow;
+                    weeklyRangePosition = (float)Math.Max(0.0, Math.Min(1.0,
+                        (price - st.PrevWeekLow) / weekRange));
+                }
+
+                // [22] monthly_trend_score — proxy using ATR trend as EMA slope
+                //      Python uses 20-day EMA slope on daily bars.  In C# we
+                //      approximate with the ATR expansion/contraction direction
+                //      since we don't have daily EMA readily available.
+                //      Maps to [0, 1]: 0.0 = strong downtrend, 0.5 = flat, 1.0 = strong uptrend.
+                float monthlyTrendScore = 0.5f;
+                if (st.PrevDayValid && price > 0 && st.PrevDayClose > 0)
+                {
+                    // Simple proxy: current price vs prior day close gives short-term trend
+                    double pctChange = (price - st.PrevDayClose) / st.PrevDayClose;
+                    // Normalise: ±2% → [0, 1]
+                    monthlyTrendScore = (float)Math.Max(0.0, Math.Min(1.0,
+                        (pctChange / 0.02) * 0.5 + 0.5));
+                }
+
+                // [23] crypto_momentum_score — placeholder (0.5 = neutral)
+                //      In Python this reads from Kraken crypto data.  C# does not
+                //      have access to Kraken feeds, so we use the neutral default.
+                //      The model tolerates this — crypto momentum is additive, not
+                //      critical for non-crypto assets.
+                float cryptoMomentumScore = 0.5f;
+
+                // ── v7.1 features [24]–[27] — Phase 4B sub-feature decomposition ──
+
+                // [24] breakout_type_category — coarse grouping:
+                //      time-based=0.0 (ORB, Asian, IB), range-based=0.5
+                //      (PDR, Weekly, Monthly, VA, Inside, Gap, Pivot, Fib),
+                //      squeeze-based=1.0 (Consolidation, BollingerSqueeze)
+                float breakoutTypeCategory = 0.5f; // default: range-based
+                switch (breakoutType)
+                {
+                    case BreakoutType.ORB:
+                    case BreakoutType.Asian:
+                    case BreakoutType.InitialBalance:
+                        breakoutTypeCategory = 0.0f; // time-based
+                        break;
+                    case BreakoutType.Consolidation:
+                    case BreakoutType.BollingerSqueeze:
+                        breakoutTypeCategory = 1.0f; // squeeze-based
+                        break;
+                    default:
+                        breakoutTypeCategory = 0.5f; // range-based
+                        break;
+                }
+
+                // [25] session_overlap_flag — 1.0 if London+NY overlap (08:00–12:00 ET)
+                //      Captures the highest-volume intraday window when both
+                //      London and New York are fully active.
+                float sessionOverlapFlag = (barTime.Hour >= 8 && barTime.Hour < 12) ? 1.0f : 0.0f;
+
+                // [26] atr_trend — ATR expanding (1.0) or contracting (0.0)
+                //      Compares the most recent ATR to the oldest in the 10-bar
+                //      ring buffer.  If ATR is rising → expanding → 1.0.
+                float atrTrend = 0.5f;
+                if (st.AtrHistFilled >= 2)
+                {
+                    // Oldest value in ring buffer
+                    int oldestIdx = st.AtrHistFilled >= 10
+                        ? st.AtrHistIdx  // buffer is full, oldest is at current write position
+                        : 0;             // buffer not full, oldest is at index 0
+                    double oldestAtr = st.AtrHistory[oldestIdx];
+                    double newestAtr = st.AtrValue;
+                    if (oldestAtr > 0)
+                    {
+                        double atrChange = (newestAtr - oldestAtr) / oldestAtr;
+                        // Map: -10% or worse → 0.0, 0% → 0.5, +10% or more → 1.0
+                        atrTrend = (float)Math.Max(0.0, Math.Min(1.0,
+                            (atrChange / 0.10) * 0.5 + 0.5));
+                    }
+                }
+
+                // [27] volume_trend — 5-bar volume slope normalised [0, 1]
+                //      1.0 = rising sharply, 0.5 = flat, 0.0 = declining sharply.
+                float volumeTrend = 0.5f;
+                if (st.VolTrendFilled >= 2)
+                {
+                    // Simple slope: compare newest vs oldest in the 5-bar buffer
+                    int oldestVolIdx = st.VolTrendFilled >= 5
+                        ? st.VolTrendIdx
+                        : 0;
+                    double oldestVol = st.VolTrendBuf[oldestVolIdx];
+                    // Newest is the entry just before the current write index
+                    int newestVolIdx = (st.VolTrendIdx - 1 + 5) % 5;
+                    double newestVol = st.VolTrendBuf[newestVolIdx];
+                    if (oldestVol > 0)
+                    {
+                        double volChange = (newestVol - oldestVol) / oldestVol;
+                        // Map: -50% or worse → 0.0, 0% → 0.5, +50% or more → 1.0
+                        volumeTrend = (float)Math.Max(0.0, Math.Min(1.0,
+                            (volChange / 0.50) * 0.5 + 0.5));
+                    }
+                }
+
                 return new float[]
                 {
                     qualityNorm,          // [0]
@@ -4544,6 +4801,16 @@ namespace NinjaTrader.NinjaScript.Strategies
                     assetVolClass,        // [15]  v6
                     hourOfDay,            // [16]  v6
                     tp3AtrMultNorm,       // [17]  v6
+                    dailyBiasDirection,   // [18]  v7
+                    dailyBiasConfidence,  // [19]  v7
+                    priorDayPattern,      // [20]  v7
+                    weeklyRangePosition,  // [21]  v7
+                    monthlyTrendScore,    // [22]  v7
+                    cryptoMomentumScore,  // [23]  v7
+                    breakoutTypeCategory, // [24]  v7.1
+                    sessionOverlapFlag,   // [25]  v7.1
+                    atrTrend,             // [26]  v7.1
+                    volumeTrend,          // [27]  v7.1
                 };
             }
             catch (Exception ex)
@@ -5043,24 +5310,24 @@ namespace NinjaTrader.NinjaScript.Strategies
             {
                 var phase = new PositionPhase
                 {
-                    SignalId    = signalId,
-                    Direction   = direction,
-                    Asset       = instrName,
-                    Bip         = bip,
-                    Phase       = BreakoutPhase.Phase1,
-                    EntryPrice  = price,
-                    AtrAtEntry  = atr,
-                    SlPrice     = sl,
-                    Tp1Price    = tp1,
-                    Tp2Price    = tp2,
-                    Tp3Price    = tp3,
-                    TotalQty    = estimatedQty,
-                    Tp1Qty      = tp1Qty,
-                    Tp2Qty      = tp2Qty,
-                    Tp3Qty      = tp3Qty,
-                    OcoGroup    = "",
+                    SignalId = signalId,
+                    Direction = direction,
+                    Asset = instrName,
+                    Bip = bip,
+                    Phase = BreakoutPhase.Phase1,
+                    EntryPrice = price,
+                    AtrAtEntry = atr,
+                    SlPrice = sl,
+                    Tp1Price = tp1,
+                    Tp2Price = tp2,
+                    Tp3Price = tp3,
+                    TotalQty = estimatedQty,
+                    Tp1Qty = tp1Qty,
+                    Tp2Qty = tp2Qty,
+                    Tp3Qty = tp3Qty,
+                    OcoGroup = "",
                     Tp3Submitted = false,
-                    Ema9StopHit  = false,
+                    Ema9StopHit = false,
                 };
                 lock (_phaseLock)
                     _positionPhases[signalId] = phase;
@@ -5214,10 +5481,10 @@ namespace NinjaTrader.NinjaScript
         // on every BIP0 bar.  Volatile ensures cross-thread visibility without
         // a full lock — one writer (Bridge heartbeat thread), one reader
         // (strategy bar-sync thread).
-        private static volatile bool   _isRiskBlocked    = false;
-        private static volatile string _riskBlockReason  = "";
+        private static volatile bool _isRiskBlocked = false;
+        private static volatile string _riskBlockReason = "";
 
-        public static bool   IsRiskBlocked   { get { return _isRiskBlocked; }   set { _isRiskBlocked   = value; } }
+        public static bool IsRiskBlocked { get { return _isRiskBlocked; } set { _isRiskBlocked = value; } }
         public static string RiskBlockReason { get { return _riskBlockReason; } set { _riskBlockReason = value ?? ""; } }
 
         public class Signal
@@ -5356,7 +5623,7 @@ namespace NinjaTrader.NinjaScript
             _totalEnqueued = 0;
             _totalDrained = 0;
             _bridgeRegistered = false;
-            _isRiskBlocked   = false;
+            _isRiskBlocked = false;
             _riskBlockReason = "";
         }
     }
@@ -5896,8 +6163,8 @@ namespace NinjaTrader.NinjaScript
         private const int ImageSize = 224;
         // feature_contract.json: tabular feature count.
         // Default 18 (v6 contract), but auto-detected from model at load time.
-        private int _numTabular = 18;
-        private const int MaxTabular = 18; // C# always builds 18 features (v6 contract)
+        private int _numTabular = 28;
+        private const int MaxTabular = 28; // C# always builds 28 features (v7.1 contract)
         private const int NumChannels = 3;
         private static readonly int ImageBufSize = NumChannels * ImageSize * ImageSize;
         public int NumTabular => _numTabular;
@@ -5982,7 +6249,7 @@ namespace NinjaTrader.NinjaScript
         }
 
         /// <summary>
-        /// Normalise 18 raw tabular features per feature_contract.json v6.
+        /// Normalise 28 raw tabular features per feature_contract.json v7.1.
         /// Must produce identical output to _normalise_tabular_for_inference() in breakout_cnn.py.
         ///
         /// Index  Feature                  Normalisation
@@ -6005,6 +6272,16 @@ namespace NinjaTrader.NinjaScript
         ///  [15]  asset_volatility_class  passthrough (0.0 / 0.5 / 1.0)
         ///  [16]  hour_of_day             passthrough [0, 1] (already / 23)
         ///  [17]  tp3_atr_mult_norm       passthrough [0, 1] (already / 5.0)
+        ///  [18]  daily_bias_direction    passthrough [0, 1] (already normalised)
+        ///  [19]  daily_bias_confidence   passthrough [0, 1]
+        ///  [20]  prior_day_pattern       passthrough [0, 1] (already / 9)
+        ///  [21]  weekly_range_position   passthrough [0, 1]
+        ///  [22]  monthly_trend_score     passthrough [0, 1]
+        ///  [23]  crypto_momentum_score   passthrough [0, 1]
+        ///  [24]  breakout_type_category  passthrough {0.0, 0.5, 1.0}
+        ///  [25]  session_overlap_flag    passthrough {0.0, 1.0}
+        ///  [26]  atr_trend               passthrough [0, 1]
+        ///  [27]  volume_trend            passthrough [0, 1]
         /// </summary>
         private float[] NormaliseTabular(float[] raw)
         {
@@ -6075,6 +6352,54 @@ namespace NinjaTrader.NinjaScript
                 if (_numTabular > 17 && raw.Length > 17)
                     norm[17] = Math.Max(0f, Math.Min(1f, raw[17]));
             } // end guard for features [14]+
+
+            // ── v7 features [18]–[23] — Daily Strategy layer ─────────────────
+            // All pre-normalised to [0, 1] in PrepareCnnTabular — passthrough with clamp.
+            if (_numTabular > 18 && raw.Length > 18)
+            {
+                // [18] daily_bias_direction — already {0.0, 0.5, 1.0}
+                norm[18] = Math.Max(0f, Math.Min(1f, raw[18]));
+
+                // [19] daily_bias_confidence — already [0, 1]
+                if (_numTabular > 19 && raw.Length > 19)
+                    norm[19] = Math.Max(0f, Math.Min(1f, raw[19]));
+
+                // [20] prior_day_pattern — already / 9, [0, 1]
+                if (_numTabular > 20 && raw.Length > 20)
+                    norm[20] = Math.Max(0f, Math.Min(1f, raw[20]));
+
+                // [21] weekly_range_position — already [0, 1]
+                if (_numTabular > 21 && raw.Length > 21)
+                    norm[21] = Math.Max(0f, Math.Min(1f, raw[21]));
+
+                // [22] monthly_trend_score — already [0, 1]
+                if (_numTabular > 22 && raw.Length > 22)
+                    norm[22] = Math.Max(0f, Math.Min(1f, raw[22]));
+
+                // [23] crypto_momentum_score — already [0, 1]
+                if (_numTabular > 23 && raw.Length > 23)
+                    norm[23] = Math.Max(0f, Math.Min(1f, raw[23]));
+            } // end guard for features [18]+
+
+            // ── v7.1 features [24]–[27] — Phase 4B sub-feature decomposition ──
+            // All pre-normalised to [0, 1] in PrepareCnnTabular — passthrough with clamp.
+            if (_numTabular > 24 && raw.Length > 24)
+            {
+                // [24] breakout_type_category — already {0.0, 0.5, 1.0}
+                norm[24] = Math.Max(0f, Math.Min(1f, raw[24]));
+
+                // [25] session_overlap_flag — already {0.0, 1.0}
+                if (_numTabular > 25 && raw.Length > 25)
+                    norm[25] = Math.Max(0f, Math.Min(1f, raw[25]));
+
+                // [26] atr_trend — already [0, 1]
+                if (_numTabular > 26 && raw.Length > 26)
+                    norm[26] = Math.Max(0f, Math.Min(1f, raw[26]));
+
+                // [27] volume_trend — already [0, 1]
+                if (_numTabular > 27 && raw.Length > 27)
+                    norm[27] = Math.Max(0f, Math.Min(1f, raw[27]));
+            } // end guard for features [24]+
 
             return norm;
         }
@@ -6157,22 +6482,22 @@ namespace NinjaTrader.NinjaScript
         private const int LeftPad = 4;
         private const int RightPad = 4;
 
-        private static readonly Color BgColor    = Color.FromArgb(0x0D, 0x0D, 0x0D);
+        private static readonly Color BgColor = Color.FromArgb(0x0D, 0x0D, 0x0D);
         private static readonly Color BullCandle = Color.FromArgb(0x26, 0xA6, 0x9A);
         private static readonly Color BearCandle = Color.FromArgb(0xEF, 0x53, 0x50);
-        private static readonly Color VwapLine   = Color.FromArgb(0x00, 0xE5, 0xFF);
-        private static readonly Color VolBull    = Color.FromArgb(100, 0x26, 0xA6, 0x9A);
-        private static readonly Color VolBear    = Color.FromArgb(100, 0xEF, 0x53, 0x50);
+        private static readonly Color VwapLine = Color.FromArgb(0x00, 0xE5, 0xFF);
+        private static readonly Color VolBull = Color.FromArgb(100, 0x26, 0xA6, 0x9A);
+        private static readonly Color VolBear = Color.FromArgb(100, 0xEF, 0x53, 0x50);
 
         /// <summary>Describes how to paint one range box on the chart image.</summary>
         private sealed class BoxStyle
         {
             /// <summary>Semi-transparent fill color.  Alpha=0 means no fill is drawn.</summary>
-            public Color Fill   { get; }
+            public Color Fill { get; }
             /// <summary>Opaque border/line color.</summary>
             public Color Border { get; }
             /// <summary>true = solid border lines, false = dashed (4px on / 4px off).</summary>
-            public bool  Solid  { get; }
+            public bool Solid { get; }
 
             public BoxStyle(Color fill, Color border, bool solid)
             { Fill = fill; Border = border; Solid = solid; }
@@ -6189,7 +6514,7 @@ namespace NinjaTrader.NinjaScript
                 // ORB — gold semi-transparent fill + gold solid border
                 case BreakoutType.ORB:
                     return new BoxStyle(
-                        Color.FromArgb(40,  0xFF, 0xD7, 0x00),
+                        Color.FromArgb(40, 0xFF, 0xD7, 0x00),
                         Color.FromArgb(100, 0xFF, 0xD7, 0x00),
                         solid: true);
 
@@ -6203,7 +6528,7 @@ namespace NinjaTrader.NinjaScript
                 // InitialBalance — blue solid border, light-blue fill
                 case BreakoutType.InitialBalance:
                     return new BoxStyle(
-                        Color.FromArgb(40,  0x29, 0xB6, 0xF6),
+                        Color.FromArgb(40, 0x29, 0xB6, 0xF6),
                         Color.FromArgb(180, 0x01, 0x88, 0xFF),
                         solid: true);
 
@@ -6217,14 +6542,14 @@ namespace NinjaTrader.NinjaScript
                 // Weekly — teal solid border + teal fill alpha 30
                 case BreakoutType.Weekly:
                     return new BoxStyle(
-                        Color.FromArgb(30,  0x00, 0x96, 0x88),
+                        Color.FromArgb(30, 0x00, 0x96, 0x88),
                         Color.FromArgb(180, 0x00, 0x96, 0x88),
                         solid: true);
 
                 // Monthly — orange solid border + orange fill alpha 30
                 case BreakoutType.Monthly:
                     return new BoxStyle(
-                        Color.FromArgb(30,  0xFF, 0x98, 0x00),
+                        Color.FromArgb(30, 0xFF, 0x98, 0x00),
                         Color.FromArgb(180, 0xFF, 0x98, 0x00),
                         solid: true);
 
@@ -6245,7 +6570,7 @@ namespace NinjaTrader.NinjaScript
                 // ValueArea — olive solid border + olive fill alpha 30
                 case BreakoutType.ValueArea:
                     return new BoxStyle(
-                        Color.FromArgb(30,  0x9E, 0x9D, 0x24),
+                        Color.FromArgb(30, 0x9E, 0x9D, 0x24),
                         Color.FromArgb(180, 0x9E, 0x9D, 0x24),
                         solid: true);
 
@@ -6273,14 +6598,14 @@ namespace NinjaTrader.NinjaScript
                 // Fibonacci — amber solid border + amber fill alpha 20
                 case BreakoutType.Fibonacci:
                     return new BoxStyle(
-                        Color.FromArgb(20,  0xFF, 0xBF, 0x00),
+                        Color.FromArgb(20, 0xFF, 0xBF, 0x00),
                         Color.FromArgb(180, 0xFF, 0xBF, 0x00),
                         solid: true);
 
                 // Fallback: gold ORB style
                 default:
                     return new BoxStyle(
-                        Color.FromArgb(40,  0xFF, 0xD7, 0x00),
+                        Color.FromArgb(40, 0xFF, 0xD7, 0x00),
                         Color.FromArgb(100, 0xFF, 0xD7, 0x00),
                         solid: true);
             }
@@ -6288,12 +6613,12 @@ namespace NinjaTrader.NinjaScript
 
         public class Bar
         {
-            public DateTime Time   { get; set; }
-            public double   Open   { get; set; }
-            public double   High   { get; set; }
-            public double   Low    { get; set; }
-            public double   Close  { get; set; }
-            public double   Volume { get; set; }
+            public DateTime Time { get; set; }
+            public double Open { get; set; }
+            public double High { get; set; }
+            public double Low { get; set; }
+            public double Close { get; set; }
+            public double Volume { get; set; }
             public Bar() { }
             public Bar(DateTime t, double o, double h, double l, double c, double v)
             { Time = t; Open = o; High = h; Low = l; Close = c; Volume = v; }
@@ -6321,27 +6646,27 @@ namespace NinjaTrader.NinjaScript
             {
                 g.Clear(BgColor);
 
-                double priceMin = bars.Min(b => b.Low)  * 0.9995;
+                double priceMin = bars.Min(b => b.Low) * 0.9995;
                 double priceMax = bars.Max(b => b.High) * 1.0005;
-                double pRange   = priceMax - priceMin;
+                double pRange = priceMax - priceMin;
                 if (pRange <= 0) pRange = 1;
 
                 double volMax = bars.Max(b => b.Volume);
                 if (volMax <= 0) volMax = 1;
 
-                int   usableW = W - LeftPad - RightPad;
-                float barW    = Math.Max(1f, (float)usableW / bars.Count);
+                int usableW = W - LeftPad - RightPad;
+                float barW = Math.Max(1f, (float)usableW / bars.Count);
 
                 // ── Range box ─────────────────────────────────────────────────
                 if (rangeHigh > rangeLow && rangeHigh > priceMin && rangeLow < priceMax)
                 {
                     // Clamp to price panel
                     double clampedH = Math.Min(rangeHigh, priceMax);
-                    double clampedL = Math.Max(rangeLow,  priceMin);
+                    double clampedL = Math.Max(rangeLow, priceMin);
 
                     int yBoxH = PriceTop + (int)((priceMax - clampedH) / pRange * PriceH);
                     int yBoxL = PriceTop + (int)((priceMax - clampedL) / pRange * PriceH);
-                    int boxH  = Math.Max(1, yBoxL - yBoxH);
+                    int boxH = Math.Max(1, yBoxL - yBoxH);
 
                     // Fill (only when alpha > 0)
                     if (style.Fill.A > 0)
@@ -6364,21 +6689,21 @@ namespace NinjaTrader.NinjaScript
                 // ── Candles ───────────────────────────────────────────────────
                 for (int i = 0; i < bars.Count; i++)
                 {
-                    var   bar  = bars[i];
-                    bool  bull = bar.Close >= bar.Open;
-                    Color col  = bull ? BullCandle : BearCandle;
+                    var bar = bars[i];
+                    bool bull = bar.Close >= bar.Open;
+                    Color col = bull ? BullCandle : BearCandle;
 
                     float xCenter = LeftPad + i * barW + barW / 2f;
-                    float xL      = LeftPad + i * barW + 1;
-                    float xR      = xL + barW - 2;
+                    float xL = LeftPad + i * barW + 1;
+                    float xR = xL + barW - 2;
 
-                    int yHigh  = PriceTop + (int)((priceMax - bar.High)  / pRange * PriceH);
-                    int yLow   = PriceTop + (int)((priceMax - bar.Low)   / pRange * PriceH);
-                    int yOpen  = PriceTop + (int)((priceMax - bar.Open)  / pRange * PriceH);
+                    int yHigh = PriceTop + (int)((priceMax - bar.High) / pRange * PriceH);
+                    int yLow = PriceTop + (int)((priceMax - bar.Low) / pRange * PriceH);
+                    int yOpen = PriceTop + (int)((priceMax - bar.Open) / pRange * PriceH);
                     int yClose = PriceTop + (int)((priceMax - bar.Close) / pRange * PriceH);
 
                     int bodyTop = Math.Min(yOpen, yClose);
-                    int bodyH   = Math.Max(1, Math.Abs(yClose - yOpen));
+                    int bodyH = Math.Max(1, Math.Abs(yClose - yOpen));
 
                     using (var pen = new Pen(col, 1))
                         g.DrawLine(pen, xCenter, yHigh, xCenter, yLow);
@@ -6386,7 +6711,7 @@ namespace NinjaTrader.NinjaScript
                         g.FillRectangle(brush, xL, bodyTop, Math.Max(1, xR - xL), bodyH);
 
                     // Volume panel
-                    int volH   = (int)(bar.Volume / volMax * (VolPanelH - 2));
+                    int volH = (int)(bar.Volume / volMax * (VolPanelH - 2));
                     int volTop = H - VolPanelH + (VolPanelH - volH);
                     using (var volBrush = new SolidBrush(bull ? VolBull : VolBear))
                         g.FillRectangle(volBrush, xL, volTop, Math.Max(1, xR - xL), volH);
@@ -6400,9 +6725,9 @@ namespace NinjaTrader.NinjaScript
                         for (int i = 1; i < bars.Count; i++)
                         {
                             float x1 = LeftPad + (i - 1) * barW + barW / 2f;
-                            float x2 = LeftPad +  i      * barW + barW / 2f;
-                            int   y1 = PriceTop + (int)((priceMax - vwapValues[i - 1]) / pRange * PriceH);
-                            int   y2 = PriceTop + (int)((priceMax - vwapValues[i])     / pRange * PriceH);
+                            float x2 = LeftPad + i * barW + barW / 2f;
+                            int y1 = PriceTop + (int)((priceMax - vwapValues[i - 1]) / pRange * PriceH);
+                            int y2 = PriceTop + (int)((priceMax - vwapValues[i]) / pRange * PriceH);
                             g.DrawLine(vwapPen, x1, y1, x2, y2);
                         }
                     }

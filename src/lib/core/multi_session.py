@@ -5,6 +5,12 @@ Single source of truth for every session used by the ``rb`` platform.
 Both the Python dataset generator / CNN pipeline **and** the C# NinjaTrader
 strategy read from this contract.
 
+.. note::
+
+   ``RBSession`` is the preferred alias for ``ORBSession`` (Phase 1G rename).
+   Both names are exported and functionally identical.  New code should use
+   ``RBSession``; ``ORBSession`` is kept for backward compatibility.
+
 Sessions defined (chronological Globex-day order, 18:00 ET start):
   1. ``cme``        — CME Globex Re-open      18:00–18:30 ET
   2. ``sydney``     — Sydney / ASX            18:30–19:00 ET
@@ -30,7 +36,8 @@ Usage::
         get_session,
         all_sessions,
         session_keys,
-        ORBSession,
+        RBSession,       # preferred (Phase 1G)
+        ORBSession,      # backward compat alias
         SESSION_BY_KEY,
     )
 
@@ -85,6 +92,9 @@ ALL_SESSION_KEYS: list[str] = [
 class ORBSession:
     """All parameters for one named Globex session.
 
+    .. note:: ``RBSession`` is the preferred name (Phase 1G rename).
+       ``ORBSession`` is kept as a backward-compatible alias.
+
     Attributes:
         key:                 Short identifier used everywhere in Python and C#
                              code (e.g. ``"london"``, ``"us"``).
@@ -133,6 +143,11 @@ class ORBSession:
     applies_to: list[str]
     description: str
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+# Phase 1G rename: RBSession is the preferred name going forward.
+# ORBSession is kept as a backward-compatible alias (they are the same class).
+RBSession = ORBSession
 
 
 # ---------------------------------------------------------------------------
