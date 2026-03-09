@@ -35,9 +35,6 @@ completes in under 60 seconds on CPU.  It is the canary for the real
 from __future__ import annotations
 
 import csv
-import io
-import os
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -140,12 +137,8 @@ def _make_tabular_row(rng: np.random.Generator, label: str) -> dict[str, Any]:
             row[feat] = float(rng.integers(0, NUM_ASSET_CLASSES)) / 4.0
         elif feat == "breakout_type_ord":
             row[feat] = float(rng.integers(0, 13)) / 12.0
-        elif feat == "correlation_regime":
+        elif feat in ("correlation_regime", "breakout_type_category", "asset_volatility_class"):
             # 0.0, 0.5, or 1.0
-            row[feat] = float(rng.choice([0.0, 0.5, 1.0]))
-        elif feat == "breakout_type_category":
-            row[feat] = float(rng.choice([0.0, 0.5, 1.0]))
-        elif feat == "asset_volatility_class":
             row[feat] = float(rng.choice([0.0, 0.5, 1.0]))
         else:
             row[feat] = float(rng.uniform(0.0, 1.0))
@@ -242,7 +235,7 @@ class TestV8Architecture:
     def test_import(self):
         """The module must import cleanly (no missing deps at import time)."""
         from lib.analysis.breakout_cnn import NUM_TABULAR as CONTRACT_NUM_TABULAR
-        from lib.analysis.breakout_cnn import HybridBreakoutCNN
+        from lib.analysis.breakout_cnn import HybridBreakoutCNN  # noqa: F401
 
         assert CONTRACT_NUM_TABULAR == NUM_TABULAR, (
             f"Contract NUM_TABULAR={CONTRACT_NUM_TABULAR} != smoke test expectation {NUM_TABULAR}. "
@@ -819,7 +812,6 @@ class TestV8GradAccumAndMixup:
 
         warmup_epochs = 2
         total_epochs = 6
-        base_lr = 1.0  # use 1.0 so we can reason about multipliers
 
         def _lr_lambda(epoch: int) -> float:
             if epoch < warmup_epochs:

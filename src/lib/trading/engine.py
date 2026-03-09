@@ -31,8 +31,6 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-_EST = ZoneInfo("America/New_York")
-
 import optuna  # noqa: E402
 import pandas as pd  # noqa: E402
 from backtesting import Backtest  # noqa: E402
@@ -62,7 +60,6 @@ from lib.integrations.massive_client import (  # noqa: E402
     get_massive_provider,
     is_massive_available,
 )
-from lib.trading.strategies.costs import slippage_commission_rate  # noqa: E402
 from lib.trading.strategies import (  # noqa: E402
     STRATEGY_CLASSES,
     STRATEGY_LABELS,
@@ -71,6 +68,9 @@ from lib.trading.strategies import (  # noqa: E402
     score_backtest,
     suggest_params,
 )
+from lib.trading.strategies.costs import slippage_commission_rate  # noqa: E402
+
+_EST = ZoneInfo("America/New_York")
 
 logger = logging.getLogger("engine")
 logger.setLevel(logging.INFO)

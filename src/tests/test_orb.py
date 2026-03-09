@@ -1439,8 +1439,8 @@ class TestORBRiskIntegration:
 
     def test_orb_breakout_with_risk_check(self):
         """After detecting an ORB breakout, a risk check should evaluate the trade."""
-        from lib.trading.strategies.rb.open.detector import detect_opening_range_breakout
         from lib.services.engine.risk import RiskManager
+        from lib.trading.strategies.rb.open.detector import detect_opening_range_breakout
 
         bars = _make_breakout_bars(direction="LONG", or_price=2700.0, breakout_magnitude=20.0)
         orb_result = detect_opening_range_breakout(bars, symbol="MGC")
@@ -1462,8 +1462,8 @@ class TestORBRiskIntegration:
 
     def test_orb_detection_then_position_update(self):
         """ORB detection followed by position update should track risk correctly."""
-        from lib.trading.strategies.rb.open.detector import detect_opening_range_breakout
         from lib.services.engine.risk import RiskManager
+        from lib.trading.strategies.rb.open.detector import detect_opening_range_breakout
 
         bars = _make_breakout_bars(direction="LONG", or_price=2700.0, breakout_magnitude=20.0)
         _orb_result = detect_opening_range_breakout(bars, symbol="MGC")
@@ -1636,8 +1636,8 @@ class TestMultiSessionORB:
         assert statuses["us"] == "forming"
 
     def test_orb_result_includes_session_info(self):
-        from lib.trading.strategies.rb.open.sessions import LONDON_SESSION
         from lib.trading.strategies.rb.open.detector import detect_opening_range_breakout
+        from lib.trading.strategies.rb.open.sessions import LONDON_SESSION
 
         bars = _make_1m_bars()
         result = detect_opening_range_breakout(bars, symbol="MGC", session=LONDON_SESSION)
