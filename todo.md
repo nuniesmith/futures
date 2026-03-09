@@ -1,8 +1,8 @@
 # futures — TODO
 
 > **Single repo**: `github.com/nuniesmith/futures`
-> **Docker Hub**: `nuniesmith/futures` — `:engine` · `:web` · `:trainer`
-> **Infrastructure**: Local (Tailscale mesh) — Pi (engine + web), GPU rig (trainer)
+> **Docker Hub**: `nuniesmith/futures` — `:data` · `:engine` · `:web` · `:trainer`
+> **Infrastructure**: Ubuntu Server (data + engine + web + monitoring), Home GPU rig (trainer)
 
 ---
 
@@ -21,16 +21,26 @@ futures/
 │   │   ├── services/
 │   │   │   ├── engine/    # main, handlers, scheduler, position_manager, backfill, risk, focus, live_risk, …
 │   │   │   ├── web/       # HTMX dashboard, FastAPI reverse-proxy (port 8080)
-│   │   │   └── data/      # FastAPI data API (positions, SSE, bridge, trades, journal, kraken, …)
+│   │   │   └── data/      # FastAPI REST + SSE API (port 8000) — bars, journal, positions, kraken, sse, …
 │   │   └── integrations/  # kraken_client, massive_client, grok_helper
+│   ├── entrypoints/
+│   │   ├── data/main.py   # python -m entrypoints.data.main  → lib.services.data.main:app
+│   │   ├── engine/main.py # python -m entrypoints.engine.main
+│   │   ├── web/main.py    # python -m entrypoints.web.main
+│   │   └── training/main.py
 │   └── pine/
 │       └── ruby_futures.pine   # TradingView Pine Script indicator
 ├── models/                # champion .pt, feature_contract.json (Git LFS)
 ├── scripts/
-│   ├── sync_models.sh     # Pi-side: pull .pt from this repo → restart engine
+│   ├── sync_models.sh     # pull .pt from repo → restart engine
 │   └── …
 ├── config/                # Prometheus, Grafana, Alertmanager
-├── docker/                # Dockerfiles per service
+├── docker/
+│   ├── data/              # Dockerfile + entrypoint.sh  (:data image)
+│   ├── engine/            # Dockerfile + entrypoint.sh  (:engine image)
+│   ├── web/               # Dockerfile + entrypoint.sh  (:web image)
+│   ├── trainer/           # Dockerfile                  (:trainer image)
+│   └── monitoring/        # prometheus/ + grafana/
 └── docker-compose.yml
 ```
 
@@ -74,19 +84,21 @@ Tradovate Bridge (future — JavaScript)
 
 ## Current State
 
-- **Monorepo**: All source — engine, web, trainer, lib, Pine Script, deploy scripts.
+- **Monorepo**: All source — engine, web, data, trainer, lib, Pine Script, deploy scripts.
 - **Models**: `models/breakout_cnn_best.pt` + `feature_contract.json` committed (Git LFS). Latest champion: **87.1% accuracy**, 87.15% precision, 87.27% recall, 25 epochs, v6 18-feature. Retrain to v8 (37-feature) is the next major milestone.
-- **Docker**: `:engine` (data API + CNN inference), `:web` (HTMX dashboard), `:trainer` (GPU training server). Runs on Ubuntu Server (engine + web + postgres + redis + monitoring) and home laptop GPU rig (trainer only).
+- **Docker**: `:data` (FastAPI REST + SSE, port 8050), `:engine` (background compute worker, no HTTP port), `:web` (HTMX dashboard reverse-proxy, port 8180), `:trainer` (GPU training server, port 8200). All run on Ubuntu Server; trainer also runs on home laptop GPU rig. Data service is the single HTTP entry point for all dashboard and API traffic — engine publishes computed state to Redis for data to serve.
+- **Service split**: `data` and `engine` were previously a single `:engine` image running two processes (uvicorn + engine worker). They are now fully separate containers with clean responsibilities: data owns all REST/SSE/bar-cache/Kraken-feed, engine owns all computation/scheduling/risk.
+- **Entrypoints**: `src/entrypoints/{data,engine,web,training}/main.py` — thin wrappers that import and call `main()` from the corresponding `lib.services.*` module. Dockerfiles use `python -m entrypoints.<service>.main`.
 - **Feature Contract**: v8, 37 tabular features + hierarchical asset embeddings. `models/feature_contract.json` is the canonical source. Expanded from v6 (18) → v7.1 (28) → v8 (37) with cross-asset correlation features, asset fingerprint features, and learned embeddings.
 - **CNN Model**: EfficientNetV2-S + wider tabular head + asset embeddings. Auto-detects tabular dimension from checkpoint metadata at load time. Training pipeline: generate dataset → train → evaluate → gate check (≥89% acc, ≥87% prec, ≥84% rec) → promote. Python `_normalise_tabular_for_inference()` handles v6→v7→v7.1→v8 backward-compat padding so older models work with the new code.
 - **Breakout Types**: 13 — ORB, PrevDay, InitialBalance, Consolidation, Weekly, Monthly, Asian, BollingerSqueeze, ValueArea, InsideDay, GapRejection, PivotPoints, Fibonacci. Fully wired in engine detection, training, dataset generator, CNN tabular vector, chart renderer.
 - **Position Manager**: `position_manager.py` — always-in 1-lot micro positions, reversal gates (CNN ≥ 0.85, MTF ≥ 0.60, 30min cooldown), Redis persistence, `OrderCommand` emitter (informational — feeds dashboard, not live execution).
 - **Dashboard**: HTMX + FastAPI — live signals, 13 breakout type filter pills, 9 session tabs, MTF score column, trade journal, Kraken crypto chart + correlation panel, Grok AI analyst, CNN dataset preview, positions panel, flatten/cancel buttons, market regime (HMM), performance panel, volume profile, equity curve, asset focus cards with entry/stop/TP levels, focus mode, risk strip, swing action buttons. Broker-agnostic position bridge (TradingView/Tradovate ready).
-- **Kraken Integration**: `KrakenDataProvider` REST + `KrakenFeedManager` WebSocket feed. 9 crypto pairs streaming.
+- **Kraken Integration**: `KrakenDataProvider` REST + `KrakenFeedManager` WebSocket feed. 9 crypto pairs streaming. Runs inside the data container (`ENABLE_KRAKEN_CRYPTO=1`).
 - **Massive Integration**: `MassiveDataProvider` REST + `MassiveFeedManager` WebSocket. Front-month resolution, primary bars source for training.
-- **Data Service**: Unified data layer — Redis cache → Postgres → external APIs. Startup cache warming from Postgres (7 days).
-- **Training**: `trainer_server.py` FastAPI (port 8200). `dataset_generator.py` covers all 13 types + 9 sessions + Kraken. Full pipeline: generate → split (85/15 stratified) → train → evaluate → gate → promote.
-- **CI/CD**: Lint → Test → Build & push 5 Docker images (engine, web, trainer, prometheus, grafana) → Deploy to Ubuntu Server via Tailscale SSH → Deploy trainer to home laptop via Tailscale SSH → Health checks → Discord notifications.
+- **Data Service**: Unified data layer — Redis cache → Postgres → external APIs. Startup cache warming from Postgres (7 days). Exposes `/bars/{symbol}` (auto-fill), `/bars/bulk`, `/sse/dashboard`, `/kraken/*`, and all dashboard HTMX endpoints.
+- **Training**: `trainer_server.py` FastAPI (port 8200). `dataset_generator.py` covers all 13 types + 9 sessions + Kraken. Full pipeline: generate → split (85/15 stratified) → train → evaluate → gate → promote. Fetches bars from `ENGINE_DATA_URL=http://data:8000`.
+- **CI/CD**: Lint → Test → Build & push **6 Docker images** (data, engine, web, trainer, prometheus, grafana) → Deploy data + engine + web to Ubuntu Server via Tailscale SSH → Deploy trainer to home laptop via Tailscale SSH → Health checks → Discord notifications. `:data` is the new `:latest` alias.
 - **Tailscale**: Ubuntu Server (Docker) at `100.122.184.58`, all services communicate over Tailscale mesh. HTTP only (no domain/TLS needed for local mesh). Trainer laptop (CUDA GPU) at `100.113.72.63:8200`.
 - **NinjaTrader removed**: All NT8 Bridge code, deploy scripts, and C# patchers removed from Python codebase. Position management is now broker-agnostic (`positions.py`). The `src/ninja/` and `src/pine/` directories contain C#/Pine source for reference but are not part of the Python runtime. TradingView integration (`tradingview.py`) is the intended live trading path.
 
@@ -351,6 +363,50 @@ Step 3: Compare
 
 ---
 
+## 🔴 Lightweight Charts — Dedicated Chart UI *(Phase CHARTS)*
+
+> Replace the placeholder `/charts` page (currently 4 static HTMX divs) with a full interactive candlestick chart UI using TradingView's [Lightweight Charts](https://tradingview.github.io/lightweight-charts/) JS library directly in the browser.
+>
+> **Why not the `lightweight-charts-python` PyPI package?** Reviewed — it is a desktop/notebook wrapper that spawns a `pywebview` native OS window. It requires a display, has no HTTP endpoint, and cannot run in Docker. The underlying JS library it wraps is what we want, and we already have everything needed to drive it ourselves: `/bars/{symbol}` (auto-fill OHLCV), `/sse/dashboard` (live Redis pub/sub), and `/kraken/ohlcv/{pair}`.
+
+### Phase CHARTS-A: Bars SSE Endpoint
+- [ ] **`src/lib/services/data/api/sse.py`** — add `GET /sse/bars/{symbol}` endpoint
+  - Subscribe to Redis pub/sub channel `engine:bars_1m:{symbol}`
+  - Stream `text/event-stream` events: `data: {"time": <unix>, "open": …, "high": …, "low": …, "close": …, "volume": …}`
+  - Engine already publishes 1m bars to Redis on each bar close — no engine changes needed
+  - Fallback: if no Redis event within 60s, re-fetch latest bar from `/bars/{symbol}?days_back=1` and stream it
+
+### Phase CHARTS-B: Chart Data Shaping Endpoint
+- [ ] **`src/lib/services/data/api/charts.py`** — new router, registered at `/api/charts`
+  - `GET /api/charts/bars/{symbol}` — wraps `/bars/{symbol}`, reshapes split-orient DataFrame into
+    `[{"time": <unix_seconds>, "open": …, "high": …, "low": …, "close": …, "volume": …}]`
+    array that Lightweight Charts `candleSeries.setData()` accepts directly
+  - `GET /api/charts/symbols` — returns grouped symbol list (CME micros + Kraken crypto) for the symbol switcher
+  - `GET /api/charts/orb-markers/{symbol}` — returns ORB session open/high/low as marker objects
+    `[{"time": …, "position": "aboveBar", "color": "…", "shape": "circle", "text": "ORB London"}]`
+    sourced from `engine:orb_results` Redis key
+
+### Phase CHARTS-C: Charts Page Rewrite
+- [ ] **`src/lib/services/data/api/dashboard.py`** — rewrite `charts_page()` (currently L5945)
+  - Full-page HTML (not HTMX fragment) with Lightweight Charts loaded from CDN:
+    `unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js`
+  - **Layout**: topbar (symbol switcher + timeframe switcher) + main candle pane + volume histogram subchart
+  - **Symbol switcher**: dropdown from `/api/charts/symbols` — CME micros grouped separately from Kraken crypto
+  - **Timeframe switcher**: `1m | 5m | 15m | 1h | 1D` pills — re-fetches `/api/charts/bars/{symbol}?interval=<tf>`
+  - **Styling**: dark background (`#0c0d0f`), matches existing dashboard palette, Ruby green up-candles / red down-candles
+  - **ORB markers**: fetched from `/api/charts/orb-markers/{symbol}` on symbol load, drawn via `candleSeries.setMarkers()`
+  - **Price lines**: entry / stop / TP1 / TP2 from current focus card data (`/api/focus`) drawn as `candleSeries.createPriceLine()`
+  - **Live updates**: `EventSource('/sse/bars/{symbol}')` → `candleSeries.update(bar)` on each event
+  - **Multi-pane**: volume histogram in a subchart synced to main chart timescale (`createChart` + `chart.timeScale()` sync)
+  - **No new Python dependencies** — Lightweight Charts is a CDN JS include only
+
+### Phase CHARTS-D: Navigation Wire-Up
+- [ ] Link `📈 Charts` nav item (already exists in `_build_page_shell`) to `/charts`
+- [ ] Add `charts_page_route` FastAPI GET handler at `/charts` (already scaffolded at L6145 — just needs the new `charts_page()` wired in)
+- [ ] Web service proxy: ensure `/charts` and `/api/charts/*` and `/sse/bars/*` are proxied through `:web → :data` (currently all `/api/*` and `/sse/*` paths are already proxied — no web service changes needed)
+
+---
+
 ## 🔴 TradingView Integration — Reference Overlay Only *(deferred — after v8 champion)*
 
 > **Decision**: TradingView is used as a **reference overlay for live price action** only. Position sendback from TV is not practical. The Ruby Pine Script indicator shows ORB boxes, PDR levels, session separators, and engine signals — but all trading decisions and execution happen manually via Tradovate, informed by the Python dashboard. Future automation will use the Tradovate JavaScript bridge (Phase TBRIDGE), not TradingView webhooks.
@@ -589,6 +645,7 @@ Deferred until v8 champion is live and profitable. Nice-to-have market regime ov
 - [ ] `ORBSession` → `RBSession` bulk rename in callers (alias works, non-breaking)
 - [ ] Cross-attention fusion (Phase v8-D optional) — test on small dataset after initial v8 train
 - [ ] "Asset DNA" radar chart on focus cards (Phase v8-C dashboard, low priority)
+- [ ] Phase CHARTS — replace placeholder `/charts` page with Lightweight Charts UI (see Phase CHARTS above)
 
 ---
 
@@ -805,25 +862,41 @@ trainer_server.py → _run_training_pipeline(TrainRequest)
 
 ```
 Docker Compose:
-  Ubuntu Server (100.122.184.58)          Home Laptop (100.113.72.63)
-  ┌──────────────┐  ┌──────────────┐      ┌──────────────┐
-  │   :engine    │  │    :web      │      │   :trainer   │
-  │  main.py     │  │  FastAPI     │      │  FastAPI     │
-  │  scheduler   │  │  dashboard   │      │  dataset gen │
-  │  risk mgr    │  │  focus cards │      │  CNN train   │
-  │  position mgr│  │  settings    │      │  promote .pt │
-  │  all handlers│  │  risk strip  │      │  CUDA GPU    │
-  │  reddit poll │  │  sentiment   │      │              │
-  └──────┬───────┘  └──────┬───────┘      └──────┬───────┘
-         └──────────────────┤                     │
-                            ↓                     │
-  ┌──────────┐  ┌──────────┐                      │
-  │  Redis   │  │ Postgres │                      │
-  └──────────┘  └──────────┘                      │
-  ┌─────────────┐  ┌──────────┐                   │
-  │ Prometheus  │  │ Grafana  │                   │
-  └─────────────┘  └──────────┘                   │
-         └────────── Tailscale mesh ──────────────┘
+  Ubuntu Server (100.122.184.58)                          Home Laptop (100.113.72.63)
+  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   ┌──────────────┐
+  │    :data     │  │   :engine    │  │    :web      │   │   :trainer   │
+  │  FastAPI     │  │  main.py     │  │  FastAPI     │   │  FastAPI     │
+  │  REST + SSE  │  │  scheduler   │  │  reverse-    │   │  dataset gen │
+  │  bar cache   │  │  risk mgr    │  │  proxy only  │   │  CNN train   │
+  │  Kraken feed │  │  position mgr│  │  port 8180   │   │  promote .pt │
+  │  Reddit poll │  │  all handlers│  │              │   │  CUDA GPU    │
+  │  port 8050   │  │  (no HTTP)   │  │              │   │  port 8200   │
+  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘   └──────┬───────┘
+         │    publishes     │   reads          │ proxies          │
+         │    Redis state ←─┘   Redis          │ → :data          │
+         ↓                                     ↓                  │
+  ┌──────────┐  ┌──────────┐           Browser (8180)            │
+  │  Redis   │  │ Postgres │                                      │
+  └──────────┘  └──────────┘                                      │
+  ┌─────────────┐  ┌──────────┐                                   │
+  │ Prometheus  │  │ Grafana  │                                   │
+  └──────┬──────┘  └──────────┘                                   │
+         └──────────────────────── Tailscale mesh ────────────────┘
+
+  Service responsibilities:
+    :data    — all REST/SSE endpoints, bar cache (Postgres+Redis), Kraken WS feed,
+               Reddit sentiment polling, /bars/{symbol} auto-fill, /api/charts/*
+    :engine  — DashboardEngine, ScheduleManager, RiskManager, PositionManager,
+               breakout detection, CNN inference, Grok briefs, Redis publish
+               writes /tmp/engine_health.json as heartbeat (no HTTP port)
+    :web     — stateless reverse-proxy; proxies all /api/* and /sse/* to :data
+
+  Port map:
+    8050  → :data    (internal 8000)   REST + SSE API
+    8180  → :web     (internal 8080)   HTMX dashboard
+    8200  → :trainer (internal 8200)   GPU training server
+    9095  → Prometheus
+    3010  → Grafana
 
   (Future) Tradovate JS Bridge:
   ┌────────────────────┐
@@ -833,8 +906,16 @@ Docker Compose:
   └────────────────────┘
 
 Tailscale mesh:
-  Ubuntu Server → engine + web + postgres + redis + monitoring + bridge (always on, 24/7)
+  Ubuntu Server → data + engine + web + postgres + redis + monitoring (always on, 24/7)
   Home Laptop   → trainer (on-demand, CUDA GPU, port 8200)
+
+CI/CD (6-image matrix — nuniesmith/futures):
+  :data       amd64 + arm64   ← new, `:latest` alias
+  :engine     amd64 + arm64
+  :web        amd64 + arm64
+  :trainer    amd64 only
+  :prometheus amd64 + arm64
+  :grafana    amd64 + arm64
 ```
 
 ### 10. Reddit Sentiment Pipeline (Phase REDDIT)
@@ -860,6 +941,16 @@ Engine Scheduler (every 15 min during ACTIVE + EVENING)
 ---
 
 ## Completed
+
+### Data Service Split (`:data` + `:engine` separation)
+- [x] `docker/data/Dockerfile` — standalone image: `python:3.13-slim`, copies `src/`, runs via `entrypoints/data/main.py`
+- [x] `docker/data/entrypoint.sh` — `exec python -m entrypoints.data.main`
+- [x] `docker/engine/entrypoint.sh` — stripped to `exec python -m lib.services.engine.main` (uvicorn removed)
+- [x] `docker/engine/Dockerfile` — removed `EXPOSE 8000`, removed HTTP healthcheck, uses `test -f /tmp/engine_health.json`
+- [x] `lib.services.data.main` — added `main()` function (was `if __name__ == "__main__"` only); `LOG_LEVEL` env var wired
+- [x] `docker-compose.yml` — `data` service (port 8050), `engine` (no ports, depends on data), `web`/`trainer`/`prometheus` all point at `http://data:8000`; `ENABLE_KRAKEN_CRYPTO=1` on data, `=0` on engine
+- [x] CI/CD — `data` added to docker matrix (amd64+arm64, `is_default: true` → `:latest`); engine set `is_default: false`; deploy pulls + starts `data engine web prometheus grafana`; summary table updated
+
 
 ### Daily Bias Analyzer (`src/lib/strategies/daily/bias_analyzer.py`)
 - [x] `BiasDirection`, `CandlePattern`, `KeyLevels`, `DailyBias` dataclasses
