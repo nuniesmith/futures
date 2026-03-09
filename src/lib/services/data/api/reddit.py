@@ -14,7 +14,7 @@ JSON endpoints are prefixed /api/reddit/.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from lib.analysis.reddit_sentiment import (
@@ -31,6 +31,7 @@ router = APIRouter()
 # ─────────────────────────────────────────────────────────────────────────────
 # JSON / REST endpoints
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @router.get("/api/reddit/signal/{asset}")
 async def api_signal(asset: str, request: Request):
@@ -52,6 +53,7 @@ async def api_signal_window(asset: str, window_min: int, request: Request):
         return {"error": f"window_min must be one of {WINDOWS_MINUTES}"}
     redis = request.app.state.redis
     from dataclasses import asdict
+
     sig = await aggregate_asset(asset, window_min, redis)
     return asdict(sig)
 
@@ -60,16 +62,13 @@ async def api_signal_window(asset: str, window_min: int, request: Request):
 async def api_snapshot(request: Request):
     """Full snapshot — all assets, all windows."""
     from dataclasses import asdict
+
     snapshot = await get_full_snapshot(request.app.state.redis)
     # serialise nested dataclasses
     return {
         "computed_at": snapshot.computed_at,
         "signals": {
-            asset: {
-                str(win): asdict(sig)
-                for win, sig in wins.items()
-            }
-            for asset, wins in snapshot.signals.items()
+            asset: {str(win): asdict(sig) for win, sig in wins.items()} for asset, wins in snapshot.signals.items()
         },
     }
 
@@ -78,12 +77,13 @@ async def api_snapshot(request: Request):
 # HTMX fragments — drop these into your dashboard templates
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _signal_color(signal: str) -> str:
     return {
         "STRONG_BULL": "#00c853",
-        "BULL":        "#69f0ae",
-        "NEUTRAL":     "#90a4ae",
-        "BEAR":        "#ff6d00",
+        "BULL": "#69f0ae",
+        "NEUTRAL": "#90a4ae",
+        "BEAR": "#ff6d00",
         "STRONG_BEAR": "#d50000",
     }.get(signal, "#90a4ae")
 
@@ -91,9 +91,9 @@ def _signal_color(signal: str) -> str:
 def _signal_emoji(signal: str) -> str:
     return {
         "STRONG_BULL": "🟢🟢",
-        "BULL":        "🟢",
-        "NEUTRAL":     "⚪",
-        "BEAR":        "🔴",
+        "BULL": "🟢",
+        "NEUTRAL": "⚪",
+        "BEAR": "🔴",
         "STRONG_BEAR": "🔴🔴",
     }.get(signal, "⚪")
 
@@ -105,20 +105,17 @@ async def htmx_reddit_panel(request: Request):
     Use with:  hx-get="/htmx/reddit/panel" hx-trigger="every 120s"
     """
     redis = request.app.state.redis
-    rows  = []
+    rows = []
     for asset in ASSET_KEYWORDS:
         sig = await get_asset_signal(asset, redis)
         signal = sig.get("signal", "NO_DATA")
-        color  = _signal_color(signal)
-        emoji  = _signal_emoji(signal)
-        conf   = float(sig.get("confidence", 0))
-        ment   = int(sig.get("mention_count", 0))
-        vel    = float(sig.get("mention_velocity", 0))
-        ws     = float(sig.get("weighted_sentiment", 0))
-        vel_badge = (
-            '<span style="color:#ff9800;font-size:0.75rem">🔥 spike</span>'
-            if vel > 1.5 else ""
-        )
+        color = _signal_color(signal)
+        emoji = _signal_emoji(signal)
+        conf = float(sig.get("confidence", 0))
+        ment = int(sig.get("mention_count", 0))
+        vel = float(sig.get("mention_velocity", 0))
+        ws = float(sig.get("weighted_sentiment", 0))
+        vel_badge = '<span style="color:#ff9800;font-size:0.75rem">🔥 spike</span>' if vel > 1.5 else ""
         rows.append(f"""
         <tr>
           <td style="font-weight:600;padding:6px 10px">{asset}</td>
@@ -146,7 +143,7 @@ async def htmx_reddit_panel(request: Request):
             <th style="text-align:left;padding:4px 10px">Conf</th>
           </tr>
         </thead>
-        <tbody>{''.join(rows)}</tbody>
+        <tbody>{"".join(rows)}</tbody>
       </table>
     </div>
     """)
@@ -165,10 +162,9 @@ async def htmx_asset_card(asset: str, request: Request):
     redis = request.app.state.redis
     win_rows = []
     for win in WINDOWS_MINUTES:
-        from dataclasses import asdict
-        sig    = await aggregate_asset(asset, win, redis)
-        color  = _signal_color(sig.signal)
-        label  = {15: "15m", 60: "1h", 240: "4h", 1440: "24h"}[win]
+        sig = await aggregate_asset(asset, win, redis)
+        color = _signal_color(sig.signal)
+        label = {15: "15m", 60: "1h", 240: "4h", 1440: "24h"}[win]
         win_rows.append(f"""
         <tr>
           <td style="padding:4px 8px;color:#aaa">{label}</td>
@@ -179,16 +175,15 @@ async def htmx_asset_card(asset: str, request: Request):
         </tr>""")
 
     # top posts from 1h window
-    sig_1h    = await aggregate_asset(asset, 60, redis)
+    sig_1h = await aggregate_asset(asset, 60, redis)
     post_rows = ""
     for p in sig_1h.top_posts:
-        c = _signal_color(p.get("label", "neutral").upper()
-                          .replace("BULLISH", "BULL").replace("BEARISH", "BEAR"))
+        c = _signal_color(p.get("label", "neutral").upper().replace("BULLISH", "BULL").replace("BEARISH", "BEAR"))
         post_rows += f"""
         <li style="margin:4px 0;font-size:0.8rem">
-          <span style="color:{c}">[{p.get('label','?').upper()[:4]}]</span>
-          <a href="#" style="color:#90caf9">{p.get('title','')[:80]}</a>
-          <span style="color:#666"> r/{p.get('subreddit','')} · ↑{p.get('score',0)}</span>
+          <span style="color:{c}">[{p.get("label", "?").upper()[:4]}]</span>
+          <a href="#" style="color:#90caf9">{p.get("title", "")[:80]}</a>
+          <span style="color:#666"> r/{p.get("subreddit", "")} · ↑{p.get("score", 0)}</span>
         </li>"""
 
     return HTMLResponse(f"""
@@ -205,7 +200,7 @@ async def htmx_asset_card(asset: str, request: Request):
             <th style="text-align:left;padding:2px 8px">Bull/Bear</th>
           </tr>
         </thead>
-        <tbody>{''.join(win_rows)}</tbody>
+        <tbody>{"".join(win_rows)}</tbody>
       </table>
       <div style="font-size:0.8rem;color:#aaa;margin-bottom:4px">Top posts (1h)</div>
       <ul style="list-style:none;padding:0;margin:0">{post_rows or '<li style="color:#555">No posts yet</li>'}</ul>

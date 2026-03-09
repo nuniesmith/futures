@@ -298,7 +298,7 @@ _test_results: list[tuple[str, bool, str]] = []
 def _run_test(name: str, func, *args, **kwargs) -> bool:
     """Run a test step, capturing pass/fail."""
     try:
-        result = func(*args, **kwargs)
+        func(*args, **kwargs)
         _test_results.append((name, True, ""))
         _ok(name)
         return True
@@ -787,7 +787,7 @@ def test_13_embedding_indices_valid():
     assert unknown_asset == 0, f"Unknown symbol asset_idx should be 0, got {unknown_asset}"
 
     _info(f"  All {len(test_symbols)} symbols have valid embedding indices")
-    _info(f"  Unknown symbols safely default to index 0")
+    _info("  Unknown symbols safely default to index 0")
 
 
 # ---------------------------------------------------------------------------

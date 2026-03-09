@@ -971,6 +971,58 @@ FROM trades;
 
 
 # ---------------------------------------------------------------------------
+# Reddit posts schema
+# ---------------------------------------------------------------------------
+
+_SCHEMA_REDDIT_POSTS_SQLITE = """
+CREATE TABLE IF NOT EXISTS reddit_posts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id         TEXT        NOT NULL UNIQUE,
+    subreddit       TEXT        NOT NULL,
+    author          TEXT,
+    title           TEXT,
+    body            TEXT,
+    url             TEXT,
+    score           INTEGER     DEFAULT 0,
+    num_comments    INTEGER     DEFAULT 0,
+    is_comment      INTEGER     DEFAULT 0,
+    asset           TEXT        NOT NULL,
+    sentiment_score REAL,
+    sentiment_label TEXT,
+    upvote_ratio    REAL,
+    created_utc     TEXT        NOT NULL,
+    fetched_at      TEXT        NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_reddit_posts_asset      ON reddit_posts (asset);
+CREATE INDEX IF NOT EXISTS idx_reddit_posts_created    ON reddit_posts (created_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_reddit_posts_asset_time ON reddit_posts (asset, created_utc DESC);
+"""
+
+_SCHEMA_REDDIT_POSTS_PG = """
+CREATE TABLE IF NOT EXISTS reddit_posts (
+    id              SERIAL PRIMARY KEY,
+    post_id         TEXT        NOT NULL UNIQUE,
+    subreddit       TEXT        NOT NULL,
+    author          TEXT,
+    title           TEXT,
+    body            TEXT,
+    url             TEXT,
+    score           INTEGER     DEFAULT 0,
+    num_comments    INTEGER     DEFAULT 0,
+    is_comment      BOOLEAN     DEFAULT FALSE,
+    asset           TEXT        NOT NULL,
+    sentiment_score DOUBLE PRECISION,
+    sentiment_label TEXT,
+    upvote_ratio    DOUBLE PRECISION,
+    created_utc     TIMESTAMPTZ NOT NULL,
+    fetched_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_reddit_posts_asset      ON reddit_posts (asset);
+CREATE INDEX IF NOT EXISTS idx_reddit_posts_created    ON reddit_posts (created_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_reddit_posts_asset_time ON reddit_posts (asset, created_utc DESC);
+"""
+
+# ---------------------------------------------------------------------------
 # Database initialisation
 # ---------------------------------------------------------------------------
 
@@ -1047,6 +1099,16 @@ def init_db() -> None:
             with contextlib.suppress(Exception):
                 conn.rollback()
 
+        # Create reddit_posts table (separate try — non-fatal if praw not used)
+        try:
+            conn.executescript(_SCHEMA_REDDIT_POSTS_PG)
+            conn.commit()
+            logger.info("Postgres tables initialised (reddit_posts)")
+        except Exception as exc:
+            logger.warning("reddit_posts table init failed (non-fatal): %s", exc)
+            with contextlib.suppress(Exception):
+                conn.rollback()
+
         conn.close()
         return
 
@@ -1068,6 +1130,12 @@ def init_db() -> None:
 
     # Create audit tables
     _init_audit_tables(conn, use_postgres=False)
+
+    # Create reddit_posts table
+    try:
+        conn.executescript(_SCHEMA_REDDIT_POSTS_SQLITE)
+    except Exception as exc:
+        logger.warning("reddit_posts table init failed (non-fatal): %s", exc)
 
     # Migrate from v1 if it exists
     cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'")

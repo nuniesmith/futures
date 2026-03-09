@@ -31,6 +31,7 @@ Docker:
     CMD ["uvicorn", "lib.services.data.main:app", "--host", "0.0.0.0", "--port", "8000"]
 """
 
+import asyncio
 import json
 import math
 import os
@@ -156,6 +157,7 @@ from lib.services.data.api.positions import (  # noqa: E402
 from lib.services.data.api.rate_limit import (  # noqa: E402
     setup_rate_limiting,
 )
+from lib.services.data.api.reddit import router as reddit_router  # noqa: E402
 from lib.services.data.api.risk import router as risk_router  # noqa: E402
 from lib.services.data.api.sar import router as sar_router  # noqa: E402
 from lib.services.data.api.settings import (  # noqa: E402
@@ -324,7 +326,32 @@ async def lifespan(app: FastAPI):
     actions_set_engine(_engine)
     grok_set_engine(_engine)
 
-    # 4b. Wire LiveRiskPublisher into the live_risk API module.
+    # 4b. Start Reddit watcher + aggregation job (non-fatal if credentials missing)
+    try:
+        from lib.analysis.reddit_sentiment import get_full_snapshot as _reddit_snapshot
+        from lib.integrations.reddit_watcher import RedditWatcher
+
+        _reddit_watcher = RedditWatcher(
+            redis=app.state.redis,
+            pg_pool=getattr(app.state, "pg_pool", None),
+            mode=os.getenv("REDDIT_MODE", "poll"),
+        )
+        asyncio.create_task(_reddit_watcher.run())
+
+        async def _reddit_aggregation_job():
+            while True:
+                try:
+                    await _reddit_snapshot(app.state.redis)
+                except Exception as exc:
+                    logger.warning("Reddit aggregation error: %s", exc)
+                await asyncio.sleep(300)
+
+        asyncio.create_task(_reddit_aggregation_job())
+        logger.info("Reddit watcher + aggregation job started")
+    except Exception as exc:
+        logger.warning("Reddit watcher startup skipped (non-fatal): %s", exc)
+
+    # 4c. Wire LiveRiskPublisher into the live_risk API module.
     #     In embedded mode the standalone engine loop (main.py) is NOT running,
     #     so we create a LiveRiskPublisher here that the /api/live-risk/refresh
     #     endpoint and the HTMX polling strip can use.
@@ -647,6 +674,11 @@ app.include_router(live_risk_router, tags=["Live Risk"])
 # Phase 3D: HTMX mutation + query endpoints for swing trade management.
 # NOTE: swing_actions_router is mounted WITHOUT a prefix — routes are defined with /api/swing/ paths.
 app.include_router(swing_actions_router, tags=["Swing Actions"])
+
+# Reddit Sentiment: /api/reddit/signal/{asset}, /api/reddit/signal/{asset}/{window_min},
+#                   /api/reddit/snapshot, /htmx/reddit/panel, /htmx/reddit/asset/{asset}
+# NOTE: reddit_router is mounted WITHOUT a prefix — routes are defined with full paths.
+app.include_router(reddit_router, tags=["Reddit Sentiment"])
 
 
 # ---------------------------------------------------------------------------

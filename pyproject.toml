@@ -51,6 +51,10 @@ dependencies = [
     # --- Filesystem watching (CNN model hot-reload) ---
     "watchdog>=4.0.0",
 
+    # --- Reddit sentiment ---
+    "praw>=7.7",
+    "vaderSentiment>=3.3",
+
     # --- ONNX (model export + CPU inference) ---
     "onnx>=1.14.0",
     "onnxruntime>=1.16.0",

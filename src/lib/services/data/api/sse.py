@@ -274,6 +274,37 @@ def _get_grok_from_cache() -> str | None:
     return None
 
 
+def _get_reddit_signals() -> str | None:
+    """Read cached Reddit 1h signals for all assets from Redis.
+
+    Returns a JSON string with shape:
+        {"GC": {"signal": "BULL", "weighted_sentiment": 0.31, ...}, ...}
+    or None if no data is available.
+    """
+    try:
+        r = _get_redis()
+        if r is None:
+            return None
+        from lib.integrations.reddit_watcher import ASSET_KEYWORDS
+
+        out: dict[str, dict] = {}
+        for asset in ASSET_KEYWORDS:
+            key = f"reddit:signal:{asset}"
+            raw = r.hgetall(key)
+            if raw:
+                out[asset] = {
+                    (k.decode() if isinstance(k, bytes) else k): (
+                        float(v)
+                        if (k.decode() if isinstance(k, bytes) else k) != "signal"
+                        else (v.decode() if isinstance(v, bytes) else v)
+                    )
+                    for k, v in raw.items()
+                }
+        return json.dumps(out) if out else None
+    except Exception:
+        return None
+
+
 def _get_risk_from_cache() -> str | None:
     """Read the latest risk status from Redis cache."""
     try:
@@ -495,6 +526,11 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
     if orb:
         yield _format_sse(data=orb, event="orb-update")
 
+    # Send initial Reddit signals
+    reddit = _get_reddit_signals()
+    if reddit:
+        yield _format_sse(data=reddit, event="reddit-signal")
+
     # Send initial session info
     status = _get_engine_status()
     if status:
@@ -539,6 +575,7 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
     last_grok_hash = ""
     last_risk_hash = ""
     last_orb_hash = ""
+    last_reddit_hash = ""
     last_session = ""
     last_bridge_connected: bool | None = None  # None = not yet emitted
 
@@ -779,6 +816,15 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                             last_risk_hash = risk_hash
                             if not _should_throttle("risk-update"):
                                 yield _format_sse(data=risk, event="risk-update")
+
+                    # Check Reddit signals
+                    reddit = _get_reddit_signals()
+                    if reddit:
+                        reddit_hash = str(hash(reddit))
+                        if reddit_hash != last_reddit_hash:
+                            last_reddit_hash = reddit_hash
+                            if not _should_throttle("reddit-signal"):
+                                yield _format_sse(data=reddit, event="reddit-signal")
 
                     # Check ORB status (TASK-801)
                     orb = _get_orb_from_cache()
