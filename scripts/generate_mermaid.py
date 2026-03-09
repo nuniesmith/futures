@@ -1,7 +1,7 @@
 import base64
-import requests
-import json
 from pathlib import Path
+
+import requests
 
 # =============================================================================
 # FUTURES TRADING SYSTEM — FULL LOGIC FLOW (v5)
@@ -16,7 +16,7 @@ from pathlib import Path
 MERMAID = """flowchart TD
     %% ==================== EXTERNAL SOURCES ====================
     subgraph External["🌐 External Sources"]
-        A1[MassiveAPI + yfinance\nCME futures 1m/5m/15m/daily] 
+        A1[MassiveAPI + yfinance\nCME futures 1m/5m/15m/daily]
         A2[Kraken REST + WebSocket\n9+ spot pairs 24/7]
         A3[Reddit WSB via PRAW + VADER]
     end
@@ -116,6 +116,7 @@ MERMAID = """flowchart TD
 # SCRIPT LOGIC
 # =============================================================================
 
+
 def generate_mermaid_files():
     output_dir = Path("docs")
     output_dir.mkdir(exist_ok=True)
@@ -143,6 +144,7 @@ def generate_mermaid_files():
     except Exception as e:
         print(f"⚠️  Could not render PNG (no internet or API issue): {e}")
         print("   Just open the .mmd file in mermaid.live instead")
+
 
 if __name__ == "__main__":
     print("🚀 Generating Futures Trading System Logic Flow (v5)...\n")

@@ -224,7 +224,7 @@ def test_bridge_metrics(bridge_url):
         return
     if resp.status_code == 200:
         lines = resp.text.strip().split("\n")
-        metric_count = len([l for l in lines if l and not l.startswith("#")])
+        metric_count = len([line for line in lines if line and not line.startswith("#")])
         _pass("Bridge /metrics", f"{metric_count} metric lines")
     else:
         _fail("Bridge /metrics", f"HTTP {resp.status_code}")
