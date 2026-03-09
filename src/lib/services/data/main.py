@@ -1,18 +1,34 @@
 """
-Futures Data Service — FastAPI + Background Engine
-===================================================
-Dedicated microservice that runs all heavy computation:
-  - Massive WebSocket listener (real-time 1m bars)
-  - DashboardEngine (5m refresh, optimization, backtesting)
-  - Ruby modules (volatility, wave, signal quality, regime, CVD, ICT)
-  - REST API + HTMX dashboard
+Ruby Futures — Data Service
+============================
+Standalone FastAPI microservice that handles all market data, caching,
+REST API, and HTMX dashboard rendering.
+
+Architecture:
+    Browser → Web (8080) → Data Service (8000) → Redis / Postgres / Massive / Kraken
+                                                ↑
+                                         Engine (8100) publishes focus/risk to Redis
+
+Responsibilities:
+  - REST + SSE API for the dashboard (GET /, /api/focus, /sse/dashboard, …)
+  - Bar cache management (Postgres + Redis, gap-fill via Massive / Kraken)
+  - Kraken WebSocket live crypto feed
+  - Grok AI analyst streaming
+  - Trade journal, positions, risk state reads
+  - All HTMX fragment endpoints
+
+The Data Service is STATELESS with respect to computation — it reads engine
+output from Redis and never runs the DashboardEngine or engine scheduler.
+The Engine service (lib.services.engine.main) runs in its own container and
+publishes computed focus / risk / ORB state to Redis for the Data Service to
+serve.
 
 Usage (from project root):
-    PYTHONPATH=src uvicorn lib.services.engine.data.main:app --host 0.0.0.0 --port 8000
+    PYTHONPATH=src uvicorn lib.services.data.main:app --host 0.0.0.0 --port 8000
 
 Docker:
     ENV PYTHONPATH="/app/src"
-    CMD ["uvicorn", "lib.services.engine.data.main:app", ...]
+    CMD ["uvicorn", "lib.services.data.main:app", "--host", "0.0.0.0", "--port", "8000"]
 """
 
 import json
@@ -88,82 +104,84 @@ logger = get_logger("data_service")
 # Bare imports like `from cache import ...` resolve via PYTHONPATH (/app/src).
 # ---------------------------------------------------------------------------
 from lib.core.models import init_db  # noqa: E402
-from lib.services.engine.data.api.actions import (  # noqa: E402
+from lib.services.data.api.actions import (  # noqa: E402
     router as actions_router,
 )
-from lib.services.engine.data.api.actions import (  # noqa: E402
+from lib.services.data.api.actions import (  # noqa: E402
     set_engine as actions_set_engine,
 )
-from lib.services.engine.data.api.analysis import (  # noqa: E402
+from lib.services.data.api.analysis import (  # noqa: E402
     router as analysis_router,
 )
-from lib.services.engine.data.api.analysis import (  # noqa: E402
+from lib.services.data.api.analysis import (  # noqa: E402
     set_engine as analysis_set_engine,
 )
-from lib.services.engine.data.api.audit import router as audit_router  # noqa: E402
-from lib.services.engine.data.api.auth import require_api_key  # noqa: E402
-from lib.services.engine.data.api.bars import (  # noqa: E402
+from lib.services.data.api.audit import router as audit_router  # noqa: E402
+from lib.services.data.api.auth import require_api_key  # noqa: E402
+from lib.services.data.api.bars import (  # noqa: E402
     router as bars_router,
 )
-from lib.services.engine.data.api.bars import (  # noqa: E402
+from lib.services.data.api.bars import (  # noqa: E402
     startup_warm_caches,
 )
-from lib.services.engine.data.api.cnn import router as cnn_router  # noqa: E402
-from lib.services.engine.data.api.dashboard import (  # noqa: E402
+from lib.services.data.api.cnn import router as cnn_router  # noqa: E402
+from lib.services.data.api.dashboard import (  # noqa: E402
     router as dashboard_router,
 )
-from lib.services.engine.data.api.grok import router as grok_router  # noqa: E402
-from lib.services.engine.data.api.grok import set_engine as grok_set_engine  # noqa: E402
-from lib.services.engine.data.api.health import (  # noqa: E402
+from lib.services.data.api.grok import router as grok_router  # noqa: E402
+from lib.services.data.api.grok import set_engine as grok_set_engine  # noqa: E402
+from lib.services.data.api.health import (  # noqa: E402
     router as health_router,
 )
-from lib.services.engine.data.api.journal import (  # noqa: E402
+from lib.services.data.api.journal import (  # noqa: E402
     router as journal_router,
 )
-from lib.services.engine.data.api.kraken import router as kraken_router  # noqa: E402
-from lib.services.engine.data.api.live_risk import (  # noqa: E402
+from lib.services.data.api.kraken import router as kraken_router  # noqa: E402
+from lib.services.data.api.live_risk import (  # noqa: E402
     router as live_risk_router,
 )
-from lib.services.engine.data.api.market_data import (  # noqa: E402
+from lib.services.data.api.market_data import (  # noqa: E402
     router as market_data_router,
 )
-from lib.services.engine.data.api.metrics import PrometheusMiddleware  # noqa: E402
-from lib.services.engine.data.api.metrics import (  # noqa: E402
+from lib.services.data.api.metrics import PrometheusMiddleware  # noqa: E402
+from lib.services.data.api.metrics import (  # noqa: E402
     router as metrics_router,
 )
-from lib.services.engine.data.api.nt8_deploy import (  # noqa: E402
+from lib.services.data.api.nt8_deploy import (  # noqa: E402
     router as nt8_deploy_router,
 )
-from lib.services.engine.data.api.positions import (  # noqa: E402
+from lib.services.data.api.positions import (  # noqa: E402
     router as positions_router,
 )
-from lib.services.engine.data.api.rate_limit import (  # noqa: E402
+from lib.services.data.api.rate_limit import (  # noqa: E402
     setup_rate_limiting,
 )
-from lib.services.engine.data.api.risk import router as risk_router  # noqa: E402
-from lib.services.engine.data.api.sar import router as sar_router  # noqa: E402
-from lib.services.engine.data.api.settings import (  # noqa: E402
+from lib.services.data.api.risk import router as risk_router  # noqa: E402
+from lib.services.data.api.sar import router as sar_router  # noqa: E402
+from lib.services.data.api.settings import (  # noqa: E402
     router as settings_router,
 )
-from lib.services.engine.data.api.sse import router as sse_router  # noqa: E402
-from lib.services.engine.data.api.swing_actions import (  # noqa: E402
+from lib.services.data.api.sse import router as sse_router  # noqa: E402
+from lib.services.data.api.swing_actions import (  # noqa: E402
     router as swing_actions_router,
 )
-from lib.services.engine.data.api.trades import (  # noqa: E402
+from lib.services.data.api.trades import (  # noqa: E402
     router as trades_router,
 )
-from lib.services.engine.data.api.tradingview import (  # noqa: E402
+from lib.services.data.api.tradingview import (  # noqa: E402
     router as tradingview_router,
 )
-from lib.services.engine.data.api.trainer import (  # noqa: E402
+from lib.services.data.api.trainer import (  # noqa: E402
     router as trainer_router,
 )
 
 # ---------------------------------------------------------------------------
-# Engine mode: embedded (legacy, all-in-one) or remote (reads from Redis)
-# Set ENGINE_MODE=remote when running engine as separate container.
+# Engine mode — always "remote" when running as standalone data service.
+# The data service NEVER embeds the engine; it reads published state from Redis.
+# ENGINE_MODE=embedded is retained only for local dev / smoke-testing without
+# a separate engine container.
 # ---------------------------------------------------------------------------
-_ENGINE_MODE = os.getenv("ENGINE_MODE", "embedded")  # "embedded" or "remote"
+_ENGINE_MODE = os.getenv("ENGINE_MODE", "remote")  # default: remote (separate engine)
 
 _engine: Any = None
 
@@ -316,7 +334,7 @@ async def lifespan(app: FastAPI):
     _live_risk_publisher = None
     if _ENGINE_MODE != "remote":
         try:
-            from lib.services.engine.data.api.live_risk import set_publisher as lr_set_publisher
+            from lib.services.data.api.live_risk import set_publisher as lr_set_publisher
             from lib.services.engine.live_risk import LiveRiskPublisher
 
             # Try to get RiskManager and PositionManager from the engine
@@ -718,18 +736,24 @@ async def favicon():
 
 
 # ---------------------------------------------------------------------------
-# Run directly: python -m src.services.data.main
-# or:           python src/services/data/main.py
+# Run directly: python -m lib.services.data.main
+# or via entrypoint: python -m entrypoints.data.main
 # ---------------------------------------------------------------------------
-if __name__ == "__main__":
+def main() -> None:
+    """Start the Data Service via uvicorn. Called by entrypoints/data/main.py."""
     import uvicorn
 
     host = os.getenv("DATA_SERVICE_HOST", "0.0.0.0")
     port = int(os.getenv("DATA_SERVICE_PORT", "8000"))
+    log_level = os.getenv("LOG_LEVEL", "info")
 
     uvicorn.run(
         app,
         host=host,
         port=port,
-        log_level="info",
+        log_level=log_level,
     )
+
+
+if __name__ == "__main__":
+    main()

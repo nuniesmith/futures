@@ -224,10 +224,14 @@ jobs:
             fail-fast: false
             matrix:
                 include:
+                    - service: data
+                      dockerfile: docker/data/Dockerfile
+                      platforms: linux/amd64,linux/arm64
+                      is_default: true
                     - service: engine
                       dockerfile: docker/engine/Dockerfile
                       platforms: linux/amd64,linux/arm64
-                      is_default: true
+                      is_default: false
                     - service: web
                       dockerfile: docker/web/Dockerfile
                       platforms: linux/amd64,linux/arm64
@@ -305,7 +309,7 @@ jobs:
     #   - Can be skipped manually via workflow_dispatch skip_deploy input
     # =========================================================================
     deploy:
-        name: ☁️ Deploy Cloud (engine + web)
+        name: ☁️ Deploy Cloud (data + engine + web)
         needs: docker
         runs-on: ubuntu-latest
         timeout-minutes: 15
@@ -442,6 +446,9 @@ jobs:
                       echo "🐳 Pulling latest images from Docker Hub..."
                       echo "${{ secrets.DOCKER_TOKEN }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin 2>/dev/null || true
 
+                      echo "==> Pulling :data image..."
+                      docker pull ${{ env.IMAGE_NAME }}:data
+
                       echo "==> Pulling :engine image..."
                       docker pull ${{ env.IMAGE_NAME }}:engine
 
@@ -449,16 +456,16 @@ jobs:
                       docker pull ${{ env.IMAGE_NAME }}:web
 
                       # Start services (trainer goes to the home laptop — not deployed here)
-                      echo "🚀 Starting engine and web services..."
-                      docker compose -f docker-compose.prod.yml up -d --no-build --remove-orphans engine web prometheus grafana 2>/dev/null || \
-                        docker compose up -d --no-build --remove-orphans engine web prometheus grafana
+                      echo "🚀 Starting data, engine and web services..."
+                      docker compose -f docker-compose.prod.yml up -d --no-build --remove-orphans data engine web prometheus grafana 2>/dev/null || \
+                        docker compose up -d --no-build --remove-orphans data engine web prometheus grafana
 
                   post-deploy-command: |
                       cd ~/futures
 
                       echo ""
                       echo "📊 Container status:"
-                      docker compose -f docker-compose.prod.yml ps engine web 2>/dev/null || \
+                      docker compose -f docker-compose.prod.yml ps data engine web 2>/dev/null || \
                         docker ps --filter "name=futures" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
                       echo ""
@@ -500,13 +507,13 @@ jobs:
               with:
                   webhook-url: ${{ secrets.DISCORD_WEBHOOK_ACTIONS }}
                   title: "${{ steps.deploy.outcome == 'success' && '☁️ Futures Deployed to Cloud' || '❌ Futures Cloud Deploy Failed' }}"
-                  description: "${{ steps.deploy.outcome == 'success' && 'Engine + Web updated on cloud server' || 'Failed to deploy Futures to cloud server' }}"
+                  description: "${{ steps.deploy.outcome == 'success' && 'Data + Engine + Web updated on cloud server' || 'Failed to deploy Futures to cloud server' }}"
                   status: ${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}
                   include-repo-info: "true"
                   fields: |
                       [
                         {"name": "Platform", "value": "☁️ Cloud Ubuntu (amd64)", "inline": true},
-                        {"name": "Images", "value": "`${{ env.IMAGE_NAME }}:engine`\n`${{ env.IMAGE_NAME }}:web`", "inline": true},
+                        {"name": "Images", "value": "`${{ env.IMAGE_NAME }}:data`\n`${{ env.IMAGE_NAME }}:engine`\n`${{ env.IMAGE_NAME }}:web`", "inline": true},
                         {"name": "Commit", "value": "`${{ steps.vars.outputs.sha_short }}`", "inline": true},
                         {"name": "Network", "value": "🔒 Tailscale VPN", "inline": true},
                         {"name": "Health", "value": "${{ steps.health-checks.outputs.healthy == 'true' && '✅ Healthy' || '⚠️ Check logs' }}", "inline": true}
@@ -751,7 +758,7 @@ jobs:
                   echo "| ✨ Lint & Format | \`${{ needs.lint.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "| 🧪 Test | \`${{ needs.test.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "| 🐳 Docker Build & Push | \`${{ needs.docker.result }}\` |" >> $GITHUB_STEP_SUMMARY
-                  echo "| ☁️ Deploy Cloud (engine + web) | \`${{ needs.deploy.result }}\` |" >> $GITHUB_STEP_SUMMARY
+                  echo "| ☁️ Deploy Cloud (data + engine + web) | \`${{ needs.deploy.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "| 🏋️ Deploy Trainer (home GPU) | \`${{ needs.deploy-trainer.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -792,10 +799,11 @@ jobs:
                   echo "" >> $GITHUB_STEP_SUMMARY
                   echo "| Service | Tag | Pinned Tag | Platforms | Deploy Target |" >> $GITHUB_STEP_SUMMARY
                   echo "|---------|-----|------------|-----------|---------------|" >> $GITHUB_STEP_SUMMARY
+                  echo "| Data | \`${{ env.IMAGE_NAME }}:data\` | \`:data-${SHA_SHORT}\` | amd64, arm64 | ☁️ Cloud |" >> $GITHUB_STEP_SUMMARY
                   echo "| Engine | \`${{ env.IMAGE_NAME }}:engine\` | \`:engine-${SHA_SHORT}\` | amd64, arm64 | ☁️ Cloud |" >> $GITHUB_STEP_SUMMARY
                   echo "| Web | \`${{ env.IMAGE_NAME }}:web\` | \`:web-${SHA_SHORT}\` | amd64, arm64 | ☁️ Cloud |" >> $GITHUB_STEP_SUMMARY
                   echo "| Trainer | \`${{ env.IMAGE_NAME }}:trainer\` | \`:trainer-${SHA_SHORT}\` | amd64 | 🏋️ Home GPU |" >> $GITHUB_STEP_SUMMARY
-                  echo "| Default | \`${{ env.IMAGE_NAME }}:latest\` | — | amd64, arm64 | — |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Default (:latest) | \`${{ env.IMAGE_NAME }}:latest\` | — | amd64, arm64 | ☁️ Cloud |" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
                   echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
                   echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY

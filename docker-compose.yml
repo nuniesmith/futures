@@ -5,23 +5,27 @@
 # Services:
 #   postgres   — durable storage (journal, historical opts, alerts)
 #   redis      — hot cache (latest Ruby metrics, live positions, 1m bars)
-#   engine     — FastAPI REST + SSE (port 8100) + background computation worker
-#   web        — HTMX dashboard frontend; reverse-proxies to engine (port 8180)
+#   data       — FastAPI REST + SSE API (port 8050); bar cache, Kraken feed,
+#                Redis reads of engine-published state
+#   engine     — background computation worker; publishes focus/risk to Redis
+#   web        — HTMX dashboard frontend; reverse-proxies to data (port 8180)
 #   trainer    — GPU CNN training server (port 8200)  [training profile]
 #   prometheus — metrics collection & alerting
 #   grafana    — dashboards & visualization
 #
 # Docker Hub repo (built by CI/CD):
-#   nuniesmith/futures:engine     — engine + data API (arm64 + amd64)
+#   nuniesmith/futures:data       — data API service (arm64 + amd64)
+#   nuniesmith/futures:engine     — background engine worker (arm64 + amd64)
 #   nuniesmith/futures:web        — HTMX dashboard (arm64 + amd64)
 #   nuniesmith/futures:trainer    — GPU training server (amd64 only)
 #   nuniesmith/futures:prometheus — Prometheus with baked-in config (arm64 + amd64)
 #   nuniesmith/futures:grafana    — Grafana with baked-in dashboards (arm64 + amd64)
-#   nuniesmith/futures:latest     — alias for :engine (default pull)
+#   nuniesmith/futures:latest     — alias for :data (default pull)
 #
 # Usage:
 #   docker compose up -d --build                            # Pi services
 #   docker compose --profile training up -d --build         # + trainer (GPU rig)
+#   docker compose logs -f data
 #   docker compose logs -f engine
 #   docker compose logs -f web
 #   docker compose ps
@@ -81,28 +85,26 @@ services:
             retries: 3
 
     # -------------------------------------------------------------------------
-    # Engine — FastAPI REST + SSE API (port 8100) + background computation worker
+    # Data — FastAPI REST + SSE API (port 8050)
     #
-    # Runs two processes via docker/engine/entrypoint.sh:
-    #   1. uvicorn  — serves REST API and SSE (lib.services.engine.data.main)
-    #   2. engine   — DashboardEngine, optimization, backtesting,
-    #                 daily focus computation, session-aware scheduling
+    # Responsibilities:
+    #   - All REST + SSE endpoints consumed by the web dashboard
+    #   - Bar cache management (Postgres + Redis, gap-fill via Massive / Kraken)
+    #   - Kraken WebSocket live crypto feed
+    #   - Reads engine-published focus / risk / ORB state from Redis
     #
-    # Both share the same src/ tree, Redis connection, and Postgres connection.
-    # If either process exits, the container exits and Docker restarts it.
-    #
-    # CNN training runs on a dedicated GPU machine via the trainer service.
-    # Trained models are stored in ./models/ and hot-reloaded by the engine.
+    # The data service is STATELESS with respect to computation — it never runs
+    # the DashboardEngine. The engine container publishes computed state to Redis
+    # for the data service to serve.
     # -------------------------------------------------------------------------
-    engine:
-        image: nuniesmith/futures:engine
+    data:
+        image: nuniesmith/futures:data
         build:
             context: .
-            dockerfile: docker/engine/Dockerfile
+            dockerfile: docker/data/Dockerfile
         restart: unless-stopped
-        shm_size: 2gb
         ports:
-            - "8100:8000"
+            - "8050:8000"
         env_file:
             - .env
         environment:
@@ -128,8 +130,6 @@ services:
             - PYTHONUNBUFFERED=1
         volumes:
             - app_data:/app/data
-            - ./models:/app/models
-            - ./scripts:/app/scripts
         depends_on:
             redis:
                 condition: service_healthy
@@ -149,9 +149,67 @@ services:
             retries: 3
 
     # -------------------------------------------------------------------------
+    # Engine — background computation worker
+    #
+    # Runs the DashboardEngine: Ruby modules, optimization, backtesting,
+    # daily focus computation, session-aware scheduling, live risk publishing.
+    # Publishes all computed state to Redis for the data service to serve.
+    #
+    # No HTTP port is exposed — the data service owns port 8000.
+    # CNN training runs on a dedicated GPU machine via the trainer service.
+    # Trained models are stored in ./models/ and hot-reloaded by the engine.
+    # -------------------------------------------------------------------------
+    engine:
+        image: nuniesmith/futures:engine
+        build:
+            context: .
+            dockerfile: docker/engine/Dockerfile
+        restart: unless-stopped
+        shm_size: 2gb
+        env_file:
+            - .env
+        environment:
+            - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+            - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-futures_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-futures_db}
+            - DB_PATH=/app/data/futures_journal.db
+            - DATA_SERVICE_URL=http://data:8000
+            - ENGINE_DATA_URL=http://data:8000
+            - ORB_FILTER_GATE=${ORB_FILTER_GATE:-majority}
+            - ORB_CNN_GATE=${ORB_CNN_GATE:-0}
+            - KRAKEN_API_KEY=${KRAKEN_API_KEY:-}
+            - KRAKEN_API_SECRET=${KRAKEN_API_SECRET:-}
+            - ENABLE_KRAKEN_CRYPTO=${ENABLE_KRAKEN_CRYPTO:-0}
+            - TRAINER_API_KEY=${TRAINER_API_KEY:-}
+            - TRAINER_SERVICE_URL=${TRAINER_SERVICE_URL:-http://100.113.72.63:8200}
+            # TradingView integration (Phase TV-D)
+            - TV_WEBHOOK_SECRET=${TV_WEBHOOK_SECRET:-}
+            - GITHUB_SIGNALS_TOKEN=${GITHUB_SIGNALS_TOKEN:-}
+            - GITHUB_SIGNALS_REPO=${GITHUB_SIGNALS_REPO:-nuniesmith/futures-signals}
+            - LOG_LEVEL=info
+            - PYTHONPATH=/app/src
+            - PYTHONUNBUFFERED=1
+        volumes:
+            - app_data:/app/data
+            - ./models:/app/models
+            - ./scripts:/app/scripts
+        depends_on:
+            redis:
+                condition: service_healthy
+            postgres:
+                condition: service_healthy
+            data:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "test", "-f", "/tmp/engine_health.json"]
+            interval: 15s
+            timeout: 5s
+            start_period: 60s
+            retries: 3
+
+    # -------------------------------------------------------------------------
     # Web — HTMX Dashboard Frontend
     # Stateless reverse-proxy that serves the dashboard HTML and proxies all
-    # API/SSE requests to the engine service. No Redis or Postgres access.
+    # API/SSE requests to the data service. No Redis or Postgres access.
     # User-facing entry point at http://localhost:8180
     # -------------------------------------------------------------------------
     web:
@@ -163,7 +221,7 @@ services:
         ports:
             - "8180:8080"
         environment:
-            - DATA_SERVICE_URL=http://engine:8000
+            - DATA_SERVICE_URL=http://data:8000
             - TRAINER_SERVICE_URL=http://100.113.72.63:8200
             - WEB_HOST=0.0.0.0
             - WEB_PORT=8080
@@ -172,7 +230,7 @@ services:
             - PYTHONPATH=/app/src
             - PYTHONUNBUFFERED=1
         depends_on:
-            engine:
+            data:
                 condition: service_healthy
         healthcheck:
             test:
@@ -250,6 +308,12 @@ services:
             - CNN_RETRAIN_BATCH_SIZE=${CNN_RETRAIN_BATCH_SIZE:-64}
             - CNN_RETRAIN_LR=${CNN_RETRAIN_LR:-0.0002}
             - CNN_RETRAIN_PATIENCE=${CNN_RETRAIN_PATIENCE:-8}
+
+            # ----------------------------------------------------------------
+            # Data service — trainer fetches bars from the data service
+            # ----------------------------------------------------------------
+            - ENGINE_DATA_URL=http://data:8000
+            - DATA_SERVICE_URL=http://data:8000
 
             # ----------------------------------------------------------------
             # Market data — Massive API (futures) + Kraken API (crypto)
@@ -337,7 +401,7 @@ services:
             - "--web.enable-lifecycle"
 
         depends_on:
-            engine:
+            data:
                 condition: service_healthy
 
     # -------------------------------------------------------------------------
