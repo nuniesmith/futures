@@ -26,7 +26,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 
 import praw
@@ -206,7 +206,7 @@ def _normalise(submission, asset: str, is_comment: bool = False) -> dict:
         "sentiment_score": round(compound, 4),
         "sentiment_label": label,
         "upvote_ratio": ratio,
-        "created_utc": datetime.fromtimestamp(submission.created_utc, tz=datetime.UTC),
+        "created_utc": datetime.fromtimestamp(submission.created_utc, tz=timezone.utc),
     }
 
 
