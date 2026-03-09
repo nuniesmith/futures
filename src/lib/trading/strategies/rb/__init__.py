@@ -74,7 +74,7 @@ from lib.services.engine.rb.breakout import (
 # ---------------------------------------------------------------------------
 # Re-exports from detector (unified detection facade)
 # ---------------------------------------------------------------------------
-from lib.strategies.rb.detector import (
+from lib.trading.strategies.rb.detector import (
     BreakoutResult,
     detect_all_breakout_types,
     detect_breakout_for_type,
@@ -88,7 +88,7 @@ from lib.strategies.rb.detector import (
 # ---------------------------------------------------------------------------
 # Re-exports from publisher (Redis pub + alerting)
 # ---------------------------------------------------------------------------
-from lib.strategies.rb.publisher import (
+from lib.trading.strategies.rb.publisher import (
     dispatch_to_position_manager,
     get_alert_template,
     persist_breakout_result,
@@ -100,7 +100,7 @@ from lib.strategies.rb.publisher import (
 # ---------------------------------------------------------------------------
 # Re-exports from range_builders (pure range construction + shared helpers)
 # ---------------------------------------------------------------------------
-from lib.strategies.rb.range_builders import (
+from lib.trading.strategies.rb.range_builders import (
     build_asian_range,
     build_bbsqueeze_range,
     build_consolidation_range,
