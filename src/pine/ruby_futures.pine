@@ -40,7 +40,7 @@ dashPosition  = input.string("Top Right", "Dashboard Position",
 // 4. TOP G CHANNEL  (from FKS)
 // ══════════════════════════════════════════════════════════════════════════════
 showTopG          = input.bool(true,  "Show Top G Channel",      group="4. Top G Channel")
-topGLength        = input.int(200,    "Channel Range Length",     minval=20,               group="4. Top G Channel")
+topGLength        = input.int(150,    "Channel Range Length",     minval=20,               group="4. Top G Channel")
 showTopGMid       = input.bool(true,  "Show Mid Line",            group="4. Top G Channel")
 showTopGSignals   = input.bool(true,  "Show Strong Channel Signals", group="4. Top G Channel")
 showSimpleSigs    = input.bool(false, "Show Simple Signals (noisy)", group="4. Top G Channel")
@@ -110,31 +110,32 @@ f_lowest_highest(_len) =>
     float _mid = ta.hma(math.avg(_lo, _hi), 15)
     [_lo, _hi, _mid]
 
-// Normalised rate-of-change helper
-f_calc_norm_roc(_offset, _len=8, _stdev_len=200) =>
-    float _roc   = ta.roc(close[_offset], _len)
-    float _stdev = ta.stdev(ta.roc(close, _len), _stdev_len)
-    _stdev == 0 ? 0 : _roc / _stdev
+// Normalised rate-of-change — computed once per bar, then offset via [] in signal logic
+// This matches the original Top G which does: roc = ta.roc(close, 8) / ta.stdev(roc, 200)
+// and then references roc[2].
+f_calc_norm_roc() =>
+    float _roc   = ta.roc(close, 8)
+    float _stdev = ta.stdev(_roc, 200)
+    _stdev == 0 ? 0.0 : _roc / _stdev
 
 // Signal detection: channel touches, bounces, and early-warning zones
 // Returns [top, bottom, simple_bot, simple_top, pot_bot, pot_top]
-f_signals(_lo, _hi, _atr) =>
-    float _roc2      = f_calc_norm_roc(2)
-    float _roc0      = f_calc_norm_roc(0)
+f_signals(_lo, _hi, _atr, _norm_roc) =>
     float _sup_zone  = _lo + _atr * 0.5
     float _res_zone  = _hi - _atr * 0.5
 
     // Strong signals — require double-touch / momentum confirmation
-    bool _top     = high < _hi and high[1] == _hi[1] and _roc2 >  2 * signalSensitivity and _lo == _lo[5] and barstate.isconfirmed
-    bool _bot     = low[1] == _lo[1] and low > _lo and low[2] == _lo[2] and _roc2 < -2 * signalSensitivity and barstate.isconfirmed
+    // Use _norm_roc[2] (output offset) to match original: roc[2] > 2
+    bool _top     = high < _hi and high[1] == _hi[1] and _norm_roc[2] >  2 * signalSensitivity and _lo == _lo[5] and barstate.isconfirmed
+    bool _bot     = low[1] == _lo[1] and low > _lo and low[2] == _lo[2] and _norm_roc[2] < -2 * signalSensitivity and barstate.isconfirmed
 
     // Simple signals — single-bar touch and bounce (visual only)
     bool _s_bot   = low[1]  == _lo[1] and low  > _lo and not _bot and barstate.isconfirmed
     bool _s_top   = high < _hi and high[1] == _hi[1] and not _top and barstate.isconfirmed
 
     // Potential / early-warning — price entering zone with momentum
-    bool _p_bot   = low  <= _sup_zone and _roc0 < -1 * signalSensitivity and barstate.isconfirmed
-    bool _p_top   = high >= _res_zone and _roc0 >  1 * signalSensitivity and barstate.isconfirmed
+    bool _p_bot   = low  <= _sup_zone and _norm_roc < -1 * signalSensitivity and barstate.isconfirmed
+    bool _p_top   = high >= _res_zone and _norm_roc >  1 * signalSensitivity and barstate.isconfirmed
 
     [_top, _bot, _s_bot, _s_top, _p_bot, _p_top]
 
@@ -235,7 +236,8 @@ barcolor(barColorMode == "Heatmap" ? heatmap_bar_color :
 // TOP G CHANNEL CALCULATIONS  (FKS)
 // ══════════════════════════════════════════════════════════════════════════════
 [tg_lo, tg_hi, tg_mid] = f_lowest_highest(topGLength)
-[tg_top, tg_bot, tg_s_bot, tg_s_top, tg_p_bot, tg_p_top] = f_signals(tg_lo, tg_hi, atr14)
+tg_norm_roc = f_calc_norm_roc()
+[tg_top, tg_bot, tg_s_bot, tg_s_top, tg_p_bot, tg_p_top] = f_signals(tg_lo, tg_hi, atr14, tg_norm_roc)
 float tg_range = tg_hi - tg_lo
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -1,14 +1,21 @@
 # =============================================================================
 # Futures - CI/CD Pipeline
 # =============================================================================
-# Automated build, push, and deployment of Futures to Raspberry Pi via Tailscale
+# Automated build, push, and deployment of Futures via Tailscale
 #
-# Pipeline: Lint → Test → Docker Build & Push (matrix) → Deploy to Pi → Health Check
+# Pipeline: Lint → Test → Docker Build & Push (matrix)
+#           → Deploy Cloud (engine + web) → Deploy Trainer (home laptop)
+#           → Health Checks
+#
+# Two deployment targets:
+#   Cloud Server  — Ubuntu cloud VPS: engine, web, postgres, redis, monitoring
+#   Trainer Rig   — Home laptop (CUDA GPU, 64 GB RAM): trainer service only
+#                   Also hosts the FKS project — ports don't conflict.
 #
 # Single DockerHub repo (nuniesmith/futures) with tag-per-service:
-#   nuniesmith/futures:engine          — Engine + Data API (arm64 + amd64, runs on Pi)
-#   nuniesmith/futures:web             — HTMX Dashboard (arm64 + amd64, runs on Pi)
-#   nuniesmith/futures:trainer         — GPU Training Server (amd64 only, dedicated rig)
+#   nuniesmith/futures:engine          — Engine + Data API (amd64 + arm64)
+#   nuniesmith/futures:web             — HTMX Dashboard (amd64 + arm64)
+#   nuniesmith/futures:trainer         — GPU Training Server (amd64 only)
 #   nuniesmith/futures:engine-<sha>    — Pinned engine build
 #   nuniesmith/futures:web-<sha>       — Pinned web build
 #   nuniesmith/futures:trainer-<sha>   — Pinned trainer build
@@ -17,16 +24,29 @@
 # Required Secrets:
 #   - TAILSCALE_OAUTH_CLIENT_ID: Tailscale OAuth Client ID
 #   - TAILSCALE_OAUTH_SECRET: Tailscale OAuth Secret
-#   - PROD_TAILSCALE_IP: Production server Tailscale IP
-#   - PROD_SSH_KEY: SSH private key for deployment
+#
+#   Cloud Server:
+#   - PROD_TAILSCALE_IP: Cloud server Tailscale IP
+#   - PROD_SSH_KEY: SSH private key for cloud server
 #   - PROD_SSH_USER: SSH username (default: actions)
 #   - PROD_SSH_PORT: SSH port (default: 22)
+#
+#   Trainer Rig (home laptop):
+#   - TRAINER_TAILSCALE_IP: Trainer laptop Tailscale IP
+#   - TRAINER_SSH_KEY: SSH private key for trainer laptop
+#   (SSH user and port are the same as PROD_SSH_USER / PROD_SSH_PORT)
+#
+#   Docker:
 #   - DOCKER_USERNAME: Docker Hub username
 #   - DOCKER_TOKEN: Docker Hub access token
+#
+#   Notifications:
 #   - DISCORD_WEBHOOK_ACTIONS: Discord webhook for CI/CD notifications
-#   - XAI_API_KEY: xAI (Grok) API key injected into prod .env
-#   - MASSIVE_API_KEY: Massive API key injected into prod .env
-#   - KRAKEN_API_KEY: Kraken API key injected into prod .env
+#
+#   API Keys (injected into prod .env on cloud server):
+#   - XAI_API_KEY: xAI (Grok) API key
+#   - MASSIVE_API_KEY: Massive API key
+#   - KRAKEN_API_KEY: Kraken API key
 # =============================================================================
 
 name: 🚀 CI/CD Pipeline
@@ -257,14 +277,14 @@ jobs:
                   fields: '[{"name": "Dockerfile", "value": "`${{ matrix.dockerfile }}`", "inline": true}, {"name": "Workflow", "value": "[View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}]'
 
     # =========================================================================
-    # Stage 4: Deploy to Production (Raspberry Pi via Tailscale)
+    # Stage 4a: Deploy to Cloud Server (engine + web via Tailscale)
     # =========================================================================
     #
-    # Connects to the Pi over Tailscale VPN, then uses the shared ssh-deploy
-    # action to pull the freshly-pushed :engine and :web images (arm64 variants)
-    # and restart the services via docker compose.
+    # Connects to the cloud Ubuntu server over Tailscale VPN, then uses the
+    # shared ssh-deploy action to pull the freshly-pushed :engine and :web
+    # images and restart services via docker compose.
     #
-    # The :trainer image is NOT deployed to the Pi (GPU rig only).
+    # The :trainer image is NOT deployed here — it goes to the home laptop.
     #
     # Gates:
     #   - Only runs on push to main (same gate as docker stage)
@@ -272,7 +292,7 @@ jobs:
     #   - Can be skipped manually via workflow_dispatch skip_deploy input
     # =========================================================================
     deploy:
-        name: 🚀 Deploy to Raspberry Pi
+        name: ☁️ Deploy Cloud (engine + web)
         needs: docker
         runs-on: ubuntu-latest
         timeout-minutes: 15
@@ -310,7 +330,7 @@ jobs:
                   git-branch: main
                   docker-prune: false
                   pre-deploy-command: |
-                      echo "📦 Preparing Futures deployment on Raspberry Pi..."
+                      echo "📦 Preparing Futures deployment on cloud server..."
 
                       # Handle git repository setup
                       if [ ! -d "$HOME/futures/.git" ]; then
@@ -411,7 +431,7 @@ jobs:
                       echo "==> Pulling :web image..."
                       docker pull ${{ env.IMAGE_NAME }}:web
 
-                      # Start services (trainer is GPU-rig only — not deployed to Pi)
+                      # Start services (trainer goes to the home laptop — not deployed here)
                       echo "🚀 Starting engine and web services..."
                       docker compose -f docker-compose.prod.yml up -d --no-build --remove-orphans engine web 2>/dev/null || \
                         docker compose up -d --no-build --remove-orphans
@@ -429,7 +449,6 @@ jobs:
                       df -h / | grep -v Filesystem
                       docker system df 2>/dev/null || true
 
-                      # Prune dangling images to save space on Raspberry Pi
                       echo ""
                       echo "🧹 Pruning dangling Docker images..."
                       docker image prune -f 2>/dev/null || true
@@ -440,7 +459,7 @@ jobs:
                       docker info --format '{{.Architecture}}' 2>/dev/null || true
 
                       echo ""
-                      echo "✅ Futures deployment complete!"
+                      echo "✅ Cloud server deployment complete!"
 
             - name: 🏥 Run Health Checks
               id: health-checks
@@ -463,14 +482,219 @@ jobs:
               continue-on-error: true
               with:
                   webhook-url: ${{ secrets.DISCORD_WEBHOOK_ACTIONS }}
-                  title: "${{ steps.deploy.outcome == 'success' && '🚀 Futures Deployed to Pi' || '❌ Futures Pi Deploy Failed' }}"
-                  description: "${{ steps.deploy.outcome == 'success' && 'Engine + Web updated on Raspberry Pi' || 'Failed to deploy Futures to Raspberry Pi' }}"
+                  title: "${{ steps.deploy.outcome == 'success' && '☁️ Futures Deployed to Cloud' || '❌ Futures Cloud Deploy Failed' }}"
+                  description: "${{ steps.deploy.outcome == 'success' && 'Engine + Web updated on cloud server' || 'Failed to deploy Futures to cloud server' }}"
                   status: ${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}
                   include-repo-info: "true"
                   fields: |
                       [
-                        {"name": "Platform", "value": "🥧 Raspberry Pi (ARM64)", "inline": true},
+                        {"name": "Platform", "value": "☁️ Cloud Ubuntu (amd64)", "inline": true},
                         {"name": "Images", "value": "`${{ env.IMAGE_NAME }}:engine`\n`${{ env.IMAGE_NAME }}:web`", "inline": true},
+                        {"name": "Commit", "value": "`${{ steps.vars.outputs.sha_short }}`", "inline": true},
+                        {"name": "Network", "value": "🔒 Tailscale VPN", "inline": true},
+                        {"name": "Health", "value": "${{ steps.health-checks.outputs.healthy == 'true' && '✅ Healthy' || '⚠️ Check logs' }}", "inline": true}
+                      ]
+
+    # =========================================================================
+    # Stage 4b: Deploy Trainer to Home Laptop (GPU rig via Tailscale)
+    # =========================================================================
+    #
+    # Connects to the home laptop (CUDA GPU + 64 GB RAM) over Tailscale VPN,
+    # pulls the :trainer image and restarts it with the training profile.
+    #
+    # This machine also runs the FKS project — ports don't interfere:
+    #   Futures trainer: 8200
+    #
+    # SSH user and port are the same as the cloud server; only the IP and
+    # SSH key differ (TRAINER_TAILSCALE_IP, TRAINER_SSH_KEY).
+    #
+    # Gates: same as cloud deploy — runs in parallel after docker stage.
+    # =========================================================================
+    deploy-trainer:
+        name: 🏋️ Deploy Trainer (home GPU)
+        needs: docker
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        if: |
+            github.event_name == 'push' && github.ref == 'refs/heads/main'
+            && (github.event_name != 'workflow_dispatch' || inputs.skip_deploy != true)
+        steps:
+            - name: 📥 Checkout code
+              uses: actions/checkout@v4
+
+            - name: 🔢 Compute short SHA
+              id: vars
+              run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+            - name: 🔌 Connect to Tailscale
+              id: tailscale
+              uses: nuniesmith/actions/.github/actions/tailscale-connect@main
+              with:
+                  oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+                  oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+                  target-ip: ${{ secrets.TRAINER_TAILSCALE_IP }}
+                  target-ssh-port: ${{ secrets.PROD_SSH_PORT || '22' }}
+
+            - name: 🏋️ Deploy Trainer via SSH
+              id: deploy-trainer
+              if: steps.tailscale.outputs.connected == 'true'
+              uses: nuniesmith/actions/.github/actions/ssh-deploy@main
+              with:
+                  host: ${{ secrets.TRAINER_TAILSCALE_IP }}
+                  port: ${{ secrets.PROD_SSH_PORT || '22' }}
+                  username: ${{ secrets.PROD_SSH_USER || 'actions' }}
+                  ssh-key: ${{ secrets.TRAINER_SSH_KEY }}
+                  project-path: ~/futures
+                  git-pull: false
+                  git-branch: main
+                  docker-prune: false
+                  pre-deploy-command: |
+                      echo "📦 Preparing Trainer deployment on home GPU rig..."
+
+                      # Handle git repository setup
+                      if [ ! -d "$HOME/futures/.git" ]; then
+                        if [ -d "$HOME/futures" ]; then
+                          echo "📁 Directory exists but is not a git repo — initializing..."
+                          cd ~/futures
+                          git init
+                          git remote add origin https://github.com/${{ github.repository }}.git
+                          git fetch origin
+                          git checkout -f main
+                          git branch --set-upstream-to=origin/main main
+                        else
+                          echo "📥 First deployment — cloning repository..."
+                          git clone https://github.com/${{ github.repository }}.git ~/futures
+                          cd ~/futures
+                          git checkout main
+                        fi
+                      else
+                        cd ~/futures
+                        echo "📥 Pulling latest changes..."
+                        git fetch origin
+                        git checkout main
+                        git pull origin main
+                      fi
+
+                      # Ensure scripts are executable
+                      find . -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+
+                      # Create .env file if it doesn't exist
+                      if [ ! -f ".env" ]; then
+                        echo "📝 Creating default .env..."
+                        cat > .env <<'ENVEOF'
+                      # Futures Trainer Environment Configuration
+                      PYTHONUNBUFFERED=1
+                      LOG_LEVEL=info
+                      ENVEOF
+                        chmod 600 .env
+                        echo "✅ Created .env file"
+                      fi
+
+                      # Upsert API keys needed by trainer
+                      echo "🔑 Injecting API keys into .env..."
+                      upsert_env() {
+                        local key="$1" val="$2"
+                        if grep -q "^${key}=" .env 2>/dev/null; then
+                          sed -i "s|^${key}=.*|${key}=${val}|" .env
+                        else
+                          echo "${key}=${val}" >> .env
+                        fi
+                      }
+                      upsert_env "MASSIVE_API_KEY"     "${{ secrets.MASSIVE_API_KEY }}"
+                      upsert_env "KRAKEN_API_KEY"      "${{ secrets.KRAKEN_API_KEY }}"
+                      upsert_env "KRAKEN_API_SECRET"   "${{ secrets.KRAKEN_API_SECRET }}"
+
+                      chmod 600 .env
+                      echo "✅ API keys injected"
+
+                      # Create required directories
+                      echo "📁 Ensuring data directories exist..."
+                      mkdir -p data models dataset config scripts
+                      chmod 755 data models dataset config scripts
+                      echo "✅ Directories ready"
+
+                      # Verify NVIDIA GPU is available
+                      echo ""
+                      echo "🎮 GPU check:"
+                      nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null || echo "⚠️ nvidia-smi not available (GPU may still work in container)"
+
+                  deploy-command: |
+                      cd ~/futures
+
+                      # Stop existing trainer service (leave other FKS services untouched)
+                      echo "🐳 Stopping existing trainer service..."
+                      docker compose --profile training stop trainer 2>/dev/null || true
+                      docker compose --profile training rm -f trainer 2>/dev/null || true
+
+                      # Log in to Docker Hub and pull latest trainer image
+                      echo "🐳 Pulling latest trainer image from Docker Hub..."
+                      echo "${{ secrets.DOCKER_TOKEN }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin 2>/dev/null || true
+
+                      echo "==> Pulling :trainer image..."
+                      docker pull ${{ env.IMAGE_NAME }}:trainer
+
+                      # Start trainer with the training profile
+                      echo "🏋️ Starting trainer service..."
+                      docker compose --profile training up -d --no-build trainer
+
+                  post-deploy-command: |
+                      cd ~/futures
+
+                      echo ""
+                      echo "📊 Trainer container status:"
+                      docker compose --profile training ps trainer 2>/dev/null || \
+                        docker ps --filter "name=trainer" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+                      echo ""
+                      echo "📊 Storage usage:"
+                      df -h / | grep -v Filesystem
+                      docker system df 2>/dev/null || true
+
+                      echo ""
+                      echo "🧹 Pruning dangling Docker images..."
+                      docker image prune -f 2>/dev/null || true
+
+                      echo ""
+                      echo "🎮 GPU status:"
+                      nvidia-smi 2>/dev/null || echo "nvidia-smi not available on host"
+
+                      echo ""
+                      echo "🎯 Architecture:"
+                      uname -m
+                      docker info --format '{{.Architecture}}' 2>/dev/null || true
+
+                      echo ""
+                      echo "✅ Trainer deployment complete!"
+
+            - name: 🏥 Run Trainer Health Check
+              id: health-checks
+              if: always() && steps.deploy-trainer.outcome == 'success'
+              uses: nuniesmith/actions/.github/actions/health-check@main
+              with:
+                  containers: trainer
+                  ssh-host: ${{ secrets.TRAINER_TAILSCALE_IP }}
+                  ssh-port: ${{ secrets.PROD_SSH_PORT || '22' }}
+                  ssh-user: ${{ secrets.PROD_SSH_USER || 'actions' }}
+                  ssh-key: ${{ secrets.TRAINER_SSH_KEY }}
+                  initial-delay: 30
+                  retry-count: 3
+                  retry-delay: 15
+                  fail-on-unhealthy: false
+
+            - name: 📣 Notify trainer deployment
+              if: always()
+              uses: nuniesmith/actions/.github/actions/discord-notify@main
+              continue-on-error: true
+              with:
+                  webhook-url: ${{ secrets.DISCORD_WEBHOOK_ACTIONS }}
+                  title: "${{ steps.deploy-trainer.outcome == 'success' && '🏋️ Trainer Deployed to GPU Rig' || '❌ Trainer Deploy Failed' }}"
+                  description: "${{ steps.deploy-trainer.outcome == 'success' && 'Trainer service updated on home GPU laptop' || 'Failed to deploy Trainer to home GPU laptop' }}"
+                  status: ${{ steps.deploy-trainer.outcome == 'success' && 'success' || 'failure' }}
+                  include-repo-info: "true"
+                  fields: |
+                      [
+                        {"name": "Platform", "value": "🏋️ Home GPU Rig (amd64 / CUDA)", "inline": true},
+                        {"name": "Image", "value": "`${{ env.IMAGE_NAME }}:trainer`", "inline": true},
                         {"name": "Commit", "value": "`${{ steps.vars.outputs.sha_short }}`", "inline": true},
                         {"name": "Network", "value": "🔒 Tailscale VPN", "inline": true},
                         {"name": "Health", "value": "${{ steps.health-checks.outputs.healthy == 'true' && '✅ Healthy' || '⚠️ Check logs' }}", "inline": true}
@@ -483,7 +707,7 @@ jobs:
         name: 📊 Pipeline Summary
         runs-on: ubuntu-latest
         timeout-minutes: 5
-        needs: [lint, test, docker, deploy]
+        needs: [lint, test, docker, deploy, deploy-trainer]
         if: always()
         steps:
             - name: 📊 Generate summary
@@ -497,21 +721,27 @@ jobs:
                   echo "| ✨ Lint & Format | \`${{ needs.lint.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "| 🧪 Test | \`${{ needs.test.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "| 🐳 Docker Build & Push | \`${{ needs.docker.result }}\` |" >> $GITHUB_STEP_SUMMARY
-                  echo "| 🚀 Deploy to Raspberry Pi | \`${{ needs.deploy.result }}\` |" >> $GITHUB_STEP_SUMMARY
+                  echo "| ☁️ Deploy Cloud (engine + web) | \`${{ needs.deploy.result }}\` |" >> $GITHUB_STEP_SUMMARY
+                  echo "| 🏋️ Deploy Trainer (home GPU) | \`${{ needs.deploy-trainer.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
 
                   if [ "${{ needs.lint.result }}" = "success" ] && \
                      [ "${{ needs.test.result }}" = "success" ] && \
                      [ "${{ needs.docker.result }}" = "success" ]; then
-                    DEPLOY="${{ needs.deploy.result }}"
-                    if [ "$DEPLOY" = "success" ]; then
-                      echo "### ✅ All stages completed — Pi updated!" >> $GITHUB_STEP_SUMMARY
-                    elif [ "$DEPLOY" = "skipped" ]; then
-                      echo "### ✅ Build + test passed (Pi deploy skipped)" >> $GITHUB_STEP_SUMMARY
-                    elif [ "$DEPLOY" = "failure" ]; then
-                      echo "### ⚠️ Build passed but Pi deploy failed — check Tailscale / SSH secrets" >> $GITHUB_STEP_SUMMARY
+                    CLOUD="${{ needs.deploy.result }}"
+                    TRAINER="${{ needs.deploy-trainer.result }}"
+                    if [ "$CLOUD" = "success" ] && [ "$TRAINER" = "success" ]; then
+                      echo "### ✅ All stages completed — cloud + trainer updated!" >> $GITHUB_STEP_SUMMARY
+                    elif [ "$CLOUD" = "success" ] && [ "$TRAINER" = "failure" ]; then
+                      echo "### ⚠️ Cloud deployed but trainer deploy failed — check TRAINER_TAILSCALE_IP / TRAINER_SSH_KEY" >> $GITHUB_STEP_SUMMARY
+                    elif [ "$CLOUD" = "failure" ] && [ "$TRAINER" = "success" ]; then
+                      echo "### ⚠️ Trainer deployed but cloud deploy failed — check PROD_TAILSCALE_IP / PROD_SSH_KEY" >> $GITHUB_STEP_SUMMARY
+                    elif [ "$CLOUD" = "failure" ] && [ "$TRAINER" = "failure" ]; then
+                      echo "### ❌ Both deploys failed — check Tailscale / SSH secrets" >> $GITHUB_STEP_SUMMARY
+                    elif [ "$CLOUD" = "skipped" ] && [ "$TRAINER" = "skipped" ]; then
+                      echo "### ✅ Build + test passed (deploys skipped)" >> $GITHUB_STEP_SUMMARY
                     else
-                      echo "### ✅ All stages completed successfully!" >> $GITHUB_STEP_SUMMARY
+                      echo "### ✅ Build passed — Cloud: ${CLOUD}, Trainer: ${TRAINER}" >> $GITHUB_STEP_SUMMARY
                     fi
                   elif [ "${{ needs.lint.result }}" = "failure" ]; then
                     echo "### ❌ Pipeline failed at lint stage" >> $GITHUB_STEP_SUMMARY
@@ -530,12 +760,12 @@ jobs:
                   echo "" >> $GITHUB_STEP_SUMMARY
                   echo "### 🐳 Docker Tags" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
-                  echo "| Service | Tag | Pinned Tag | Platforms |" >> $GITHUB_STEP_SUMMARY
-                  echo "|---------|-----|------------|-----------|" >> $GITHUB_STEP_SUMMARY
-                  echo "| Engine | \`${{ env.IMAGE_NAME }}:engine\` | \`:engine-${SHA_SHORT}\` | amd64, arm64 |" >> $GITHUB_STEP_SUMMARY
-                  echo "| Web | \`${{ env.IMAGE_NAME }}:web\` | \`:web-${SHA_SHORT}\` | amd64, arm64 |" >> $GITHUB_STEP_SUMMARY
-                  echo "| Trainer | \`${{ env.IMAGE_NAME }}:trainer\` | \`:trainer-${SHA_SHORT}\` | amd64 |" >> $GITHUB_STEP_SUMMARY
-                  echo "| Default | \`${{ env.IMAGE_NAME }}:latest\` | — | amd64, arm64 |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Service | Tag | Pinned Tag | Platforms | Deploy Target |" >> $GITHUB_STEP_SUMMARY
+                  echo "|---------|-----|------------|-----------|---------------|" >> $GITHUB_STEP_SUMMARY
+                  echo "| Engine | \`${{ env.IMAGE_NAME }}:engine\` | \`:engine-${SHA_SHORT}\` | amd64, arm64 | ☁️ Cloud |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Web | \`${{ env.IMAGE_NAME }}:web\` | \`:web-${SHA_SHORT}\` | amd64, arm64 | ☁️ Cloud |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Trainer | \`${{ env.IMAGE_NAME }}:trainer\` | \`:trainer-${SHA_SHORT}\` | amd64 | 🏋️ Home GPU |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Default | \`${{ env.IMAGE_NAME }}:latest\` | — | amd64, arm64 | — |" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
                   echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
                   echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -545,11 +775,12 @@ jobs:
                   echo "| 🔗 Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
 
             - name: ❌ Fail on critical errors
-              if: needs.lint.result == 'failure' || needs.test.result == 'failure' || needs.docker.result == 'failure' || needs.deploy.result == 'failure'
+              if: needs.lint.result == 'failure' || needs.test.result == 'failure' || needs.docker.result == 'failure' || needs.deploy.result == 'failure' || needs.deploy-trainer.result == 'failure'
               run: |
                   echo "❌ Pipeline had failures"
-                  echo "  Lint:   ${{ needs.lint.result }}"
-                  echo "  Test:   ${{ needs.test.result }}"
-                  echo "  Docker: ${{ needs.docker.result }}"
-                  echo "  Deploy: ${{ needs.deploy.result }}"
+                  echo "  Lint:    ${{ needs.lint.result }}"
+                  echo "  Test:    ${{ needs.test.result }}"
+                  echo "  Docker:  ${{ needs.docker.result }}"
+                  echo "  Cloud:   ${{ needs.deploy.result }}"
+                  echo "  Trainer: ${{ needs.deploy-trainer.result }}"
                   exit 1
