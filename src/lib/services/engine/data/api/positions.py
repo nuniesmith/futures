@@ -1,24 +1,28 @@
 """
-Positions API router — NinjaTrader live position bridge (v2).
+Positions API router — live position management (v3, broker-agnostic).
 
-Handles receiving live position snapshots from NinjaTrader's Bridge
-strategy and serving them to the dashboard.  Also provides proxy
-endpoints that let the web dashboard send commands *back* to
-NinjaTrader (execute signal, flatten, cancel orders).
+Handles receiving live position snapshots from any connected broker
+(TradingView/Tradovate, or future integrations) and serving them to
+the dashboard.  Also provides proxy endpoints that let the web
+dashboard send commands *back* to the connected broker (execute signal,
+flatten, cancel orders).
 
-Bridge v2 additions:
-  - POST /positions/heartbeat    — Bridge keep-alive with account summary
-  - POST /positions/execute      — Proxy: forward a trade signal to Bridge
-  - POST /positions/flatten      — Proxy: flatten all positions via Bridge
-  - POST /positions/cancel_orders — Proxy: cancel working orders via Bridge
-  - GET  /positions/bridge_status — Read Bridge /status (account info)
-  - GET  /positions/bridge_orders — Read Bridge /orders (recent order events)
+Endpoints:
+  - POST /positions/update        — Push a position snapshot (from broker)
+  - POST /positions/heartbeat     — Broker keep-alive with account summary
+  - POST /positions/execute       — Proxy: forward a trade signal to broker
+  - POST /positions/flatten       — Proxy: flatten all positions via broker
+  - POST /positions/cancel_orders — Proxy: cancel working orders via broker
+  - GET  /positions/broker_status — Read broker connection status
+  - GET  /positions/broker_orders — Read recent order events from broker
+  - GET  /positions/              — Get current cached positions
+  - DELETE /positions/            — Clear cached positions
 
 Risk enforcement:
-  When NinjaTrader pushes a position snapshot via POST /positions/update,
+  When a broker pushes a position snapshot via POST /positions/update,
   the router syncs the positions into the local RiskManager and evaluates
-  all risk rules.  The response includes risk status fields so the NT8
-  Bridge knows immediately if trading limits have been hit.
+  all risk rules.  The response includes risk status fields so the broker
+  connector knows immediately if trading limits have been hit.
 """
 
 import json
@@ -44,34 +48,36 @@ logger = logging.getLogger("api.positions")
 router = APIRouter(tags=["Positions"])
 
 # ---------------------------------------------------------------------------
-# Cache key & TTL for live positions from NinjaTrader
+# Cache key & TTL for live positions
 # ---------------------------------------------------------------------------
 _POSITIONS_CACHE_KEY = _cache_key("live_positions", "current")
 _POSITIONS_TTL = 7200  # 2 hours — positions persist across brief disconnects
 
-# Bridge heartbeat cache (separate from positions — shorter TTL)
-_HEARTBEAT_CACHE_KEY = _cache_key("bridge_heartbeat", "current")
-_HEARTBEAT_TTL = 60  # 1 minute — if no heartbeat within 60s, bridge is "stale"
+# Broker heartbeat cache (separate from positions — shorter TTL)
+_HEARTBEAT_CACHE_KEY = _cache_key("broker_heartbeat", "current")
+_HEARTBEAT_TTL = 60  # 1 minute — if no heartbeat within 60s, broker is "stale"
 
-# Bridge /status probe cache (rich data: rubyAttached, signalBusActive, etc.)
-_BRIDGE_STATUS_CACHE_KEY = _cache_key("bridge_status", "latest")
-_BRIDGE_STATUS_TTL = 30  # 30 seconds — refreshed on each probe or heartbeat
+# Broker status probe cache
+_BROKER_STATUS_CACHE_KEY = _cache_key("broker_status", "latest")
+_BROKER_STATUS_TTL = 30  # 30 seconds — refreshed on each probe or heartbeat
 
-# NinjaTrader Bridge listener URL (the Bridge runs an HttpListener on this port)
+# Broker connector URL — the TradingView/Tradovate webhook relay or
+# any future broker connector that accepts commands.
 # Module-level defaults — overridden at call time by persisted Redis settings
 # (edited via the Settings → Services UI).  Env vars are the last fallback.
-_BRIDGE_HOST_DEFAULT = os.getenv("NT_BRIDGE_HOST", "100.127.182.112")
-_BRIDGE_PORT_DEFAULT = int(os.getenv("NT_BRIDGE_PORT", "5680"))
-_BRIDGE_TIMEOUT = 5.0  # seconds
+# New TV_BROKER_* env vars take priority; legacy NT_BRIDGE_* vars are the fallback.
+_BROKER_HOST_DEFAULT = os.getenv("TV_BROKER_HOST", "") or os.getenv("NT_BRIDGE_HOST", "")
+_BROKER_PORT_DEFAULT = int(os.getenv("TV_BROKER_PORT", "") or os.getenv("NT_BRIDGE_PORT", "") or "0")
+_BROKER_TIMEOUT = 5.0  # seconds
 
 
-def _get_bridge_host_port() -> tuple[str, int]:
-    """Return (host, port) for the NinjaTrader Bridge.
+def _get_broker_host_port() -> tuple[str, int]:
+    """Return (host, port) for the broker connector.
 
     Priority:
       1. Persisted Redis settings (saved via Settings → Services UI)
-      2. ``NT_BRIDGE_HOST`` / ``NT_BRIDGE_PORT`` environment variables
-      3. Hard-coded defaults (100.127.182.112 / 5680)
+      2. ``TV_BROKER_HOST`` / ``TV_BROKER_PORT`` environment variables
+      3. Hard-coded defaults
     """
     try:
         from lib.core.cache import cache_get
@@ -82,12 +88,13 @@ def _get_bridge_host_port() -> tuple[str, int]:
 
             data = _json.loads(raw)
             svc = data.get("services", {})
-            host = svc.get("bridge_host") or _BRIDGE_HOST_DEFAULT
-            port = int(svc.get("bridge_port") or _BRIDGE_PORT_DEFAULT)
+            # Check new TV keys first, fall back to legacy bridge keys
+            host = svc.get("tv_broker_host") or svc.get("bridge_host") or _BROKER_HOST_DEFAULT
+            port = int(svc.get("tv_broker_port") or svc.get("bridge_port") or _BROKER_PORT_DEFAULT)
             return host, port
     except Exception:
         pass
-    return _BRIDGE_HOST_DEFAULT, _BRIDGE_PORT_DEFAULT
+    return _BROKER_HOST_DEFAULT, _BROKER_PORT_DEFAULT
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +102,10 @@ def _get_bridge_host_port() -> tuple[str, int]:
 # ---------------------------------------------------------------------------
 
 
-class NTPosition(BaseModel):
-    """A single live position pushed from NinjaTrader."""
+class Position(BaseModel):
+    """A single live position from the broker."""
 
-    symbol: str = Field(..., description="Instrument full name, e.g. 'MESZ5'")
+    symbol: str = Field(..., description="Instrument full name, e.g. 'MESZ5' or 'MGC'")
     side: str = Field(..., description="Long or Short")
     quantity: float = Field(..., description="Number of contracts")
     avgPrice: float = Field(..., description="Average fill price")
@@ -109,10 +116,10 @@ class NTPosition(BaseModel):
     lastUpdate: str | None = Field(None, description="ISO timestamp of last update")
 
 
-class NTPendingOrder(BaseModel):
-    """A working/accepted order from NinjaTrader."""
+class PendingOrder(BaseModel):
+    """A working/accepted order from the broker."""
 
-    orderId: str = Field("", description="NinjaTrader order ID")
+    orderId: str = Field("", description="Broker order ID")
     name: str = Field("", description="Order name/label")
     instrument: str = Field("", description="Instrument full name")
     action: str = Field("", description="Buy, Sell, SellShort, BuyToCover")
@@ -123,76 +130,79 @@ class NTPendingOrder(BaseModel):
     state: str = Field("", description="Order state: Working, Accepted, etc.")
 
 
-class NTPositionsPayload(BaseModel):
-    """Payload pushed by the Bridge NinjaTrader strategy (v2).
+class PositionsPayload(BaseModel):
+    """Payload pushed by a broker connector (TradingView/Tradovate, etc.).
 
-    Bridge v2 adds: cashBalance, realizedPnL, pendingOrders,
-    totalUnrealizedPnL, riskBlocked, riskBlockReason, bridge_version.
+    Fields are broker-agnostic; any connector that pushes positions should
+    conform to this schema.
     """
 
-    account: str = Field(..., description="NinjaTrader account name, e.g. 'Sim101'")
-    positions: list[NTPosition] = Field(default_factory=list, description="List of open positions")
-    pendingOrders: list[NTPendingOrder] = Field(default_factory=list, description="Working/accepted orders")
-    timestamp: str | None = Field(None, description="UTC timestamp from NT")
+    account: str = Field(..., description="Broker account name, e.g. 'Tradovate-Sim101'")
+    positions: list[Position] = Field(default_factory=list, description="List of open positions")
+    pendingOrders: list[PendingOrder] = Field(default_factory=list, description="Working/accepted orders")
+    timestamp: str | None = Field(None, description="UTC timestamp from broker")
     cashBalance: float = Field(0.0, description="Account cash balance")
     realizedPnL: float = Field(0.0, description="Today's realized P&L")
     totalUnrealizedPnL: float = Field(0.0, description="Sum of all unrealized P&L")
-    riskBlocked: bool = Field(False, description="True if Bridge risk enforcement is blocking new trades")
+    riskBlocked: bool = Field(False, description="True if broker-side risk enforcement is blocking new trades")
     riskBlockReason: str = Field("", description="Reason for risk block (if any)")
-    bridge_version: str = Field("1.0", description="Bridge version string")
+    broker_version: str = Field("1.0", description="Broker connector version string")
+    source: str = Field("unknown", description="Source identifier: 'tradingview', 'tradovate', etc.")
 
 
-class NTHeartbeatPayload(BaseModel):
-    """Lightweight heartbeat from the Bridge strategy."""
+class HeartbeatPayload(BaseModel):
+    """Lightweight heartbeat from the broker connector."""
 
-    account: str = Field(..., description="NinjaTrader account name")
-    state: str = Field("", description="Strategy state (e.g. Realtime)")
+    account: str = Field(..., description="Broker account name")
+    state: str = Field("", description="Connection state (e.g. Realtime, Connected)")
     connected: bool = Field(True, description="Whether the account is connected")
     positions: int = Field(0, description="Number of open positions")
     cashBalance: float = Field(0.0, description="Account cash balance")
     riskBlocked: bool = Field(False, description="Whether risk enforcement is blocking")
-    bridge_version: str = Field("1.0", description="Bridge version")
-    listenerPort: int = Field(8080, description="Bridge HTTP listener port")
+    broker_version: str = Field("1.0", description="Broker connector version")
+    listenerPort: int = Field(0, description="Broker connector listener port (if applicable)")
     timestamp: str | None = Field(None, description="UTC timestamp")
+    source: str = Field("unknown", description="Source identifier: 'tradingview', 'tradovate', etc.")
 
 
-class NTPositionsResponse(BaseModel):
+class PositionsResponse(BaseModel):
     """Response returned by GET /."""
 
     account: str = ""
-    positions: list[NTPosition] = []
+    positions: list[Position] = []
     timestamp: str = ""
     received_at: str = ""
     has_positions: bool = False
     total_unrealized_pnl: float = 0.0
     cash_balance: float = 0.0
     realized_pnl: float = 0.0
-    pending_orders: list[NTPendingOrder] = []
-    bridge_connected: bool = False
-    bridge_version: str = ""
+    pending_orders: list[PendingOrder] = []
+    broker_connected: bool = False
+    broker_version: str = ""
+    source: str = ""
 
 
 class ExecuteSignalRequest(BaseModel):
-    """Request body for sending a trade signal to NinjaTrader via the Bridge."""
+    """Request body for sending a trade signal to the broker."""
 
     direction: str = Field(..., description="'long' or 'short'")
-    quantity: int = Field(1, ge=1, description="Number of contracts (will be risk-sized by Bridge)")
+    quantity: int = Field(1, ge=1, description="Number of contracts (will be risk-sized by broker)")
     order_type: str = Field("market", description="'market', 'limit', or 'stop'")
     limit_price: float = Field(0.0, description="Limit price (for limit/stop orders)")
-    stop_loss: float = Field(0.0, description="Exact stop loss price (0 = use Bridge default)")
-    take_profit: float = Field(0.0, description="Exact take profit price (0 = use Bridge default)")
+    stop_loss: float = Field(0.0, description="Exact stop loss price (0 = use broker default)")
+    take_profit: float = Field(0.0, description="Exact take profit price (0 = use broker default)")
     tp2: float = Field(0.0, description="Second take profit target (0 = none)")
     strategy: str = Field("", description="Strategy name for logging")
     asset: str = Field("", description="Asset name for logging")
     signal_id: str = Field("", description="Unique signal ID for tracking (auto-generated if empty)")
     enforce_risk: bool = Field(
         True,
-        description="If True, run a pre-flight risk check before forwarding to Bridge",
+        description="If True, run a pre-flight risk check before forwarding to broker",
     )
 
 
 class FlattenRequest(BaseModel):
-    """Request body for flattening all positions via the Bridge."""
+    """Request body for flattening all positions."""
 
     reason: str = Field("dashboard", description="Reason for flattening (for audit trail)")
 
@@ -203,30 +213,42 @@ class FlattenRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Helper: forward HTTP requests to the NinjaTrader Bridge listener
+# Helper: forward HTTP requests to the broker connector
 # ---------------------------------------------------------------------------
 
 
-def _get_bridge_url() -> str:
-    """Return the base URL for the NinjaTrader Bridge HTTP listener.
+def _get_broker_url() -> str:
+    """Return the base URL for the broker connector.
 
     Host is always resolved from persisted Redis settings (Settings UI) or
-    env-var fallback via ``_get_bridge_host_port()``.  Port is then
+    env-var fallback via ``_get_broker_host_port()``.  Port is then
     cross-checked against the ``listenerPort`` field in the latest heartbeat
-    so that a Bridge restart on a different port is picked up automatically.
+    so that a connector restart on a different port is picked up automatically.
+
+    If no explicit host/port is configured but a heartbeat is present with
+    a ``listenerPort``, we fall back to ``localhost`` — the broker connector
+    is assumed to be local when it sends heartbeats without an explicit host.
     """
-    host, port = _get_bridge_host_port()
+    host, port = _get_broker_host_port()
     try:
         raw = cache_get(_HEARTBEAT_CACHE_KEY)
         if raw:
             hb = json.loads(raw)
-            port = hb.get("listenerPort", port)
+            hb_port = hb.get("listenerPort", 0)
+            if hb_port:
+                port = hb_port
+            # If no host is explicitly configured but a heartbeat exists
+            # with a listenerPort, assume the broker is on localhost.
+            if not host and port:
+                host = "localhost"
     except Exception:
         pass
+    if not host or not port:
+        return ""
     return f"http://{host}:{port}"
 
 
-def _is_bridge_alive() -> bool:
+def _is_broker_alive() -> bool:
     """Check whether we've received a heartbeat recently."""
     try:
         raw = cache_get(_HEARTBEAT_CACHE_KEY)
@@ -243,20 +265,26 @@ def _is_bridge_alive() -> bool:
         return False
 
 
+# Legacy aliases — other modules may import these names
+_is_bridge_alive = _is_broker_alive
+_get_bridge_url = _get_broker_url
+_get_bridge_host_port = _get_broker_host_port
+
+
 # ---------------------------------------------------------------------------
-# Endpoints — NinjaTrader → Python (push)
+# Endpoints — Broker → Python (push)
 # ---------------------------------------------------------------------------
 
 
 @router.post("/update")
-def update_positions(payload: NTPositionsPayload):
-    """Receive live position snapshot from NinjaTrader's Bridge strategy.
+def update_positions(payload: PositionsPayload):
+    """Receive live position snapshot from a broker connector.
 
-    The Bridge POSTs here on every position change (open, close,
-    partial fill, P&L tick).  Bridge v2 also sends account balance,
-    realized P&L, pending orders, and risk-block state.
+    The broker connector POSTs here on every position change (open, close,
+    partial fill, P&L tick).  Also sends account balance, realized P&L,
+    pending orders, and risk-block state.
 
-    The response includes risk evaluation fields so the Bridge
+    The response includes risk evaluation fields so the broker connector
     knows immediately if any risk limits have been reached.
     """
     received_at = datetime.now(tz=_EST).isoformat()
@@ -275,7 +303,8 @@ def update_positions(payload: NTPositionsPayload):
         "totalUnrealizedPnL": payload.totalUnrealizedPnL,
         "riskBlocked": payload.riskBlocked,
         "riskBlockReason": payload.riskBlockReason,
-        "bridge_version": payload.bridge_version,
+        "broker_version": payload.broker_version,
+        "source": payload.source,
     }
 
     cache_set(
@@ -288,12 +317,12 @@ def update_positions(payload: NTPositionsPayload):
     open_count = len([p for p in payload.positions if p.quantity > 0])
 
     logger.info(
-        "Position update: account=%s positions=%d total_pnl=%.2f balance=%.2f bridge=%s",
+        "Position update: account=%s positions=%d total_pnl=%.2f balance=%.2f source=%s",
         payload.account,
         open_count,
         total_pnl,
         payload.cashBalance,
-        payload.bridge_version,
+        payload.source,
     )
 
     # --- Risk evaluation ---
@@ -326,17 +355,16 @@ def update_positions(payload: NTPositionsPayload):
 
 
 @router.post("/heartbeat")
-def receive_heartbeat(payload: NTHeartbeatPayload):
-    """Receive a keep-alive heartbeat from the NinjaTrader Bridge.
+def receive_heartbeat(payload: HeartbeatPayload):
+    """Receive a keep-alive heartbeat from the broker connector.
 
-    The Bridge sends this every ~15 seconds so the dashboard knows
-    the connection is alive even when there are no position changes.
-    The heartbeat also carries the Bridge's listener port so the
+    The connector sends this periodically so the dashboard knows the
+    connection is alive even when there are no position changes.  The
+    heartbeat also carries the connector's listener port so the
     execute/flatten proxy endpoints know where to forward requests.
 
-    Also triggers a background probe of Bridge /status to keep the
-    cached rich status (rubyAttached, signalBusActive) fresh for
-    the NT8 health indicators.
+    Also triggers a background probe of broker /status to keep the
+    cached rich status fresh for the health indicators.
     """
     received_at = datetime.now(tz=_EST).isoformat()
 
@@ -347,10 +375,11 @@ def receive_heartbeat(payload: NTHeartbeatPayload):
         "positions": payload.positions,
         "cashBalance": payload.cashBalance,
         "riskBlocked": payload.riskBlocked,
-        "bridge_version": payload.bridge_version,
+        "broker_version": payload.broker_version,
         "listenerPort": payload.listenerPort,
         "received_at": received_at,
         "timestamp": payload.timestamp or received_at,
+        "source": payload.source,
     }
 
     cache_set(
@@ -360,17 +389,15 @@ def receive_heartbeat(payload: NTHeartbeatPayload):
     )
 
     logger.debug(
-        "Bridge heartbeat: account=%s state=%s positions=%d port=%d",
+        "Broker heartbeat: account=%s state=%s positions=%d source=%s",
         payload.account,
         payload.state,
         payload.positions,
-        payload.listenerPort,
+        payload.source,
     )
 
-    # Probe Bridge /status in-band to keep cached rich status fresh
-    # (rubyAttached, signalBusActive, signalBusPending, etc.)
-    # This is lightweight — Bridge /status is a local HTTP call.
-    _probe_bridge_status()
+    # Probe broker /status in-band to keep cached rich status fresh
+    _probe_broker_status()
 
     return {
         "status": "ok",
@@ -379,24 +406,24 @@ def receive_heartbeat(payload: NTHeartbeatPayload):
 
 
 # ---------------------------------------------------------------------------
-# Endpoints — Python → NinjaTrader (proxy to Bridge listener)
+# Endpoints — Python → Broker (proxy to broker connector)
 # ---------------------------------------------------------------------------
 
 
 @router.post("/execute")
 def execute_signal(req: ExecuteSignalRequest):
-    """Send a trade signal to NinjaTrader via the Bridge's HTTP listener.
+    """Send a trade signal to the broker via its HTTP connector.
 
     This is the primary way the web dashboard triggers order execution.
-    The signal is forwarded to the Bridge's ``/execute_signal`` endpoint,
-    which queues it for main-thread execution inside NinjaTrader.
+    The signal is forwarded to the broker's ``/execute_signal`` endpoint,
+    which queues it for execution.
 
     Optionally runs a pre-flight risk check before forwarding.
     """
-    if not _is_bridge_alive():
+    if not _is_broker_alive():
         raise HTTPException(
             status_code=503,
-            detail="NinjaTrader Bridge is not connected (no recent heartbeat)",
+            detail="Broker connector is not connected (no recent heartbeat)",
         )
 
     # --- Optional pre-flight risk check ---
@@ -418,142 +445,164 @@ def execute_signal(req: ExecuteSignalRequest):
         except Exception as exc:
             logger.debug("Pre-flight risk check unavailable (non-fatal): %s", exc)
 
-    # --- Forward to NinjaTrader Bridge ---
-    bridge_url = _get_bridge_url()
+    # --- Forward to broker connector ---
+    broker_url = _get_broker_url()
+    if not broker_url:
+        raise HTTPException(
+            status_code=503,
+            detail="Broker connector URL is not configured (set TV_BROKER_HOST/TV_BROKER_PORT)",
+        )
+
     signal_payload = req.model_dump()
 
     try:
-        with httpx.Client(timeout=_BRIDGE_TIMEOUT) as client:
-            resp = client.post(f"{bridge_url}/execute_signal", json=signal_payload)
+        with httpx.Client(timeout=_BROKER_TIMEOUT) as client:
+            resp = client.post(f"{broker_url}/execute_signal", json=signal_payload)
             resp.raise_for_status()
             result = resp.json()
-            result["forwarded_to"] = bridge_url
+            result["forwarded_to"] = broker_url
             return result
     except httpx.ConnectError as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"Cannot connect to NinjaTrader Bridge at {bridge_url}",
+            detail=f"Cannot connect to broker at {broker_url}",
         ) from exc
     except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=504,
-            detail=f"NinjaTrader Bridge at {bridge_url} timed out",
+            detail=f"Broker at {broker_url} timed out",
         ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Bridge communication error: {exc}",
+            detail=f"Broker communication error: {exc}",
         ) from exc
 
 
 @router.post("/flatten")
 def flatten_all(req: FlattenRequest):
-    """Flatten all positions by forwarding to the Bridge's /flatten endpoint.
+    """Flatten all positions by forwarding to the broker's /flatten endpoint.
 
     Closes all open positions at market and cancels all working orders.
     """
-    if not _is_bridge_alive():
+    if not _is_broker_alive():
         raise HTTPException(
             status_code=503,
-            detail="NinjaTrader Bridge is not connected (no recent heartbeat)",
+            detail="Broker connector is not connected (no recent heartbeat)",
         )
 
-    bridge_url = _get_bridge_url()
+    broker_url = _get_broker_url()
+    if not broker_url:
+        raise HTTPException(
+            status_code=503,
+            detail="Broker connector URL is not configured",
+        )
 
     try:
-        with httpx.Client(timeout=_BRIDGE_TIMEOUT) as client:
+        with httpx.Client(timeout=_BROKER_TIMEOUT) as client:
             resp = client.post(
-                f"{bridge_url}/flatten",
+                f"{broker_url}/flatten",
                 json={"reason": req.reason},
             )
             resp.raise_for_status()
             result = resp.json()
-            result["forwarded_to"] = bridge_url
-            logger.warning("🔴 FLATTEN ALL sent to Bridge — reason: %s", req.reason)
+            result["forwarded_to"] = broker_url
+            logger.warning("🔴 FLATTEN ALL sent to broker — reason: %s", req.reason)
             return result
     except httpx.ConnectError as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"Cannot connect to NinjaTrader Bridge at {bridge_url}",
+            detail=f"Cannot connect to broker at {broker_url}",
         ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Bridge communication error: {exc}",
+            detail=f"Broker communication error: {exc}",
         ) from exc
 
 
 @router.post("/cancel_orders")
 def cancel_orders():
-    """Cancel all working orders by forwarding to the Bridge's /cancel_orders endpoint."""
-    if not _is_bridge_alive():
+    """Cancel all working orders by forwarding to the broker's /cancel_orders endpoint."""
+    if not _is_broker_alive():
         raise HTTPException(
             status_code=503,
-            detail="NinjaTrader Bridge is not connected (no recent heartbeat)",
+            detail="Broker connector is not connected (no recent heartbeat)",
         )
 
-    bridge_url = _get_bridge_url()
+    broker_url = _get_broker_url()
+    if not broker_url:
+        raise HTTPException(
+            status_code=503,
+            detail="Broker connector URL is not configured",
+        )
 
     try:
-        with httpx.Client(timeout=_BRIDGE_TIMEOUT) as client:
-            resp = client.post(f"{bridge_url}/cancel_orders")
+        with httpx.Client(timeout=_BROKER_TIMEOUT) as client:
+            resp = client.post(f"{broker_url}/cancel_orders")
             resp.raise_for_status()
             result = resp.json()
-            result["forwarded_to"] = bridge_url
-            logger.info("Cancel all orders sent to Bridge")
+            result["forwarded_to"] = broker_url
+            logger.info("Cancel all orders sent to broker")
             return result
     except httpx.ConnectError as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"Cannot connect to NinjaTrader Bridge at {bridge_url}",
+            detail=f"Cannot connect to broker at {broker_url}",
         ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Bridge communication error: {exc}",
+            detail=f"Broker communication error: {exc}",
         ) from exc
 
 
-def _probe_bridge_status() -> dict[str, Any]:
-    """Fetch Bridge /status and cache the result for health indicators.
+def _probe_broker_status() -> dict[str, Any]:
+    """Fetch broker /status and cache the result for health indicators.
 
-    Called by get_bridge_status() and can also be called by the
-    NT8 health endpoint to ensure fresh data.  Returns the parsed
+    Called by get_broker_status() and can also be called by the
+    health endpoint to ensure fresh data.  Returns the parsed
     JSON dict or {} on failure.
     """
-    if not _is_bridge_alive():
+    if not _is_broker_alive():
         return {}
 
-    bridge_url = _get_bridge_url()
-    bridge_status: dict[str, Any] = {}
-    try:
-        with httpx.Client(timeout=_BRIDGE_TIMEOUT) as client:
-            resp = client.get(f"{bridge_url}/status")
-            resp.raise_for_status()
-            bridge_status = resp.json()
+    broker_url = _get_broker_url()
+    if not broker_url:
+        return {}
 
-        # Cache the rich status so NT8 health indicators can read
-        # rubyAttached, signalBusActive, signalBusPending, etc.
+    broker_status: dict[str, Any] = {}
+    try:
+        with httpx.Client(timeout=_BROKER_TIMEOUT) as client:
+            resp = client.get(f"{broker_url}/status")
+            resp.raise_for_status()
+            broker_status = resp.json()
+
+        # Cache the rich status so health indicators can read it
         cache_set(
-            _BRIDGE_STATUS_CACHE_KEY,
-            json.dumps(bridge_status).encode(),
-            _BRIDGE_STATUS_TTL,
+            _BROKER_STATUS_CACHE_KEY,
+            json.dumps(broker_status).encode(),
+            _BROKER_STATUS_TTL,
         )
     except Exception as exc:
-        logger.debug("Could not fetch Bridge /status: %s", exc)
+        logger.debug("Could not fetch broker /status: %s", exc)
 
-    return bridge_status
+    return broker_status
 
 
-@router.get("/bridge_status")
-def get_bridge_status():
-    """Read the NinjaTrader Bridge's /status endpoint.
+# Legacy alias used by nt8_deploy.py and other modules
+_probe_bridge_status = _probe_broker_status
+
+
+@router.get("/broker_status")
+def get_broker_status():
+    """Read the broker connector's /status endpoint.
 
     Returns account info, position count, balance, risk state,
-    and Bridge configuration.  Also includes heartbeat age to
+    and connector configuration.  Also includes heartbeat age to
     indicate connection freshness.
     """
-    # Return cached heartbeat data + live status if Bridge is reachable
+    # Return cached heartbeat data + live status if broker is reachable
     heartbeat_data = {}
     try:
         raw = cache_get(_HEARTBEAT_CACHE_KEY)
@@ -562,44 +611,65 @@ def get_bridge_status():
     except Exception:
         pass
 
-    bridge_alive = _is_bridge_alive()
-    bridge_status = _probe_bridge_status() if bridge_alive else {}
+    broker_alive = _is_broker_alive()
+    broker_status = _probe_broker_status() if broker_alive else {}
 
     return {
-        "bridge_alive": bridge_alive,
+        "broker_alive": broker_alive,
         "heartbeat": heartbeat_data,
-        "live_status": bridge_status,
-        "bridge_url": _get_bridge_url(),
+        "live_status": broker_status,
+        "broker_url": _get_broker_url(),
         "timestamp": datetime.now(tz=_EST).isoformat(),
     }
 
 
-@router.get("/bridge_orders")
-def get_bridge_orders():
-    """Read the NinjaTrader Bridge's /orders endpoint.
+# Legacy alias — some dashboard code may reference "bridge_status"
+@router.get("/bridge_status")
+def get_bridge_status():
+    """Legacy alias for broker_status (backward compat)."""
+    return get_broker_status()
+
+
+@router.get("/broker_orders")
+def get_broker_orders():
+    """Read the broker connector's /orders endpoint.
 
     Returns recent order events (fills, rejects, cancellations)
-    tracked by the Bridge for audit and display on the dashboard.
+    tracked by the connector for audit and display on the dashboard.
     """
-    if not _is_bridge_alive():
+    if not _is_broker_alive():
         return {
-            "bridge_alive": False,
+            "broker_alive": False,
             "events": [],
-            "error": "NinjaTrader Bridge is not connected",
+            "error": "Broker connector is not connected",
         }
 
-    bridge_url = _get_bridge_url()
+    broker_url = _get_broker_url()
+    if not broker_url:
+        return {
+            "broker_alive": False,
+            "events": [],
+            "error": "Broker connector URL is not configured",
+        }
+
     try:
-        with httpx.Client(timeout=_BRIDGE_TIMEOUT) as client:
-            resp = client.get(f"{bridge_url}/orders")
+        with httpx.Client(timeout=_BROKER_TIMEOUT) as client:
+            resp = client.get(f"{broker_url}/orders")
             resp.raise_for_status()
             return resp.json()
     except Exception as exc:
         return {
-            "bridge_alive": True,
+            "broker_alive": True,
             "events": [],
             "error": f"Could not fetch orders: {exc}",
         }
+
+
+# Legacy alias
+@router.get("/bridge_orders")
+def get_bridge_orders():
+    """Legacy alias for broker_orders (backward compat)."""
+    return get_broker_orders()
 
 
 # ---------------------------------------------------------------------------
@@ -607,28 +677,25 @@ def get_bridge_orders():
 # ---------------------------------------------------------------------------
 
 
-@router.get("/", response_model=NTPositionsResponse)
+@router.get("/", response_model=PositionsResponse)
 def get_positions():
-    """Get current live positions from NinjaTrader.
+    """Get current live positions from the broker.
 
-    Returns the most recent position snapshot pushed by the
-    Bridge strategy.  If no data has been received (or the cache
-    has expired), returns an empty response.
-
-    Bridge v2 payloads include account balance, realized P&L,
-    and pending orders alongside the position list.
+    Returns the most recent position snapshot pushed by the broker
+    connector.  If no data has been received (or the cache has
+    expired), returns an empty response.
     """
     raw = cache_get(_POSITIONS_CACHE_KEY)
     if raw is None:
-        return NTPositionsResponse()
+        return PositionsResponse()
 
     try:
         data = json.loads(raw.decode())
-        positions = [NTPosition(**p) for p in data.get("positions", [])]
-        pending = [NTPendingOrder(**o) for o in data.get("pendingOrders", [])]
+        positions = [Position(**p) for p in data.get("positions", [])]
+        pending = [PendingOrder(**o) for o in data.get("pendingOrders", [])]
         total_pnl = sum(p.unrealizedPnL for p in positions)
 
-        return NTPositionsResponse(
+        return PositionsResponse(
             account=data.get("account", ""),
             positions=positions,
             timestamp=data.get("timestamp", ""),
@@ -638,19 +705,20 @@ def get_positions():
             cash_balance=data.get("cashBalance", 0.0),
             realized_pnl=data.get("realizedPnL", 0.0),
             pending_orders=pending,
-            bridge_connected=_is_bridge_alive(),
-            bridge_version=data.get("bridge_version", ""),
+            broker_connected=_is_broker_alive(),
+            broker_version=data.get("broker_version", data.get("bridge_version", "")),
+            source=data.get("source", ""),
         )
     except Exception as exc:
         logger.error("Failed to parse cached positions: %s", exc)
-        return NTPositionsResponse()
+        return PositionsResponse()
 
 
 @router.delete("/")
 def clear_positions():
     """Clear cached live positions and heartbeat (e.g. end of day reset).
 
-    Useful when NinjaTrader is closed but stale position data
+    Useful when the broker is closed but stale position data
     remains in cache.
     """
     keys_to_clear = [_POSITIONS_CACHE_KEY, _HEARTBEAT_CACHE_KEY]
@@ -677,12 +745,16 @@ def clear_positions():
 
 
 def get_live_positions() -> dict[str, Any]:
-    """Read the latest NinjaTrader positions from cache.
+    """Read the latest positions from cache.
 
     Returns a dict with keys: account, positions (list of dicts),
     timestamp, received_at, has_positions, total_unrealized_pnl,
-    cash_balance, realized_pnl, pending_orders, bridge_connected,
-    bridge_version.
+    cash_balance, realized_pnl, pending_orders, broker_connected,
+    broker_version, source.
+
+    Also provides legacy ``bridge_connected`` and ``bridge_version``
+    keys for backward compatibility with dashboard code that hasn't
+    been updated yet.
 
     Importable by other modules without going through HTTP.
     """
@@ -698,14 +770,19 @@ def get_live_positions() -> dict[str, Any]:
             "cash_balance": 0.0,
             "realized_pnl": 0.0,
             "pending_orders": [],
+            "broker_connected": False,
+            "broker_version": "",
             "bridge_connected": False,
             "bridge_version": "",
+            "source": "",
         }
 
     try:
         data = json.loads(raw.decode())
         positions = data.get("positions", [])
         total_pnl = sum(p.get("unrealizedPnL", 0) for p in positions)
+        broker_conn = _is_broker_alive()
+        broker_ver = data.get("broker_version", data.get("bridge_version", ""))
         return {
             "account": data.get("account", ""),
             "positions": positions,
@@ -716,8 +793,12 @@ def get_live_positions() -> dict[str, Any]:
             "cash_balance": data.get("cashBalance", 0.0),
             "realized_pnl": data.get("realizedPnL", 0.0),
             "pending_orders": data.get("pendingOrders", []),
-            "bridge_connected": _is_bridge_alive(),
-            "bridge_version": data.get("bridge_version", ""),
+            "broker_connected": broker_conn,
+            "broker_version": broker_ver,
+            # Legacy aliases for backward compat
+            "bridge_connected": broker_conn,
+            "bridge_version": broker_ver,
+            "source": data.get("source", ""),
         }
     except Exception:
         return {
@@ -730,6 +811,21 @@ def get_live_positions() -> dict[str, Any]:
             "cash_balance": 0.0,
             "realized_pnl": 0.0,
             "pending_orders": [],
+            "broker_connected": False,
+            "broker_version": "",
             "bridge_connected": False,
             "bridge_version": "",
+            "source": "",
         }
+
+
+# ---------------------------------------------------------------------------
+# Backward compatibility — old class names used by test_bridge_trading.py
+# and any other code that imported from the old NT8-specific module.
+# These are thin aliases so existing imports don't break.
+# ---------------------------------------------------------------------------
+NTPosition = Position
+NTPendingOrder = PendingOrder
+NTPositionsPayload = PositionsPayload
+NTHeartbeatPayload = HeartbeatPayload
+NTPositionsResponse = PositionsResponse

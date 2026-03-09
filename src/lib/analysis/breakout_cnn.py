@@ -101,8 +101,13 @@ except ImportError:
 # Ordered list of tabular feature names expected by the model.
 # The dataset and inference code must provide them in exactly this order.
 #
-# v7 contract (24 features) — extends v6's 18 features with 6 new slots
-# from the Daily Strategy layer and crypto momentum analysis.
+# v8 contract (37 features) — extends v7.1's 28 features with 9 new slots
+# from cross-asset correlation (Phase v8-B) and asset fingerprint (Phase v8-C).
+# Slots [13] asset_class_id and [15] asset_volatility_class are still present
+# in the tabular vector for backward compat, but v8 models also receive
+# asset_class_idx and asset_idx as separate integer IDs routed to nn.Embedding
+# layers (Phase v8-A).
+#
 # Aligns with NinjaTrader BreakoutStrategy PrepareCnnTabular() and
 # OrbCnnPredictor.NormaliseTabular() in C#.
 # This is the canonical contract for Python training and NT8 inference.
@@ -140,6 +145,17 @@ except ImportError:
 #  [25]  session_overlap_flag    1.0 if London+NY overlap window, else 0.0
 #  [26]  atr_trend               ATR expanding=1.0, contracting=0.0 (10-bar)
 #  [27]  volume_trend            5-bar volume slope, normalised [0, 1]
+#  ── v8-B additions (slots 28–30) — Cross-Asset Correlation features ─────
+#  [28]  primary_peer_corr       Pearson r with primary peer, [-1,1] → [0,1]
+#  [29]  cross_class_corr        strongest cross-class corr mag, [-1,1] → [0,1]
+#  [30]  correlation_regime      0.0=broken, 0.5=normal, 1.0=elevated
+#  ── v8-C additions (slots 31–36) — Asset Fingerprint features ───────────
+#  [31]  typical_daily_range_norm  median daily range / ATR, clamped [0, 1]
+#  [32]  session_concentration   dominant session fraction [0, 1]
+#  [33]  breakout_follow_through trailing 20-day breakout win rate [0, 1]
+#  [34]  hurst_exponent          mean-reversion tendency [0, 1]
+#  [35]  overnight_gap_tendency  median overnight gap / ATR, clamped [0, 1]
+#  [36]  volume_profile_shape    volume regularity score [0, 1]
 TABULAR_FEATURES: list[str] = [
     "quality_pct_norm",  # [0]  quality / 100
     "volume_ratio",  # [1]  breakout bar vol / avg vol
@@ -172,14 +188,26 @@ TABULAR_FEATURES: list[str] = [
     "session_overlap_flag",  # [25] 1.0 if London+NY overlap
     "atr_trend",  # [26] expanding=1.0, contracting=0.0
     "volume_trend",  # [27] 5-bar vol slope [0, 1]
+    # ── v8-B additions — Cross-Asset Correlation features ────────────────
+    "primary_peer_corr",  # [28] peer correlation [0, 1]
+    "cross_class_corr",  # [29] cross-class correlation [0, 1]
+    "correlation_regime",  # [30] regime: broken/normal/elevated
+    # ── v8-C additions — Asset Fingerprint features ──────────────────────
+    "typical_daily_range_norm",  # [31] daily range / ATR [0, 1]
+    "session_concentration",  # [32] dominant session frac [0, 1]
+    "breakout_follow_through",  # [33] trailing win rate [0, 1]
+    "hurst_exponent",  # [34] mean-reversion [0, 1]
+    "overnight_gap_tendency",  # [35] gap / ATR [0, 1]
+    "volume_profile_shape",  # [36] volume regularity [0, 1]
 ]
 
 NUM_TABULAR = len(TABULAR_FEATURES)
 
 # Feature contract version — must match NinjaTrader BreakoutStrategy.
-# v7.1 adds 4 sub-features (Phase 4B): breakout_type_category,
-# session_overlap_flag, atr_trend, volume_trend.
-FEATURE_CONTRACT_VERSION = 7
+# v8 adds hierarchical asset embeddings (Phase v8-A), 3 cross-asset
+# correlation features (Phase v8-B), 6 asset fingerprint features
+# (Phase v8-C), and architecture upgrades (Phase v8-D).
+FEATURE_CONTRACT_VERSION = 8
 
 # Asset class ordinal map — mirrors GetAssetClassNorm() in BreakoutStrategy.cs.
 # 0=equity_index, 1=fx, 2=metals_energy, 3=treasuries_ags, 4=crypto
@@ -1036,7 +1064,7 @@ if _TORCH_AVAILABLE:
             if self.transform:
                 img = self.transform(img)
 
-            # ── Tabular features v6 — 18 features matching C# PrepareCnnTabular ──
+            # ── Tabular features v8 — 37 features matching feature_contract v8 ──
             #
             # Raw values are normalised here using the same transforms as
             # OrbCnnPredictor.NormaliseTabular() in BreakoutStrategy.cs so that
@@ -1142,6 +1170,33 @@ if _TORCH_AVAILABLE:
             except (ValueError, TypeError):
                 pass
 
+            # ── v7 features (slots 18–23) — read from CSV or default ─────
+            _daily_bias_dir = max(0.0, min(1.0, float(row.get("daily_bias_direction", 0.5))))
+            _daily_bias_conf = max(0.0, min(1.0, float(row.get("daily_bias_confidence", 0.0))))
+            _prior_day_pat = max(0.0, min(1.0, float(row.get("prior_day_pattern", 1.0))))
+            _weekly_range_pos = max(0.0, min(1.0, float(row.get("weekly_range_position", 0.5))))
+            _monthly_trend = max(0.0, min(1.0, float(row.get("monthly_trend_score", 0.5))))
+            _crypto_mom = max(0.0, min(1.0, float(row.get("crypto_momentum_score", 0.5))))
+
+            # ── v7.1 sub-features (slots 24–27) — read from CSV or default
+            _bt_category = max(0.0, min(1.0, float(row.get("breakout_type_category", 0.5))))
+            _session_overlap = max(0.0, min(1.0, float(row.get("session_overlap_flag", 0.0))))
+            _atr_trend = max(0.0, min(1.0, float(row.get("atr_trend", 0.5))))
+            _vol_trend = max(0.0, min(1.0, float(row.get("volume_trend", 0.5))))
+
+            # ── v8-B cross-asset correlation features (slots 28–30) ──────
+            _primary_peer_corr = max(0.0, min(1.0, float(row.get("primary_peer_corr", 0.5))))
+            _cross_class_corr = max(0.0, min(1.0, float(row.get("cross_class_corr", 0.5))))
+            _correlation_regime = max(0.0, min(1.0, float(row.get("correlation_regime", 0.5))))
+
+            # ── v8-C asset fingerprint features (slots 31–36) ────────────
+            _typical_daily_range_norm = max(0.0, min(1.0, float(row.get("typical_daily_range_norm", 0.5))))
+            _session_concentration = max(0.0, min(1.0, float(row.get("session_concentration", 0.5))))
+            _breakout_follow_through = max(0.0, min(1.0, float(row.get("breakout_follow_through", 0.5))))
+            _hurst_exponent = max(0.0, min(1.0, float(row.get("hurst_exponent", 0.5))))
+            _overnight_gap_tendency = max(0.0, min(1.0, float(row.get("overnight_gap_tendency", 0.5))))
+            _volume_profile_shape = max(0.0, min(1.0, float(row.get("volume_profile_shape", 0.5))))
+
             tabular = torch.tensor(
                 [
                     _qual,  # [0]  quality_pct_norm
@@ -1162,6 +1217,29 @@ if _TORCH_AVAILABLE:
                     _vol_cls,  # [15] asset_volatility_class
                     _hour_of_day,  # [16] hour_of_day
                     _tp3_mult,  # [17] tp3_atr_mult_norm
+                    # ── v7 ────────────────────────────────────────────────
+                    _daily_bias_dir,  # [18] daily_bias_direction
+                    _daily_bias_conf,  # [19] daily_bias_confidence
+                    _prior_day_pat,  # [20] prior_day_pattern
+                    _weekly_range_pos,  # [21] weekly_range_position
+                    _monthly_trend,  # [22] monthly_trend_score
+                    _crypto_mom,  # [23] crypto_momentum_score
+                    # ── v7.1 ──────────────────────────────────────────────
+                    _bt_category,  # [24] breakout_type_category
+                    _session_overlap,  # [25] session_overlap_flag
+                    _atr_trend,  # [26] atr_trend
+                    _vol_trend,  # [27] volume_trend
+                    # ── v8-B cross-asset ──────────────────────────────────
+                    _primary_peer_corr,  # [28] primary_peer_corr
+                    _cross_class_corr,  # [29] cross_class_corr
+                    _correlation_regime,  # [30] correlation_regime
+                    # ── v8-C fingerprint ──────────────────────────────────
+                    _typical_daily_range_norm,  # [31] typical_daily_range_norm
+                    _session_concentration,  # [32] session_concentration
+                    _breakout_follow_through,  # [33] breakout_follow_through
+                    _hurst_exponent,  # [34] hurst_exponent
+                    _overnight_gap_tendency,  # [35] overnight_gap_tendency
+                    _volume_profile_shape,  # [36] volume_profile_shape
                 ],
                 dtype=torch.float32,
             )
@@ -1171,22 +1249,34 @@ if _TORCH_AVAILABLE:
                 logger.warning("NaN/Inf in tabular features at row %d — zeroing", idx)
                 tabular = torch.zeros(NUM_TABULAR, dtype=torch.float32)
 
+            # ── v8-A: Embedding IDs (integer, NOT in the float tabular vector) ──
+            _asset_class_idx = get_asset_class_idx(_ticker)
+            _asset_idx = get_asset_idx(_ticker)
+
             # --- Label ---
             label_str = str(row.get("label", "bad"))
             target = 1 if label_str.startswith("good") else 0
 
-            return img, tabular, torch.tensor(target, dtype=torch.long), torch.tensor(valid, dtype=torch.bool)
+            return (
+                img,
+                tabular,
+                torch.tensor(target, dtype=torch.long),
+                torch.tensor(valid, dtype=torch.bool),
+                torch.tensor(_asset_class_idx, dtype=torch.long),
+                torch.tensor(_asset_idx, dtype=torch.long),
+            )
 
         @staticmethod
         def skip_invalid_collate(batch):
             """Custom collate_fn that drops samples flagged as invalid.
 
-            Each sample is a tuple ``(img, tabular, target, valid_flag)``.
+            Each sample is a tuple:
+              ``(img, tabular, target, valid_flag, asset_class_idx, asset_idx)``
             Only samples where ``valid_flag`` is True are kept.  If the entire
             batch is invalid we return ``None`` — the training loop must check
             for this and skip the batch.
             """
-            # batch is a list of (img, tabular, target, valid) tuples
+            # batch is a list of 6-tuples
             filtered = [s for s in batch if s[3].item()]
             if not filtered:
                 return None  # entire batch was invalid — caller must skip
@@ -1194,7 +1284,9 @@ if _TORCH_AVAILABLE:
             imgs = torch.stack([s[0] for s in filtered])
             tabs = torch.stack([s[1] for s in filtered])
             targets = torch.stack([s[2] for s in filtered])
-            return imgs, tabs, targets
+            asset_class_ids = torch.stack([s[4] for s in filtered])
+            asset_ids = torch.stack([s[5] for s in filtered])
+            return imgs, tabs, targets, asset_class_ids, asset_ids
 
 
 else:
@@ -1234,20 +1326,147 @@ NUM_BREAKOUT_TYPES = 13
 # replaces it in the combined representation.
 BREAKOUT_EMBED_DIM = 8
 
+# ---------------------------------------------------------------------------
+# v8-A: Hierarchical Asset Embedding constants
+# ---------------------------------------------------------------------------
+# 5 asset classes: equity_index=0, fx=1, metals_energy=2, bonds_ags=3, crypto=4
+NUM_ASSET_CLASSES = 5
+ASSET_CLASS_EMBED_DIM = 4
+
+# Per-symbol asset ID — one per tradeable symbol.  The embedding learns
+# each asset's "personality" from breakout outcomes end-to-end.
+ASSET_ID_LOOKUP: dict[str, int] = {
+    # Equity index (0–3)
+    "MES": 0,
+    "MNQ": 1,
+    "M2K": 2,
+    "MYM": 3,
+    # FX (4–9)
+    "6E": 4,
+    "6B": 5,
+    "6J": 6,
+    "6A": 7,
+    "6C": 8,
+    "6S": 9,
+    "M6E": 4,
+    "M6B": 5,  # micros → same embedding as full
+    # Metals / Energy (10–14)
+    "MGC": 10,
+    "SIL": 11,
+    "MHG": 12,
+    "MCL": 13,
+    "MNG": 14,
+    # Treasuries / Ags (15–19)
+    "ZN": 15,
+    "ZB": 16,
+    "ZC": 17,
+    "ZS": 18,
+    "ZW": 19,
+    # Crypto (20–24)
+    "MBT": 20,
+    "MET": 21,
+    "BTC": 20,
+    "ETH": 21,  # short aliases → same embedding
+    "SOL": 22,
+    "LINK": 22,
+    "AVAX": 22,  # alt-coins share an embedding
+    "DOT": 23,
+    "ADA": 23,
+    "MATIC": 23,
+    "XRP": 23,
+    # Kraken tickers → same as their short aliases
+    "KRAKEN:XBTUSD": 20,
+    "KRAKEN:ETHUSD": 21,
+    "KRAKEN:SOLUSD": 22,
+    "KRAKEN:LINKUSD": 22,
+    "KRAKEN:AVAXUSD": 22,
+    "KRAKEN:DOTUSD": 23,
+    "KRAKEN:ADAUSD": 23,
+    "KRAKEN:MATICUSD": 23,
+    "KRAKEN:XRPUSD": 23,
+}
+NUM_ASSETS = 25  # unique asset IDs (0–24)
+ASSET_ID_EMBED_DIM = 8
+
+# Integer asset class index (not normalised) for embedding lookup.
+# Maps the same tickers as ASSET_CLASS_ORDINALS but returns 0–4 int.
+ASSET_CLASS_IDX_LOOKUP: dict[str, int] = {
+    # Equity index → 0
+    "MES": 0,
+    "MNQ": 0,
+    "M2K": 0,
+    "MYM": 0,
+    # FX → 1
+    "6E": 1,
+    "6B": 1,
+    "6J": 1,
+    "6A": 1,
+    "6C": 1,
+    "6S": 1,
+    "M6E": 1,
+    "M6B": 1,
+    # Metals / Energy → 2
+    "MGC": 2,
+    "SIL": 2,
+    "MHG": 2,
+    "MCL": 2,
+    "MNG": 2,
+    # Treasuries / Ags → 3
+    "ZN": 3,
+    "ZB": 3,
+    "ZC": 3,
+    "ZS": 3,
+    "ZW": 3,
+    # Crypto → 4
+    "MBT": 4,
+    "MET": 4,
+    "BTC": 4,
+    "ETH": 4,
+    "SOL": 4,
+    "LINK": 4,
+    "AVAX": 4,
+    "DOT": 4,
+    "ADA": 4,
+    "MATIC": 4,
+    "XRP": 4,
+    "KRAKEN:XBTUSD": 4,
+    "KRAKEN:ETHUSD": 4,
+    "KRAKEN:SOLUSD": 4,
+    "KRAKEN:LINKUSD": 4,
+    "KRAKEN:AVAXUSD": 4,
+    "KRAKEN:DOTUSD": 4,
+    "KRAKEN:ADAUSD": 4,
+    "KRAKEN:MATICUSD": 4,
+    "KRAKEN:XRPUSD": 4,
+}
+
+
+def get_asset_class_idx(ticker: str) -> int:
+    """Return the integer asset class index (0–4) for embedding lookup."""
+    return ASSET_CLASS_IDX_LOOKUP.get(str(ticker).upper().strip(), 0)
+
+
+def get_asset_idx(ticker: str) -> int:
+    """Return the integer asset ID (0–24) for embedding lookup."""
+    return ASSET_ID_LOOKUP.get(str(ticker).upper().strip(), 0)
+
 
 if _TORCH_AVAILABLE:
 
     class HybridBreakoutCNN(nn.Module):  # type: ignore[no-redef]
-        """Hybrid image + tabular model for breakout classification (v6 contract).
+        """Hybrid image + tabular model for breakout classification (v8 contract).
 
-        Architecture:
-          Image branch:   EfficientNetV2-S (pre-trained ImageNet) → 1280-dim
-          Tabular branch: Linear(NUM_TABULAR→128) → BN → ReLU → Dropout →
-                          Linear(128→64) → BN → ReLU → Linear(64→32)
-          Classifier:     Linear(1280+32→512) → BN → ReLU → Dropout →
-                          Linear(512→128) → ReLU → Dropout → Linear(128→2)
+        Architecture (v8):
+          Image branch:     EfficientNetV2-S (pre-trained ImageNet) → 1280-dim
+          Asset embeddings: nn.Embedding(5, 4) + nn.Embedding(25, 8) → 12-dim
+          Tabular branch:   Linear(N→256) → BN → GELU → Dropout(0.3) →
+                            Linear(256→128) → BN → GELU → Linear(128→64)
+          Classifier:       Linear(1280+64+12→512) → BN → GELU → Dropout →
+                            Linear(512→128) → GELU → Dropout → Linear(128→2)
 
-        NUM_TABULAR = 18 (v6 contract, identical to C# PrepareCnnTabular).
+        NUM_TABULAR = 37 (v8 contract: v7.1 28 features + 3 cross-asset + 6 fingerprint).
+        Embedding IDs (asset_class_idx, asset_idx) are passed separately from
+        the float tabular vector.
 
         The model outputs raw logits for 2 classes:
           - Class 0: bad breakout (fail / chop)
@@ -1261,9 +1480,12 @@ if _TORCH_AVAILABLE:
             num_tabular: int = NUM_TABULAR,
             dropout: float = 0.4,
             pretrained: bool = True,
+            use_type_embedding: bool = False,  # kept for backward compat (ignored in v8)
+            use_asset_embeddings: bool = True,
         ):
             super().__init__()
             self.num_tabular = num_tabular
+            self.use_asset_embeddings = use_asset_embeddings
 
             # --- Image backbone: EfficientNetV2-S ---
             weights = models.EfficientNet_V2_S_Weights.DEFAULT if pretrained else None
@@ -1272,27 +1494,37 @@ if _TORCH_AVAILABLE:
             self.cnn = backbone
             self._cnn_out_dim = 1280
 
-            # --- Tabular branch (deeper than v5/v6, BatchNorm for stability) ---
+            # --- v8-A: Hierarchical Asset Embeddings ---
+            # These replace the flat asset_class_id [13] and asset_volatility_class [15]
+            # with learned representations.  The flat features are still in the tabular
+            # vector for backward compat, but the embeddings provide richer signal.
+            self._embed_dim = 0
+            if use_asset_embeddings:
+                self.asset_class_embedding = nn.Embedding(NUM_ASSET_CLASSES, ASSET_CLASS_EMBED_DIM)
+                self.asset_id_embedding = nn.Embedding(NUM_ASSETS, ASSET_ID_EMBED_DIM)
+                self._embed_dim = ASSET_CLASS_EMBED_DIM + ASSET_ID_EMBED_DIM  # 4 + 8 = 12
+
+            # --- v8-D: Wider tabular head with GELU (capacity for 37 features) ---
             self.tabular_head = nn.Sequential(
-                nn.Linear(num_tabular, 128),
+                nn.Linear(num_tabular, 256),
+                nn.BatchNorm1d(256),
+                nn.GELU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, 128),
                 nn.BatchNorm1d(128),
-                nn.ReLU(inplace=True),
-                nn.Dropout(0.25),
+                nn.GELU(),
                 nn.Linear(128, 64),
-                nn.BatchNorm1d(64),
-                nn.ReLU(inplace=True),
-                nn.Linear(64, 32),
             )
 
             # --- Classifier ---
-            combined_dim = self._cnn_out_dim + 32
+            combined_dim = self._cnn_out_dim + 64 + self._embed_dim
             self.classifier = nn.Sequential(
                 nn.Linear(combined_dim, 512),
                 nn.BatchNorm1d(512),
-                nn.ReLU(inplace=True),
+                nn.GELU(),
                 nn.Dropout(dropout),
                 nn.Linear(512, 128),
-                nn.ReLU(inplace=True),
+                nn.GELU(),
                 nn.Dropout(dropout * 0.5),
                 nn.Linear(128, 2),
             )
@@ -1301,21 +1533,37 @@ if _TORCH_AVAILABLE:
             self,
             image: torch.Tensor,
             tabular: torch.Tensor,
-            type_ids: torch.Tensor | None = None,  # kept for API compat, unused
+            type_ids: torch.Tensor | None = None,  # kept for API compat
+            asset_class_ids: torch.Tensor | None = None,
+            asset_ids: torch.Tensor | None = None,
         ) -> torch.Tensor:
             """Forward pass.
 
             Args:
-                image:   (B, 3, 224, 224) normalised image tensor.
-                tabular: (B, NUM_TABULAR) float tensor — v6 18-feature vector.
-                type_ids: ignored (kept for backward API compatibility).
+                image:           (B, 3, 224, 224) normalised image tensor.
+                tabular:         (B, NUM_TABULAR) float tensor — v8 37-feature vector.
+                type_ids:        ignored (kept for backward API compatibility).
+                asset_class_ids: (B,) int tensor — asset class indices (0–4).
+                asset_ids:       (B,) int tensor — per-symbol asset indices (0–24).
 
             Returns:
                 (B, 2) logits tensor.
             """
             img_features = self.cnn(image)  # (B, 1280)
-            tab_features = self.tabular_head(tabular)  # (B, 32)
-            combined = torch.cat([img_features, tab_features], dim=1)  # (B, 1312)
+            tab_features = self.tabular_head(tabular)  # (B, 64)
+
+            # Asset embeddings — concatenate if available
+            if self.use_asset_embeddings and asset_class_ids is not None and asset_ids is not None:
+                class_emb = self.asset_class_embedding(asset_class_ids)  # (B, 4)
+                asset_emb = self.asset_id_embedding(asset_ids)  # (B, 8)
+                combined = torch.cat([img_features, tab_features, class_emb, asset_emb], dim=1)
+            else:
+                combined = torch.cat([img_features, tab_features], dim=1)
+                # Pad to expected classifier input dim if embeddings are in the architecture
+                if self._embed_dim > 0:
+                    pad = torch.zeros(combined.size(0), self._embed_dim, device=combined.device)
+                    combined = torch.cat([combined, pad], dim=1)
+
             return self.classifier(combined)  # (B, 2)
 
         def freeze_backbone(self) -> None:
@@ -1343,6 +1591,10 @@ else:
 
         def unfreeze_backbone(self) -> None:
             raise RuntimeError("PyTorch is not installed")
+
+        @property
+        def use_asset_embeddings(self) -> bool:
+            return False
 
 
 # ---------------------------------------------------------------------------
@@ -1414,37 +1666,56 @@ def _safe_num_workers(requested: int) -> int:
 def train_model(
     data_csv: str,
     val_csv: str | None = None,
-    epochs: int = 8,
-    batch_size: int = 32,
-    lr: float = 3e-4,
-    weight_decay: float = 1e-5,
-    freeze_epochs: int = 2,
+    epochs: int = 80,
+    batch_size: int = 64,
+    lr: float = 2e-4,
+    weight_decay: float = 1e-4,
+    freeze_epochs: int = 5,
     model_dir: str = DEFAULT_MODEL_DIR,
     image_root: str | None = None,
     num_workers: int = 4,
     save_best: bool = True,
+    patience: int = 15,
+    grad_accum_steps: int = 2,
+    mixup_alpha: float = 0.2,
+    warmup_epochs: int = 5,
 ) -> TrainResult | None:
-    """Train the HybridBreakoutCNN model.
+    """Train the HybridBreakoutCNN model (v8 recipe).
 
-    Two-phase training:
+    Two-phase training with cosine warmup:
       1. Freeze CNN backbone for ``freeze_epochs`` epochs — trains only the
-         tabular head and classifier on your data.
-      2. Unfreeze backbone and fine-tune everything at a lower LR.
+         tabular head, embeddings, and classifier on your data.
+      2. Unfreeze backbone and fine-tune everything with separate LR groups.
+
+    v8 training recipe additions:
+      - Gradient accumulation (effective batch = batch_size × grad_accum_steps)
+      - Mixup augmentation on tabular features (α=0.2)
+      - Label smoothing 0.10 (up from 0.05)
+      - Cosine warmup (warmup_epochs linear warmup before cosine decay)
+      - Separate param groups: backbone LR vs tabular head + embeddings LR
+      - Early stopping with patience
 
     Args:
         data_csv: Path to training CSV (see BreakoutDataset for format).
         val_csv: Optional validation CSV.  If None, 15% of training data
                  is held out automatically.
-        epochs: Total training epochs (default 8).
-        batch_size: Batch size (default 32).
-        lr: Learning rate (default 3e-4).
-        weight_decay: AdamW weight decay (default 1e-5).
-        freeze_epochs: Number of epochs to freeze the CNN backbone (default 2).
+        epochs: Total training epochs (default 80).
+        batch_size: Batch size (default 64).
+        lr: Learning rate for backbone (default 2e-4).
+        weight_decay: AdamW weight decay (default 1e-4).
+        freeze_epochs: Number of epochs to freeze the CNN backbone (default 5).
         model_dir: Directory to save the trained model (default "models").
         image_root: Optional root directory to prepend to image_path values.
         num_workers: DataLoader workers (default 4).
         save_best: If True and val_csv is provided, save the best model by
                    validation accuracy instead of the final epoch.
+        patience: Early stopping patience — stop if val acc doesn't improve
+                  for this many epochs (default 15).
+        grad_accum_steps: Gradient accumulation steps (default 2, effective
+                          batch = 64×2 = 128).
+        mixup_alpha: Mixup interpolation alpha for tabular features (default 0.2).
+                     Set to 0.0 to disable mixup.
+        warmup_epochs: Linear LR warmup epochs before cosine decay (default 5).
 
     Returns:
         :class:`TrainResult` with ``model_path``, ``best_epoch``, and
@@ -1495,25 +1766,51 @@ def train_model(
     )
 
     # --- Model ---
-    model = HybridBreakoutCNN(pretrained=True)
-    logger.info("HybridBreakoutCNN v6: %d tabular features", NUM_TABULAR)
+    model = HybridBreakoutCNN(pretrained=True, use_asset_embeddings=True)
+    logger.info(
+        "HybridBreakoutCNN v8: %d tabular features + asset embeddings (%d+%d dims)",
+        NUM_TABULAR,
+        ASSET_CLASS_EMBED_DIM,
+        ASSET_ID_EMBED_DIM,
+    )
     model = model.to(device)
 
-    # --- Optimizer ---
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    # --- Optimizer with separate param groups (v8-E) ---
+    # Backbone gets lower LR; tabular head + embeddings get higher LR
+    backbone_params = list(model.cnn.parameters())
+    head_params = list(model.tabular_head.parameters()) + list(model.classifier.parameters())
+    embedding_params: list[Any] = []
+    if model.use_asset_embeddings:
+        embedding_params = list(model.asset_class_embedding.parameters()) + list(model.asset_id_embedding.parameters())
+    head_lr = lr * 5  # 1e-3 for tabular head + embeddings
 
-    # Learning rate scheduler: cosine annealing
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr * 0.01)
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": backbone_params, "lr": lr},
+            {"params": head_params + embedding_params, "lr": head_lr},
+        ],
+        weight_decay=weight_decay,
+    )
 
-    # --- Loss ---
-    # Use label smoothing to prevent overconfident predictions
-    criterion: Any = nn.CrossEntropyLoss(label_smoothing=0.05)
+    # Learning rate scheduler: linear warmup then cosine annealing (v8-D)
+    def _lr_lambda(epoch: int) -> float:
+        if epoch < warmup_epochs:
+            return (epoch + 1) / warmup_epochs  # linear warmup
+        # Cosine decay from warmup_epochs to total epochs
+        progress = (epoch - warmup_epochs) / max(1, epochs - warmup_epochs)
+        return max(0.01, 0.5 * (1.0 + np.cos(np.pi * progress)))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
+
+    # --- Loss (v8-D: label smoothing 0.10) ---
+    criterion: Any = nn.CrossEntropyLoss(label_smoothing=0.10)
 
     # --- Training loop ---
     best_val_acc = 0.0
     best_model_path: str | None = None
     best_epoch: int | None = None
     epochs_completed: int = 0
+    epochs_since_improvement = 0
     os.makedirs(model_dir, exist_ok=True)
 
     for epoch in range(epochs):
@@ -1523,9 +1820,7 @@ def train_model(
                 model.freeze_backbone()
         elif epoch == freeze_epochs:
             model.unfreeze_backbone()
-            # Lower LR for backbone fine-tuning
-            for pg in optimizer.param_groups:
-                pg["lr"] = lr * 0.1
+            logger.info("Backbone unfrozen at epoch %d — full fine-tuning begins", epoch + 1)
 
         # --- Train ---
         model.train()
@@ -1533,18 +1828,29 @@ def train_model(
         train_correct = 0
         train_total = 0
 
+        optimizer.zero_grad(set_to_none=True)
+
         for batch_idx, batch in enumerate(train_loader):
             # skip_invalid_collate returns None when every sample was invalid
             if batch is None:
                 continue
-            imgs, tabs, labels = batch
+            imgs, tabs, labels, asset_class_ids, asset_ids = batch
             imgs = imgs.to(device, non_blocking=True)
             tabs = tabs.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
+            asset_class_ids = asset_class_ids.to(device, non_blocking=True)
+            asset_ids = asset_ids.to(device, non_blocking=True)
 
-            optimizer.zero_grad(set_to_none=True)
-            outputs = model(imgs, tabs)
-            loss = criterion(outputs, labels)
+            # ── v8-D: Mixup augmentation on tabular features ─────────────
+            if mixup_alpha > 0.0 and tabs.size(0) > 1:
+                lam = float(np.random.beta(mixup_alpha, mixup_alpha))
+                perm = torch.randperm(tabs.size(0), device=device)
+                tabs = lam * tabs + (1 - lam) * tabs[perm]
+                # Note: labels are NOT mixed — mixup on tabular only acts as
+                # a regulariser without requiring soft label loss.
+
+            outputs = model(imgs, tabs, asset_class_ids=asset_class_ids, asset_ids=asset_ids)
+            loss = criterion(outputs, labels) / grad_accum_steps
 
             # NaN guard — skip batch if loss explodes
             if torch.isnan(loss) or torch.isinf(loss):
@@ -1553,12 +1859,14 @@ def train_model(
 
             loss.backward()
 
-            # Gradient clipping for stability
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            # ── v8-D: Gradient accumulation ───────────────────────────────
+            if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(train_loader):
+                # Gradient clipping for stability
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
 
-            optimizer.step()
-
-            train_loss += loss.item() * imgs.size(0)
+            train_loss += loss.item() * grad_accum_steps * imgs.size(0)
             _, predicted = outputs.max(1)
             train_correct += predicted.eq(labels).sum().item()
             train_total += labels.size(0)
@@ -1578,12 +1886,14 @@ def train_model(
             for batch in val_loader:
                 if batch is None:
                     continue
-                imgs, tabs, labels = batch
+                imgs, tabs, labels, asset_class_ids, asset_ids = batch
                 imgs = imgs.to(device, non_blocking=True)
                 tabs = tabs.to(device, non_blocking=True)
                 labels = labels.to(device, non_blocking=True)
+                asset_class_ids = asset_class_ids.to(device, non_blocking=True)
+                asset_ids = asset_ids.to(device, non_blocking=True)
 
-                outputs = model(imgs, tabs)
+                outputs = model(imgs, tabs, asset_class_ids=asset_class_ids, asset_ids=asset_ids)
                 loss = criterion(outputs, labels)
 
                 val_loss += loss.item() * imgs.size(0)
@@ -1613,13 +1923,26 @@ def train_model(
         if save_best and val_acc > best_val_acc:
             best_val_acc = val_acc
             best_epoch = epoch + 1  # 1-based
+            epochs_since_improvement = 0
             best_model_path = os.path.join(
                 model_dir, f"{MODEL_PREFIX}{datetime.now():%Y%m%d_%H%M%S}_acc{val_acc:.0f}.pt"
             )
             torch.save(model.state_dict(), best_model_path)
             logger.info("New best model saved: %s (val_acc=%.1f%%)", best_model_path, val_acc)
+        else:
+            epochs_since_improvement += 1
 
         epochs_completed = epoch + 1
+
+        # ── v8-E: Early stopping ─────────────────────────────────────────
+        if patience > 0 and epochs_since_improvement >= patience:
+            logger.info(
+                "Early stopping at epoch %d — no improvement for %d epochs (best val_acc=%.1f%%)",
+                epochs_completed,
+                patience,
+                best_val_acc,
+            )
+            break
 
     # --- Save final model (if not saving best, or as fallback) ---
     final_path = os.path.join(model_dir, f"{MODEL_PREFIX}{datetime.now():%Y%m%d_%H%M%S}_final.pt")
@@ -1686,12 +2009,11 @@ def evaluate_model(
             state_dict = torch.load(model_path, map_location=device, weights_only=True)
         except TypeError:
             state_dict = torch.load(model_path, map_location=device)  # type: ignore[call-overload]
-        tab_key = "tabular_head.0.weight"
-        num_tab = state_dict[tab_key].shape[1] if tab_key in state_dict else NUM_TABULAR
-        model = HybridBreakoutCNN(pretrained=False, num_tabular=num_tab)
-        model.load_state_dict(state_dict, strict=False)
+        model = _build_model_from_checkpoint(state_dict)
+        if model is None:
+            logger.error("Failed to build model from checkpoint %s", model_path)
+            return None
         model = model.to(device)
-        model.eval()
 
         # Build validation loader
         val_transform = get_inference_transform()
@@ -1717,12 +2039,17 @@ def evaluate_model(
             for batch in val_loader:
                 if batch is None:
                     continue
-                imgs, tabs, labels = batch
+                imgs, tabs, labels, asset_class_ids, asset_ids = batch
                 imgs = imgs.to(device, non_blocking=True)
                 tabs = tabs.to(device, non_blocking=True)
                 labels = labels.to(device, non_blocking=True)
+                asset_class_ids = asset_class_ids.to(device, non_blocking=True)
+                asset_ids = asset_ids.to(device, non_blocking=True)
 
-                outputs = model(imgs, tabs)
+                if model.use_asset_embeddings:
+                    outputs = model(imgs, tabs, asset_class_ids=asset_class_ids, asset_ids=asset_ids)
+                else:
+                    outputs = model(imgs, tabs)
                 _, predicted = outputs.max(1)
 
                 all_preds.extend(predicted.cpu().tolist())
@@ -1849,29 +2176,30 @@ def _find_latest_model(model_dir: str = DEFAULT_MODEL_DIR) -> str | None:
 def _build_model_from_checkpoint(state_dict: dict) -> Any:
     """Instantiate a HybridBreakoutCNN whose architecture matches *state_dict*.
 
-    Detects whether the checkpoint was trained with ``use_type_embedding=True``
-    by checking for the ``type_embedding.weight`` key in the state dict.
+    Detects whether the checkpoint was trained with v8 asset embeddings by
+    checking for the ``asset_class_embedding.weight`` key in the state dict.
+    Falls back to v7.1/v6 mode if embedding weights are absent.
 
     Returns a model with weights loaded (eval mode, not moved to device yet).
     """
     if not _TORCH_AVAILABLE:
         return None
 
-    use_type_emb = "type_embedding.weight" in state_dict
+    use_asset_emb = "asset_class_embedding.weight" in state_dict
 
     # Infer num_tabular from first tabular_head Linear weight shape.
-    # For scalar-only models the key is ``tabular_head.0.weight`` with shape
-    # (64, num_tabular).  For embedding models it is (64, num_tabular-1).
+    # v8 wider head: tabular_head.0.weight has shape (256, num_tabular)
+    # v7.1/v6 head:  tabular_head.0.weight has shape (128, num_tabular)
     num_tabular = NUM_TABULAR
     tab_key = "tabular_head.0.weight"
     if tab_key in state_dict:
         in_features = state_dict[tab_key].shape[1]
-        num_tabular = in_features + 1 if use_type_emb else in_features
+        num_tabular = in_features
 
     model = HybridBreakoutCNN(
         num_tabular=num_tabular,
         pretrained=False,  # weights come from checkpoint
-        use_type_embedding=use_type_emb,
+        use_asset_embeddings=use_asset_emb,
     )
     model.load_state_dict(state_dict, strict=False)
     model.eval()
@@ -1885,7 +2213,8 @@ def _load_model(
     """Load a HybridBreakoutCNN model from disk.
 
     Uses a module-level cache to avoid reloading on every inference call.
-    Thread-safe via _model_lock.
+    Thread-safe via _model_lock.  Automatically detects v6/v7.1/v8
+    architecture from the checkpoint weights.
 
     Args:
         model_path: Explicit path to a .pt file.  If None, finds the latest.
@@ -1918,17 +2247,22 @@ def _load_model(
                 state_dict = torch.load(model_path, map_location=dev, weights_only=True)
             except TypeError:
                 state_dict = torch.load(model_path, map_location=dev)  # type: ignore[call-overload]
-            tab_key = "tabular_head.0.weight"
-            num_tab = state_dict[tab_key].shape[1] if tab_key in state_dict else NUM_TABULAR
-            model = HybridBreakoutCNN(pretrained=False, num_tabular=num_tab)
-            model.load_state_dict(state_dict, strict=False)
-            model.eval()
+
+            model = _build_model_from_checkpoint(state_dict)
+            if model is None:
+                return None
             model = model.to(dev)
 
             _cached_model = model
             _cached_model_path = model_path
 
-            logger.info("Model loaded: %s → %s", model_path, dev)
+            logger.info(
+                "Model loaded: %s → %s (tabular=%d, asset_emb=%s)",
+                model_path,
+                dev,
+                model.num_tabular,
+                model.use_asset_embeddings,
+            )
             return model
 
         except Exception as exc:
@@ -1947,7 +2281,7 @@ def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[floa
     Applies the same transforms as OrbCnnPredictor.NormaliseTabular() in C#
     so that Python inference and NT8 inference are identical.
 
-    v7.1 input order (28 features — must match TABULAR_FEATURES exactly):
+    v8 input order (37 features — must match TABULAR_FEATURES exactly):
         [0]  quality_pct_norm      — quality / 100, already in [0, 1]
         [1]  volume_ratio          — raw ratio (log-normalised here)
         [2]  atr_pct               — ATR / price fraction (×100 here)
@@ -1976,19 +2310,40 @@ def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[floa
         [25] session_overlap_flag  — 0 or 1 passthrough
         [26] atr_trend             — [0, 1] passthrough
         [27] volume_trend          — [0, 1] passthrough
+        [28] primary_peer_corr     — [0, 1] passthrough
+        [29] cross_class_corr      — [0, 1] passthrough
+        [30] correlation_regime    — [0, 1] passthrough
+        [31] typical_daily_range_norm — [0, 1] passthrough
+        [32] session_concentration — [0, 1] passthrough
+        [33] breakout_follow_through — [0, 1] passthrough
+        [34] hurst_exponent        — [0, 1] passthrough
+        [35] overnight_gap_tendency — [0, 1] passthrough
+        [36] volume_profile_shape  — [0, 1] passthrough
 
     For backward compat, 8-feature (v5), 14-feature (v4), 18-feature (v6),
-    and 24-feature (v7) vectors are zero-padded to 28 with sensible defaults
-    before normalisation.
+    24-feature (v7), and 28-feature (v7.1) vectors are zero-padded to 37
+    with sensible defaults before normalisation.
 
     Returns a list of NUM_TABULAR floats ready for the model tabular input tensor.
     """
     f = list(raw_features)
 
+    # v8 neutral defaults for slots [28..36] (cross-asset + fingerprint)
+    _V8_NEUTRAL_DEFAULTS = [
+        0.5,
+        0.5,
+        0.5,  # [28..30] cross-asset: peer_corr, cross_class, regime
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5,  # [31..36] fingerprint: range, session, follow_through, hurst, gap, vol_shape
+    ]
+
     # Backward compat padding — extend shorter vectors with neutral defaults
     if len(f) == 8:
-        # v5 (8 features) → pad to 28
-        # [8..13] v4 extras, [14..17] v6 extras, [18..23] v7 extras, [24..27] v7.1 extras
+        # v5 (8 features) → pad to 37
         f.extend(
             [
                 1.0,
@@ -2012,9 +2367,10 @@ def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[floa
                 0.5,
                 0.5,  # [24..27] v7.1 neutral defaults
             ]
+            + _V8_NEUTRAL_DEFAULTS  # [28..36] v8 neutral defaults
         )
     elif len(f) == 14:
-        # v4 (14 features) → pad [14..27]
+        # v4 (14 features) → pad [14..36]
         f.extend(
             [
                 0.0,
@@ -2032,9 +2388,10 @@ def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[floa
                 0.5,
                 0.5,  # [24..27] v7.1 neutral defaults
             ]
+            + _V8_NEUTRAL_DEFAULTS  # [28..36] v8 neutral defaults
         )
     elif len(f) == 18:
-        # v6 (18 features) → pad [18..27]
+        # v6 (18 features) → pad [18..36]
         f.extend(
             [
                 0.5,
@@ -2048,15 +2405,22 @@ def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[floa
                 0.5,
                 0.5,  # [24..27] v7.1 neutral defaults
             ]
+            + _V8_NEUTRAL_DEFAULTS  # [28..36] v8 neutral defaults
         )
     elif len(f) == 24:
-        # v7 (24 features) → pad [24..27] with v7.1 neutral defaults
-        f.extend([0.5, 0.0, 0.5, 0.5])
+        # v7 (24 features) → pad [24..36]
+        f.extend(
+            [0.5, 0.0, 0.5, 0.5]  # [24..27] v7.1 neutral defaults
+            + _V8_NEUTRAL_DEFAULTS  # [28..36] v8 neutral defaults
+        )
+    elif len(f) == 28:
+        # v7.1 (28 features) → pad [28..36] with v8 neutral defaults
+        f.extend(_V8_NEUTRAL_DEFAULTS)
 
     if len(f) != NUM_TABULAR:
         raise ValueError(
-            f"Expected {NUM_TABULAR} tabular features (v7.1), 24 (v7 compat), "
-            f"18 (v6 compat), 14 (v4 compat), or 8 (v5 compat); "
+            f"Expected {NUM_TABULAR} tabular features (v8), 28 (v7.1 compat), "
+            f"24 (v7 compat), 18 (v6 compat), 14 (v4 compat), or 8 (v5 compat); "
             f"got {len(f)}. Required order: {TABULAR_FEATURES}"
         )
 
@@ -2139,6 +2503,17 @@ def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[floa
         max(0.0, min(1.0, f[25])),  # [25] session_overlap_flag
         max(0.0, min(1.0, f[26])),  # [26] atr_trend
         max(0.0, min(1.0, f[27])),  # [27] volume_trend
+        # ── v8-B cross-asset features (slots 28–30) — passthrough clamp ──
+        max(0.0, min(1.0, f[28])),  # [28] primary_peer_corr
+        max(0.0, min(1.0, f[29])),  # [29] cross_class_corr
+        max(0.0, min(1.0, f[30])),  # [30] correlation_regime
+        # ── v8-C fingerprint features (slots 31–36) — passthrough clamp ──
+        max(0.0, min(1.0, f[31])),  # [31] typical_daily_range_norm
+        max(0.0, min(1.0, f[32])),  # [32] session_concentration
+        max(0.0, min(1.0, f[33])),  # [33] breakout_follow_through
+        max(0.0, min(1.0, f[34])),  # [34] hurst_exponent
+        max(0.0, min(1.0, f[35])),  # [35] overnight_gap_tendency
+        max(0.0, min(1.0, f[36])),  # [36] volume_profile_shape
     ]
 
 
@@ -2148,34 +2523,15 @@ def predict_breakout(
     model_path: str | None = None,
     threshold: float | None = None,
     session_key: str | None = None,
+    ticker: str | None = None,
 ) -> dict[str, Any] | None:
     """Predict whether a chart snapshot shows a high-quality breakout.
 
     Args:
         image_path: Path to the PNG chart snapshot.
-        tabular_features: List/tuple of 18 floats in TABULAR_FEATURES order
-            (v6 contract).  8-feature (v5) and 14-feature (v4) vectors are
-            accepted for backward compatibility and zero-padded automatically.
-
-            v6 features:
-              [0]  quality_pct_norm      — quality_pct / 100 (0.0–1.0)
-              [1]  volume_ratio          — breakout bar vol / 20-bar avg
-              [2]  atr_pct               — ATR as fraction of price
-              [3]  cvd_delta             — normalised CVD delta (-1 to 1)
-              [4]  nr7_flag              — 1.0 if NR7 day, 0.0 otherwise
-              [5]  direction_flag        — 1.0 for LONG, 0.0 for SHORT
-              [6]  session_ordinal       — Globex day position [0, 1]
-              [7]  london_overlap_flag   — 1.0 if 08:00–09:00 ET
-              [8]  or_range_atr_ratio    — ORB range / ATR (raw)
-              [9]  premarket_range_ratio — premarket range / ORB range (raw)
-              [10] bar_of_day            — minutes since Globex open / 1380
-              [11] day_of_week           — Mon=0..Fri=4 / 4
-              [12] vwap_distance         — (price-vwap) / ATR (raw)
-              [13] asset_class_id        — asset class ordinal / 4
-              [14] breakout_type_ord     — BreakoutType ordinal / 12
-              [15] asset_volatility_class — low=0 / med=0.5 / high=1.0
-              [16] hour_of_day           — ET hour / 23
-              [17] tp3_atr_mult_norm     — TP3 ATR mult / 5.0
+        tabular_features: List/tuple of floats in TABULAR_FEATURES order.
+            Accepts 8 (v5), 14 (v4), 18 (v6), 24 (v7), 28 (v7.1), or
+            37 (v8) features — shorter vectors are zero-padded automatically.
 
         model_path: Explicit model path (default: latest in models/).
         threshold: Probability threshold for "signal" verdict.
@@ -2185,6 +2541,8 @@ def predict_breakout(
         session_key: ORBSession.key (e.g. "london", "tokyo", "us").
                      Used to look up the per-session threshold and for
                      logging.  Ignored if *threshold* is explicitly set.
+        ticker: Symbol ticker (e.g. "MGC", "MNQ") for v8 asset embedding
+                lookup.  If None, embedding IDs default to 0.
 
     Returns:
         Dict with:
@@ -2218,16 +2576,31 @@ def predict_breakout(
         img_tensor = transform(img).unsqueeze(0).to(device)  # type: ignore[union-attr]  # (1, 3, 224, 224)
 
         # Normalise tabular features (same transforms as training dataset)
+        # Handle model expecting fewer features than v8 (backward compat)
         tab_list = _normalise_tabular_for_inference(tabular_features)
-        if len(tab_list) != NUM_TABULAR:
-            logger.error("Expected %d tabular features, got %d", NUM_TABULAR, len(tab_list))
-            return None
+        # If the loaded model expects fewer features (e.g. v7.1 28-feature model),
+        # truncate to match its num_tabular
+        model_num_tab = getattr(model, "num_tabular", NUM_TABULAR)
+        if len(tab_list) > model_num_tab:
+            tab_list = tab_list[:model_num_tab]
+        elif len(tab_list) < model_num_tab:
+            # Pad with neutral 0.5 for any missing features
+            tab_list.extend([0.5] * (model_num_tab - len(tab_list)))
 
-        tab_tensor = torch.tensor([tab_list], dtype=torch.float32).to(device)  # (1, 8)
+        tab_tensor = torch.tensor([tab_list], dtype=torch.float32).to(device)
+
+        # v8-A: Asset embedding IDs
+        _asset_class_idx = get_asset_class_idx(ticker) if ticker else 0
+        _asset_idx = get_asset_idx(ticker) if ticker else 0
+        asset_class_ids = torch.tensor([_asset_class_idx], dtype=torch.long).to(device)
+        asset_ids = torch.tensor([_asset_idx], dtype=torch.long).to(device)
 
         # Inference
         with torch.no_grad():
-            logits = model(img_tensor, tab_tensor)  # (1, 2)
+            if model.use_asset_embeddings:
+                logits = model(img_tensor, tab_tensor, asset_class_ids=asset_class_ids, asset_ids=asset_ids)
+            else:
+                logits = model(img_tensor, tab_tensor)
             probs = torch.softmax(logits, dim=1)
             prob_good = float(probs[0, 1].item())
 
@@ -2262,6 +2635,7 @@ def predict_breakout_batch(
     threshold: float | None = None,
     session_key: str | None = None,
     batch_size: int = 16,
+    tickers: Sequence[str] | None = None,
 ) -> list[dict[str, Any] | None]:
     """Batch inference for multiple chart snapshots.
 
@@ -2279,6 +2653,8 @@ def predict_breakout_batch(
                      look up the per-session threshold.  Ignored if
                      *threshold* is explicitly set.
         batch_size: Max images per GPU forward pass.
+        tickers: Optional list of symbol tickers (one per image) for v8
+                 asset embedding lookup.  If None, all default to ID 0.
 
     Returns:
         List of result dicts (same format as predict_breakout), or None entries
@@ -2300,6 +2676,7 @@ def predict_breakout_batch(
 
     device = next(model.parameters()).device
     transform = get_inference_transform()
+    model_num_tab = getattr(model, "num_tabular", NUM_TABULAR)
     results: list[dict[str, Any] | None] = [None] * len(image_paths)
 
     # Process in batches
@@ -2309,6 +2686,8 @@ def predict_breakout_batch(
 
         img_tensors = []
         tab_tensors = []
+        acls_tensors = []
+        aid_tensors = []
         valid_indices = []
 
         for i in batch_indices:
@@ -2317,12 +2696,22 @@ def predict_breakout_batch(
                 assert transform is not None
                 img_t = transform(img)
                 tab_list = _normalise_tabular_for_inference(tabular_features_batch[i])
-                if len(tab_list) != NUM_TABULAR:
-                    continue
+                # Match model's expected tabular dimension
+                if len(tab_list) > model_num_tab:
+                    tab_list = tab_list[:model_num_tab]
+                elif len(tab_list) < model_num_tab:
+                    tab_list.extend([0.5] * (model_num_tab - len(tab_list)))
                 tab_t = torch.tensor(tab_list, dtype=torch.float32)
+
+                # v8-A embedding IDs
+                _tkr = tickers[i] if tickers and i < len(tickers) else None
+                acls_t = torch.tensor(get_asset_class_idx(_tkr) if _tkr else 0, dtype=torch.long)
+                aid_t = torch.tensor(get_asset_idx(_tkr) if _tkr else 0, dtype=torch.long)
 
                 img_tensors.append(img_t)
                 tab_tensors.append(tab_t)
+                acls_tensors.append(acls_t)
+                aid_tensors.append(aid_t)
                 valid_indices.append(i)
             except Exception as exc:
                 logger.debug("Failed to load image %s: %s", image_paths[i], exc)
@@ -2330,11 +2719,16 @@ def predict_breakout_batch(
         if not valid_indices:
             continue
 
-        img_batch = torch.stack(img_tensors).to(device)  # (B, 3, 224, 224)
-        tab_batch = torch.stack(tab_tensors).to(device)  # (B, 6)
+        img_batch = torch.stack(img_tensors).to(device)
+        tab_batch = torch.stack(tab_tensors).to(device)
+        acls_batch = torch.stack(acls_tensors).to(device)
+        aid_batch = torch.stack(aid_tensors).to(device)
 
         with torch.no_grad():
-            logits = model(img_batch, tab_batch)
+            if model.use_asset_embeddings:
+                logits = model(img_batch, tab_batch, asset_class_ids=acls_batch, asset_ids=aid_batch)
+            else:
+                logits = model(img_batch, tab_batch)
             probs = torch.softmax(logits, dim=1)[:, 1]  # (B,)
 
         for j, global_idx in enumerate(valid_indices):
@@ -2366,31 +2760,17 @@ def predict_breakout_batch(
 
 
 def generate_feature_contract(output_path: str | None = None) -> dict[str, Any]:
-    """Generate and optionally write the ``feature_contract.json`` v6 file.
+    """Generate and optionally write the ``feature_contract.json`` v8 file.
 
     The contract encodes every parameter needed by consumers (engine, NT8
     C# OrbCnnPredictor, rb trainer) to correctly prepare the tabular feature
-    vector and interpret model outputs.  The v6 schema matches the 18-feature
-    vector built by BreakoutStrategy.PrepareCnnTabular() in C#.
+    vector and interpret model outputs.
 
-    Structure::
-
-        {
-          "version":          6,
-          "num_tabular":      18,
-          "tabular_features": [...],
-          "default_threshold": 0.82,
-          "image_size":       224,
-          "imagenet_mean":    [...],
-          "imagenet_std":     [...],
-          "session_thresholds":   {...},
-          "session_ordinals":     {...},
-          "asset_class_map":      {...},
-          "breakout_type_ordinals": {...},
-          "asset_volatility_classes": {...},
-          "breakout_types":       {...},
-          "generated_at":     "<ISO timestamp>",
-        }
+    v8 additions over v7.1:
+      - ``asset_class_lookup`` / ``asset_id_lookup`` for embedding indices
+      - Cross-asset correlation feature descriptions (v8-B)
+      - Asset fingerprint feature descriptions (v8-C)
+      - Architecture metadata (embedding dims, wider head)
 
     Args:
         output_path: If given, write the JSON to this path (creates parent
@@ -2480,6 +2860,56 @@ def generate_feature_contract(output_path: str | None = None) -> dict[str, Any]:
                 "Fibonacci",
             ],
             "squeeze_based": ["Consolidation", "BollingerSqueeze"],
+        },
+        # ── v8-A: Hierarchical asset embedding lookup tables ──────────────
+        "asset_class_lookup": ASSET_CLASS_IDX_LOOKUP,
+        "asset_id_lookup": ASSET_ID_LOOKUP,
+        "num_asset_classes": NUM_ASSET_CLASSES,
+        "num_assets": NUM_ASSETS,
+        "asset_class_embed_dim": ASSET_CLASS_EMBED_DIM,
+        "asset_id_embed_dim": ASSET_ID_EMBED_DIM,
+        # ── v8-B: Cross-asset correlation feature descriptions ────────────
+        "v8_cross_asset_descriptions": {
+            "primary_peer_corr": (
+                "Pearson correlation with primary peer asset over 30-bar window, "
+                "mapped from [-1,1] to [0,1]. 0.5 = uncorrelated."
+            ),
+            "cross_class_corr": (
+                "Strongest cross-class correlation magnitude over 30-bar window, "
+                "mapped from [-1,1] to [0,1]. Reveals risk-on/off regime."
+            ),
+            "correlation_regime": (
+                "Correlation structure state: 0.0 = broken/inverted (decorrelated), "
+                "0.5 = normal, 1.0 = elevated (herding). Detected by comparing "
+                "30-bar vs 200-bar baseline correlation z-score."
+            ),
+        },
+        # ── v8-C: Asset fingerprint feature descriptions ──────────────────
+        "v8_fingerprint_descriptions": {
+            "typical_daily_range_norm": (
+                "Median daily range / ATR(14), clamped [0.5, 2.5] then normalised to [0,1]. "
+                "High = very active asset, low = quiet."
+            ),
+            "session_concentration": (
+                "Fraction of daily range captured in the dominant session [0,1]. "
+                "High = concentrated activity, low = distributed."
+            ),
+            "breakout_follow_through": (
+                "Trailing 20-day breakout win rate for this asset [0,1]. "
+                "1.0 = every breakout continues, 0.0 = every one fades."
+            ),
+            "hurst_exponent": (
+                "Rolling Hurst exponent normalised to [0,1]. "
+                "<0.4 = mean-reverting (choppy), >0.6 = trending (momentum), 0.5 = random walk."
+            ),
+            "overnight_gap_tendency": (
+                "Median overnight gap size / ATR, clamped and normalised to [0,1]. "
+                "High = gap-prone, low = smooth transitions."
+            ),
+            "volume_profile_shape": (
+                "Intraday volume distribution regularity score [0,1]. "
+                "0.9 = U-shaped (predictable), 0.4 = flat (unpredictable)."
+            ),
         },
         "generated_at": _dt.now(tz=__import__("datetime").timezone.utc).isoformat(),
     }

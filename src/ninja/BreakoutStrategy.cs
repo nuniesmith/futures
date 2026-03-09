@@ -609,14 +609,14 @@ namespace NinjaTrader.NinjaScript.Strategies
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         // ── SAR sync — HTTP client for pushing reversals to the Python engine ──
-        // Posts to POST http://100.100.84.48:8000/sar/sync after every reversal.
+        // Posts to POST http://100.122.184.58:8000/sar/sync after every reversal.
         // Fire-and-forget (ContinueWith, no await) so the bar-update thread is
         // never blocked.  Initialised in OnStateChange(DataLoaded).
         private System.Net.Http.HttpClient _sarHttpClient;
-        private const string CSarSyncUrl = "http://100.100.84.48:8000/sar/sync";
+        private const string CSarSyncUrl = "http://100.122.184.58:8000/sar/sync";
         // MTF bars base URL — used by GetMtfBarsFromEngine() to fetch 15m bars
         // from the Pi's data engine as a fallback when NT8's own 15m BIP is missing.
-        private const string CEngineBaseUrl = "http://100.100.84.48:8000";
+        private const string CEngineBaseUrl = "http://100.122.184.58:8000";
 
         // ── Risk gate (mirrors Bridge.RiskBlocked so both respect it) ─────────
         // BreakoutStrategy has no HTTP listener of its own; it simply won't
@@ -2419,7 +2419,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 FireEntry(newDirection, bip, st, price, atr, barTime, instrName, breakoutType);
 
                 // Step 7: push the reversal state to the Python engine on the Pi
-                // (100.100.84.48:8000) so PositionManager stays in sync.
+                // (100.122.184.58:8000) so PositionManager stays in sync.
                 // Fire-and-forget — never block the bar thread.
                 PushSarSyncAsync(instrName, newDirection, sar, barTime);
 
@@ -2437,7 +2437,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         /// Sends the new active direction + signalId + reversal count so the
         /// Python PositionManager's ReversalState stays in sync with C#.
         ///
-        /// Endpoint: POST http://100.100.84.48:8000/sar/sync
+        /// Endpoint: POST http://100.122.184.58:8000/sar/sync
         /// Body (JSON):
         /// {
         ///   "asset":          "MGC",

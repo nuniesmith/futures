@@ -544,7 +544,7 @@ app.include_router(analysis_router, prefix="/analysis", tags=["Analysis"])
 # Actions: /actions/force_refresh, /actions/optimize_now, /actions/update_settings, etc.
 app.include_router(actions_router, prefix="/actions", tags=["Actions"])
 
-# Positions: /positions/, /positions/update, etc.  (NinjaTrader bridge)
+# Positions: /positions/, /positions/update, etc.  (broker-agnostic position management)
 app.include_router(positions_router, prefix="/positions", tags=["Positions"])
 
 # Trades: /trades, /trades/{id}/close, /log_trade, etc.  (trade CRUD)
@@ -574,9 +574,10 @@ app.include_router(health_router, tags=["Health"])
 # Prometheus metrics: /metrics/prometheus  (TASK-704)
 app.include_router(metrics_router, tags=["Metrics"])
 
-# NT8 Deploy: /api/nt8/installer, /api/nt8/panel/html, /api/nt8/deploy
-# NOTE: nt8_deploy_router is mounted WITHOUT a prefix — routes are defined with /api/nt8/ paths.
-app.include_router(nt8_deploy_router, tags=["NT8 Deploy"])
+# System Health: /api/nt8/panel/html, /api/nt8/health/html, /api/nt8/health
+# NOTE: nt8_deploy_router is mounted WITHOUT a prefix — routes use /api/nt8/ paths
+# for backward compat with existing dashboard HTMX calls.
+app.include_router(nt8_deploy_router, tags=["System Health"])
 
 # CNN: /cnn/status, /cnn/retrain, /cnn/retrain/status, /cnn/history, /cnn/status/html
 # NOTE: cnn_router is mounted WITHOUT a prefix — routes are defined with /cnn/ paths.

@@ -434,7 +434,7 @@ def format_market_context(
     else:
         session_status = "CLOSED — no trading"
 
-    # Live positions from NinjaTrader
+    # Live positions from broker
     positions_text = "No live positions"
     has_positions = False
     if live_positions and live_positions.get("has_positions"):
@@ -843,7 +843,7 @@ def _run_live_verbose(
     positions_block = ""
     if context.get("has_positions"):
         positions_block = f"""
-LIVE POSITIONS (from NinjaTrader):
+LIVE POSITIONS (from broker):
 {context["positions_text"]}
 """
 

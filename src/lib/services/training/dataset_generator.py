@@ -117,7 +117,7 @@ class DatasetConfig:
     #   "sydney"    — Sydney/ASX 18:30–19:00 ET (overnight)
     #   "london_ny" — London-NY Crossover 08:00–08:30 ET
     #   "cme_settle"— CME Settlement 14:00–14:30 ET
-    orb_session: str = "us"
+    orb_session: str = "all"
 
     # Chart rendering
     chart_dpi: int = 150  # lower than live for disk space savings
@@ -128,13 +128,13 @@ class DatasetConfig:
 
     # Per-(label, breakout_type) cap — prevents high-frequency types (e.g. ORB)
     # from swamping rarer types (e.g. Monthly, Weekly) when --breakout-type=all.
-    # 0 = no cap.  Example: 500 → at most 500 good_long samples per type.
-    max_samples_per_type_label: int = 0
+    # v8 training recipe default: 800.
+    max_samples_per_type_label: int = 800
 
     # Per-(label, session) cap — ensures overnight sessions (Sydney, Tokyo, Shanghai)
     # are not under-represented vs the primary London / US sessions.
-    # 0 = no cap.  Example: 300 → at most 300 good_long samples per session.
-    max_samples_per_session_label: int = 0
+    # v8 training recipe default: 400.
+    max_samples_per_session_label: int = 400
 
     include_no_trade: bool = False  # include no_trade samples (usually not useful)
 
@@ -187,7 +187,7 @@ class DatasetConfig:
     # When set to a specific type the corresponding ``simulate_batch_*``
     # function is called.  "ORB" still uses the existing sliding-window
     # ``simulate_batch`` for backward compatibility.
-    breakout_type: str = "ORB"
+    breakout_type: str = "all"
 
     # Parallelism
     max_workers: int = 1  # symbols processed in parallel (1 = sequential)
@@ -261,6 +261,10 @@ class DatasetStats:
 # ---------------------------------------------------------------------------
 
 _ENGINE_DATA_URL: str = (os.getenv("ENGINE_DATA_URL") or os.getenv("DATA_SERVICE_URL", "http://data:8000")).rstrip("/")
+
+# Shared secret for inter-service authentication.
+# When set, sent as X-API-Key header on all engine HTTP requests.
+_API_KEY: str = os.getenv("API_KEY", "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -396,8 +400,13 @@ def _load_bars_from_engine(symbol: str, days: int = 90) -> pd.DataFrame | None:
         "auto_fill": "true",
     }
 
+    # Include API key header for inter-service auth (if configured)
+    headers: dict[str, str] = {}
+    if _API_KEY:
+        headers["X-API-Key"] = _API_KEY
+
     try:
-        resp = _requests.get(url, params=params, timeout=60)
+        resp = _requests.get(url, params=params, headers=headers, timeout=60)
         if resp.status_code == 404:
             logger.debug("Engine has no bars for %s (404)", symbol)
             return None
@@ -1457,6 +1466,7 @@ def generate_dataset_for_symbol(
     bars_1m: pd.DataFrame,
     bars_daily: pd.DataFrame | None = None,
     config: DatasetConfig | None = None,
+    bars_by_ticker: dict[str, pd.DataFrame] | None = None,
 ) -> tuple[list[dict[str, Any]], DatasetStats]:
     """Generate labeled chart images for a single symbol.
 
@@ -1477,6 +1487,10 @@ def generate_dataset_for_symbol(
         bars_1m: 1-minute OHLCV bars.
         bars_daily: Daily bars for NR7 (optional).
         config: DatasetConfig.
+        bars_by_ticker: Dict mapping ticker → 1-min bars for peer assets.
+                        Used by ``_build_row()`` to compute v8-B cross-asset
+                        correlation features.  If None, those features fall
+                        back to neutral 0.5 defaults.
 
     Returns:
         (rows, stats) where rows is a list of dicts for the CSV, and
@@ -1498,6 +1512,43 @@ def generate_dataset_for_symbol(
 
     stats.total_windows = len(all_sim_results)
     stats.total_trades = sum(1 for r in all_sim_results if r.is_trade)
+
+    # ── Attach context data to each result for v7/v8 feature computation ──
+    # _build_row() reads these private attributes to compute:
+    #   - v7 features [18-23]: daily bias, weekly range, monthly trend
+    #     (requires _daily_bars)
+    #   - v7.1 features [26-27]: atr_trend, volume_trend
+    #     (requires _bars_1m)
+    #   - v8-B features [28-30]: cross-asset correlation
+    #     (requires _bars_by_ticker)
+    #   - v8-C features [31-36]: asset fingerprint
+    #     (requires _daily_bars + _bars_1m)
+    _bars_by_ticker_safe = bars_by_ticker or {}
+    for r in all_sim_results:
+        # Daily bars — for bias analyzer, fingerprint, and NR7
+        if bars_daily is not None and not bars_daily.empty:
+            r._daily_bars = bars_daily
+
+        # 1-minute bars window — for atr_trend, volume_trend, fingerprint.
+        # Attach the full bars so _build_row() can slice as needed;
+        # for features like atr_trend/volume_trend the last N bars before
+        # the breakout are used, so the full series is appropriate.
+        if bars_1m is not None and not bars_1m.empty:
+            # Use the window slice if provenance is available, otherwise
+            # attach the full bars (features use tail lookbacks anyway).
+            _offset = getattr(r, "_window_offset", -1)
+            _wsize = getattr(r, "_window_size", 0) or cfg.window_size
+            if _offset >= 0:
+                _end = min(_offset + _wsize, len(bars_1m))
+                r._bars_1m = bars_1m.iloc[_offset:_end]
+            else:
+                r._bars_1m = bars_1m
+
+        # Peer bars dict — for cross-asset correlation features.
+        # Always include the signal asset's own bars so compute_cross_asset_features
+        # can find them by ticker.
+        if _bars_by_ticker_safe:
+            r._bars_by_ticker = _bars_by_ticker_safe
 
     sim_results = all_sim_results
 
@@ -1748,7 +1799,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     """Build a single CSV row from an ORBSimResult.
 
     The row includes all columns needed by BreakoutDataset.__getitem__ to
-    compute the 24-feature tabular vector per feature_contract.json v7,
+    compute the 37-feature tabular vector per feature_contract.json v8,
     mirroring C# PrepareCnnTabular() exactly:
 
       [0]  quality_pct_norm       ← quality_pct / 100
@@ -1777,6 +1828,22 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
       [21] weekly_range_position  ← price in prior week H/L range [0, 1]
       [22] monthly_trend_score    ← EMA slope [-1,+1] mapped to [0, 1]
       [23] crypto_momentum_score  ← crypto lead [-1,+1] mapped to [0, 1]
+      ── v7.1 additions (Phase 4B sub-features) ──
+      [24] breakout_type_category ← time=0, range=0.5, squeeze=1.0
+      [25] session_overlap_flag   ← 1.0 if London+NY overlap, else 0.0
+      [26] atr_trend              ← ATR expanding=1.0, contracting=0.0
+      [27] volume_trend           ← 5-bar volume slope [0, 1]
+      ── v8-B additions (Cross-Asset Correlation) ──
+      [28] primary_peer_corr      ← Pearson r with primary peer [0, 1]
+      [29] cross_class_corr       ← strongest cross-class corr [0, 1]
+      [30] correlation_regime     ← broken=0, normal=0.5, elevated=1.0
+      ── v8-C additions (Asset Fingerprint) ──
+      [31] typical_daily_range_norm ← median daily range / ATR [0, 1]
+      [32] session_concentration  ← dominant session fraction [0, 1]
+      [33] breakout_follow_through ← trailing win rate [0, 1]
+      [34] hurst_exponent         ← mean-reversion tendency [0, 1]
+      [35] overnight_gap_tendency ← overnight gap / ATR [0, 1]
+      [36] volume_profile_shape   ← volume regularity score [0, 1]
     """
     import math
 
@@ -2051,6 +2118,80 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     except Exception:
         pass
 
+    # ── v8-B cross-asset correlation features [28–30] ─────────────────────
+    # Uses the cross_asset module to compute rolling correlations with peer
+    # assets.  Requires peer bars to be attached to the result by the
+    # simulator; falls back to neutral 0.5 when data is unavailable.
+    primary_peer_corr = 0.5
+    cross_class_corr = 0.5
+    correlation_regime = 0.5
+    try:
+        from lib.analysis.cross_asset import compute_cross_asset_features
+
+        _bars_by_ticker = getattr(result, "_bars_by_ticker", None)
+        if _bars_by_ticker is not None and isinstance(_bars_by_ticker, dict):
+            _cross_feats = compute_cross_asset_features(result.symbol, _bars_by_ticker)
+            primary_peer_corr = _cross_feats.primary_peer_corr
+            cross_class_corr = _cross_feats.cross_class_corr
+            correlation_regime = _cross_feats.correlation_regime
+    except Exception:
+        pass
+
+    # ── v8-C asset fingerprint features [31–36] ──────────────────────────
+    # Uses the asset_fingerprint module to compute per-asset behavioral
+    # profile.  Requires daily + 1m bars; falls back to neutral 0.5.
+    typical_daily_range_norm = 0.5
+    session_concentration_val = 0.5
+    breakout_follow_through_val = 0.5
+    hurst_exponent_val = 0.5
+    overnight_gap_tendency = 0.5
+    volume_profile_shape_val = 0.5
+    try:
+        from lib.analysis.asset_fingerprint import compute_asset_fingerprint
+
+        _daily_bars_fp = getattr(result, "_daily_bars", None)
+        _bars_1m_fp = getattr(result, "_bars_1m", None)
+        if _daily_bars_fp is not None and not _daily_bars_fp.empty:
+            _fp = compute_asset_fingerprint(
+                result.symbol,
+                bars_daily=_daily_bars_fp,
+                bars_1m=_bars_1m_fp,
+                lookback_days=20,
+            )
+            # [31] typical_daily_range_norm — clamp [0.5, 2.5] → [0, 1]
+            typical_daily_range_norm = max(0.0, min(1.0, (_fp.typical_daily_range_atr - 0.5) / 2.0))
+
+            # [32] session_concentration — dominant session fraction
+            session_concentration_val = max(
+                _fp.session_concentration.overnight_pct,
+                _fp.session_concentration.london_pct,
+                _fp.session_concentration.us_pct,
+                _fp.session_concentration.settle_pct,
+            )
+
+            # [33] breakout_follow_through — trailing win rate
+            breakout_follow_through_val = _fp.breakout_follow_through.follow_through_rate
+
+            # [34] hurst_exponent — mean-reversion tendency
+            hurst_exponent_val = max(0.0, min(1.0, _fp.mean_reversion_tendency))
+
+            # [35] overnight_gap_tendency — gap frequency as proxy
+            overnight_gap_tendency = max(0.0, min(1.0, _fp.overnight_gap.avg_gap_atr_ratio))
+
+            # [36] volume_profile_shape — regularity score
+            from lib.analysis.asset_fingerprint import VolumeProfileShape as _VPS
+
+            _shape_scores = {
+                _VPS.U_SHAPED: 0.9,
+                _VPS.L_SHAPED: 0.7,
+                _VPS.FRONT_LOADED: 0.6,
+                _VPS.FLAT: 0.4,
+                _VPS.UNKNOWN: 0.5,
+            }
+            volume_profile_shape_val = _shape_scores.get(_fp.volume_profile_shape, 0.5)
+    except Exception:
+        pass
+
     return {
         # ── Identity / label ──────────────────────────────────────────────
         "image_path": image_path,
@@ -2109,12 +2250,54 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
         "session_overlap_flag": round(session_overlap, 4),  # [25] already {0.0, 1.0}
         "atr_trend": round(atr_trend_val, 4),  # [26] already [0, 1]
         "volume_trend": round(vol_trend_val, 4),  # [27] already [0, 1]
+        # ── v8-B cross-asset correlation columns ──────────────────────────
+        "primary_peer_corr": round(primary_peer_corr, 4),  # [28] already [0, 1]
+        "cross_class_corr": round(cross_class_corr, 4),  # [29] already [0, 1]
+        "correlation_regime": round(correlation_regime, 4),  # [30] already [0, 1]
+        # ── v8-C asset fingerprint columns ────────────────────────────────
+        "typical_daily_range_norm": round(typical_daily_range_norm, 4),  # [31] already [0, 1]
+        "session_concentration": round(session_concentration_val, 4),  # [32] already [0, 1]
+        "breakout_follow_through": round(breakout_follow_through_val, 4),  # [33] already [0, 1]
+        "hurst_exponent": round(hurst_exponent_val, 4),  # [34] already [0, 1]
+        "overnight_gap_tendency": round(overnight_gap_tendency, 4),  # [35] already [0, 1]
+        "volume_profile_shape": round(volume_profile_shape_val, 4),  # [36] already [0, 1]
     }
 
 
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+
+
+def _resolve_peer_tickers(symbol: str) -> list[str]:
+    """Return the list of peer tickers needed for cross-asset features.
+
+    Looks up the symbol in ``cross_asset.PEER_MAP`` and returns the
+    primary peer plus all cross-class peers.  Returns an empty list if
+    no peer mapping exists.
+    """
+    try:
+        from lib.analysis.cross_asset import PEER_MAP
+
+        peer_info = PEER_MAP.get(symbol)
+        if peer_info is None:
+            # Try stripping =F suffix
+            stripped = symbol.split("=")[0] if "=" in symbol else symbol
+            peer_info = PEER_MAP.get(stripped)
+        if peer_info is None:
+            return []
+
+        tickers: list[str] = []
+        primary = peer_info.get("primary_peer", "")
+        if primary:
+            tickers.append(primary)
+        cross = peer_info.get("cross_class_peers", [])
+        for t in cross:
+            if t and t not in tickers:
+                tickers.append(t)
+        return tickers
+    except Exception:
+        return []
 
 
 def generate_dataset(
@@ -2147,6 +2330,47 @@ def generate_dataset(
     aggregate_stats = DatasetStats()
     all_rows: list[dict[str, Any]] = []
 
+    # ── Pre-load peer bars for cross-asset features (v8-B) ────────────
+    # Build a shared cache of 1-minute bars keyed by short ticker.
+    # Symbols that appear in the main list will be loaded anyway during
+    # the per-symbol loop; peers that are NOT in the list are loaded here
+    # up-front.  The cache avoids loading the same ticker twice.
+    _bars_cache: dict[str, pd.DataFrame | None] = {}  # ticker → bars (or None)
+    if bars_override:
+        for k, v in bars_override.items():
+            _bars_cache[k] = v
+
+    # Discover all peer tickers we'll need
+    _all_peer_tickers: set[str] = set()
+    for symbol in symbols:
+        _all_peer_tickers.update(_resolve_peer_tickers(symbol))
+    # Remove tickers that are already in the primary symbol list (they'll
+    # be loaded during the main loop)
+    _peer_only_tickers = _all_peer_tickers - set(symbols) - set(_bars_cache.keys())
+
+    if _peer_only_tickers:
+        logger.info(
+            "Pre-loading %d peer tickers for cross-asset features: %s",
+            len(_peer_only_tickers),
+            ", ".join(sorted(_peer_only_tickers)),
+        )
+        for peer_ticker in sorted(_peer_only_tickers):
+            try:
+                peer_bars = load_bars(
+                    peer_ticker,
+                    source=cfg.bars_source,
+                    days=days_back,
+                    csv_dir=cfg.csv_bars_dir,
+                )
+                _bars_cache[peer_ticker] = peer_bars
+                if peer_bars is not None and not peer_bars.empty:
+                    logger.info("  ✓ %s: %d bars loaded", peer_ticker, len(peer_bars))
+                else:
+                    logger.info("  ✗ %s: no data available", peer_ticker)
+            except Exception as exc:
+                logger.warning("  ✗ %s: load failed — %s", peer_ticker, exc)
+                _bars_cache[peer_ticker] = None
+
     total_symbols = len(symbols)
     for sym_idx, symbol in enumerate(symbols, 1):
         logger.info("Processing %s [%d/%d]...", symbol, sym_idx, total_symbols)
@@ -2154,6 +2378,8 @@ def generate_dataset(
         # Load bar data
         if bars_override and symbol in bars_override:
             bars_1m = bars_override[symbol]
+        elif symbol in _bars_cache and _bars_cache[symbol] is not None:
+            bars_1m = _bars_cache[symbol]
         else:
             bars_1m = load_bars(
                 symbol,
@@ -2168,8 +2394,45 @@ def generate_dataset(
             aggregate_stats.errors.append(msg)
             continue
 
-        # Load daily bars for NR7
+        # Store in cache so peer lookups can find it
+        _bars_cache[symbol] = bars_1m
+
+        # Load daily bars for NR7 + v7/v8 features
         bars_daily = load_daily_bars(symbol, source=cfg.bars_source, csv_dir=cfg.csv_bars_dir)
+
+        # ── Build bars_by_ticker for cross-asset features ─────────────
+        # Include this symbol's own bars plus all its peers' bars.
+        bars_by_ticker: dict[str, pd.DataFrame] = {symbol: bars_1m}
+        peer_tickers = _resolve_peer_tickers(symbol)
+        for pt in peer_tickers:
+            # Check the cache first
+            if pt in _bars_cache:
+                if _bars_cache[pt] is not None and not _bars_cache[pt].empty:
+                    bars_by_ticker[pt] = _bars_cache[pt]
+            else:
+                # Peer wasn't pre-loaded (e.g. not in PEER_MAP at planning
+                # time, or newly discovered).  Try loading now.
+                try:
+                    pb = load_bars(
+                        pt,
+                        source=cfg.bars_source,
+                        days=days_back,
+                        csv_dir=cfg.csv_bars_dir,
+                    )
+                    _bars_cache[pt] = pb
+                    if pb is not None and not pb.empty:
+                        bars_by_ticker[pt] = pb
+                except Exception:
+                    _bars_cache[pt] = None
+
+        _n_peers_loaded = len(bars_by_ticker) - 1  # exclude the symbol itself
+        if _n_peers_loaded > 0:
+            logger.info(
+                "%s: %d/%d peer bars available for cross-asset features",
+                symbol,
+                _n_peers_loaded,
+                len(peer_tickers),
+            )
 
         try:
             rows, symbol_stats = generate_dataset_for_symbol(
@@ -2177,6 +2440,7 @@ def generate_dataset(
                 bars_1m=bars_1m,
                 bars_daily=bars_daily,
                 config=cfg,
+                bars_by_ticker=bars_by_ticker,
             )
 
             all_rows.extend(rows)
@@ -2280,14 +2544,21 @@ def split_dataset(
             return "unknown"
 
     if stratify and "label" in df.columns:
-        # Build a composite stratification key from label + session so that
-        # both London and US images are proportionally represented in the
-        # train and val sets for every label class.
+        # Build a composite stratification key from (label, breakout_type, session)
+        # so that every combination is proportionally represented in train and
+        # val splits.  This prevents rare breakout types (Monthly, Weekly) or
+        # overnight sessions from ending up entirely in one split.
         if "breakout_time" in df.columns:
             df["_session"] = df["breakout_time"].apply(_infer_session)
-            df["_strat_key"] = df["label"].astype(str) + "__" + df["_session"]
         else:
-            df["_strat_key"] = df["label"].astype(str)
+            df["_session"] = "unknown"
+
+        if "breakout_type" in df.columns:
+            df["_bt"] = df["breakout_type"].astype(str)
+        else:
+            df["_bt"] = "ORB"
+
+        df["_strat_key"] = df["label"].astype(str) + "__" + df["_bt"] + "__" + df["_session"]
 
         train_parts = []
         val_parts = []
@@ -2301,23 +2572,28 @@ def split_dataset(
         val_df = pd.concat(val_parts, ignore_index=True).sample(frac=1, random_state=rng)
 
         # Log stratification breakdown for audit
-        if "_session" in df.columns:
-            for split_name, split_df in [("train", train_df), ("val", val_df)]:
-                session_counts = split_df["_session"].value_counts().to_dict()
-                label_counts = split_df["label"].value_counts().to_dict()
-                logger.info(
-                    "  %s split — sessions: %s | labels: %s",
-                    split_name,
-                    session_counts,
-                    label_counts,
-                )
+        for split_name, split_df in [("train", train_df), ("val", val_df)]:
+            session_counts = split_df["_session"].value_counts().to_dict() if "_session" in split_df.columns else {}
+            label_counts = split_df["label"].value_counts().to_dict() if "label" in split_df.columns else {}
+            bt_counts = split_df["_bt"].value_counts().to_dict() if "_bt" in split_df.columns else {}
+            logger.info(
+                "  %s split — labels: %s | breakout_types: %s | sessions: %s",
+                split_name,
+                label_counts,
+                bt_counts,
+                session_counts,
+            )
 
         # Drop helper columns before saving
-        for col in ("_session", "_strat_key"):
+        for col in ("_session", "_bt", "_strat_key"):
             if col in train_df.columns:
                 train_df = train_df.drop(columns=[col])
             if col in val_df.columns:
                 val_df = val_df.drop(columns=[col])
+        # Also drop from the source df to avoid leaking helper columns
+        for col in ("_session", "_bt", "_strat_key"):
+            if col in df.columns:
+                df = df.drop(columns=[col])
     else:
         shuffled = df.sample(frac=1, random_state=rng)
         n_val = max(1, int(len(shuffled) * val_fraction))
@@ -2425,7 +2701,7 @@ def _cli():
         required=True,
         help="Symbols to process (e.g. MGC MES MNQ)",
     )
-    gen_parser.add_argument("--days", type=int, default=90, help="Days of history")
+    gen_parser.add_argument("--days", type=int, default=120, help="Days of history (v8 recipe: 120)")
     gen_parser.add_argument("--output-dir", default="dataset", help="Output directory")
     gen_parser.add_argument("--image-dir", default="dataset/images", help="Image output directory")
     gen_parser.add_argument("--source", default="massive", choices=["massive", "db", "cache", "csv"])
@@ -2437,7 +2713,7 @@ def _cli():
     gen_parser.add_argument("--no-skip", action="store_true", help="Re-render existing images")
     gen_parser.add_argument(
         "--session",
-        default="us",
+        default="all",
         choices=[
             "us",
             "london",
@@ -2450,7 +2726,7 @@ def _cli():
             "london_ny",
             "cme_settle",
         ],
-        help="ORB session: 'us' (default), 'london', 'all' (all 9 sessions), or a specific session key",
+        help="ORB session: 'all' (default, v8 recipe), 'us', 'london', or a specific session key",
     )
     gen_parser.add_argument(
         "--parity-renderer",
@@ -2468,7 +2744,7 @@ def _cli():
     )
     gen_parser.add_argument(
         "--breakout-type",
-        default="ORB",
+        default="all",
         choices=[
             "ORB",
             "PrevDay",
@@ -2486,7 +2762,7 @@ def _cli():
             "all",
         ],
         help=(
-            "Breakout type to generate (default: 'ORB'). "
+            "Breakout type to generate (default: 'all', v8 recipe). "
             "Use 'all' to iterate all 13 types. "
             "Controls box style on chart and the breakout_type_ord tabular feature."
         ),
@@ -2494,27 +2770,25 @@ def _cli():
     gen_parser.add_argument(
         "--max-per-type",
         type=int,
-        default=0,
+        default=800,
         help=(
             "Maximum samples per (label, breakout_type) bucket when --breakout-type=all. "
-            "0 = unlimited (default). Set e.g. 500 to cap each type/label combination so "
-            "rare types are not swamped by common ones."
+            "v8 recipe default: 800. Set 0 for unlimited."
         ),
     )
     gen_parser.add_argument(
         "--max-per-session",
         type=int,
-        default=0,
-        help=(
-            "Maximum samples per (label, session) bucket. "
-            "0 = unlimited (default). Useful to prevent overnight sessions from being "
-            "under-represented vs the primary US/London sessions."
-        ),
+        default=400,
+        help=("Maximum samples per (label, session) bucket. v8 recipe default: 400. Set 0 for unlimited."),
     )
 
     # Split
     split_parser = sub.add_parser("split", help="Split dataset into train/val")
     split_parser.add_argument("--csv", required=True, help="Path to dataset CSV")
+    split_parser.add_argument(
+        "--output-dir", default=None, help="Output directory for split CSVs (default: same as input CSV)"
+    )
     split_parser.add_argument("--val-frac", type=float, default=0.15)
     split_parser.add_argument("--seed", type=int, default=42)
 
@@ -2577,6 +2851,7 @@ def _cli():
     elif args.command == "split":
         train_path, val_path = split_dataset(
             csv_path=args.csv,
+            output_dir=args.output_dir,
             val_fraction=args.val_frac,
             random_seed=args.seed,
         )

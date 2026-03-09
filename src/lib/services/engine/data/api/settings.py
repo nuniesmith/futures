@@ -512,12 +512,12 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
           <div class="card-title">Service URLs</div>
           <div class="field">
             <label class="lbl">Data Service URL</label>
-            <input type="text" id="svc-data-url" placeholder="http://100.100.84.48:8000"/>
+            <input type="text" id="svc-data-url" placeholder="http://100.122.184.58:8000"/>
             <div class="field-hint">Engine + data API (Pi)</div>
           </div>
           <div class="field">
             <label class="lbl">Trainer Service URL</label>
-            <input type="text" id="svc-trainer-url" placeholder="http://100.100.84.48:8200"/>
+            <input type="text" id="svc-trainer-url" placeholder="http://100.122.184.58:8200"/>
             <div class="field-hint">GPU training server</div>
           </div>
           <div class="field">
@@ -1573,9 +1573,9 @@ async def get_service_config():
     overrides = _load_persisted_settings()
     svc = overrides.get("services", {})
     return {
-        "data_service_url": svc.get("data_service_url", os.getenv("DATA_SERVICE_URL", "http://100.100.84.48:8000")),
+        "data_service_url": svc.get("data_service_url", os.getenv("DATA_SERVICE_URL", "http://100.122.184.58:8000")),
         "trainer_service_url": svc.get(
-            "trainer_service_url", os.getenv("TRAINER_SERVICE_URL", "http://100.100.84.48:8200")
+            "trainer_service_url", os.getenv("TRAINER_SERVICE_URL", "http://100.122.184.58:8200")
         ),
         "bridge_host": svc.get("bridge_host", os.getenv("NT_BRIDGE_HOST", "100.127.182.112")),
         "bridge_port": svc.get("bridge_port", int(os.getenv("NT_BRIDGE_PORT", "5680"))),
@@ -1622,13 +1622,13 @@ async def probe_services():
     overrides = _load_persisted_settings()
     svc = overrides.get("services", {})
 
-    trainer_url = svc.get("trainer_service_url", os.getenv("TRAINER_SERVICE_URL", "http://100.100.84.48:8200"))
+    trainer_url = svc.get("trainer_service_url", os.getenv("TRAINER_SERVICE_URL", "http://100.122.184.58:8200"))
     bridge_host = svc.get("bridge_host", os.getenv("NT_BRIDGE_HOST", "100.127.182.112"))
     bridge_port = svc.get("bridge_port", int(os.getenv("NT_BRIDGE_PORT", "5680")))
 
     # Displayed URL for the engine — whatever the operator configured, for
     # reference only (we don't HTTP-probe it since we *are* it).
-    data_url = svc.get("data_service_url", os.getenv("DATA_SERVICE_URL", "http://100.100.84.48:8000"))
+    data_url = svc.get("data_service_url", os.getenv("DATA_SERVICE_URL", "http://100.122.184.58:8000"))
 
     services = []
 

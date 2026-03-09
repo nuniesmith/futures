@@ -2,7 +2,7 @@
 Trainer Page API Router
 ========================
 Serves the full Trainer dashboard page at GET /trainer and proxies all
-/trainer/api/* requests to the trainer service (default http://trainer:8200).
+/trainer/api/* requests to the trainer service (default http://100.113.72.63:8200).
 
 The trainer service URL is configurable at runtime and persisted in Redis
 so it survives container restarts.  This lets you point the dashboard at a
@@ -35,7 +35,7 @@ router = APIRouter(tags=["Trainer"])
 # Trainer URL — default from env, overridable via Redis at runtime
 # ---------------------------------------------------------------------------
 
-_DEFAULT_TRAINER_URL = os.getenv("TRAINER_SERVICE_URL", "http://trainer:8200").rstrip("/")
+_DEFAULT_TRAINER_URL = os.getenv("TRAINER_SERVICE_URL", "http://100.113.72.63:8200").rstrip("/")
 _TRAINER_URL_REDIS_KEY = "futures:trainer_service_url"
 
 # Module-level httpx client — reused across requests
@@ -411,7 +411,7 @@ tr:hover td{background:var(--bg-inner)}
     <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
       <span style="font-size:0.68rem;color:var(--muted)">Trainer URL:</span>
       <div class="url-row" style="margin:0">
-        <input type="url" id="trainer-url-input" style="width:220px;font-size:0.72rem" placeholder="http://trainer:8200"/>
+        <input type="url" id="trainer-url-input" style="width:220px;font-size:0.72rem" placeholder="http://100.113.72.63:8200"/>
         <button class="btn btn-neutral btn-sm" onclick="saveTrainerUrl()">Save</button>
         <button class="btn btn-neutral btn-sm" onclick="pollServiceStatus()">↺</button>
       </div>

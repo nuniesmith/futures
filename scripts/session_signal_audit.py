@@ -338,7 +338,7 @@ def _fetch_trades(
 
     # Common trade table schemas vary — try a few column name patterns
     queries = [
-        # NT8 bridge / risk manager style
+        # Trade log / risk manager style
         f"""
         SELECT symbol, direction, entry_price, exit_price, pnl, created_at,
                metadata_json

@@ -114,8 +114,6 @@ services:
             - ENGINE_MODE=remote
             - ORB_FILTER_GATE=${ORB_FILTER_GATE:-majority}
             - ORB_CNN_GATE=${ORB_CNN_GATE:-0}
-            - NT_BRIDGE_HOST=${NT_BRIDGE_HOST:-100.113.72.63}
-            - NT_BRIDGE_PORT=${NT_BRIDGE_PORT:-5680}
             - KRAKEN_API_KEY=${KRAKEN_API_KEY:-}
             - KRAKEN_API_SECRET=${KRAKEN_API_SECRET:-}
             - ENABLE_KRAKEN_CRYPTO=${ENABLE_KRAKEN_CRYPTO:-1}
@@ -164,7 +162,7 @@ services:
             - "8180:8080"
         environment:
             - DATA_SERVICE_URL=http://engine:8000
-            - TRAINER_SERVICE_URL=http://trainer:8200
+            - TRAINER_SERVICE_URL=http://100.113.72.63:8200
             - WEB_HOST=0.0.0.0
             - WEB_PORT=8080
             - LOG_LEVEL=info
@@ -188,6 +186,14 @@ services:
 
     # -------------------------------------------------------------------------
     # Trainer — GPU CNN retraining server (port 8200)       [training profile]
+    #
+    # ⚠️  PRODUCTION NOTE: The trainer GPU rig uses the standalone
+    #     docker-compose.trainer.yml instead of this file. That file has
+    #     no postgres/redis dependencies — the trainer fetches all market
+    #     data from the engine over Tailscale via ENGINE_DATA_URL.
+    #
+    #     This definition is kept for LOCAL DEVELOPMENT only (running the
+    #     full stack on one machine with --profile training).
     #
     # Runs a FastAPI server that listens for POST /train requests. Each request
     # triggers the full pipeline: dataset generation → model training →

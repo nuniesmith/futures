@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("OnnxFetch")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ce2f5e27d05e73077cc5fbae4f8f7b3d0b83c63b")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+8af2942b0144198e32e7d8258269d5924c5d8887")]
 [assembly: System.Reflection.AssemblyProductAttribute("OnnxFetch")]
 [assembly: System.Reflection.AssemblyTitleAttribute("OnnxFetch")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

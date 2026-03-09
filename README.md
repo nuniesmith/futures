@@ -434,9 +434,7 @@ futures/
 |---|---|---|
 | `ACCOUNT_SIZE` | `150000` | Account size for risk calculations ($50K, $100K, or $150K) |
 | `ORB_FILTER_GATE` | `majority` | Filter strictness: `all`, `majority`, or `none` |
-| `ORB_CNN_GATE` | `0` | `0` = CNN advisory only, `1` = CNN hard gate (blocks trade signal) |
-| `NT_BRIDGE_HOST` | `100.113.72.63` | Tailscale IP of the NT8 machine running the Bridge add-on |
-| `NT_BRIDGE_PORT` | `5680` | Bridge TCP port |
+| `ORB_CNN_GATE` | `0` | `0` = CNN advisory only, `1` = CNN hard gate (blocks trade signal)
 
 #### Trainer
 

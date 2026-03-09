@@ -304,14 +304,14 @@ class TestFeatureContract:
             return json.load(f)
 
     def test_version_6(self, contract):
-        assert contract["version"] == 7.1
+        assert contract["version"] == 8
 
     def test_num_tabular_18(self, contract):
-        assert contract["num_tabular"] == 28
+        assert contract["num_tabular"] == 37
 
     def test_tabular_features_list(self, contract):
         features = contract["tabular_features"]
-        assert len(features) == 28
+        assert len(features) == 37
         assert "asset_class_id" in features
         assert "asset_volatility_class" in features
         assert "breakout_type_ord" in features
@@ -327,6 +327,17 @@ class TestFeatureContract:
         assert "session_overlap_flag" in features
         assert "atr_trend" in features
         assert "volume_trend" in features
+        # v8-B additions — Cross-Asset Correlation
+        assert "primary_peer_corr" in features
+        assert "cross_class_corr" in features
+        assert "correlation_regime" in features
+        # v8-C additions — Asset Fingerprint
+        assert "typical_daily_range_norm" in features
+        assert "session_concentration" in features
+        assert "breakout_follow_through" in features
+        assert "hurst_exponent" in features
+        assert "overnight_gap_tendency" in features
+        assert "volume_profile_shape" in features
 
     @pytest.mark.parametrize(
         "symbol",
@@ -843,7 +854,7 @@ class TestTabularFeatureShape:
             assert get_asset_volatility_class(p) == 1.0, f"{p} vol class != 1.0"
 
     def test_feature_contract_has_28_features(self):
-        """Sanity check: exactly 28 tabular features in the v7.1 contract."""
+        """Sanity check: exactly 37 tabular features in the v8 contract."""
         contract_path = os.path.join(_PROJECT_ROOT, "models", "feature_contract.json")
         if not os.path.isfile(contract_path):
             pytest.skip("feature_contract.json not found")
@@ -851,8 +862,8 @@ class TestTabularFeatureShape:
         with open(contract_path) as f:
             contract = json.load(f)
 
-        assert contract["num_tabular"] == 28
-        assert len(contract["tabular_features"]) == 28
+        assert contract["num_tabular"] == 37
+        assert len(contract["tabular_features"]) == 37
 
         expected_features = [
             "quality_pct_norm",
@@ -885,6 +896,17 @@ class TestTabularFeatureShape:
             "session_overlap_flag",
             "atr_trend",
             "volume_trend",
+            # v8-B additions (cross-asset correlation)
+            "primary_peer_corr",
+            "cross_class_corr",
+            "correlation_regime",
+            # v8-C additions (asset fingerprint)
+            "typical_daily_range_norm",
+            "session_concentration",
+            "breakout_follow_through",
+            "hurst_exponent",
+            "overnight_gap_tendency",
+            "volume_profile_shape",
         ]
         for feat in expected_features:
             assert feat in contract["tabular_features"], f"Missing feature: {feat}"

@@ -51,7 +51,7 @@ MERMAID = """flowchart TD
     subgraph Manual["🛠️ Manual London Mode (03:00–12:00 ET)"]
         P[Dashboard auto-switches to Manual View]
         Q[Focus cards ranked by Conviction Stack Score 0-100]
-        Q -->|high stack| R[Manual entry buttons\nBridge /execute_signal\nquick LONG/SHORT + Take Profit Now]
+        Q -->|high stack| R[Manual entry buttons\nTradingView / dashboard\nquick LONG/SHORT + Take Profit Now]
         R --> S[You take early profit & done by noon]
         S --> T[Auto switches back to full automation at 12:00]
     end
@@ -65,7 +65,7 @@ MERMAID = """flowchart TD
         X --> Y[RiskManager.can_enter\nLiveRiskState + Discord smart gate]
         Y --> Z[PositionManager\nSAR always-in scalps OR DailySwing]
         Z --> AA[3-phase bracket\nTP1 → BE → EMA9 trail to TP3]
-        AA --> BB[Bridge.cs → NT8 BreakoutStrategy.cs\nexecutes on prop accounts]
+        AA --> BB[TradingView signal → Tradovate\nexecutes on prop accounts]
     end
 
     %% ==================== JOURNALING & LLM ====================
@@ -94,7 +94,7 @@ MERMAID = """flowchart TD
     subgraph Weekend["🧠 Weekend 48h Training"]
         MM[Full dataset regen\n180 days + WSB + Conviction features]
         MM --> NN[Long CNN retrain + deep Optuna]
-        NN --> OO[Export ONNX + feature_contract vX\nsync_models + deploy_nt8.ps1]
+        NN --> OO[Export ONNX + feature_contract vX\nsync_models → engine hot-reload]
     end
 
     %% ==================== CONNECTIONS ====================

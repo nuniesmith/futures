@@ -1200,26 +1200,26 @@ class TestFeatureContractGeneration:
         contract = generate_feature_contract()
         assert isinstance(contract, dict)
 
-    def test_version_is_7(self):
+    def test_version_is_8(self):
         from lib.analysis.breakout_cnn import FEATURE_CONTRACT_VERSION, generate_feature_contract
 
         contract = generate_feature_contract()
         assert contract["version"] == FEATURE_CONTRACT_VERSION
-        assert contract["version"] == 7
+        assert contract["version"] == 8
 
     def test_num_tabular_matches_constant(self):
         from lib.analysis.breakout_cnn import NUM_TABULAR, generate_feature_contract
 
         contract = generate_feature_contract()
         assert contract["num_tabular"] == NUM_TABULAR
-        assert contract["num_tabular"] == 28
+        assert contract["num_tabular"] == 37
 
     def test_tabular_features_list(self):
         from lib.analysis.breakout_cnn import TABULAR_FEATURES, generate_feature_contract
 
         contract = generate_feature_contract()
         assert contract["tabular_features"] == TABULAR_FEATURES
-        assert len(contract["tabular_features"]) == 28
+        assert len(contract["tabular_features"]) == 37
         # Spot-check v4 core features
         assert "quality_pct_norm" in contract["tabular_features"]
         assert "direction_flag" in contract["tabular_features"]
@@ -1242,6 +1242,17 @@ class TestFeatureContractGeneration:
         assert "session_overlap_flag" in contract["tabular_features"]
         assert "atr_trend" in contract["tabular_features"]
         assert "volume_trend" in contract["tabular_features"]
+        # v8-B additions — Cross-Asset Correlation
+        assert "primary_peer_corr" in contract["tabular_features"]
+        assert "cross_class_corr" in contract["tabular_features"]
+        assert "correlation_regime" in contract["tabular_features"]
+        # v8-C additions — Asset Fingerprint
+        assert "typical_daily_range_norm" in contract["tabular_features"]
+        assert "session_concentration" in contract["tabular_features"]
+        assert "breakout_follow_through" in contract["tabular_features"]
+        assert "hurst_exponent" in contract["tabular_features"]
+        assert "overnight_gap_tendency" in contract["tabular_features"]
+        assert "volume_profile_shape" in contract["tabular_features"]
 
     def test_all_13_breakout_types_present(self):
         from lib.analysis.breakout_cnn import generate_feature_contract
@@ -1371,4 +1382,4 @@ class TestFeatureContractGeneration:
 
         result = generate_feature_contract(output_path=None)
         assert isinstance(result, dict)
-        assert result["version"] == 7
+        assert result["version"] == 8

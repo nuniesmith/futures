@@ -1707,7 +1707,7 @@ def _handle_generate_chart_dataset(engine) -> None:
 
     Use the trainer service (lib.services.training.trainer_server) on the GPU machine:
         docker compose --profile training up -d
-        curl -X POST http://trainer:8200/train
+        curl -X POST http://100.113.72.63:8200/train
     """
     logger.info("⏭️  Chart dataset generation skipped — use trainer service (POST /train)")
 
@@ -1718,7 +1718,7 @@ def _handle_train_breakout_cnn(engine) -> None:
     The trainer server (lib.services.training.trainer_server) handles the full
     pipeline: dataset generation → training → evaluation → promotion.
         docker compose --profile training up -d
-        curl -X POST http://trainer:8200/train
+        curl -X POST http://100.113.72.63:8200/train
     Trained models are hot-reloaded by the engine via watchdog.
     """
     logger.info("⏭️  CNN training skipped — use trainer service (POST /train)")

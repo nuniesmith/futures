@@ -1,6 +1,6 @@
 {
-    "version": 7.1,
-    "num_tabular": 28,
+    "version": 8,
+    "num_tabular": 37,
     "tabular_features": [
         "quality_pct_norm",
         "volume_ratio",
@@ -29,7 +29,16 @@
         "breakout_type_category",
         "session_overlap_flag",
         "atr_trend",
-        "volume_trend"
+        "volume_trend",
+        "primary_peer_corr",
+        "cross_class_corr",
+        "correlation_regime",
+        "typical_daily_range_norm",
+        "session_concentration",
+        "breakout_follow_through",
+        "hurst_exponent",
+        "overnight_gap_tendency",
+        "volume_profile_shape"
     ],
     "default_threshold": 0.82,
     "image_size": 224,
@@ -163,7 +172,7 @@
             "box_style": "gold_dashed",
             "box_border_rgba": [255, 215, 0, 100],
             "box_fill_rgba": [255, 215, 0, 30],
-            "description": "Opening Range Breakout \u2014 30-min OR at session open"
+            "description": "Opening Range Breakout — 30-min OR at session open"
         },
         "PrevDay": {
             "ordinal": 1,
@@ -179,7 +188,7 @@
             "box_style": "silver_solid",
             "box_border_rgba": [192, 192, 192, 120],
             "box_fill_rgba": [192, 192, 192, 20],
-            "description": "Previous Day High/Low \u2014 prior session range as support/resistance"
+            "description": "Previous Day High/Low — prior session range as support/resistance"
         },
         "InitialBalance": {
             "ordinal": 2,
@@ -195,7 +204,7 @@
             "box_style": "blue_dashed",
             "box_border_rgba": [0, 229, 255, 110],
             "box_fill_rgba": [0, 229, 255, 18],
-            "description": "Initial Balance \u2014 first 60 min of the primary session (auction theory IB)"
+            "description": "Initial Balance — first 60 min of the primary session (auction theory IB)"
         },
         "Consolidation": {
             "ordinal": 3,
@@ -211,7 +220,7 @@
             "box_style": "purple_solid",
             "box_border_rgba": [147, 0, 211, 130],
             "box_fill_rgba": [147, 0, 211, 22],
-            "description": "Detected Consolidation \u2014 auto-identified tight range / inside-bar cluster"
+            "description": "Detected Consolidation — auto-identified tight range / inside-bar cluster"
         },
         "Weekly": {
             "ordinal": 4,
@@ -227,7 +236,7 @@
             "box_style": "teal_solid",
             "box_border_rgba": [0, 128, 128, 120],
             "box_fill_rgba": [0, 128, 128, 15],
-            "description": "Weekly Range \u2014 prior week's high/low as support/resistance"
+            "description": "Weekly Range — prior week's high/low as support/resistance"
         },
         "Monthly": {
             "ordinal": 5,
@@ -243,7 +252,7 @@
             "box_style": "orange_solid",
             "box_border_rgba": [255, 140, 0, 100],
             "box_fill_rgba": [255, 140, 0, 12],
-            "description": "Monthly Range \u2014 prior month's high/low as macro support/resistance"
+            "description": "Monthly Range — prior month's high/low as macro support/resistance"
         },
         "Asian": {
             "ordinal": 6,
@@ -259,7 +268,7 @@
             "box_style": "red_dashed",
             "box_border_rgba": [220, 20, 60, 110],
             "box_fill_rgba": [220, 20, 60, 18],
-            "description": "Asian Session Range \u2014 19:00\u201302:00 ET high/low (Tokyo/Sydney overnight)"
+            "description": "Asian Session Range — 19:00–02:00 ET high/low (Tokyo/Sydney overnight)"
         },
         "BollingerSqueeze": {
             "ordinal": 7,
@@ -275,7 +284,7 @@
             "box_style": "magenta_dashed",
             "box_border_rgba": [255, 0, 255, 110],
             "box_fill_rgba": [255, 0, 255, 15],
-            "description": "Bollinger Squeeze \u2014 BB compression + Keltner inside \u2192 expansion breakout"
+            "description": "Bollinger Squeeze — BB compression + Keltner inside → expansion breakout"
         },
         "ValueArea": {
             "ordinal": 8,
@@ -291,7 +300,7 @@
             "box_style": "olive_solid",
             "box_border_rgba": [128, 128, 0, 120],
             "box_fill_rgba": [128, 128, 0, 18],
-            "description": "Value Area \u2014 prior session VAH/VAL from volume profile (70% rule)"
+            "description": "Value Area — prior session VAH/VAL from volume profile (70% rule)"
         },
         "InsideDay": {
             "ordinal": 9,
@@ -307,7 +316,7 @@
             "box_style": "lime_dashed",
             "box_border_rgba": [50, 205, 50, 120],
             "box_fill_rgba": [50, 205, 50, 18],
-            "description": "Inside Day \u2014 today's range inside yesterday's \u2192 coiled energy breakout"
+            "description": "Inside Day — today's range inside yesterday's → coiled energy breakout"
         },
         "GapRejection": {
             "ordinal": 10,
@@ -323,7 +332,7 @@
             "box_style": "coral_solid",
             "box_border_rgba": [255, 127, 80, 120],
             "box_fill_rgba": [255, 127, 80, 18],
-            "description": "Gap Rejection \u2014 overnight gap fill or rejection at gap edge"
+            "description": "Gap Rejection — overnight gap fill or rejection at gap edge"
         },
         "PivotPoints": {
             "ordinal": 11,
@@ -339,7 +348,7 @@
             "box_style": "steel_dashed",
             "box_border_rgba": [70, 130, 180, 120],
             "box_fill_rgba": [70, 130, 180, 18],
-            "description": "Pivot Points \u2014 classic floor pivot R1/S1 as the breakout range"
+            "description": "Pivot Points — classic floor pivot R1/S1 as the breakout range"
         },
         "Fibonacci": {
             "ordinal": 12,
@@ -355,7 +364,7 @@
             "box_style": "amber_solid",
             "box_border_rgba": [255, 191, 0, 120],
             "box_fill_rgba": [255, 191, 0, 18],
-            "description": "Fibonacci \u2014 38.2%\u201361.8% retracement zone of prior swing as breakout range"
+            "description": "Fibonacci — 38.2%–61.8% retracement zone of prior swing as breakout range"
         }
     },
     "v7_feature_descriptions": {
@@ -386,5 +395,138 @@
         ],
         "squeeze_based": ["Consolidation", "BollingerSqueeze"]
     },
-    "generated_at": "2026-03-07T18:08:34.109876+00:00"
+    "asset_class_lookup": {
+        "MES": 0,
+        "MNQ": 0,
+        "M2K": 0,
+        "MYM": 0,
+        "6E": 1,
+        "6B": 1,
+        "6J": 1,
+        "6A": 1,
+        "6C": 1,
+        "6S": 1,
+        "M6E": 1,
+        "M6B": 1,
+        "MGC": 2,
+        "SIL": 2,
+        "MHG": 2,
+        "MCL": 2,
+        "MNG": 2,
+        "ZN": 3,
+        "ZB": 3,
+        "ZC": 3,
+        "ZS": 3,
+        "ZW": 3,
+        "MBT": 4,
+        "MET": 4,
+        "BTC": 4,
+        "ETH": 4,
+        "SOL": 4,
+        "LINK": 4,
+        "AVAX": 4,
+        "DOT": 4,
+        "ADA": 4,
+        "MATIC": 4,
+        "XRP": 4,
+        "KRAKEN:XBTUSD": 4,
+        "KRAKEN:ETHUSD": 4,
+        "KRAKEN:SOLUSD": 4,
+        "KRAKEN:LINKUSD": 4,
+        "KRAKEN:AVAXUSD": 4,
+        "KRAKEN:DOTUSD": 4,
+        "KRAKEN:ADAUSD": 4,
+        "KRAKEN:MATICUSD": 4,
+        "KRAKEN:XRPUSD": 4
+    },
+    "asset_id_lookup": {
+        "MES": 0,
+        "MNQ": 1,
+        "M2K": 2,
+        "MYM": 3,
+        "6E": 4,
+        "6B": 5,
+        "6J": 6,
+        "6A": 7,
+        "6C": 8,
+        "6S": 9,
+        "M6E": 4,
+        "M6B": 5,
+        "MGC": 10,
+        "SIL": 11,
+        "MHG": 12,
+        "MCL": 13,
+        "MNG": 14,
+        "ZN": 15,
+        "ZB": 16,
+        "ZC": 17,
+        "ZS": 18,
+        "ZW": 19,
+        "MBT": 20,
+        "MET": 21,
+        "BTC": 20,
+        "ETH": 21,
+        "SOL": 22,
+        "LINK": 22,
+        "AVAX": 22,
+        "DOT": 23,
+        "ADA": 23,
+        "MATIC": 23,
+        "XRP": 23,
+        "KRAKEN:XBTUSD": 20,
+        "KRAKEN:ETHUSD": 21,
+        "KRAKEN:SOLUSD": 22,
+        "KRAKEN:LINKUSD": 22,
+        "KRAKEN:AVAXUSD": 22,
+        "KRAKEN:DOTUSD": 23,
+        "KRAKEN:ADAUSD": 23,
+        "KRAKEN:MATICUSD": 23,
+        "KRAKEN:XRPUSD": 23
+    },
+    "num_asset_classes": 5,
+    "num_assets": 25,
+    "asset_class_embed_dim": 4,
+    "asset_id_embed_dim": 8,
+    "v8_cross_asset_descriptions": {
+        "primary_peer_corr": "Pearson correlation with primary peer asset over 30-bar window, mapped from [-1,1] to [0,1]. 0.5 = uncorrelated.",
+        "cross_class_corr": "Strongest cross-class correlation magnitude over 30-bar window, mapped from [-1,1] to [0,1]. Reveals risk-on/off regime.",
+        "correlation_regime": "Correlation structure state: 0.0 = broken/inverted (decorrelated), 0.5 = normal, 1.0 = elevated (herding). Detected by comparing 30-bar vs 200-bar baseline correlation z-score."
+    },
+    "v8_fingerprint_descriptions": {
+        "typical_daily_range_norm": "Median daily range / ATR(14), clamped [0.5, 2.5] then normalised to [0,1]. High = very active asset, low = quiet.",
+        "session_concentration": "Fraction of daily range captured in the dominant session [0,1]. High = concentrated activity, low = distributed.",
+        "breakout_follow_through": "Trailing 20-day breakout win rate for this asset [0,1]. 1.0 = every breakout continues, 0.0 = every one fades.",
+        "hurst_exponent": "Rolling Hurst exponent normalised to [0,1]. <0.4 = mean-reverting (choppy), >0.6 = trending (momentum), 0.5 = random walk.",
+        "overnight_gap_tendency": "Median overnight gap size / ATR, clamped and normalised to [0,1]. High = gap-prone, low = smooth transitions.",
+        "volume_profile_shape": "Intraday volume distribution regularity score [0,1]. 0.9 = U-shaped (predictable), 0.4 = flat (unpredictable)."
+    },
+    "v8_architecture": {
+        "tabular_head": "Linear(37→256) → BN → GELU → Dropout(0.3) → Linear(256→128) → BN → GELU → Linear(128→64)",
+        "asset_class_embedding": "nn.Embedding(5, 4)",
+        "asset_id_embedding": "nn.Embedding(25, 8)",
+        "classifier_input_dim": "1280 + 64 + 12 = 1356",
+        "activation": "GELU",
+        "label_smoothing": 0.1,
+        "mixup_alpha": 0.2,
+        "warmup_epochs": 5,
+        "grad_accum_steps": 2
+    },
+    "v8_training_recipe": {
+        "epochs": 80,
+        "patience": 15,
+        "batch_size": 64,
+        "effective_batch_size": 128,
+        "freeze_epochs": 5,
+        "backbone_lr": 0.0002,
+        "head_lr": 0.001,
+        "weight_decay": 0.0001,
+        "max_samples_per_type_label": 800,
+        "max_samples_per_session_label": 400,
+        "gate_check": {
+            "min_accuracy": 0.89,
+            "min_precision": 0.87,
+            "min_recall": 0.84
+        }
+    },
+    "generated_at": "2026-03-09T00:00:00+00:00"
 }

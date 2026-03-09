@@ -47,6 +47,7 @@
 #   - XAI_API_KEY: xAI (Grok) API key
 #   - MASSIVE_API_KEY: Massive API key
 #   - KRAKEN_API_KEY: Kraken API key
+#   - API_KEY: Shared secret for inter-service auth (engine ↔ trainer)
 # =============================================================================
 
 name: 🚀 CI/CD Pipeline
@@ -74,7 +75,7 @@ on:
                 type: boolean
                 default: false
             skip_deploy:
-                description: "Skip Pi deploy (build only)"
+                description: "Skip deployment (build only)"
                 required: false
                 type: boolean
                 default: false
@@ -411,6 +412,7 @@ jobs:
                       upsert_env "MASSIVE_API_KEY"     "${{ secrets.MASSIVE_API_KEY }}"
                       upsert_env "KRAKEN_API_KEY"      "${{ secrets.KRAKEN_API_KEY }}"
                       upsert_env "KRAKEN_API_SECRET"   "${{ secrets.KRAKEN_API_SECRET }}"
+                      upsert_env "API_KEY"             "${{ secrets.API_KEY }}"
 
                       chmod 600 .env
                       echo "✅ API keys injected"
@@ -598,8 +600,10 @@ jobs:
                         echo "✅ Created .env file"
                       fi
 
-                      # Upsert API keys needed by trainer
-                      echo "🔑 Injecting API keys into .env..."
+                      # Upsert env vars needed by trainer
+                      # The trainer fetches ALL market data from the engine over
+                      # Tailscale — no direct MASSIVE/KRAKEN API keys needed.
+                      echo "🔑 Injecting environment variables into .env..."
                       upsert_env() {
                         local key="$1" val="$2"
                         if grep -q "^${key}=" .env 2>/dev/null; then
@@ -608,12 +612,19 @@ jobs:
                           echo "${key}=${val}" >> .env
                         fi
                       }
-                      upsert_env "MASSIVE_API_KEY"     "${{ secrets.MASSIVE_API_KEY }}"
-                      upsert_env "KRAKEN_API_KEY"      "${{ secrets.KRAKEN_API_KEY }}"
-                      upsert_env "KRAKEN_API_SECRET"   "${{ secrets.KRAKEN_API_SECRET }}"
+                      upsert_env "ENGINE_DATA_URL"     "http://${{ secrets.PROD_TAILSCALE_IP }}:8100"
+                      upsert_env "API_KEY"             "${{ secrets.API_KEY }}"
+                      upsert_env "TRAINER_API_KEY"     "${{ secrets.API_KEY }}"
+
+                      # Clean up legacy keys the trainer no longer needs
+                      sed -i '/^MASSIVE_API_KEY=/d'   .env 2>/dev/null || true
+                      sed -i '/^KRAKEN_API_KEY=/d'    .env 2>/dev/null || true
+                      sed -i '/^KRAKEN_API_SECRET=/d' .env 2>/dev/null || true
+                      sed -i '/^POSTGRES_PASSWORD=/d' .env 2>/dev/null || true
+                      sed -i '/^REDIS_PASSWORD=/d'    .env 2>/dev/null || true
 
                       chmod 600 .env
-                      echo "✅ API keys injected"
+                      echo "✅ Environment variables injected (ENGINE_DATA_URL + API_KEY)"
 
                       # Create required directories
                       echo "📁 Ensuring data directories exist..."
@@ -631,6 +642,9 @@ jobs:
 
                       # Stop existing trainer service (leave other FKS services untouched)
                       echo "🐳 Stopping existing trainer service..."
+                      docker compose -f docker-compose.trainer.yml stop trainer 2>/dev/null || true
+                      docker compose -f docker-compose.trainer.yml rm -f trainer 2>/dev/null || true
+                      # Also clean up any old profile-based containers
                       docker compose --profile training stop trainer 2>/dev/null || true
                       docker compose --profile training rm -f trainer 2>/dev/null || true
 
@@ -641,16 +655,16 @@ jobs:
                       echo "==> Pulling :trainer image..."
                       docker pull ${{ env.IMAGE_NAME }}:trainer
 
-                      # Start trainer with the training profile
+                      # Start trainer with standalone compose file (no postgres/redis deps)
                       echo "🏋️ Starting trainer service..."
-                      docker compose --profile training up -d --no-build trainer
+                      docker compose -f docker-compose.trainer.yml up -d --no-build trainer
 
                   post-deploy-command: |
                       cd ~/futures
 
                       echo ""
                       echo "📊 Trainer container status:"
-                      docker compose --profile training ps trainer 2>/dev/null || \
+                      docker compose -f docker-compose.trainer.yml ps trainer 2>/dev/null || \
                         docker ps --filter "name=trainer" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
                       echo ""

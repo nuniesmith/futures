@@ -139,7 +139,7 @@ def _inject_heartbeat(
         "received_at": received,
         "timestamp": received,
     }
-    key = _fake_cache_key("bridge_heartbeat", "current")
+    key = _fake_cache_key("broker_heartbeat", "current")
     _fake_cache[key] = json.dumps(hb)
 
 
@@ -717,7 +717,7 @@ class TestHeartbeat:
         assert data["status"] == "ok"
 
         # Verify cached
-        key = _fake_cache_key("bridge_heartbeat", "current")
+        key = _fake_cache_key("broker_heartbeat", "current")
         raw = _fake_cache.get(key)
         assert raw is not None
         hb = json.loads(raw)
@@ -731,7 +731,7 @@ class TestHeartbeat:
             json=self._make_heartbeat(port=9876),
         )
 
-        key = _fake_cache_key("bridge_heartbeat", "current")
+        key = _fake_cache_key("broker_heartbeat", "current")
         raw = _fake_cache.get(key)
         assert raw is not None
         hb = json.loads(raw)
@@ -750,7 +750,7 @@ class TestHeartbeat:
         )
 
         # Now the heartbeat key should be fresh
-        key = _fake_cache_key("bridge_heartbeat", "current")
+        key = _fake_cache_key("broker_heartbeat", "current")
         raw = _fake_cache.get(key)
         assert raw is not None
         hb = json.loads(raw)

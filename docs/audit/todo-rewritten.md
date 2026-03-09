@@ -61,7 +61,7 @@ futures/
 - **Training**: `trainer_server.py` FastAPI HTTP server (port 8200). `dataset_generator.py` covers all 13 types + all 9 sessions + Kraken. Session-specific thresholds. Type embedding. Synthetic augmentation. Balanced sampling. Full pipeline: generate → split (85/15 stratified) → train → evaluate → gate → promote → ONNX export.
 - **Monitoring**: Prometheus + Grafana. "Training Data Health" dashboard provisioned.
 - **CI/CD**: Lint → Test → Build & push 3 Docker images → Deploy to Pi via Tailscale SSH → Health checks → Discord notifications. All on push to `main`.
-- **Tailscale**: NT8 Windows at `100.127.182.112`, Pi (Docker) at `100.100.84.48`, all services communicate over Tailscale mesh. HTTP only (no domain/TLS needed for local mesh).
+- **Tailscale**: Ubuntu Server (Docker) at `100.122.184.58`, all services communicate over Tailscale mesh. HTTP only (no domain/TLS needed for local mesh). Trainer is at '100.113.72.63'.
 
 ---
 

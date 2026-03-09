@@ -4,7 +4,7 @@ Live Signal Monitor — Watch ORB + CNN signals in real time
 ===========================================================
 
 Polls Redis for published ORB signals and displays them in the terminal
-with colour-coded output.  Also shows Bridge ACK status and basic
+with colour-coded output.  Also shows signal ACK status and basic
 engine health.
 
 Usage:
@@ -202,7 +202,7 @@ def run_monitor(interval: float = 1.0, json_mode: bool = False) -> None:
                                 ack = _r.get(f"signals:ack:{ts}")
                                 if ack:
                                     ack_str = ack.decode() if isinstance(ack, bytes) else ack
-                                    print(_dim(f"    -> ACK from Bridge: {ack_str}"))
+                                    print(_dim(f"    -> ACK: {ack_str}"))
                             except Exception:
                                 pass
                         print()
@@ -231,7 +231,7 @@ def run_monitor(interval: float = 1.0, json_mode: bool = False) -> None:
                 try:
                     ack_keys = list(_r.keys("signals:ack:*"))
                     if ack_keys:
-                        print(_dim(f"  ({len(ack_keys)} total ACKs from Bridge)"))
+                        print(_dim(f"  ({len(ack_keys)} total ACKs)"))
                 except Exception:
                     pass
 

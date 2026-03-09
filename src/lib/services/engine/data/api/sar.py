@@ -26,8 +26,7 @@ DELETE /sar/state/{asset}
 
 Network topology
 ----------------
-  NT8 Windows server  100.127.182.112  →  POST http://100.100.84.48:8000/sar/sync
-  Pi (Docker engine)  100.100.84.48    ←  reads Redis, drives PositionManager
+  Ubuntu Server (Docker engine)  100.122.184.58    ←  reads Redis, drives PositionManager
 """
 
 from __future__ import annotations

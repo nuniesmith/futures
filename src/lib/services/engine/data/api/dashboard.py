@@ -607,7 +607,10 @@ def _get_positions() -> list[dict[str, Any]]:
 
 
 def _get_bridge_info() -> dict[str, Any]:
-    """Read NT8 Bridge liveness from the heartbeat cache key.
+    """Read broker liveness from the heartbeat cache key.
+
+    Checks the new ``broker_heartbeat`` key first, then falls back to the
+    legacy ``bridge_heartbeat`` key for backward compatibility.
 
     Returns a dict with: connected (bool), age_seconds (float), account (str).
     Safe to call even when Redis is unavailable — returns disconnected state.
@@ -615,8 +618,12 @@ def _get_bridge_info() -> dict[str, Any]:
     try:
         from lib.core.cache import _cache_key, cache_get
 
-        key = _cache_key("bridge_heartbeat", "current")
+        # Try new broker key first, fall back to legacy bridge key
+        key = _cache_key("broker_heartbeat", "current")
         raw = cache_get(key)
+        if raw is None:
+            key = _cache_key("bridge_heartbeat", "current")
+            raw = cache_get(key)
         if raw is None:
             return {"connected": False, "age_seconds": -1.0, "account": ""}
         hb = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
@@ -1891,7 +1898,7 @@ def _render_positions_panel(
     bridge_age_seconds: float = -1,
     bridge_account: str = "",
 ) -> str:
-    """Render condensed live positions + daily P&L panel with Bridge status and action buttons."""
+    """Render condensed live positions + daily P&L panel with broker status and action buttons."""
     daily_pnl = 0.0
     can_trade = True
     block_reason = ""
@@ -1922,20 +1929,18 @@ def _render_positions_panel(
     trade_color = "text-yellow-400" if open_count >= max_trades else "text-zinc-200"
     streak_color = "text-red-400" if consecutive > 1 else "text-zinc-400"
 
-    # Bridge status dot + age
+    # Broker status dot + age
     if bridge_connected:
         age_str = f"{bridge_age_seconds:.0f}s ago" if bridge_age_seconds >= 0 else ""
         acct_str = f" · {bridge_account}" if bridge_account else ""
-        bridge_dot_html = f'<span style="color:#22c55e;font-size:9px" title="Bridge connected{acct_str} · last heartbeat {age_str}">● BRIDGE</span>'
+        bridge_dot_html = f'<span style="color:#22c55e;font-size:9px" title="Broker connected{acct_str} · last heartbeat {age_str}">● TV</span>'
     else:
-        bridge_dot_html = (
-            '<span style="color:#71717a;font-size:9px" title="Bridge offline — no heartbeat">○ BRIDGE</span>'
-        )
+        bridge_dot_html = '<span style="color:#71717a;font-size:9px" title="Broker offline — no heartbeat">○ TV</span>'
 
-    # Action buttons (disabled when bridge is offline)
+    # Action buttons (disabled when broker is offline)
     btn_disabled = "" if bridge_connected else ' style="opacity:0.4;pointer-events:none" disabled'
-    btn_title_flatten = "Flatten all positions via Bridge" if bridge_connected else "Bridge offline"
-    btn_title_cancel = "Cancel all working orders via Bridge" if bridge_connected else "Bridge offline"
+    btn_title_flatten = "Flatten all positions via broker" if bridge_connected else "Broker offline"
+    btn_title_cancel = "Cancel all working orders via broker" if bridge_connected else "Broker offline"
     action_buttons_html = f"""
     <div class="flex items-center gap-1 mt-1 mb-2">
         <button
@@ -3400,7 +3405,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     if focus_data and focus_data.get("no_trade"):
         no_trade_html = _render_no_trade_banner(str(focus_data.get("no_trade_reason", "Low-conviction day")))
 
-    # Positions panel with risk status + Bridge liveness
+    # Positions panel with risk status + broker liveness
     positions = _get_positions()
     risk_status = _get_risk_status()
     _bridge_info = _get_bridge_info()
@@ -4743,20 +4748,20 @@ function toggleTheme() {{
             _pushEvent('📋','Position update','#60a5fa');
         }});
 
-        // Bridge status — online/offline state change
+        // Broker status — online/offline state change
         _es.addEventListener('bridge-status', function(e) {{
             try {{
                 var bs = JSON.parse(e.data);
-                // Always refresh the positions panel so the bridge dot + button state updates
+                // Always refresh the positions panel so the broker dot + button state updates
                 if (typeof htmx!=='undefined') {{
                     htmx.ajax('GET','/api/positions/html',{{target:'#positions-container',swap:'innerHTML'}});
                     htmx.ajax('GET','/api/nt8/health/html',{{target:'#health-bar',swap:'innerHTML'}});
                 }}
                 if (bs.connected) {{
                     var acct = bs.account ? ' (' + bs.account + ')' : '';
-                    _pushEvent('🟢','NT8 Bridge connected' + acct,'#22c55e');
+                    _pushEvent('🟢','Broker connected' + acct,'#22c55e');
                 }} else {{
-                    _pushEvent('🔴','NT8 Bridge offline — no heartbeat','#f87171');
+                    _pushEvent('🔴','Broker offline — no heartbeat','#f87171');
                 }}
             }} catch(err) {{}}
         }});
@@ -4965,7 +4970,7 @@ def get_focus_symbol(request: Request, symbol: str):
 
 @router.get("/api/positions/html", response_class=HTMLResponse)
 def get_positions_html():
-    """Return live positions panel with risk status and Bridge state as HTML fragment.
+    """Return live positions panel with risk status and broker state as HTML fragment.
 
     Always returns content (positions panel renders even when empty),
     so no 204 guard needed here.

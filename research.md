@@ -337,7 +337,6 @@ ModelWatcher → hot-reload in engine + NT8
 - Discord/Telegram alerts: new signals, risk blocks, rebalance executed, daily P&L  
 - Crash resilience: Redis persistence, Bridge heartbeat, NT8 15 s heartbeat  
 - CI/CD: lint → test → build/push 3 Docker images → deploy to Pi (Tailscale SSH)  
-- Tailscale IPs: Pi `100.100.84.48`, NT8 `100.127.182.112`, GPU rig on-demand
 
 ### How This Maps to Your TODO (all phases covered)
 

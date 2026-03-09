@@ -276,9 +276,9 @@ flowchart TD
 
         subgraph INFRA["🏗️ Infrastructure"]
             direction TB
-            in1["✅ Docker Compose\n:engine Pi — main+sched+risk+posmgr\n:web Pi — HTMX dash :8080\n:trainer GPU — CNN :8200"]
+            in1["✅ Docker Compose\n:engine Ubuntu Server — main+sched+risk+posmgr\n:web Ubuntu Server — HTMX dash :8080\n:trainer GPU — CNN :8200"]
             in2["✅ CI/CD  GitHub Actions\nLint→Test→Build 3 imgs\nDeploy Pi SSH · health checks\nDiscord notify · keys injected"]
-            in3["✅ Tailscale mesh\nPi 100.100.84.48\nWindows 100.127.182.112\nHTTP only · no TLS needed"]
+            in3["✅ Tailscale mesh\nUbuntu Server 100.122.184.58\nTrainer 100.113.72.63\nHTTP only · no TLS needed"]
             in4["✅ Prometheus + Grafana\nTraining Data Health dashboard\nBridge /metrics · engine metrics\nAlertmanager provisioned"]
         end
 

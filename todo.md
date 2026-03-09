@@ -72,19 +72,20 @@ Python Dashboard (tiled alongside TV)
 ## Current State
 
 - **Monorepo**: All source — engine, web, trainer, lib, Pine Script, deploy scripts.
-- **Models**: `models/breakout_cnn_best.pt` + `feature_contract.json` committed (Git LFS). Latest champion: **87.1% accuracy**, 87.15% precision, 87.27% recall, 25 epochs, v6 18-feature. Retrain on v7.1 (28-feature) pending — this is the next major milestone.
-- **Docker**: `:engine` (data API + CNN inference), `:web` (HTMX dashboard), `:trainer` (GPU training server). Runs on Pi (engine + web) and GPU rig (trainer).
-- **Feature Contract**: v7.1, 28 tabular features. `models/feature_contract.json` is the canonical source. Expanded from v6 (18) with 6 daily strategy features (bias direction/confidence, prior day pattern, weekly range position, monthly trend score, crypto momentum) and 4 sub-features (breakout type category, session overlap flag, ATR trend, volume trend).
-- **CNN Model**: EfficientNetV2-S + tabular head. `OrbCnnPredictor` auto-detects tabular dimension from checkpoint metadata at load time. Training pipeline: generate dataset → train → evaluate → gate check (≥80% acc, ≥75% prec, ≥70% rec) → promote. Python `_normalise_tabular_for_inference()` handles v6→v7→v7.1 backward-compat padding so the old model works with the new code.
+- **Models**: `models/breakout_cnn_best.pt` + `feature_contract.json` committed (Git LFS). Latest champion: **87.1% accuracy**, 87.15% precision, 87.27% recall, 25 epochs, v6 18-feature. Retrain to v8 (37-feature) is the next major milestone.
+- **Docker**: `:engine` (data API + CNN inference), `:web` (HTMX dashboard), `:trainer` (GPU training server). Runs on Ubuntu Server (engine + web + postgres + redis + monitoring) and home laptop GPU rig (trainer only).
+- **Feature Contract**: v8, 37 tabular features + hierarchical asset embeddings. `models/feature_contract.json` is the canonical source. Expanded from v6 (18) → v7.1 (28) → v8 (37) with cross-asset correlation features, asset fingerprint features, and learned embeddings.
+- **CNN Model**: EfficientNetV2-S + wider tabular head + asset embeddings. Auto-detects tabular dimension from checkpoint metadata at load time. Training pipeline: generate dataset → train → evaluate → gate check (≥89% acc, ≥87% prec, ≥84% rec) → promote. Python `_normalise_tabular_for_inference()` handles v6→v7→v7.1→v8 backward-compat padding so older models work with the new code.
 - **Breakout Types**: 13 — ORB, PrevDay, InitialBalance, Consolidation, Weekly, Monthly, Asian, BollingerSqueeze, ValueArea, InsideDay, GapRejection, PivotPoints, Fibonacci. Fully wired in engine detection, training, dataset generator, CNN tabular vector, chart renderer.
 - **Position Manager**: `position_manager.py` — always-in 1-lot micro positions, reversal gates (CNN ≥ 0.85, MTF ≥ 0.60, 30min cooldown), Redis persistence, `OrderCommand` emitter (informational — feeds dashboard, not live execution).
-- **Dashboard**: HTMX + FastAPI — live signals, 13 breakout type filter pills, 9 session tabs, MTF score column, trade journal, Kraken crypto chart + correlation panel, Grok AI analyst, CNN dataset preview, positions panel, flatten/cancel buttons, market regime (HMM), performance panel, volume profile, equity curve, asset focus cards with entry/stop/TP levels, focus mode, risk strip, swing action buttons.
+- **Dashboard**: HTMX + FastAPI — live signals, 13 breakout type filter pills, 9 session tabs, MTF score column, trade journal, Kraken crypto chart + correlation panel, Grok AI analyst, CNN dataset preview, positions panel, flatten/cancel buttons, market regime (HMM), performance panel, volume profile, equity curve, asset focus cards with entry/stop/TP levels, focus mode, risk strip, swing action buttons. Broker-agnostic position bridge (TradingView/Tradovate ready).
 - **Kraken Integration**: `KrakenDataProvider` REST + `KrakenFeedManager` WebSocket feed. 9 crypto pairs streaming.
 - **Massive Integration**: `MassiveDataProvider` REST + `MassiveFeedManager` WebSocket. Front-month resolution, primary bars source for training.
 - **Data Service**: Unified data layer — Redis cache → Postgres → external APIs. Startup cache warming from Postgres (7 days).
 - **Training**: `trainer_server.py` FastAPI (port 8200). `dataset_generator.py` covers all 13 types + 9 sessions + Kraken. Full pipeline: generate → split (85/15 stratified) → train → evaluate → gate → promote.
-- **CI/CD**: Lint → Test → Build & push 3 Docker images → Deploy to Pi via Tailscale SSH → Health checks → Discord notifications.
-- **Tailscale**: Pi (Docker) at `100.100.84.48`, GPU rig for training. All services communicate over Tailscale mesh.
+- **CI/CD**: Lint → Test → Build & push 5 Docker images (engine, web, trainer, prometheus, grafana) → Deploy to Ubuntu Server via Tailscale SSH → Deploy trainer to home laptop via Tailscale SSH → Health checks → Discord notifications.
+- **Tailscale**: Ubuntu Server (Docker) at `100.122.184.58`, all services communicate over Tailscale mesh. HTTP only (no domain/TLS needed for local mesh). Trainer laptop (CUDA GPU) at `100.113.72.63:8200`.
+- **NinjaTrader removed**: All NT8 Bridge code, deploy scripts, and C# patchers removed from Python codebase. Position management is now broker-agnostic (`positions.py`). The `src/ninja/` and `src/pine/` directories contain C#/Pine source for reference but are not part of the Python runtime. TradingView integration (`tradingview.py`) is the intended live trading path.
 
 ---
 
@@ -95,7 +96,7 @@ Python Dashboard (tiled alongside TV)
 - `lib/services/engine/breakout.py` — **second** `BreakoutType` (StrEnum) + **second** `RangeConfig` (engine runtime)
 - `lib/services/engine/orb.py` — **third** dataclass `ORBSession` with its own ATR params
 
-Bridge mapping dicts (`_ENGINE_TO_TRAINING`, `_TRAINING_TO_ENGINE`) exist purely to convert between the two enums. These should not exist.
+Mapping dicts (`_ENGINE_TO_TRAINING`, `_TRAINING_TO_ENGINE`) existed purely to convert between the two enums. These have been removed.
 
 ### `orb.py` is an isolated silo (1800+ lines)
 Has its own `ORBResult`, `detect_opening_range_breakout()`, `compute_atr()`. `breakout.py` was built to generalise ORB but lives alongside it with parallel code paths. `main.py` has **10 separate `_handle_check_orb_*` functions** that all delegate to the same `_handle_check_orb`.
@@ -184,9 +185,9 @@ Reduce complexity before the v7.1 retrain. These make the codebase easier to rea
 
 ---
 
-## 🔴 CNN Retrain — v7.1 Feature Contract (THE Milestone)
+## 🔴 CNN v8 Champion Retrain (THE Milestone — One Big Train)
 
-This is the gate before going live. Everything above unblocks a cleaner training run. Everything below this can be tested once a retrained model is running.
+> **Strategy change**: Skip standalone v7.1 retrain. Roll all v7/v7.1 features (already coded) + v8 architecture upgrades into a single champion training run. One long GPU session, best possible model before going live. 3-week runway until TPT $150K account.
 
 ### Phase 4A: New Features from Daily Strategy Layer ✅
 - [x] 6 new v7 features (features [18]–[23]): `daily_bias_direction`, `daily_bias_confidence`, `prior_day_pattern`, `weekly_range_position`, `monthly_trend_score`, `crypto_momentum_score`
@@ -198,19 +199,156 @@ This is the gate before going live. Everything above unblocks a cleaner training
 - [x] 4 sub-features (features [24]–[27]): `breakout_type_category`, `session_overlap_flag`, `atr_trend`, `volume_trend`
 - [x] All 4 computed in `dataset_generator.py` `_build_row()` with neutral fallbacks
 
-### Phase 4C: Retrain on v7.1 Contract
-- [ ] **Generate new dataset** with all 28 features across all 25 symbols, 13 types, 9 sessions
-  - Daily bias features computed from historical daily bars (look back 1 day per sample)
-  - Weekly/monthly features from aligned historical weekly/monthly bars
-  - Crypto momentum features from aligned Kraken data
-- [ ] **Train** with same EfficientNetV2-S + tabular head architecture, larger tabular input (28 features)
-- [ ] **Gate check**: ≥88% acc, ≥85% prec, ≥82% rec (higher bar than v6 — more features, more signal)
-- [ ] **Promote** to `breakout_cnn_best.pt` + updated `feature_contract.json` v7.1
-- [ ] Deploy to Pi via `sync_models.sh` → engine hot-reload via `ModelWatcher`
+---
+
+### Phase v8-A: Hierarchical Asset Embedding (replaces flat `asset_class_id`) ✅
+> Replaces features [13] `asset_class_id` and [15] `asset_volatility_class` with learned embeddings. The model learns *what each asset behaves like* rather than us hand-coding ordinals.
+
+- [x] **Add embedding layers to `HybridBreakoutCNN`**
+  - `nn.Embedding(num_classes=5, embedding_dim=4)` — 5 asset classes (equity index, FX, metals/energy, bonds/ags, crypto)
+  - `nn.Embedding(num_assets=25, embedding_dim=8)` — one per tradeable symbol
+  - Concatenate 4+8=12-dim embedding with existing tabular head output (replaces 2 flat features, net +10 dims)
+  - Train end-to-end — embeddings learn asset personality from breakout outcomes
+- [x] **Update `feature_contract.json`** — add `asset_class_lookup` and `asset_id_lookup` tables mapping symbol→index
+- [x] **Update `_build_row()` and `BreakoutDataset.__getitem__()`** — pass `asset_class_idx` and `asset_idx` as integer IDs (not floats)
+- [x] **Update `_normalise_tabular_for_inference()`** — route embedding IDs separately from the float tabular vector
+- [x] **Backward compat**: if checkpoint lacks embedding weights, fall back to flat `asset_class_id` + `asset_volatility_class` (v7.1 mode)
+
+### Phase v8-B: Cross-Asset Correlation Features (+3 tabular features) ✅
+> Adds market-regime context: is this asset moving with or against its peers? Correlation breakdowns are strong breakout-quality signals.
+
+- [x] **`lib/analysis/cross_asset.py`** — pure computation module (already existed)
+  - `rolling_peer_correlation(symbol, bars_1m, peer_bars, window=60)` → Pearson r with primary peer
+  - `cross_class_correlation(symbol, bars_1m, class_index_bars, window=60)` → r with asset-class index
+  - `correlation_regime(r_short=30, r_long=200)` → 0.0=decorrelated, 0.5=normal, 1.0=high-corr
+- [x] **Peer mapping in `asset_registry.py`** — `Asset.peers` field: Gold→[Silver, Copper], MNQ→[MES, M2K], etc. (already existed)
+- [x] **3 new features in `feature_contract.json` v8**: `primary_peer_corr` [28], `cross_class_corr` [29], `correlation_regime` [30]
+- [x] **`_build_row()`** — compute from attached peer bars (neutral 0.5 fallback when peer data unavailable)
+- [x] **`dataset_generator.py`** — load peer bars alongside primary bars during generation (implemented: `generate_dataset()` pre-loads peer bars via `_resolve_peer_tickers()`, builds `bars_by_ticker` dict, passes to `generate_dataset_for_symbol()` which attaches `_bars_by_ticker` to each `ORBSimResult`)
+
+### Phase v8-C: Asset Fingerprint Features (+6 tabular features) ✅
+> Per-asset "DNA" — the model learns that MGC mean-reverts but MNQ trends, without us hard-coding it.
+
+- [x] **`lib/analysis/asset_fingerprint.py`** — compute per-asset daily profile (already existed)
+  - `typical_daily_range_norm` — median daily range / ATR (is this asset wide or tight today?)
+  - `session_concentration` — % of daily volume in primary session (concentrated vs distributed)
+  - `breakout_follow_through` — historical win rate of breakouts for this asset (trailing 20-day)
+  - `hurst_exponent` — mean-reversion tendency (H<0.5=mean-revert, H>0.5=trending)
+  - `overnight_gap_tendency` — median overnight gap / ATR (gap-prone vs smooth)
+  - `volume_profile_shape` — kurtosis of intraday volume distribution (spiky vs flat)
+- [x] **6 new features in `feature_contract.json` v8**: features [31]–[36]
+- [x] **`_build_row()`** — compute from daily bars + 1m bars with neutral fallbacks
+- [ ] **Dashboard (low priority, post-train)**: "Asset DNA" radar chart on focus cards
+
+### Phase v8-D: Architecture Upgrades to `HybridBreakoutCNN` ✅
+> Better tabular head, attention fusion, and training recipe. These are code-only changes before the big train.
+
+- [x] **Wider tabular head**: Linear(N→256) → BN → GELU → Dropout(0.3) → Linear(256→128) → BN → GELU → Linear(128→64)
+  - Justification: tabular input grows from 18→37 features (+embeddings), needs more capacity
+  - GELU instead of ReLU (smoother gradients, standard in modern architectures)
+- [ ] **Cross-attention fusion** (optional, test on small dataset first):
+  - Instead of `cat(img_features, tab_features)`, use a single cross-attention layer where tabular queries attend to image feature map
+  - Fallback: keep concatenation if cross-attention doesn't lift accuracy
+- [x] **Mixup augmentation**: α=0.2 mixup on tabular features during training (proven regulariser for tabular+image models)
+- [x] **Label smoothing**: increase from 0.05 → 0.10 (more features = more confident model = more benefit from smoothing)
+- [x] **Cosine warmup**: 5-epoch linear warmup before cosine decay (stabilises early training with embeddings)
+- [x] **Gradient accumulation**: effective batch size 128 (2× accumulation steps with batch_size=64) for more stable gradients
+
+### Phase v8-E: Training Recipe & Hyperparameters ✅
+> Dial in the training config for maximum accuracy on the single long run.
+
+- [ ] **Dataset generation** — all 25 symbols × 13 breakout types × 9 sessions × 120 days back
+  - `max_samples_per_type_label=800` — prevent ORB from dominating (now default in `DatasetConfig`)
+  - `max_samples_per_session_label=400` — balance overnight vs primary sessions (now default in `DatasetConfig`)
+  - `DatasetConfig` defaults updated: `breakout_type="all"`, `orb_session="all"`, caps 800/400
+  - Expected: ~50K–80K samples (vs ~20K in v6 run)
+  - **Ready to run** — just needs `generate_dataset(symbols=ALL_25, days_back=120)`
+- [x] **Training config** (defaults wired into `train_model()`):
+  - `epochs=80`, `patience=15` (longer run, more patience — embeddings need time to converge)
+  - `freeze_epochs=5` (freeze backbone longer since tabular head is now bigger + embeddings)
+  - `batch_size=64`, gradient accumulation → effective 128
+  - `lr=2e-4` (backbone), `lr=1e-3` (tabular head + embeddings) — separate param groups
+  - `weight_decay=1e-4` (slightly higher for larger model)
+- [x] **Stratified 85/15 split** — stratify by `(label, breakout_type, session)` triple for balanced eval
+  - `split_dataset()` now builds `_strat_key = label + "__" + breakout_type + "__" + session`
+  - Audit logging shows per-split breakdown of labels, breakout types, and sessions
+- [x] **Gate check**: ≥89% acc, ≥87% prec, ≥84% rec — documented in `feature_contract.json` `v8_training_recipe.gate_check`
+
+### Phase v8-F: Per-Asset Distillation → Single Champion `.pt` *(optional — try unified first)*
+> Train per-asset specialist models, distill into one master. This is the final accuracy squeeze.
+
+```
+Step 1: Train per-asset specialists
+  MGC → train (80 epochs) → best_mgc.pt  (gate: ≥75% acc)
+  MNQ → train (80 epochs) → best_mnq.pt
+  MES → train (80 epochs) → best_mes.pt
+  ...7 core assets...
+
+Step 2: Distill into champion
+  All qualified teachers (≥75% acc) → DistillationTrainer → champ_v8.pt
+
+Step 3: Compare
+  champ_v8.pt vs best single v8 model → pick the winner
+```
+
+- [ ] **`scripts/train_per_asset.py`** — loop over `['MGC', 'MNQ', 'MES', 'MYM', 'M2K', 'MBT', 'MET']`
+  - Each: generate asset-specific dataset → train → gate (≥75% acc) → save `models/per_asset/best_{symbol}.pt`
+  - Write `models/per_asset/asset_results.json` manifest with per-asset metrics
+- [ ] **`scripts/distill_combined.py`** — knowledge distillation
+  - Load all qualified teacher `.pt` files (frozen)
+  - Student = same `HybridBreakoutCNN` v8 architecture
+  - `temperature=4.0`, `alpha=0.7` (70% KL divergence + 30% hard cross-entropy)
+  - Save best student to `models/champ_v8_distilled.pt`
+- [ ] **`scripts/run_full_pipeline.py`** — master orchestrator
+  - Single command: generate → train unified → train per-asset → distill → compare → promote winner
+  - Write `models/pipeline_summary.json` with all metrics + comparison
+
+### Phase v8-G: Promote & Deploy
+- [ ] **Promote** winner to `breakout_cnn_best.pt` + regenerate `feature_contract.json` v8
+- [ ] **ONNX export** — `export_onnx_model()` with updated tabular + embedding inputs
+- [ ] **Deploy to Ubuntu Server** via `sync_models.sh` → engine hot-reload via `ModelWatcher`
+- [ ] **Smoke test** — run inference on 10 live breakouts, verify probabilities are sane
+- [ ] **Update `_normalise_tabular_for_inference()`** — add v8 backward-compat padding (28→37 features + embedding IDs)
 
 ---
 
-## 🔴 TradingView Integration — Live Trading UI
+## 🔴 Immediate Fixes — Post-Cleanup (before training)
+
+> Items discovered during NinjaTrader bridge removal and v8 code review.
+> Must be fixed before starting the big training run.
+
+### Python Model & Training Fixes
+- [x] **Run full test suite** — `pytest src/tests/` → 2552 passed, 1 skipped. Fixed `test_bridge_trading.py` heartbeat cache key (`bridge_heartbeat` → `broker_heartbeat`) and `test_kraken_training_pipeline.py` feature count (28 → 37 for v8). Also fixed `positions.py` `_get_broker_url()` to derive localhost from heartbeat `listenerPort` when no explicit broker host is configured.
+- [x] **`test_bridge_trading.py`** — updated 4 cache key references from `bridge_heartbeat` to `broker_heartbeat` to match renamed positions module. All 37 bridge trading tests pass.
+- [x] **`_build_row()` peer bars** — implemented in `dataset_generator.py`: `generate_dataset()` now pre-loads peer bars via `_resolve_peer_tickers()` (reads `cross_asset.PEER_MAP`), builds a `bars_by_ticker` dict per symbol, and `generate_dataset_for_symbol()` attaches `_daily_bars`, `_bars_1m` (window-sliced), and `_bars_by_ticker` to each `ORBSimResult`. v8-B cross-asset and v8-C fingerprint features now compute real values instead of neutral 0.5 fallbacks.
+- [ ] **Smoke-test training loop** — run a short 2-epoch training on a tiny synthetic dataset to verify v8 changes (mixup, grad accumulation, cosine warmup, separate LR groups, embedding layers) don't crash at runtime
+- [ ] **`breakout_cnn.py` comment cleanup** — several comments still reference "NinjaTrader BreakoutStrategy", "OrbCnnPredictor.NormaliseTabular() in C#", "NT8 inference". Update to say "external consumers" or "TradingView" where appropriate (cosmetic, not blocking)
+- [ ] **`chart_renderer.py` / `chart_renderer_parity.py` comment cleanup** — references to "Ruby NinjaTrader indicator" and "NT8 screen". Update to generic language (cosmetic, not blocking)
+- [ ] **`breakout_types.py` / `multi_session.py` comment cleanup** — references to "C# NinjaTrader consumer". Update (cosmetic, not blocking)
+
+### Dashboard & API Fixes
+- [ ] **Dashboard `_get_bridge_info()` callers** — function still named `_get_bridge_info()` and passes data as `bridge_connected`/`bridge_age_seconds`/`bridge_account` params to `_render_positions_panel()`. Consider renaming to `_get_broker_info()` and updating param names (functional — backward compat aliases keep it working, but confusing)
+- [ ] **Dashboard SSE event name** — `bridge-status` event listener in JS is still named `bridge-status`. The SSE publisher must match this name. Verify the engine/SSE publisher uses the same event name, or update both together
+- [ ] **Dashboard health bar** — `/api/nt8/health/html` endpoint path still says "nt8". Works fine (route is stable), but a future rename to `/api/health/html` would be cleaner. Low priority.
+- [ ] **`positions.py` duplicate route** — both `get_bridge_status()` and `get_broker_status()` are registered as GET endpoints. FastAPI may warn about duplicate routes. Verify no conflict (the legacy `/bridge_status` alias just calls `get_broker_status()`)
+- [ ] **`positions.py` duplicate route** — same for `get_bridge_orders()` / `get_broker_orders()`. Check FastAPI doesn't reject duplicate path registrations.
+
+### CI/CD & Infrastructure
+- [ ] **CI/CD trainer target IP** — verify `TRAINER_TAILSCALE_IP` secret is set to `100.113.72.63` (home laptop with CUDA)
+- [ ] **CI/CD cloud server** — verify `PROD_TAILSCALE_IP` secret points to the Ubuntu Server (was previously Pi)
+- [ ] **Docker Compose `web` service** — `TRAINER_SERVICE_URL` is hardcoded to `http://100.113.72.63:8200`. This is correct but fragile — consider using a Tailscale hostname or env var
+- [ ] **Remove `scripts/sync_models.sh`** reference check — ensure the script still works for Ubuntu Server (originally written for Pi)
+
+### Dataset Generation (blocking for training)
+- [ ] **Generate v8 dataset** — all 25 symbols × 13 breakout types × 9 sessions × 120 days back
+  - `max_samples_per_type_label=800` — prevent ORB from dominating
+  - `max_samples_per_session_label=400` — balance overnight vs primary sessions
+  - Expected: ~50K–80K samples (vs ~20K in v6 run)
+- [ ] **Stratified 85/15 split** — stratify by `(label, breakout_type, session)` triple for balanced eval
+
+---
+
+## 🔴 TradingView Integration — Live Trading UI *(deferred — after v8 champion)*
 
 The Pine Script indicator is the primary live trading chart. The Python dashboard runs alongside it for CNN context and risk management.
 
@@ -277,55 +415,14 @@ The Pine Script indicator is the primary live trading chart. The Python dashboar
 
 ---
 
-## 🟡 Post-Live: CNN Asset-Class Intelligence (v8+)
+## 🟡 Post-Live: Correlation Anomaly Detection (v9+)
 
-Deferred until the v7.1 model is live and profitable. These add significant value but don't block demo trading.
+Deferred until v8 champion is live and profitable. Nice-to-have market regime overlay, doesn't affect model quality.
 
-### Phase 7A: Hierarchical Asset Embedding
-- [ ] Replace flat `asset_class_id` ordinal with a 4-dim class embedding + 8-dim per-asset embedding, trained end-to-end
-- [ ] Embedding lookup table stored in `feature_contract.json`
-
-### Phase 7B: Cross-Asset Correlation Features
-- [ ] Rolling Pearson correlations with peer assets as CNN features: `primary_peer_corr`, `cross_class_corr`, `correlation_regime`
-- [ ] Peer asset mapping in `asset_registry.py`: `Asset.peers` → `["Silver", "Copper"]` for Gold, etc.
-- [ ] Pure computation in `lib/analysis/cross_asset.py`
-
-### Phase 7C: Asset Fingerprint Analysis
-- [ ] `lib/analysis/asset_fingerprint.py` — per-asset daily profile vector: typical daily range, session concentration, breakout follow-through rate, mean-reversion tendency (Hurst), volume profile shape, overnight gap tendency
-- [ ] Dashboard: "Asset DNA" radar chart per focused asset
-
-### Phase 7D: Correlation Anomaly Detection
+### Phase 9A: Live Correlation Anomaly Dashboard
 - [ ] Rolling correlation matrix across all 10 core assets (updated every 5 min)
 - [ ] Compare 30-bar vs 200-bar baseline → anomaly score per pair
 - [ ] Publish `engine:correlation_anomalies` → dashboard heatmap panel
-
----
-
-## 🟡 Post-Live: Per-Asset Training + Knowledge Distillation (v8+ Champion Model)
-
-Train one model per asset, distill into a single champion `.pt`. Gives ~95% of per-asset accuracy at normal inference speed with no multi-model complexity.
-
-```
-Asset 1 (MGC) → train → best_mgc.pt  ─┐
-Asset 2 (MNQ) → train → best_mnq.pt  ─┤
-Asset 3 (MES) → train → best_mes.pt  ─┼→ Distill → champ_combined.pt
-Asset N (...)  → train → best_xxx.pt  ─┘
-```
-
-### Phase 8A: Per-Asset Training Loop (`train_per_asset.py`)
-- [ ] Assets: `['MGC', 'MNQ', 'MES', 'MYM', 'M2K', 'MBT', 'MET']`
-- [ ] `epochs=60`, `patience=12`, `min_accuracy=0.75` gate per asset
-- [ ] Write `models/per_asset/asset_results.json` manifest
-
-### Phase 8B: Knowledge Distillation (`distill_combined.py`)
-- [ ] `DistillationTrainer`: load all teacher `.pt` files (frozen), student = same architecture
-- [ ] `temperature=4.0`, `alpha=0.7` (70% KL divergence + 30% cross-entropy)
-- [ ] Qualified teachers only: `min_teacher_accuracy=0.75`
-- [ ] Save best student to `models/champ_combined.pt`
-
-### Phase 8C: Master Orchestrator (`run_full_pipeline.py`)
-- [ ] Single script: per-asset training → rank + filter teachers → distill → promote
-- [ ] Write `models/pipeline_summary.json`
 
 ---
 
@@ -353,31 +450,51 @@ Asset N (...)  → train → best_xxx.pt  ─┘
 
 ---
 
-## Execution Order (Getting to Demo Live)
+## Execution Order (3-Week Sprint → TPT $150K Account)
 
-**Step 1 — Codebase cleanup (do before retraining to reduce noise):**
-- Phase 1D — extract generic handler from `main.py` (~400 lines eliminated, lower bug surface)
-- Phase 1A — merge BreakoutType enums (kills the mapping dict hell)
-- Phase 1B — merge RangeConfig (one config per type, full stop)
-- Phase 1C — unified RB detector (ORB is just another type)
-- Phase 1G — create `lib/strategies/` package
+> Focus: Docker + Python services only. TradingView is good enough for manual trading right now.
+> Strategy: 1 asset per day with a good breakout setup, done trading for the day.
+> After TPT account 1, get account 2 and wire PickMyTrade to copy trades from Tradovate.
 
-**Step 2 — CNN v7.1 retrain (the milestone):**
-- Phase 4C — generate dataset, train, gate, promote `breakout_cnn_best.pt`
-- Deploy to Pi via `sync_models.sh`
+**✅ Step 1 — Codebase cleanup (DONE):**
+- Phase 1A–1H — all complete, unified RB system, 2552 tests passing
+- NinjaTrader bridge code removed from Python codebase — positions API is now broker-agnostic
 
-**Step 3 — TradingView integration (live trading UI):**
-- Phase TV-C — Ruby Futures core futures layer (pure price, zero delay)
-- Phase TV-D — TV → Python webhook endpoint
-- Phase TV-E — end-to-end workflow test on Tradovate demo
+**Step 2 — CNN v8 Champion (THE milestone, do once, do it right):**
 
-**Step 4 — Go live on demo funds, observe, tune thresholds**
+  *Week 1: Code the upgrades (no GPU needed yet)* ✅
+  - Phase v8-A — hierarchical asset embeddings (replace flat ordinals) ✅
+  - Phase v8-B — cross-asset correlation features (+3 features) ✅
+  - Phase v8-C — asset fingerprint features (+6 features) ✅
+  - Phase v8-D — architecture upgrades (wider tabular head, GELU, mixup, warmup) ✅
+  - Phase v8-E — lock down training recipe & hyperparameters ✅
+  - **Remaining**: fix immediate issues (see "Immediate Fixes" section above), smoke-test training loop
 
-**Step 5 — Post-demo (when profitable/consistent):**
-- Phase 7A–7D — CNN asset intelligence
-- Phase 8A–8C — per-asset distillation
-- Phase 6 — Kraken portfolio
-- PickMyTrade → multi-account scaling
+  *Week 2: Train (GPU rig at 100.113.72.63:8200, mostly hands-off)*
+  - Generate v8 dataset (~50K–80K samples, all 25 symbols × 13 types × 9 sessions)
+  - Train unified v8 model (80 epochs, ~6–10 hours on GPU)
+  - Optionally: train 7 per-asset specialists + distill → compare vs unified
+  - Gate check: ≥89% acc, ≥87% prec, ≥84% rec
+  - Promote winner → `breakout_cnn_best.pt` + deploy to Ubuntu Server
+
+  *Week 3: Validate + Go Live on Demo*
+  - Phase v8-G — smoke test on live breakouts, verify inference
+  - Manual trading on TradingView demo (Tradovate connected)
+  - Dashboard tiled alongside TV — CNN probabilities, risk strip, focus cards
+  - Tune session thresholds based on live signal quality
+  - Document the workflow end-to-end
+
+**Step 3 — TPT $150K account goes live:**
+- Trade 1 asset/day with best breakout setup
+- CNN co-pilot for entry confirmation (≥0.85 probability gate)
+- Risk strip + position sizing on dashboard
+
+**Step 4 — Scale (when consistent):**
+- Get 2nd TPT account → PickMyTrade copies from 1st Tradovate account
+- Phase TV-D — TV → Python webhook (if needed for automation)
+- Scale to 5 TPT accounts → then Apex 20 accounts
+- Phase 9A — correlation anomalies (nice-to-have overlay)
+- Phase 6 — Kraken portfolio (separate from futures)
 
 ---
 
@@ -505,8 +622,9 @@ Engine fires CNN-gated signal
   │
   ├─ signals_publisher.append_and_push(signal)
   │    → signals.csv committed to nuniesmith/futures-signals (GitHub API)
+  │    → SSE push to dashboard
   │
-  └─ TradingView ruby_futures.pine)
+  └─ TradingView (ruby_futures.pine)
        → Parses signals.csv, matches current chart symbol
        → Draws entry/stop/TP lines + CNN label + dual contract sizing
        → Trader sees the level, decides manually whether to execute in Tradovate
@@ -536,27 +654,29 @@ trainer_server.py → _run_training_pipeline(TrainRequest)
 ### 9. Infrastructure
 
 ```
-Docker Compose (3 containers):
-  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-  │   :engine    │  │    :web      │  │   :trainer   │
-  │  main.py     │  │  FastAPI     │  │  FastAPI     │
-  │  scheduler   │  │  dashboard   │  │  dataset gen │
-  │  risk mgr    │  │  focus cards │  │  CNN train   │
-  │  position mgr│  │  settings    │  │  promote .pt │
-  │  all handlers│  │  risk strip  │  │              │
-  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
-         └──────────────────┼─────────────────┘
-                            ↓
-                      ┌──────────┐
-                      │  Redis   │
-                      └──────────┘
-                      ┌──────────┐
-                      │ Postgres │  (audit trail: risk_events, orb_events, journal)
-                      └──────────┘
+Docker Compose:
+  Ubuntu Server (100.122.184.58)          Home Laptop (100.113.72.63)
+  ┌──────────────┐  ┌──────────────┐      ┌──────────────┐
+  │   :engine    │  │    :web      │      │   :trainer   │
+  │  main.py     │  │  FastAPI     │      │  FastAPI     │
+  │  scheduler   │  │  dashboard   │      │  dataset gen │
+  │  risk mgr    │  │  focus cards │      │  CNN train   │
+  │  position mgr│  │  settings    │      │  promote .pt │
+  │  all handlers│  │  risk strip  │      │  CUDA GPU    │
+  └──────┬───────┘  └──────┬───────┘      └──────┬───────┘
+         └──────────────────┤                     │
+                            ↓                     │
+  ┌──────────┐  ┌──────────┐                      │
+  │  Redis   │  │ Postgres │                      │
+  └──────────┘  └──────────┘                      │
+  ┌─────────────┐  ┌──────────┐                   │
+  │ Prometheus  │  │ Grafana  │                   │
+  └─────────────┘  └──────────┘                   │
+         └────────── Tailscale mesh ──────────────┘
 
 Tailscale mesh:
-  Pi       → engine + web (always on, 24/7 scheduling)
-  GPU rig  → trainer (on-demand)
+  Ubuntu Server → engine + web + postgres + redis + monitoring (always on, 24/7)
+  Home Laptop   → trainer (on-demand, CUDA GPU, port 8200)
 ```
 
 ---
