@@ -17,7 +17,7 @@ automatically benefit when logic migrates here.
 
 Public API::
 
-    from lib.strategies.rb.detector import (
+    from lib.trading.strategies.rb.detector import (
         detect_range_breakout,
         detect_breakout_for_type,
         detect_all_breakout_types,
@@ -61,7 +61,7 @@ logger = logging.getLogger("strategies.rb.detector")
 # Re-export BreakoutResult from engine (canonical result dataclass)
 # ---------------------------------------------------------------------------
 
-from lib.services.engine.rb.breakout import BreakoutResult  # noqa: E402
+from lib.trading.strategies.rb.breakout import BreakoutResult  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Primary detection API
@@ -106,10 +106,10 @@ def detect_range_breakout(
         ``BreakoutResult`` with detection outcome, range levels, direction,
         trigger price, and quality-gate metadata.
     """
-    from lib.services.engine.rb.breakout import (
+    from lib.trading.strategies.rb.breakout import (
         DEFAULT_CONFIGS,
     )
-    from lib.services.engine.rb.breakout import (
+    from lib.trading.strategies.rb.breakout import (
         detect_range_breakout as _engine_detect,
     )
 
@@ -147,7 +147,7 @@ def detect_breakout_for_type(
 
     Equivalent to::
 
-        from lib.services.engine.rb.breakout import DEFAULT_CONFIGS
+        from lib.trading.strategies.rb.breakout import DEFAULT_CONFIGS
         config = DEFAULT_CONFIGS[breakout_type]
         result = detect_range_breakout(bars, symbol=symbol, config=config)
 
@@ -168,7 +168,7 @@ def detect_breakout_for_type(
     Returns:
         ``BreakoutResult`` for the specified breakout type.
     """
-    from lib.services.engine.rb.breakout import DEFAULT_CONFIGS
+    from lib.trading.strategies.rb.breakout import DEFAULT_CONFIGS
 
     config = DEFAULT_CONFIGS.get(breakout_type)
     if config is None:

@@ -20,11 +20,11 @@ Migration guide
 ---------------
 Replace any import of the form::
 
-    from lib.services.engine.rb.open.main import <symbol>
+    from lib.trading.strategies.rb.open.main import <symbol>
 
 with::
 
-    from lib.services.engine.rb.open import <symbol>
+    from lib.trading.strategies.rb.open import <symbol>
 
 or, if you want to keep imports short::
 
@@ -40,7 +40,7 @@ from __future__ import annotations
 
 # Re-export the entire public API from the package so that any code still
 # importing directly from this module continues to work without modification.
-from lib.services.engine.rb.open import (  # noqa: F401
+from lib.trading.strategies.rb.open import (  # noqa: F401
     ATR_PERIOD,
     BREAKOUT_ATR_MULTIPLIER,
     CME_OPEN_SESSION,

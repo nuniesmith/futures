@@ -10,7 +10,7 @@ system, and the position manager but contain no detection logic.
 
 Public API::
 
-    from lib.strategies.rb.publisher import (
+    from lib.trading.strategies.rb.publisher import (
         publish_breakout_result,
         persist_breakout_result,
         dispatch_to_position_manager,

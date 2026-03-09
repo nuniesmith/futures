@@ -21,7 +21,7 @@ Output:
   key levels (support/resistance from prior day + weekly)
 
 Usage:
-    from lib.strategies.daily.bias_analyzer import compute_daily_bias, DailyBias
+    from lib.trading.strategies.daily.bias_analyzer import compute_daily_bias, DailyBias
 
     bias = compute_daily_bias(daily_bars_df, weekly_bars_df)
     print(bias.direction)    # "LONG" | "SHORT" | "NEUTRAL"

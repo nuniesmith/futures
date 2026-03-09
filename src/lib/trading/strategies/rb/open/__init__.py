@@ -23,10 +23,10 @@ All symbols that were previously imported from
 existing callers only need to update their import path::
 
     # old
-    from lib.services.engine.rb.orb import LONDON_SESSION, detect_opening_range_breakout
+    from lib.trading.strategies.rb.orb import LONDON_SESSION, detect_opening_range_breakout
 
     # new
-    from lib.services.engine.rb.open import LONDON_SESSION, detect_opening_range_breakout
+    from lib.trading.strategies.rb.open import LONDON_SESSION, detect_opening_range_breakout
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 # Assets — per-session ticker lists, crypto overrides, helpers
 # ---------------------------------------------------------------------------
-from lib.services.engine.rb.open.assets import (
+from lib.trading.strategies.rb.open.assets import (
     CRYPTO_SYMBOL_OVERRIDES,
     SESSION_ASSETS,
     get_session_assets,
@@ -44,7 +44,7 @@ from lib.services.engine.rb.open.assets import (
 # ---------------------------------------------------------------------------
 # Detector — pure detection logic
 # ---------------------------------------------------------------------------
-from lib.services.engine.rb.open.detector import (
+from lib.trading.strategies.rb.open.detector import (
     compute_atr,
     compute_opening_range,
     detect_all_sessions,
@@ -56,7 +56,7 @@ from lib.services.engine.rb.open.detector import (
 # ---------------------------------------------------------------------------
 # Models — result dataclasses
 # ---------------------------------------------------------------------------
-from lib.services.engine.rb.open.models import (
+from lib.trading.strategies.rb.open.models import (
     MultiSessionORBResult,
     ORBResult,
 )
@@ -64,7 +64,7 @@ from lib.services.engine.rb.open.models import (
 # ---------------------------------------------------------------------------
 # Publisher — Redis I/O
 # ---------------------------------------------------------------------------
-from lib.services.engine.rb.open.publisher import (
+from lib.trading.strategies.rb.open.publisher import (
     REDIS_KEY_ORB,
     REDIS_KEY_ORB_TS,
     REDIS_PUBSUB_ORB,
@@ -77,7 +77,7 @@ from lib.services.engine.rb.open.publisher import (
 # ---------------------------------------------------------------------------
 # Sessions — dataclass, instances, lookups, helpers
 # ---------------------------------------------------------------------------
-from lib.services.engine.rb.open.sessions import (
+from lib.trading.strategies.rb.open.sessions import (
     ATR_PERIOD,
     BREAKOUT_ATR_MULTIPLIER,
     CME_OPEN_SESSION,

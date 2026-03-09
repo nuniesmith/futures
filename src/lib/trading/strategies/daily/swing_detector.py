@@ -25,7 +25,7 @@ Risk:
     (vs 0.75% for scalps).
 
 Usage:
-    from lib.strategies.daily.swing_detector import (
+    from lib.trading.strategies.daily.swing_detector import (
         detect_swing_entries,
         evaluate_swing_exits,
         SwingSignal,
@@ -65,7 +65,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from lib.strategies.daily.bias_analyzer import (
+from lib.trading.strategies.daily.bias_analyzer import (
     BiasDirection,
     DailyBias,
 )

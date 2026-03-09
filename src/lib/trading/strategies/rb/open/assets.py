@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from lib.services.engine.rb.open.sessions import ORBSession
+    from lib.trading.strategies.rb.open.sessions import ORBSession
 
 # ---------------------------------------------------------------------------
 # Per-session asset focus lists
@@ -298,7 +298,7 @@ if _KRAKEN_CRYPTO_TICKERS:
     # SESSION_BY_KEY lookup so the scheduler picks them up automatically.
     # Import here (after sessions module is fully initialised) to avoid
     # circular imports at module load time.
-    from lib.services.engine.rb.open.sessions import (
+    from lib.trading.strategies.rb.open.sessions import (
         CRYPTO_UTC_MIDNIGHT_SESSION,
         CRYPTO_UTC_NOON_SESSION,
         ORB_SESSIONS,

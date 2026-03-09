@@ -596,7 +596,7 @@ def get_daily_plan_focus_assets(
     # Attempt to load existing plan from Redis
     if redis_client is not None and not force_regenerate:
         try:
-            from lib.strategies.daily.daily_plan import DailyPlan
+            from lib.trading.strategies.daily.daily_plan import DailyPlan
 
             plan = DailyPlan.load_from_redis(redis_client)
             if plan is not None:
@@ -613,7 +613,7 @@ def get_daily_plan_focus_assets(
 
     # No cached plan — generate a fresh one
     try:
-        from lib.strategies.daily.daily_plan import generate_daily_plan
+        from lib.trading.strategies.daily.daily_plan import generate_daily_plan
 
         plan = generate_daily_plan(
             account_size=account_size,

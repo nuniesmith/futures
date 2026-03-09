@@ -29,7 +29,7 @@ import pytest
 
 os.environ.setdefault("DISABLE_REDIS", "1")
 
-from lib.services.engine.rb.breakout import (  # noqa: E402
+from lib.trading.strategies.rb.breakout import (  # noqa: E402
     DEFAULT_CONFIGS,
     BreakoutResult,
     BreakoutType,
@@ -1020,7 +1020,7 @@ class TestBreakoutTypeMapping:
     def test_single_breakout_type_enum(self):
         """Engine and core BreakoutType are the exact same class."""
         from lib.core.breakout_types import BreakoutType as CoreBreakoutType
-        from lib.services.engine.rb.breakout import BreakoutType as EngineBreakoutType
+        from lib.trading.strategies.rb.breakout import BreakoutType as EngineBreakoutType
 
         assert CoreBreakoutType is EngineBreakoutType
 

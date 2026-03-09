@@ -37,7 +37,7 @@ from zoneinfo import ZoneInfo
 if TYPE_CHECKING:
     import pandas as pd
 
-    from lib.services.engine.rb.breakout import BreakoutResult
+    from lib.trading.strategies.rb.breakout import BreakoutResult
 
 from lib.core.logging_config import get_logger, setup_logging
 
@@ -799,7 +799,7 @@ def _persist_risk_event(
 def _handle_check_orb_london(engine) -> None:
     """Check for London Open ORB patterns (03:00–03:30 ET / 08:00–08:30 UTC)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.rb.orb import LONDON_SESSION
+    from lib.trading.strategies.rb.orb import LONDON_SESSION
 
     handle_orb_check(engine, orb_session=LONDON_SESSION)
 
@@ -807,7 +807,7 @@ def _handle_check_orb_london(engine) -> None:
 def _handle_check_orb_london_ny(engine) -> None:
     """Check for London-NY Crossover ORB patterns (08:00–08:30 ET)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.rb.orb import LONDON_NY_SESSION
+    from lib.trading.strategies.rb.orb import LONDON_NY_SESSION
 
     handle_orb_check(engine, orb_session=LONDON_NY_SESSION)
 
@@ -815,7 +815,7 @@ def _handle_check_orb_london_ny(engine) -> None:
 def _handle_check_orb_frankfurt(engine) -> None:
     """Check for Frankfurt/Xetra Open ORB patterns (03:00–03:30 ET / 08:00 CET)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.rb.orb import FRANKFURT_SESSION
+    from lib.trading.strategies.rb.orb import FRANKFURT_SESSION
 
     handle_orb_check(engine, orb_session=FRANKFURT_SESSION)
 
@@ -823,7 +823,7 @@ def _handle_check_orb_frankfurt(engine) -> None:
 def _handle_check_orb_sydney(engine) -> None:
     """Check for Sydney/ASX Open ORB patterns (18:30–19:00 ET, overnight)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.rb.orb import SYDNEY_SESSION
+    from lib.trading.strategies.rb.orb import SYDNEY_SESSION
 
     handle_orb_check(engine, orb_session=SYDNEY_SESSION)
 
@@ -831,7 +831,7 @@ def _handle_check_orb_sydney(engine) -> None:
 def _handle_check_orb_cme(engine) -> None:
     """Check for CME Globex Re-Open ORB patterns (18:00–18:30 ET, overnight)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.rb.orb import CME_OPEN_SESSION
+    from lib.trading.strategies.rb.orb import CME_OPEN_SESSION
 
     handle_orb_check(engine, orb_session=CME_OPEN_SESSION)
 
@@ -839,7 +839,7 @@ def _handle_check_orb_cme(engine) -> None:
 def _handle_check_orb_tokyo(engine) -> None:
     """Check for Tokyo/TSE Open ORB patterns (19:00–19:30 ET, overnight)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.rb.orb import TOKYO_SESSION
+    from lib.trading.strategies.rb.orb import TOKYO_SESSION
 
     handle_orb_check(engine, orb_session=TOKYO_SESSION)
 
@@ -847,7 +847,7 @@ def _handle_check_orb_tokyo(engine) -> None:
 def _handle_check_orb_shanghai(engine) -> None:
     """Check for Shanghai/HK Open ORB patterns (21:00–21:30 ET, overnight)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.rb.orb import SHANGHAI_SESSION
+    from lib.trading.strategies.rb.orb import SHANGHAI_SESSION
 
     handle_orb_check(engine, orb_session=SHANGHAI_SESSION)
 
@@ -855,7 +855,7 @@ def _handle_check_orb_shanghai(engine) -> None:
 def _handle_check_orb_cme_settle(engine) -> None:
     """Check for CME Settlement ORB patterns (14:00–14:30 ET)."""
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.rb.orb import CME_SETTLEMENT_SESSION
+    from lib.trading.strategies.rb.orb import CME_SETTLEMENT_SESSION
 
     handle_orb_check(engine, orb_session=CME_SETTLEMENT_SESSION)
 
@@ -863,7 +863,7 @@ def _handle_check_orb_cme_settle(engine) -> None:
 def _handle_check_orb_crypto_utc0(engine) -> None:
     """Check for Crypto UTC-midnight ORB patterns (19:00–19:30 ET EST / 00:00 UTC)."""
     try:
-        from lib.services.engine.rb.orb import CRYPTO_UTC_MIDNIGHT_SESSION
+        from lib.trading.strategies.rb.orb import CRYPTO_UTC_MIDNIGHT_SESSION
     except ImportError:
         logger.warning("CRYPTO_UTC_MIDNIGHT_SESSION not available — crypto ORB disabled")
         return
@@ -876,7 +876,7 @@ def _handle_check_orb_crypto_utc0(engine) -> None:
 def _handle_check_orb_crypto_utc12(engine) -> None:
     """Check for Crypto UTC-noon ORB patterns (07:00–07:30 ET EST / 12:00 UTC)."""
     try:
-        from lib.services.engine.rb.orb import CRYPTO_UTC_NOON_SESSION
+        from lib.trading.strategies.rb.orb import CRYPTO_UTC_NOON_SESSION
     except ImportError:
         logger.warning("CRYPTO_UTC_NOON_SESSION not available — crypto ORB disabled")
         return
@@ -898,7 +898,7 @@ def _handle_check_orb(engine, orb_session=None) -> None:
         orb_session: ORBSession to check. Defaults to US_SESSION if None.
     """
     from lib.services.engine.handlers import handle_orb_check
-    from lib.services.engine.rb.orb import US_SESSION
+    from lib.trading.strategies.rb.orb import US_SESSION
 
     if orb_session is None:
         orb_session = US_SESSION
@@ -985,7 +985,7 @@ def _get_assets_for_session_key(session_key: str) -> list[dict]:
     """
     try:
         from lib.core.cache import cache_get
-        from lib.services.engine.rb.orb import SESSION_ASSETS
+        from lib.trading.strategies.rb.orb import SESSION_ASSETS
 
         raw_focus = cache_get("engine:daily_focus")
         if not raw_focus:
@@ -1377,7 +1377,7 @@ def _handle_check_breakout_multi(engine, session_key: str = "us", types: list[st
                Defaults to ["PDR", "CONS"] if not specified.
     """
     from lib.services.engine.handlers import handle_breakout_multi
-    from lib.services.engine.rb.breakout import breakout_type_from_short_name
+    from lib.trading.strategies.rb.breakout import breakout_type_from_short_name
 
     if types is None:
         types = ["PDR", "CONS"]

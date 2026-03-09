@@ -28,13 +28,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from lib.strategies.daily.bias_analyzer import (
+from lib.trading.strategies.daily.bias_analyzer import (
     BiasDirection,
     CandlePattern,
     DailyBias,
     KeyLevels,
 )
-from lib.strategies.daily.swing_detector import (
+from lib.trading.strategies.daily.swing_detector import (
     BREAKOUT_VOLUME_MULT,
     GAP_FILL_THRESHOLD,
     GAP_MIN_ATR_RATIO,

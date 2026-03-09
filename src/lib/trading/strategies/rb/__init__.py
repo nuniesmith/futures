@@ -6,7 +6,7 @@ Unified detection, publishing, and alerting for all 13 range-breakout types.
 This package is the canonical home for the RB strategy layer.  It re-exports
 the most commonly used symbols so callers can write::
 
-    from lib.strategies.rb import (
+    from lib.trading.strategies.rb import (
         BreakoutType,
         RangeConfig,
         get_range_config,
@@ -67,7 +67,7 @@ from lib.services.engine.handlers import (
 # ---------------------------------------------------------------------------
 # Re-exports from engine (detection + result — kept for backward compat)
 # ---------------------------------------------------------------------------
-from lib.services.engine.rb.breakout import (
+from lib.trading.strategies.rb.breakout import (
     DEFAULT_CONFIGS,
 )
 

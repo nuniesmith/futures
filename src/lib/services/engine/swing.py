@@ -357,7 +357,7 @@ def _get_asset_bias(name: str) -> Any:
         return None
 
     try:
-        from lib.strategies.daily.bias_analyzer import (
+        from lib.trading.strategies.daily.bias_analyzer import (
             BiasDirection,
             CandlePattern,
             DailyBias,
@@ -471,7 +471,7 @@ def _load_swing_states_from_redis() -> dict[str, Any]:
         return {}
 
     try:
-        from lib.strategies.daily.swing_detector import (
+        from lib.trading.strategies.daily.swing_detector import (
             SwingEntryStyle,
             SwingPhase,
             SwingSignal,
@@ -724,7 +724,7 @@ def tick_swing_detector(engine: Any, account_size: int) -> dict[str, Any]:
 
         # Run swing entry detection
         try:
-            from lib.strategies.daily.swing_detector import detect_swing_entries
+            from lib.trading.strategies.daily.swing_detector import detect_swing_entries
 
             signals = detect_swing_entries(
                 bars=bars,
@@ -757,7 +757,7 @@ def tick_swing_detector(engine: Any, account_size: int) -> dict[str, Any]:
                 )
 
                 # Auto-create SwingState for the top signal if it's ENTRY_READY
-                from lib.strategies.daily.swing_detector import SwingPhase
+                from lib.trading.strategies.daily.swing_detector import SwingPhase
 
                 top_signal = signals[0]
                 if (
@@ -765,7 +765,7 @@ def tick_swing_detector(engine: Any, account_size: int) -> dict[str, Any]:
                     and top_signal.confidence >= 0.6
                     and len(active_non_closed) < _MAX_CONCURRENT_SWINGS
                 ):
-                    from lib.strategies.daily.swing_detector import create_swing_state
+                    from lib.trading.strategies.daily.swing_detector import create_swing_state
 
                     state = create_swing_state(top_signal)
                     _active_swing_states[name] = state
@@ -822,7 +822,7 @@ def _tick_active_states(
             "updates": 0,
         }
 
-    from lib.strategies.daily.swing_detector import (
+    from lib.trading.strategies.daily.swing_detector import (
         SwingPhase,
         update_swing_state,
     )
@@ -1068,7 +1068,7 @@ def accept_swing_signal(asset_name: str) -> dict[str, Any]:
                     for sig_dict in data:
                         if sig_dict.get("asset_name") == asset_name:
                             # Reconstruct SwingSignal from dict
-                            from lib.strategies.daily.swing_detector import (
+                            from lib.trading.strategies.daily.swing_detector import (
                                 SwingEntryStyle,
                                 SwingPhase,
                                 SwingSignal,
@@ -1108,7 +1108,7 @@ def accept_swing_signal(asset_name: str) -> dict[str, Any]:
         )
 
     # Create the swing state
-    from lib.strategies.daily.swing_detector import SwingPhase, create_swing_state
+    from lib.trading.strategies.daily.swing_detector import SwingPhase, create_swing_state
 
     # Ensure signal phase is ENTRY_READY for acceptance
     if hasattr(signal, "phase"):
@@ -1232,7 +1232,7 @@ def close_swing_position(asset_name: str, reason: str = "manual") -> dict[str, A
     if state is None:
         raise ValueError(f"No active swing state for '{asset_name}'")
 
-    from lib.strategies.daily.swing_detector import SwingPhase
+    from lib.trading.strategies.daily.swing_detector import SwingPhase
 
     if state.phase == SwingPhase.CLOSED:
         raise ValueError(f"Swing for '{asset_name}' is already closed")
@@ -1300,7 +1300,7 @@ def move_stop_to_breakeven(asset_name: str) -> dict[str, Any]:
     if state is None:
         raise ValueError(f"No active swing state for '{asset_name}'")
 
-    from lib.strategies.daily.swing_detector import SwingPhase
+    from lib.trading.strategies.daily.swing_detector import SwingPhase
 
     allowed_phases = {SwingPhase.ACTIVE, SwingPhase.TP1_HIT, SwingPhase.TRAILING}
     if state.phase not in allowed_phases:
@@ -1370,7 +1370,7 @@ def update_swing_stop(asset_name: str, new_stop: float) -> dict[str, Any]:
     if state is None:
         raise ValueError(f"No active swing state for '{asset_name}'")
 
-    from lib.strategies.daily.swing_detector import SwingPhase
+    from lib.trading.strategies.daily.swing_detector import SwingPhase
 
     allowed_phases = {SwingPhase.ACTIVE, SwingPhase.TP1_HIT, SwingPhase.TRAILING}
     if state.phase not in allowed_phases:

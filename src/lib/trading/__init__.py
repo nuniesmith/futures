@@ -17,14 +17,6 @@ from lib.trading.engine import (
     run_backtest,
     run_optimization,
 )
-from lib.trading.strategies import (
-    STRATEGY_CLASSES,
-    STRATEGY_LABELS,
-    _safe_float,
-    make_strategy,
-    score_backtest,
-    suggest_params,
-)
 
 __all__ = [
     # costs
@@ -36,11 +28,4 @@ __all__ = [
     "get_engine",
     "run_backtest",
     "run_optimization",
-    # strategies
-    "STRATEGY_CLASSES",
-    "STRATEGY_LABELS",
-    "_safe_float",
-    "make_strategy",
-    "score_backtest",
-    "suggest_params",
 ]

@@ -1,7 +1,7 @@
 """Daily strategy layer — bias analysis, trade plans, and swing detection.
 
 Public API:
-    from lib.strategies.daily import (
+    from lib.trading.strategies.daily import (
         # Bias analyzer (Phase 2A)
         compute_daily_bias,
         compute_all_daily_biases,
@@ -38,7 +38,7 @@ Public API:
     )
 """
 
-from lib.strategies.daily.bias_analyzer import (
+from lib.trading.strategies.daily.bias_analyzer import (
     BiasDirection,
     CandlePattern,
     DailyBias,
@@ -47,7 +47,7 @@ from lib.strategies.daily.bias_analyzer import (
     compute_daily_bias,
     rank_assets_by_conviction,
 )
-from lib.strategies.daily.daily_plan import (
+from lib.trading.strategies.daily.daily_plan import (
     DailyPlan,
     ScalpFocusAsset,
     SwingCandidate,
@@ -55,7 +55,7 @@ from lib.strategies.daily.daily_plan import (
     generate_daily_plan,
     select_daily_focus_assets,
 )
-from lib.strategies.daily.swing_detector import (
+from lib.trading.strategies.daily.swing_detector import (
     SwingEntryStyle,
     SwingExitReason,
     SwingExitSignal,

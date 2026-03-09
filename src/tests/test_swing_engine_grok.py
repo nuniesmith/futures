@@ -91,7 +91,7 @@ def _make_bias(
     confidence: float = 0.75,
 ) -> Any:
     """Create a DailyBias object."""
-    from lib.strategies.daily.bias_analyzer import (
+    from lib.trading.strategies.daily.bias_analyzer import (
         BiasDirection,
         DailyBias,
         KeyLevels,
@@ -475,7 +475,7 @@ class TestDailyPlanGrokField:
     """Test that DailyPlan properly serializes/deserializes grok_analysis."""
 
     def test_to_dict_includes_grok_analysis(self):
-        from lib.strategies.daily.daily_plan import DailyPlan
+        from lib.trading.strategies.daily.daily_plan import DailyPlan
 
         plan = DailyPlan(
             grok_analysis={"macro_bias": "risk_on", "top_assets": [{"name": "Gold"}]},
@@ -487,7 +487,7 @@ class TestDailyPlanGrokField:
         assert d["grok_available"] is True
 
     def test_to_dict_empty_grok_analysis(self):
-        from lib.strategies.daily.daily_plan import DailyPlan
+        from lib.trading.strategies.daily.daily_plan import DailyPlan
 
         plan = DailyPlan()
         d = plan.to_dict()
@@ -495,7 +495,7 @@ class TestDailyPlanGrokField:
         assert d["grok_available"] is False
 
     def test_load_from_redis_with_grok_analysis(self):
-        from lib.strategies.daily.daily_plan import DailyPlan
+        from lib.trading.strategies.daily.daily_plan import DailyPlan
 
         plan_data = {
             "scalp_focus": [],
@@ -602,7 +602,7 @@ class TestSwingStatePersistence:
             _load_swing_states_from_redis,
             _persist_swing_states,
         )
-        from lib.strategies.daily.swing_detector import (
+        from lib.trading.strategies.daily.swing_detector import (
             SwingEntryStyle,
             SwingPhase,
             SwingSignal,
@@ -701,7 +701,7 @@ class TestPublishSwingSignalsToRedis:
 
     def test_publish_signals(self):
         from lib.services.engine.swing import _publish_swing_signals_to_redis
-        from lib.strategies.daily.swing_detector import (
+        from lib.trading.strategies.daily.swing_detector import (
             SwingEntryStyle,
             SwingPhase,
             SwingSignal,
@@ -766,7 +766,7 @@ class TestGetSwingSummary:
     def test_with_active_states(self):
         import lib.services.engine.swing as swing_mod
         from lib.services.engine.swing import get_swing_summary
-        from lib.strategies.daily.swing_detector import SwingPhase, SwingState
+        from lib.trading.strategies.daily.swing_detector import SwingPhase, SwingState
 
         swing_mod._active_swing_states = {
             "Gold": SwingState(
@@ -794,7 +794,7 @@ class TestResetSwingStates:
     def test_reset(self):
         import lib.services.engine.swing as swing_mod
         from lib.services.engine.swing import reset_swing_states
-        from lib.strategies.daily.swing_detector import SwingPhase, SwingState
+        from lib.trading.strategies.daily.swing_detector import SwingPhase, SwingState
 
         swing_mod._active_swing_states = {
             "Gold": SwingState(asset_name="Gold", phase=SwingPhase.ACTIVE),
@@ -839,7 +839,7 @@ class TestTickSwingDetector:
         import lib.services.engine.swing as swing_mod
         import lib.strategies.daily.swing_detector as sd_mod
         from lib.services.engine.swing import tick_swing_detector
-        from lib.strategies.daily.swing_detector import (
+        from lib.trading.strategies.daily.swing_detector import (
             SwingEntryStyle,
             SwingPhase,
             SwingSignal,
@@ -875,7 +875,7 @@ class TestTickSwingDetector:
         _real_detect = sd_mod.detect_swing_entries
 
         # Monkeypatch *before* entering the context manager so the lazy
-        # ``from lib.strategies.daily.swing_detector import detect_swing_entries``
+        # ``from lib.trading.strategies.daily.swing_detector import detect_swing_entries``
         # inside tick_swing_detector picks up our mock.
         mock_detect = MagicMock(return_value=[mock_signal])
         sd_mod.detect_swing_entries = mock_detect
@@ -921,7 +921,7 @@ class TestTickSwingDetector:
         """Should not scan an asset that already has an active swing state."""
         import lib.services.engine.swing as swing_mod
         from lib.services.engine.swing import tick_swing_detector
-        from lib.strategies.daily.swing_detector import SwingPhase, SwingState
+        from lib.trading.strategies.daily.swing_detector import SwingPhase, SwingState
 
         swing_mod._active_swing_states = {
             "Gold": SwingState(asset_name="Gold", phase=SwingPhase.ACTIVE, direction="LONG"),
@@ -949,7 +949,7 @@ class TestTickSwingDetector:
         """Should stop scanning when max concurrent limit is reached."""
         import lib.services.engine.swing as swing_mod
         from lib.services.engine.swing import _MAX_CONCURRENT_SWINGS, tick_swing_detector
-        from lib.strategies.daily.swing_detector import SwingPhase, SwingState
+        from lib.trading.strategies.daily.swing_detector import SwingPhase, SwingState
 
         # Fill up to max
         swing_mod._active_swing_states = {}
@@ -984,7 +984,7 @@ class TestTickActiveStates:
     def test_closed_states_archived(self):
         import lib.services.engine.swing as swing_mod
         from lib.services.engine.swing import _tick_active_states
-        from lib.strategies.daily.swing_detector import SwingPhase, SwingState
+        from lib.trading.strategies.daily.swing_detector import SwingPhase, SwingState
 
         swing_mod._active_swing_states = {
             "Gold": SwingState(
@@ -1011,7 +1011,7 @@ class TestTickActiveStates:
     def test_active_state_gets_updated(self):
         import lib.services.engine.swing as swing_mod
         from lib.services.engine.swing import _tick_active_states
-        from lib.strategies.daily.swing_detector import (
+        from lib.trading.strategies.daily.swing_detector import (
             SwingEntryStyle,
             SwingPhase,
             SwingSignal,
@@ -1456,7 +1456,7 @@ class TestDailyPlanGrokIntegration:
     @patch("lib.integrations.grok_helper.format_grok_daily_plan_for_display")
     def test_structured_grok_used_when_available(self, mock_format, mock_run, mock_legacy):
         """When structured Grok succeeds, grok_analysis should be populated."""
-        from lib.strategies.daily.daily_plan import generate_daily_plan
+        from lib.trading.strategies.daily.daily_plan import generate_daily_plan
 
         mock_run.return_value = {
             "macro_bias": "risk_on",
@@ -1493,7 +1493,7 @@ class TestDailyPlanGrokIntegration:
     @patch("lib.strategies.daily.daily_plan._fetch_grok_context")
     def test_falls_back_to_legacy_on_failure(self, mock_legacy, mock_structured):
         """When structured Grok fails, should fall back to free-text."""
-        from lib.strategies.daily.daily_plan import generate_daily_plan
+        from lib.trading.strategies.daily.daily_plan import generate_daily_plan
 
         mock_structured.side_effect = RuntimeError("API error")
         mock_legacy.return_value = "Legacy Grok text"
@@ -1515,7 +1515,7 @@ class TestDailyPlanGrokIntegration:
         mock_legacy.assert_called_once()
 
     def test_no_grok_when_key_missing(self):
-        from lib.strategies.daily.daily_plan import generate_daily_plan
+        from lib.trading.strategies.daily.daily_plan import generate_daily_plan
 
         daily_df = _make_bars(60, start_price=2700.0)
         daily_df.index = pd.date_range("2025-01-01", periods=60, freq="1D")
@@ -1562,7 +1562,7 @@ class TestEdgeCases:
 
     def test_daily_plan_grok_analysis_default(self):
         """DailyPlan should have grok_analysis as empty dict by default."""
-        from lib.strategies.daily.daily_plan import DailyPlan
+        from lib.trading.strategies.daily.daily_plan import DailyPlan
 
         plan = DailyPlan()
         assert plan.grok_analysis == {}

@@ -11,7 +11,7 @@ The ``rb`` package is the canonical public façade for the Range Breakout
 system.  It re-exports the most commonly used symbols from the core type
 definitions, the detection layer, range builders, and the publisher pipeline::
 
-    from lib.strategies.rb import (
+    from lib.trading.strategies.rb import (
         # Core types
         BreakoutType,
         RangeConfig,
@@ -51,7 +51,7 @@ definitions, the detection layer, range builders, and the publisher pipeline::
 The ``daily`` package provides higher-timeframe analysis that feeds into
 the CNN feature vector (v7+) and the dashboard daily plan view::
 
-    from lib.strategies.daily import (
+    from lib.trading.strategies.daily import (
         compute_daily_bias,
         DailyBias,
         BiasDirection,
@@ -74,3 +74,81 @@ Phase 4B additions (CNN Sub-Feature Decomposition):
   These sub-features are computed in ``lib.analysis.breakout_cnn`` and wired
   into ``dataset_generator._build_row()`` and ``feature_contract.json`` v7.1.
 """
+
+from lib.trading.strategies.strategy_defs import (
+    STRATEGY_CLASSES,
+    STRATEGY_LABELS,
+    BreakoutStrategy,
+    EventReaction,
+    ICTTrendEMA,
+    MACDMomentum,
+    ORBStrategy,
+    PlainEMACross,
+    PullbackEMA,
+    RSIReversal,
+    TrendEMACross,
+    VWAPReversion,
+    _atr,
+    _compute_ict_confluence,
+    _ema,
+    _ict_confluence_array,
+    _is_bearish_engulfing,
+    _is_bullish_engulfing,
+    _is_hammer,
+    _is_nan,
+    _is_shooting_star,
+    _macd_histogram,
+    _macd_line,
+    _macd_signal,
+    _passthrough,
+    _rolling_max,
+    _rolling_min,
+    _rsi,
+    _safe_float,
+    _sma,
+    make_strategy,
+    score_backtest,
+    suggest_params,
+)
+
+__all__ = [
+    # Dicts
+    "STRATEGY_CLASSES",
+    "STRATEGY_LABELS",
+    # Strategy classes
+    "TrendEMACross",
+    "RSIReversal",
+    "BreakoutStrategy",
+    "VWAPReversion",
+    "ORBStrategy",
+    "MACDMomentum",
+    "PullbackEMA",
+    "EventReaction",
+    "PlainEMACross",
+    "ICTTrendEMA",
+    # Public helpers
+    "make_strategy",
+    "score_backtest",
+    "suggest_params",
+    "_safe_float",
+    # Indicator helpers (used by tests and backtesting)
+    "_ema",
+    "_sma",
+    "_atr",
+    "_rsi",
+    "_macd_line",
+    "_macd_signal",
+    "_macd_histogram",
+    "_rolling_max",
+    "_rolling_min",
+    "_passthrough",
+    # ICT helpers
+    "_compute_ict_confluence",
+    "_ict_confluence_array",
+    # Candle pattern helpers
+    "_is_bullish_engulfing",
+    "_is_bearish_engulfing",
+    "_is_hammer",
+    "_is_shooting_star",
+    "_is_nan",
+]

@@ -27,7 +27,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Imports under test
 # ---------------------------------------------------------------------------
-from lib.strategies.daily.bias_analyzer import (
+from lib.trading.strategies.daily.bias_analyzer import (
     BiasDirection,
     CandlePattern,
     DailyBias,
@@ -35,7 +35,7 @@ from lib.strategies.daily.bias_analyzer import (
     compute_all_daily_biases,
     compute_daily_bias,
 )
-from lib.strategies.daily.daily_plan import (
+from lib.trading.strategies.daily.daily_plan import (
     ASSET_SESSION_MAP,
     MAX_SCALP_FOCUS,
     MAX_SWING_CANDIDATES,

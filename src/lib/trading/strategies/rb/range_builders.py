@@ -12,7 +12,7 @@ correct builder based on ``config.breakout_type``.
 
 Public API::
 
-    from lib.strategies.rb.range_builders import (
+    from lib.trading.strategies.rb.range_builders import (
         build_orb_range,
         build_pdr_range,
         build_ib_range,

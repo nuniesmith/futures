@@ -582,7 +582,7 @@ def get_daily_bias_direction(
         bias = _bias_cache[asset_name]
         return getattr(bias, "direction_feature", 0.5)
     try:
-        from lib.strategies.daily.bias_analyzer import compute_daily_bias
+        from lib.trading.strategies.daily.bias_analyzer import compute_daily_bias
 
         if bars_daily is not None and not bars_daily.empty:
             bias = compute_daily_bias(asset_name, bars_daily)
@@ -606,7 +606,7 @@ def get_daily_bias_confidence(
         bias = _bias_cache[asset_name]
         return getattr(bias, "confidence_feature", 0.0)
     try:
-        from lib.strategies.daily.bias_analyzer import compute_daily_bias
+        from lib.trading.strategies.daily.bias_analyzer import compute_daily_bias
 
         if bars_daily is not None and not bars_daily.empty:
             bias = compute_daily_bias(asset_name, bars_daily)
@@ -636,7 +636,7 @@ def get_prior_day_pattern(
         bias = _bias_cache[asset_name]
         return getattr(bias, "candle_pattern_feature", 1.0)
     try:
-        from lib.strategies.daily.bias_analyzer import compute_daily_bias
+        from lib.trading.strategies.daily.bias_analyzer import compute_daily_bias
 
         if bars_daily is not None and not bars_daily.empty:
             bias = compute_daily_bias(asset_name, bars_daily)
@@ -661,7 +661,7 @@ def get_weekly_range_position(
         bias = _bias_cache[asset_name]
         return getattr(bias, "weekly_range_feature", 0.5)
     try:
-        from lib.strategies.daily.bias_analyzer import compute_daily_bias
+        from lib.trading.strategies.daily.bias_analyzer import compute_daily_bias
 
         if bars_daily is not None and not bars_daily.empty:
             bias = compute_daily_bias(asset_name, bars_daily)
@@ -687,7 +687,7 @@ def get_monthly_trend_score(
         bias = _bias_cache[asset_name]
         return getattr(bias, "monthly_trend_feature", 0.5)
     try:
-        from lib.strategies.daily.bias_analyzer import compute_daily_bias
+        from lib.trading.strategies.daily.bias_analyzer import compute_daily_bias
 
         if bars_daily is not None and not bars_daily.empty:
             bias = compute_daily_bias(asset_name, bars_daily)

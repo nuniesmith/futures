@@ -21,7 +21,7 @@ Separate from the RB scalping system — daily trades run on different timeframe
 and risk profile.
 
 Usage:
-    from lib.strategies.daily.daily_plan import generate_daily_plan, DailyPlan
+    from lib.trading.strategies.daily.daily_plan import generate_daily_plan, DailyPlan
 
     plan = generate_daily_plan(account_size=50_000)
     print(plan.scalp_focus)       # ["Gold", "Nasdaq", "S&P", "Euro FX"]
@@ -45,7 +45,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from lib.strategies.daily.bias_analyzer import (
+from lib.trading.strategies.daily.bias_analyzer import (
     BiasDirection,
     DailyBias,
     compute_all_daily_biases,

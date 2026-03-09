@@ -36,10 +36,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-from lib.services.engine.rb.open.sessions import ORB_SESSIONS, ORBSession
+from lib.trading.strategies.rb.open.sessions import ORB_SESSIONS, ORBSession
 
 if TYPE_CHECKING:
-    from lib.services.engine.rb.open.models import MultiSessionORBResult, ORBResult
+    from lib.trading.strategies.rb.open.models import MultiSessionORBResult, ORBResult
 
 logger = logging.getLogger("engine.orb")
 
