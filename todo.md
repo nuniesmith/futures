@@ -24,7 +24,7 @@ futures/
 │   │   │   └── data/      # FastAPI data API (positions, SSE, bridge, trades, journal, kraken, …)
 │   │   └── integrations/  # kraken_client, massive_client, grok_helper
 │   └── pine/
-│       └── ruby_futures.pine   # TradingView Pine Script indicator (primary live trading UI)
+│       └── ruby_futures.pine   # TradingView Pine Script indicator
 ├── models/                # champion .pt, feature_contract.json (Git LFS)
 ├── scripts/
 │   ├── sync_models.sh     # Pi-side: pull .pt from this repo → restart engine
