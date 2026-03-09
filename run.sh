@@ -12,7 +12,6 @@ set -euo pipefail
 #   ./run.sh --down       Stop Docker Compose services (all profiles)
 #   ./run.sh --test       Run tests + lint only (no compose)
 #   ./run.sh --trainer    Include GPU trainer service (training profile)
-#   ./run.sh --sync-models Force re-pull CNN models from rb repo
 #   ./run.sh --monitoring Include Prometheus + Grafana
 #   ./run.sh --help       Show this help message
 #
@@ -62,7 +61,6 @@ usage() {
     echo "  --down          Stop all Docker Compose services (all profiles)"
     echo "  --test          Run tests + lint only (skip Docker build)"
     echo "  --trainer       Include GPU trainer service (training profile)"
-    echo "  --sync-models   Force re-pull CNN models from rb repo (even if present)"
     echo "  --monitoring    Include Prometheus + Grafana (monitoring profile)"
     echo "  --help          Show this help message"
     echo ""
@@ -164,36 +162,30 @@ EOF
 
 
 # ---------------------------------------------------------------------------
-# Model sync — pull CNN model from rb repo if missing
+# Model check — verify model files are present in repo
 # ---------------------------------------------------------------------------
 
 ensure_models() {
-    local model_file="models/breakout_cnn_best.pt"
-    if [ -f "$model_file" ]; then
-        ok "CNN model present ($(du -h "$model_file" | awk '{print $1}'))"
-    else
-        warn "CNN model not found — pulling from rb repo..."
-        bash scripts/sync_models.sh
+    local onnx_file="models/breakout_cnn_best.onnx"
+    local meta_file="models/breakout_cnn_best_meta.json"
+    local contract_file="models/feature_contract.json"
+
+    local missing=0
+    for f in "$onnx_file" "$meta_file" "$contract_file"; do
+        if [ ! -f "$f" ]; then
+            err "Expected model file not found: $f"
+            missing=1
+        fi
+    done
+
+    if [ "$missing" -eq 1 ]; then
+        err "One or more model files are missing from models/ — check your git checkout"
+        exit 1
     fi
+
+    ok "CNN model files present ($(du -h "$onnx_file" | awk '{print $1}') ONNX)"
 }
 
-force_sync_models() {
-    log "Force re-pulling CNN models from rb repo..."
-    bash scripts/sync_models.sh
-    local exit_code=$?
-    if [ $exit_code -eq 0 ]; then
-        ok "Models synced successfully"
-        # Restart engine if it's running so it picks up the new model
-        if docker compose ps --status running 2>/dev/null | grep -q engine; then
-            log "Restarting engine container to pick up new model..."
-            docker compose restart engine
-            ok "Engine restarted"
-        fi
-    else
-        err "Model sync failed (exit code $exit_code)"
-        exit $exit_code
-    fi
-}
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -266,7 +258,7 @@ run_docker() {
     local trainer="$1"
     local monitoring="$2"
 
-    log "Ensuring CNN model files are present ..."
+    log "Checking CNN model files ..."
     ensure_models
     echo ""
 
@@ -355,10 +347,6 @@ while [[ $# -gt 0 ]]; do
             POSITIONAL+=("test")
             shift
             ;;
-        --sync-models)
-            POSITIONAL+=("sync-models")
-            shift
-            ;;
         --help|-h)
             usage
             exit 0
@@ -393,9 +381,6 @@ case "$ACTION" in
         run_tests
         run_lint
         ok "All checks passed"
-        ;;
-    sync-models)
-        force_sync_models
         ;;
     all)
         # Full pipeline + every profile: core + trainer + monitoring
