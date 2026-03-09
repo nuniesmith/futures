@@ -330,14 +330,14 @@ class TestCatchupMessages:
         _reset_cache_mock()
 
     def test_returns_empty_when_no_redis(self):
-        with patch("lib.services.engine.data.api.sse._get_redis", return_value=None):
+        with patch("lib.services.data.api.sse._get_redis", return_value=None):
             result = _get_catchup_messages()
             assert result == []
 
     def test_returns_empty_when_stream_empty(self):
         mock_redis = MagicMock()
         mock_redis.xrevrange.return_value = []
-        with patch("lib.services.engine.data.api.sse._get_redis", return_value=mock_redis):
+        with patch("lib.services.data.api.sse._get_redis", return_value=mock_redis):
             result = _get_catchup_messages()
             assert result == []
 
@@ -351,7 +351,7 @@ class TestCatchupMessages:
                 {b"data": b'{"assets":["MGC"]}', b"ts": b"2026-02-26T09:59:00"},
             ),
         ]
-        with patch("lib.services.engine.data.api.sse._get_redis", return_value=mock_redis):
+        with patch("lib.services.data.api.sse._get_redis", return_value=mock_redis):
             result = _get_catchup_messages(count=8)
             # Should be reversed (oldest first)
             assert len(result) == 2
@@ -362,7 +362,7 @@ class TestCatchupMessages:
     def test_handles_xrevrange_exception(self):
         mock_redis = MagicMock()
         mock_redis.xrevrange.side_effect = Exception("Redis down")
-        with patch("lib.services.engine.data.api.sse._get_redis", return_value=mock_redis):
+        with patch("lib.services.data.api.sse._get_redis", return_value=mock_redis):
             result = _get_catchup_messages()
             assert result == []
 
@@ -464,12 +464,12 @@ class TestSSEHealthEndpoint:
         return TestClient(app)
 
     def test_health_returns_200(self, client):
-        with patch("lib.services.engine.data.api.sse._get_redis", return_value=None):
+        with patch("lib.services.data.api.sse._get_redis", return_value=None):
             resp = client.get("/sse/health")
             assert resp.status_code == 200
 
     def test_health_structure(self, client):
-        with patch("lib.services.engine.data.api.sse._get_redis", return_value=None):
+        with patch("lib.services.data.api.sse._get_redis", return_value=None):
             data = client.get("/sse/health").json()
             assert "status" in data
             assert "redis_connected" in data
@@ -480,7 +480,7 @@ class TestSSEHealthEndpoint:
             assert "catchup_count" in data
 
     def test_health_degraded_without_redis(self, client):
-        with patch("lib.services.engine.data.api.sse._get_redis", return_value=None):
+        with patch("lib.services.data.api.sse._get_redis", return_value=None):
             data = client.get("/sse/health").json()
             assert data["status"] == "degraded"
             assert data["redis_connected"] is False
@@ -490,7 +490,7 @@ class TestSSEHealthEndpoint:
     def test_health_ok_with_redis(self, client):
         mock_redis = MagicMock()
         mock_redis.xinfo_stream.return_value = {b"length": 42}
-        with patch("lib.services.engine.data.api.sse._get_redis", return_value=mock_redis):
+        with patch("lib.services.data.api.sse._get_redis", return_value=mock_redis):
             data = client.get("/sse/health").json()
             assert data["status"] == "ok"
             assert data["redis_connected"] is True
@@ -500,14 +500,14 @@ class TestSSEHealthEndpoint:
         """Redis connected but stream doesn't exist yet."""
         mock_redis = MagicMock()
         mock_redis.xinfo_stream.side_effect = Exception("no such key")
-        with patch("lib.services.engine.data.api.sse._get_redis", return_value=mock_redis):
+        with patch("lib.services.data.api.sse._get_redis", return_value=mock_redis):
             data = client.get("/sse/health").json()
             assert data["status"] == "ok"
             assert data["redis_connected"] is True
             assert data["stream_length"] == 0
 
     def test_health_reports_correct_constants(self, client):
-        with patch("lib.services.engine.data.api.sse._get_redis", return_value=None):
+        with patch("lib.services.data.api.sse._get_redis", return_value=None):
             data = client.get("/sse/health").json()
             assert data["throttle_seconds"] == _THROTTLE_SECONDS
             assert data["heartbeat_interval"] == _HEARTBEAT_INTERVAL
@@ -564,28 +564,28 @@ class TestSSEDashboardEndpoint:
             raise asyncio.CancelledError("test: stop generator")
 
         stack = ExitStack()
-        stack.enter_context(patch("lib.services.engine.data.api.sse._get_redis", return_value=None))
+        stack.enter_context(patch("lib.services.data.api.sse._get_redis", return_value=None))
         stack.enter_context(
             patch(
-                "lib.services.engine.data.api.sse._get_catchup_messages",
+                "lib.services.data.api.sse._get_catchup_messages",
                 return_value=[],
             )
         )
         stack.enter_context(
             patch(
-                "lib.services.engine.data.api.sse._get_focus_from_cache",
+                "lib.services.data.api.sse._get_focus_from_cache",
                 return_value=None,
             )
         )
         stack.enter_context(
             patch(
-                "lib.services.engine.data.api.sse._get_positions_from_cache",
+                "lib.services.data.api.sse._get_positions_from_cache",
                 return_value=None,
             )
         )
         stack.enter_context(
             patch(
-                "lib.services.engine.data.api.sse._get_engine_status",
+                "lib.services.data.api.sse._get_engine_status",
                 return_value=None,
             )
         )
@@ -593,7 +593,7 @@ class TestSSEDashboardEndpoint:
         # terminates after emitting the initial events.
         stack.enter_context(
             patch(
-                "lib.services.engine.data.api.sse.asyncio.sleep",
+                "lib.services.data.api.sse.asyncio.sleep",
                 side_effect=_instant_sleep,
             )
         )
@@ -665,25 +665,25 @@ class TestSSEDashboardEndpoint:
             raise asyncio.CancelledError("test: stop generator")
 
         with (
-            patch("lib.services.engine.data.api.sse._get_redis", return_value=None),
+            patch("lib.services.data.api.sse._get_redis", return_value=None),
             patch(
-                "lib.services.engine.data.api.sse._get_catchup_messages",
+                "lib.services.data.api.sse._get_catchup_messages",
                 return_value=catchup,
             ),
             patch(
-                "lib.services.engine.data.api.sse._get_focus_from_cache",
+                "lib.services.data.api.sse._get_focus_from_cache",
                 return_value=None,
             ),
             patch(
-                "lib.services.engine.data.api.sse._get_positions_from_cache",
+                "lib.services.data.api.sse._get_positions_from_cache",
                 return_value=None,
             ),
             patch(
-                "lib.services.engine.data.api.sse._get_engine_status",
+                "lib.services.data.api.sse._get_engine_status",
                 return_value=None,
             ),
             patch(
-                "lib.services.engine.data.api.sse.asyncio.sleep",
+                "lib.services.data.api.sse.asyncio.sleep",
                 side_effect=_instant_sleep,
             ),
             client.stream("GET", "/sse/dashboard") as resp,

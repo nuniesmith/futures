@@ -974,11 +974,11 @@ class TestGetDailyPlanHtmlEndpoint:
 
         with (
             patch(
-                "lib.services.engine.data.api.dashboard._get_daily_plan_data",
+                "lib.services.data.api.dashboard._get_daily_plan_data",
                 return_value=None,
             ),
             patch(
-                "lib.services.engine.data.api.dashboard._get_focus_data",
+                "lib.services.data.api.dashboard._get_focus_data",
                 return_value=None,
             ),
         ):
@@ -999,11 +999,11 @@ class TestGetDailyPlanHtmlEndpoint:
 
         with (
             patch(
-                "lib.services.engine.data.api.dashboard._get_daily_plan_data",
+                "lib.services.data.api.dashboard._get_daily_plan_data",
                 return_value=plan,
             ),
             patch(
-                "lib.services.engine.data.api.dashboard._get_focus_data",
+                "lib.services.data.api.dashboard._get_focus_data",
                 return_value=focus,
             ),
         ):
@@ -1023,11 +1023,11 @@ class TestGetDailyPlanHtmlEndpoint:
 
         with (
             patch(
-                "lib.services.engine.data.api.dashboard._get_daily_plan_data",
+                "lib.services.data.api.dashboard._get_daily_plan_data",
                 return_value=plan,
             ),
             patch(
-                "lib.services.engine.data.api.dashboard._get_focus_data",
+                "lib.services.data.api.dashboard._get_focus_data",
                 return_value=focus,
             ),
         ):
@@ -1055,7 +1055,7 @@ class TestGetFocusHtmlFocusMode:
         mock_request.headers = {"HX-Request": "false"}
 
         with patch(
-            "lib.services.engine.data.api.dashboard._get_focus_data",
+            "lib.services.data.api.dashboard._get_focus_data",
             return_value=focus,
         ):
             response = get_focus_html(mock_request)
@@ -1075,7 +1075,7 @@ class TestGetFocusHtmlFocusMode:
         mock_request.headers = {"HX-Request": "false"}
 
         with patch(
-            "lib.services.engine.data.api.dashboard._get_focus_data",
+            "lib.services.data.api.dashboard._get_focus_data",
             return_value=focus,
         ):
             response = get_focus_html(mock_request)
@@ -1093,7 +1093,7 @@ class TestGetFocusHtmlFocusMode:
         mock_request.headers = {"HX-Request": "true"}
 
         with patch(
-            "lib.services.engine.data.api.dashboard._get_focus_data",
+            "lib.services.data.api.dashboard._get_focus_data",
             return_value=None,
         ):
             response = get_focus_html(mock_request)

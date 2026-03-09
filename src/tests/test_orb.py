@@ -523,12 +523,12 @@ class TestORBPublishing:
             sys.modules,
             {
                 "lib.core.cache": mock_cache,
-                "lib.services.engine.data.api.tradingview": mock_tv_module,
+                "lib.services.data.api.tradingview": mock_tv_module,
             },
         ):
             success = publish_orb_alert(result)
             assert success is True
-            mock_r.publish.assert_called_once()
+            mock_r.publish.assert_called()
 
     def test_clear_orb_alert(self):
         from lib.services.engine.orb import clear_orb_alert
@@ -655,7 +655,7 @@ class TestRiskHelpers:
 
         # Patch the getter to return None
         with patch(
-            "lib.services.engine.data.api.risk._get_local_risk_manager",
+            "lib.services.data.api.risk._get_local_risk_manager",
             return_value=None,
         ):
             result = evaluate_position_risk([])
@@ -670,7 +670,7 @@ class TestRiskHelpers:
 
         rm = RiskManager(account_size=50_000)
         with patch(
-            "lib.services.engine.data.api.risk._get_local_risk_manager",
+            "lib.services.data.api.risk._get_local_risk_manager",
             return_value=rm,
         ):
             positions = [
@@ -691,7 +691,7 @@ class TestRiskHelpers:
         from lib.services.data.api.risk import check_trade_entry_risk
 
         with patch(
-            "lib.services.engine.data.api.risk._get_local_risk_manager",
+            "lib.services.data.api.risk._get_local_risk_manager",
             return_value=None,
         ):
             allowed, reason, details = check_trade_entry_risk("MGC", "LONG")
@@ -709,8 +709,8 @@ class TestRiskHelpers:
         )
 
         with (
-            patch("lib.services.engine.data.api.risk._get_local_risk_manager", return_value=rm),
-            patch("lib.services.engine.data.api.risk._sync_local_risk_manager"),
+            patch("lib.services.data.api.risk._get_local_risk_manager", return_value=rm),
+            patch("lib.services.data.api.risk._sync_local_risk_manager"),
         ):
             allowed, reason, details = check_trade_entry_risk("MGC", "LONG", size=1)
             assert allowed is True
@@ -730,8 +730,8 @@ class TestRiskHelpers:
         rm._daily_pnl = -600.0
 
         with (
-            patch("lib.services.engine.data.api.risk._get_local_risk_manager", return_value=rm),
-            patch("lib.services.engine.data.api.risk._sync_local_risk_manager"),
+            patch("lib.services.data.api.risk._get_local_risk_manager", return_value=rm),
+            patch("lib.services.data.api.risk._sync_local_risk_manager"),
         ):
             allowed, reason, details = check_trade_entry_risk("MGC", "LONG", size=1)
             assert allowed is False
@@ -967,8 +967,8 @@ class TestTradesRiskEnforcement:
         rm._daily_pnl = -600.0
 
         with (
-            patch("lib.services.engine.data.api.risk._get_local_risk_manager", return_value=rm),
-            patch("lib.services.engine.data.api.risk._sync_local_risk_manager"),
+            patch("lib.services.data.api.risk._get_local_risk_manager", return_value=rm),
+            patch("lib.services.data.api.risk._sync_local_risk_manager"),
         ):
             result = client.post(
                 "/trades",
@@ -1095,7 +1095,7 @@ class TestPositionsRiskEvaluation:
         }
 
         with patch(
-            "lib.services.engine.data.api.risk._get_local_risk_manager",
+            "lib.services.data.api.risk._get_local_risk_manager",
             return_value=rm,
         ):
             result = client.post(

@@ -589,7 +589,7 @@ class TestLoadBarsRouting:
         from lib.services.training.dataset_generator import load_bars
 
         # Patch DataResolver to not interfere
-        with patch("lib.services.engine.data.resolver.DataResolver", side_effect=ImportError):
+        with patch("lib.services.data.resolver.DataResolver", side_effect=ImportError):
             df = load_bars("BTC", source="kraken", days=1)
 
         assert df is not None
@@ -609,7 +609,7 @@ class TestLoadBarsRouting:
 
         from lib.services.training.dataset_generator import load_bars
 
-        with patch("lib.services.engine.data.resolver.DataResolver", side_effect=ImportError):
+        with patch("lib.services.data.resolver.DataResolver", side_effect=ImportError):
             df = load_bars("KRAKEN:XBTUSD", source="kraken", days=1)
 
         assert df is not None
@@ -629,7 +629,7 @@ class TestLoadBarsRouting:
 
         from lib.services.training.dataset_generator import load_bars
 
-        with patch("lib.services.engine.data.resolver.DataResolver", side_effect=ImportError):
+        with patch("lib.services.data.resolver.DataResolver", side_effect=ImportError):
             df = load_bars("MES", source="massive", days=1)
 
         assert df is not None

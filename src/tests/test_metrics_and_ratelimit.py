@@ -843,7 +843,7 @@ class TestCollectLiveGauges:
         """Should not crash when cache returns None for everything."""
         from lib.services.data.api.metrics import _collect_live_gauges
 
-        with patch("lib.services.engine.data.api.metrics.update_redis_status") as mock_redis:
+        with patch("lib.services.data.api.metrics.update_redis_status") as mock_redis:
             _collect_live_gauges()
             # Should have been called (either True or False)
             mock_redis.assert_called()

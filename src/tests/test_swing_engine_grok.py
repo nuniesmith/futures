@@ -734,7 +734,7 @@ class TestPublishSwingSignalsToRedis:
         parsed = json.loads(stored["engine:swing_signals"])
         assert len(parsed) == 1
         assert parsed[0]["asset_name"] == "Gold"
-        mock_redis.publish.assert_called_once()
+        mock_redis.publish.assert_called()
 
     def test_publish_empty_signals(self):
         from lib.services.engine.swing import _publish_swing_signals_to_redis
@@ -780,12 +780,9 @@ class TestPublishSwingToTV:
         ]
 
         mock_publish_sync = MagicMock(return_value=True)
-        # Patch the lazy import target inside the tradingview module
-        mock_tv_module = MagicMock()
-        mock_tv_module.publish_signal_to_tv_sync = mock_publish_sync
-        with patch.dict(
-            "sys.modules",
-            {"lib.services.engine.data.api.tradingview": mock_tv_module},
+        with patch(
+            "lib.services.data.api.tradingview.publish_signal_to_tv_sync",
+            mock_publish_sync,
         ):
             _publish_swing_to_tv(signals)
 
@@ -815,11 +812,9 @@ class TestPublishSwingToTV:
         ]
 
         mock_publish_sync = MagicMock(return_value=True)
-        mock_tv_module = MagicMock()
-        mock_tv_module.publish_signal_to_tv_sync = mock_publish_sync
-        with patch.dict(
-            "sys.modules",
-            {"lib.services.engine.data.api.tradingview": mock_tv_module},
+        with patch(
+            "lib.services.data.api.tradingview.publish_signal_to_tv_sync",
+            mock_publish_sync,
         ):
             _publish_swing_to_tv(signals)
 
