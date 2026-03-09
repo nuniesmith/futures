@@ -43,14 +43,11 @@ from __future__ import annotations
 
 import logging
 from datetime import time as dt_time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger("strategies.rb.range_builders")
 
@@ -218,10 +215,9 @@ def build_pdr_range(
         ``complete`` is always True for PDR (the range is already formed).
     """
     # Use explicit overrides if provided
-    if prev_day_high is not None and prev_day_low is not None:
-        if prev_day_high > prev_day_low > 0:
-            prev_range = prev_day_high - prev_day_low
-            return prev_day_high, prev_day_low, 0, True, prev_day_high, prev_day_low, prev_range
+    if prev_day_high is not None and prev_day_low is not None and prev_day_high > prev_day_low > 0:
+        prev_range = prev_day_high - prev_day_low
+        return prev_day_high, prev_day_low, 0, True, prev_day_high, prev_day_low, prev_range
 
     bars_et = localize_bars(bars)
     if len(bars_et) < 2:
@@ -269,9 +265,8 @@ def build_ib_range(
         ``(ib_high, ib_low, bar_count, complete)``
         ``complete`` is True once the current time is past the IB end time.
     """
-    if ib_high_override is not None and ib_low_override is not None:
-        if ib_high_override > ib_low_override > 0:
-            return ib_high_override, ib_low_override, 0, True
+    if ib_high_override is not None and ib_low_override is not None and ib_high_override > ib_low_override > 0:
+        return ib_high_override, ib_low_override, 0, True
 
     bars_et = localize_bars(bars)
     if len(bars_et) < 1:
@@ -476,19 +471,13 @@ def build_asian_range(
     idx_time = pd.DatetimeIndex(bars_et.index).time
 
     # Wraps midnight: time >= 19:00 OR time < 02:00
-    if start > end:
-        mask = (idx_time >= start) | (idx_time < end)
-    else:
-        mask = (idx_time >= start) & (idx_time < end)
+    mask = (idx_time >= start) | (idx_time < end) if start > end else (idx_time >= start) & (idx_time < end)
 
     asian_bars = bars_et.loc[mask]
     bar_count = len(asian_bars)
 
     # Complete once we're past the end time and NOT in the start window
-    if start > end:
-        complete = end <= now_time < start
-    else:
-        complete = now_time >= end
+    complete = end <= now_time < start if start > end else now_time >= end
 
     if bar_count < min_bars:
         return 0.0, 0.0, bar_count, complete

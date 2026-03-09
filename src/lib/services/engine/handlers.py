@@ -182,7 +182,7 @@ def get_assets_for_session_key(session_key: str) -> list[dict[str, Any]]:
         return []
 
 
-def fetch_bars_1m(engine: Any, ticker: str, symbol: str) -> "pd.DataFrame | None":
+def fetch_bars_1m(engine: Any, ticker: str, symbol: str) -> pd.DataFrame | None:
     """Fetch 1-minute bars from cache or engine data service (best-effort)."""
     try:
         import pandas as pd
@@ -203,9 +203,9 @@ def fetch_bars_1m(engine: Any, ticker: str, symbol: str) -> "pd.DataFrame | None
 
 
 def get_htf_bars(
-    bars_1m: "pd.DataFrame | None",
+    bars_1m: pd.DataFrame | None,
     ticker: str,
-) -> "pd.DataFrame | None":
+) -> pd.DataFrame | None:
     """Get 15-minute bars for MTF enrichment — from cache or resampled from 1m.
 
     Returns ``None`` if no usable data is available.
@@ -269,7 +269,7 @@ def get_prev_day_levels(ticker: str, symbol: str) -> tuple[float | None, float |
 
 def run_mtf_on_result(
     result: Any,
-    bars_htf: "pd.DataFrame | None",
+    bars_htf: pd.DataFrame | None,
 ) -> Any:
     """Run the MTF analyzer on a BreakoutResult and enrich it in-place.
 
@@ -356,7 +356,7 @@ def publish_breakout_result(result: Any, session_key: str = "us") -> None:
 
 def dispatch_to_position_manager(
     result: Any,
-    bars_1m: "pd.DataFrame | None" = None,
+    bars_1m: pd.DataFrame | None = None,
     session_key: str = "us",
 ) -> None:
     """Forward a breakout result to the PositionManager for order execution.
@@ -403,9 +403,10 @@ def send_breakout_alert(
             lines.append(f"PDR: {result.prev_day_low:,.4f} – {result.prev_day_high:,.4f}")
         elif breakout_type == BreakoutType.InitialBalance and getattr(result, "ib_high", 0) > 0:
             lines.append(f"IB: {getattr(result, 'ib_low', 0):,.4f} – {result.ib_high:,.4f}")
-        elif breakout_type in (BreakoutType.Consolidation, BreakoutType.BollingerSqueeze):
-            if getattr(result, "squeeze_detected", False):
-                lines.append(f"Squeeze: {result.squeeze_bar_count} bars, BB width {result.squeeze_bb_width:.4f}")
+        elif breakout_type in (BreakoutType.Consolidation, BreakoutType.BollingerSqueeze) and getattr(
+            result, "squeeze_detected", False
+        ):
+            lines.append(f"Squeeze: {result.squeeze_bar_count} bars, BB width {result.squeeze_bb_width:.4f}")
 
         lines.append(f"ATR: {result.atr_value:,.4f}")
 
@@ -478,9 +479,9 @@ def get_filter_windows_for_session(
 
 def run_quality_filters(
     result: Any,
-    bars_1m: "pd.DataFrame | None",
-    bars_daily: "pd.DataFrame | None",
-    bars_htf: "pd.DataFrame | None",
+    bars_1m: pd.DataFrame | None,
+    bars_daily: pd.DataFrame | None,
+    bars_htf: pd.DataFrame | None,
     session_key: str = "us",
 ) -> tuple[bool, str]:
     """Run breakout quality filters (NR7, session window, MTF, etc.).
@@ -535,7 +536,7 @@ def run_quality_filters(
 # ===========================================================================
 
 
-def _get_daily_bars(ticker: str, symbol: str) -> "pd.DataFrame | None":
+def _get_daily_bars(ticker: str, symbol: str) -> pd.DataFrame | None:
     """Load cached daily bars for NR7 check and CNN features."""
     try:
         import pandas as pd
@@ -554,8 +555,8 @@ def _get_daily_bars(ticker: str, symbol: str) -> "pd.DataFrame | None":
 
 def build_cnn_tabular_features(
     result: Any,
-    bars_1m: "pd.DataFrame | None",
-    bars_daily: "pd.DataFrame | None",
+    bars_1m: pd.DataFrame | None,
+    bars_daily: pd.DataFrame | None,
     session_key: str = "us",
     ticker: str = "",
 ) -> list[float]:
@@ -636,10 +637,8 @@ def build_cnn_tabular_features(
 
     # --- [7] london_overlap_flag ---
     _now_hour = 10
-    try:
+    with contextlib.suppress(Exception):
         _now_hour = datetime.now(tz=_EST).hour
-    except Exception:
-        pass
     _london_overlap = 1.0 if 8 <= _now_hour <= 9 else 0.0
 
     # --- [8] or_range_atr_ratio ---
@@ -746,8 +745,8 @@ def build_cnn_tabular_features(
 
 def run_cnn_inference(
     result: Any,
-    bars_1m: "pd.DataFrame | None",
-    bars_daily: "pd.DataFrame | None",
+    bars_1m: pd.DataFrame | None,
+    bars_daily: pd.DataFrame | None,
     session_key: str = "us",
     ticker: str = "",
 ) -> tuple[float | None, str, bool]:

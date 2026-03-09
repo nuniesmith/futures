@@ -50,7 +50,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import pandas as pd
 
-from lib.core.breakout_types import BreakoutType, get_range_config
+from lib.core.breakout_types import BreakoutType
 
 from .range_builders import compute_atr
 
@@ -69,7 +69,7 @@ from lib.services.engine.breakout import BreakoutResult  # noqa: E402
 
 
 def detect_range_breakout(
-    bars: "pd.DataFrame",
+    bars: pd.DataFrame,
     symbol: str = "",
     config: Any = None,
     *,
@@ -131,7 +131,7 @@ def detect_range_breakout(
 
 
 def detect_breakout_for_type(
-    bars: "pd.DataFrame",
+    bars: pd.DataFrame,
     breakout_type: BreakoutType,
     symbol: str = "",
     *,
@@ -193,7 +193,7 @@ def detect_breakout_for_type(
 
 
 def detect_all_breakout_types(
-    bars: "pd.DataFrame",
+    bars: pd.DataFrame,
     symbol: str = "",
     *,
     types: list[BreakoutType] | None = None,
@@ -248,7 +248,7 @@ def detect_all_breakout_types(
 
 
 def detect_breakouts_filtered(
-    bars: "pd.DataFrame",
+    bars: pd.DataFrame,
     symbol: str = "",
     *,
     types: list[BreakoutType] | None = None,
@@ -296,7 +296,7 @@ def detect_breakouts_filtered(
 
 
 def detect_pdr_breakout(
-    bars: "pd.DataFrame",
+    bars: pd.DataFrame,
     symbol: str = "",
     *,
     prev_day_high: float | None = None,
@@ -313,7 +313,7 @@ def detect_pdr_breakout(
 
 
 def detect_ib_breakout(
-    bars: "pd.DataFrame",
+    bars: pd.DataFrame,
     symbol: str = "",
     *,
     ib_high: float | None = None,
@@ -330,7 +330,7 @@ def detect_ib_breakout(
 
 
 def detect_consolidation_breakout(
-    bars: "pd.DataFrame",
+    bars: pd.DataFrame,
     symbol: str = "",
 ) -> BreakoutResult:
     """Convenience: detect a Consolidation/Squeeze breakout."""

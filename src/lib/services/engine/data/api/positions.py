@@ -33,7 +33,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from lib.core.cache import (  # noqa: PLC2701
-    REDIS_AVAILABLE,
     _cache_key,
     cache_get,
     cache_set,
@@ -656,17 +655,18 @@ def clear_positions():
     """
     keys_to_clear = [_POSITIONS_CACHE_KEY, _HEARTBEAT_CACHE_KEY]
 
-    if REDIS_AVAILABLE:
-        from lib.core.cache import _r
+    # Read REDIS_AVAILABLE at call time from the cache module (not from
+    # the stale name binding captured at import time) so that test
+    # fixtures that toggle the flag are respected.
+    import lib.core.cache as _cache_mod
 
-        if _r is not None:
+    if _cache_mod.REDIS_AVAILABLE:
+        if _cache_mod._r is not None:
             for key in keys_to_clear:
-                _r.delete(key)
+                _cache_mod._r.delete(key)
     else:
-        from lib.core.cache import _mem_cache
-
         for key in keys_to_clear:
-            _mem_cache.pop(key, None)
+            _cache_mod._mem_cache.pop(key, None)
 
     return {"status": "cleared", "timestamp": datetime.now(tz=_EST).isoformat()}
 

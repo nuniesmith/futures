@@ -261,7 +261,7 @@ def ignore_signal(asset_name: str) -> HTMLResponse:
     try:
         from lib.services.engine.swing import ignore_swing_signal
 
-        result = ignore_swing_signal(asset_name)
+        ignore_swing_signal(asset_name)
 
         html = _success_toast(
             "🚫 Signal Ignored",
@@ -484,7 +484,6 @@ def get_status_badge(asset_name: str) -> HTMLResponse:
     """
     try:
         from lib.services.engine.swing import (
-            get_active_swing_states,
             get_pending_signals,
             get_swing_state_detail,
         )

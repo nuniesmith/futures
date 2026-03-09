@@ -404,7 +404,7 @@ def get_session_overlap_flag(
 
 
 def get_atr_trend(
-    bars: "pd.DataFrame | None" = None,
+    bars: pd.DataFrame | None = None,
     *,
     lookback: int = 10,
 ) -> float:
@@ -464,7 +464,7 @@ def get_atr_trend(
 
 
 def get_volume_trend(
-    bars: "pd.DataFrame | None" = None,
+    bars: pd.DataFrame | None = None,
     *,
     lookback: int = 5,
 ) -> float:
@@ -536,7 +536,7 @@ def get_volume_trend(
 
 def get_daily_bias_direction(
     asset_name: str,
-    bars_daily: "pd.DataFrame | None" = None,
+    bars_daily: pd.DataFrame | None = None,
     *,
     _bias_cache: dict[str, Any] | None = None,
 ) -> float:
@@ -566,7 +566,7 @@ def get_daily_bias_direction(
 
 def get_daily_bias_confidence(
     asset_name: str,
-    bars_daily: "pd.DataFrame | None" = None,
+    bars_daily: pd.DataFrame | None = None,
     *,
     _bias_cache: dict[str, Any] | None = None,
 ) -> float:
@@ -590,7 +590,7 @@ def get_daily_bias_confidence(
 
 def get_prior_day_pattern(
     asset_name: str,
-    bars_daily: "pd.DataFrame | None" = None,
+    bars_daily: pd.DataFrame | None = None,
     *,
     _bias_cache: dict[str, Any] | None = None,
 ) -> float:
@@ -620,7 +620,7 @@ def get_prior_day_pattern(
 
 def get_weekly_range_position(
     asset_name: str,
-    bars_daily: "pd.DataFrame | None" = None,
+    bars_daily: pd.DataFrame | None = None,
     *,
     _bias_cache: dict[str, Any] | None = None,
 ) -> float:
@@ -645,7 +645,7 @@ def get_weekly_range_position(
 
 def get_monthly_trend_score(
     asset_name: str,
-    bars_daily: "pd.DataFrame | None" = None,
+    bars_daily: pd.DataFrame | None = None,
     *,
     _bias_cache: dict[str, Any] | None = None,
 ) -> float:
@@ -671,7 +671,7 @@ def get_monthly_trend_score(
 
 def get_crypto_momentum_score(
     ticker: str,
-    bars_1m: "pd.DataFrame | None" = None,
+    bars_1m: pd.DataFrame | None = None,
 ) -> float:
     """Return normalised crypto momentum score [0, 1] for the CNN.
 

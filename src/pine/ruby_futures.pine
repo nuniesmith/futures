@@ -33,6 +33,8 @@ showEMA       = input.bool(true,  "Show EMA9",            group="3. Plots")
 showVWAP      = input.bool(true,  "Show VWAP",            group="3. Plots")
 showBB        = input.bool(false, "Show Bollinger Bands", group="3. Plots")
 showTable     = input.bool(true,  "Show Ruby Dashboard",  group="3. Plots")
+dashPosition  = input.string("Top Right", "Dashboard Position",
+     options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group="3. Plots")
 
 // ══════════════════════════════════════════════════════════════════════════════
 // 4. TOP G CHANNEL  (from FKS)
@@ -66,7 +68,16 @@ barColorMode  = input.string("Volume",   "Bar Color Mode",
 heatSensitive = input.int(70, "Heatmap Sensitivity", minval=10,   group="6. Bar Coloring")
 
 // ══════════════════════════════════════════════════════════════════════════════
-// UTILITY FUNCTIONS  (FKS)
+// 7. FKS SIGNALS  (Top G + AO confirmed entries)
+// ══════════════════════════════════════════════════════════════════════════════
+showFKSSignals  = input.bool(true,  "Show FKS Long/Short Signals",  group="7. FKS Signals")
+showFKSAdd      = input.bool(true,  "Show FKS ADD Points",          group="7. FKS Signals")
+fksVolConfirm   = input.bool(true,  "Require Volume Confirmation",   group="7. FKS Signals")
+fksBiasConfirm  = input.bool(true,  "Require Session Bias Match",    group="7. FKS Signals")
+fksAddBars      = input.int(25,     "ADD Lookback Window (bars)",
+     minval=5, maxval=60,                                            group="7. FKS Signals")
+fksAOFast       = input.int(5,      "AO Fast Period",  minval=2,    group="7. FKS Signals")
+fksAOSlow       = input.int(34,     "AO Slow Period",  minval=5,    group="7. FKS Signals")
 // ══════════════════════════════════════════════════════════════════════════════
 
 // Normalize a series relative to its mean (clamps to ±5 σ)
@@ -397,6 +408,48 @@ if longAdd or shortAdd
     addFired := true
 
 // ══════════════════════════════════════════════════════════════════════════════
+// FKS SIGNAL ENGINE
+// Confirmed long/short: Top G strong bounce/rejection + AO alignment
+//                       + session bias (optional) + volume (optional)
+// FKS ADD: Top G touch signal within fksAddBars after the initial signal
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Shared AO (may differ from Ruby's ao which uses hlc3; FKS AO uses hl2)
+fks_ao = ta.sma(hl2, fksAOFast) - ta.sma(hl2, fksAOSlow)
+
+_fks_vol_ok     = not fksVolConfirm  or volume > volAvg * volMult
+_fks_long_bias  = not fksBiasConfirm or bullBias
+_fks_short_bias = not fksBiasConfirm or not bullBias
+
+// ── Primary signals: TG strong bounce/rejection confirmed by AO direction
+fksLong  = showFKSSignals and tg_bot and fks_ao > 0 and _fks_long_bias  and _fks_vol_ok and barstate.isconfirmed
+fksShort = showFKSSignals and tg_top and fks_ao < 0 and _fks_short_bias and _fks_vol_ok and barstate.isconfirmed
+
+// Track when the most recent FKS signal fired
+var int fksLongBar  = na
+var int fksShortBar = na
+
+if fksLong
+    fksLongBar  := bar_index
+if fksShort
+    fksShortBar := bar_index
+
+// ── ADD points: any TG touch (simple or potential) within the lookback window
+//    after a signal, while price remains on the right side of the channel mid
+_bars_since_fks_long  = na(fksLongBar)  ? 9999 : bar_index - fksLongBar
+_bars_since_fks_short = na(fksShortBar) ? 9999 : bar_index - fksShortBar
+
+fksAddLong  = showFKSAdd and
+              _bars_since_fks_long  >= 2 and _bars_since_fks_long  <= fksAddBars and
+              (tg_s_bot or tg_p_bot) and close > tg_mid and fks_ao > 0 and
+              not fksLong   // don't double-mark the initial signal bar
+
+fksAddShort = showFKSAdd and
+              _bars_since_fks_short >= 2 and _bars_since_fks_short <= fksAddBars and
+              (tg_s_top or tg_p_top) and close < tg_mid and fks_ao < 0 and
+              not fksShort
+
+// ══════════════════════════════════════════════════════════════════════════════
 // PLOTS
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -471,6 +524,14 @@ plotshape(series=showSimpleSigs and tg_s_top,  title="TG Simple Resistance", sty
 plotshape(series=showPotentialSigs and tg_p_bot, title="TG Potential Support", style=shape.diamond, location=location.belowbar, color=color.new(#00ffbb, 60), size=size.tiny)
 plotshape(series=showPotentialSigs and tg_p_top, title="TG Potential Resist",  style=shape.diamond, location=location.abovebar, color=color.new(#ff1100, 60), size=size.tiny)
 
+// ── FKS Long / Short confirmed signals — star shape, clearly distinct from breakout arrows
+plotshape(series=fksLong,      title="FKS Long",       style=shape.labelup,     location=location.belowbar, color=color.new(#00ff88, 0),  size=size.normal, text="L")
+plotshape(series=fksShort,     title="FKS Short",      style=shape.labeldown,   location=location.abovebar, color=color.new(#ff4444, 0),  size=size.normal, text="S")
+
+// ── FKS ADD points — smaller, offset slightly further so they don't overlap
+plotshape(series=fksAddLong,   title="FKS ADD Long",   style=shape.triangleup,  location=location.belowbar, color=color.new(#00ffbb, 20), size=size.small,  text="+L")
+plotshape(series=fksAddShort,  title="FKS ADD Short",  style=shape.triangledown,location=location.abovebar, color=color.new(#ff8888, 20), size=size.small,  text="+S")
+
 // ── Background tint (existing — uses chart background, not candle colour)
 bgcolor(close > ema9 and ao > 0  ? color.new(color.lime, 96) :
         close < ema9 and ao < 0  ? color.new(color.red,  96) : na)
@@ -493,48 +554,51 @@ if showEntryZones and barstate.islast and not na(tg_range) and tg_range > 0
 // ══════════════════════════════════════════════════════════════════════════════
 // RUBY DASHBOARD
 // ══════════════════════════════════════════════════════════════════════════════
-var table dash = table.new(position.top_right, 2, 12,
+_dashPos = dashPosition == "Bottom Right" ? position.bottom_right :
+           dashPosition == "Top Left"     ? position.top_left     :
+           dashPosition == "Bottom Left"  ? position.bottom_left  : position.top_right
+var table dash = table.new(_dashPos, 2, 14,
      bgcolor=color.new(#1e222d, 80), border_width=1, frame_color=#00ffff)
 
 if barstate.islast and showTable
     // ── Header
-    table.cell(dash, 0, 0,  "RUBY FUTURES",  text_color=#00ffff, text_size=size.small)
-    table.cell(dash, 1, 0,  "",              text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 0,  "RUBY FUTURES",  text_color=#00ffff, text_size=size.normal)
+    table.cell(dash, 1, 0,  "",              text_color=color.white, text_size=size.normal)
 
     // ── ORB / Range
-    table.cell(dash, 0, 1,  "Range",   text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 0, 1,  "Range",   text_color=color.gray,   text_size=size.normal)
     table.cell(dash, 1, 1,  rangeName + " | " + biasMode,
-         text_color=color.yellow, text_size=size.tiny)
+         text_color=color.yellow, text_size=size.normal)
 
-    table.cell(dash, 0, 2,  "Levels",  text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 0, 2,  "Levels",  text_color=color.gray,   text_size=size.normal)
     table.cell(dash, 1, 2,  rangeReady
          ? str.tostring(rHigh, "#.##") + " / " + str.tostring(rLow, "#.##")
          : "BUILDING",
-         text_color=#00ffff, text_size=size.tiny)
+         text_color=#00ffff, text_size=size.normal)
 
     // ── Core metrics
-    table.cell(dash, 0, 3,  "Quality", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 3,  "Quality", text_color=color.gray, text_size=size.normal)
     table.cell(dash, 1, 3,  str.tostring(math.round(quality)) + "%",
          text_color=quality >= 70 ? color.lime : quality >= 50 ? color.yellow : color.red,
-         text_size=size.tiny)
+         text_size=size.normal)
 
-    table.cell(dash, 0, 4,  "VWAP",    text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 0, 4,  "VWAP",    text_color=color.gray,   text_size=size.normal)
     table.cell(dash, 1, 4,  str.tostring(vwap, "#.##"),
-         text_color=#FF00FF, text_size=size.tiny)
+         text_color=#FF00FF, text_size=size.normal)
 
-    table.cell(dash, 0, 5,  "AO",      text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 0, 5,  "AO",      text_color=color.gray,   text_size=size.normal)
     table.cell(dash, 1, 5,  str.tostring(ao, "#.##"),
-         text_color=ao > 0 ? color.lime : color.red, text_size=size.tiny)
+         text_color=ao > 0 ? color.lime : color.red, text_size=size.normal)
 
-    table.cell(dash, 0, 6,  "Vol",     text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 0, 6,  "Vol",     text_color=color.gray,   text_size=size.normal)
     table.cell(dash, 1, 6,  str.tostring(volume / volAvg, "0.00") + "×",
-         text_color=volume > volAvg * volMult ? color.lime : color.gray, text_size=size.tiny)
+         text_color=volume > volAvg * volMult ? color.lime : color.gray, text_size=size.normal)
 
     // ── Top G Channel (FKS)
-    table.cell(dash, 0, 7,  "TG Chan", text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 0, 7,  "TG Chan", text_color=color.gray,   text_size=size.normal)
     table.cell(dash, 1, 7,
          str.tostring(tg_hi, "#.##") + " / " + str.tostring(tg_lo, "#.##"),
-         text_color=color.white, text_size=size.tiny)
+         text_color=color.white, text_size=size.normal)
 
     // ── TG Signal status
     _tg_sig_txt = tg_bot   ? "⬆ STRONG BOUNCE" :
@@ -542,26 +606,44 @@ if barstate.islast and showTable
                   tg_s_bot ? "^ bounce"          :
                   tg_s_top ? "v reject"          : "—"
     _tg_sig_col = tg_bot or tg_s_bot ? color.lime : tg_top or tg_s_top ? color.red : color.gray
-    table.cell(dash, 0, 8,  "TG Sig",  text_color=color.gray,   text_size=size.tiny)
-    table.cell(dash, 1, 8,  _tg_sig_txt, text_color=_tg_sig_col, text_size=size.tiny)
+    table.cell(dash, 0, 8,  "TG Sig",  text_color=color.gray,   text_size=size.normal)
+    table.cell(dash, 1, 8,  _tg_sig_txt, text_color=_tg_sig_col, text_size=size.normal)
 
     // ── HTF S/R (FKS)
-    table.cell(dash, 0, 9,  "1m S/R",  text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 0, 9,  "1m S/R",  text_color=color.gray,   text_size=size.normal)
     table.cell(dash, 1, 9,
          (not na(sr_res_1m) ? str.tostring(sr_res_1m, "#.##") : "--") + " / " +
          (not na(sr_sup_1m) ? str.tostring(sr_sup_1m, "#.##") : "--"),
-         text_color=color.white, text_size=size.tiny)
+         text_color=color.white, text_size=size.normal)
 
-    table.cell(dash, 0, 10, "5m S/R",  text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 0, 10, "5m S/R",  text_color=color.gray,   text_size=size.normal)
     table.cell(dash, 1, 10,
          (not na(sr_res_5m) ? str.tostring(sr_res_5m, "#.##") : "--") + " / " +
          (not na(sr_sup_5m) ? str.tostring(sr_sup_5m, "#.##") : "--"),
-         text_color=color.white, text_size=size.tiny)
+         text_color=color.white, text_size=size.normal)
 
     // ── Bar colour mode indicator
-    table.cell(dash, 0, 11, "Bars",    text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 0, 11, "Bars",    text_color=color.gray,   text_size=size.normal)
     table.cell(dash, 1, 11, barColorMode,
-         text_color=barColorMode == "Off" ? color.gray : color.new(#00BFFF, 0), text_size=size.tiny)
+         text_color=barColorMode == "Off" ? color.gray : color.new(#00BFFF, 0), text_size=size.normal)
+
+    // ── FKS Signal status
+    _fks_long_txt  = fksLong  ? "▲ SIGNAL"  :
+                     fksAddLong ? "+ ADD"    :
+                     not na(fksLongBar) and _bars_since_fks_long <= fksAddBars ? "watching (" + str.tostring(_bars_since_fks_long) + ")" : "—"
+    _fks_short_txt = fksShort ? "▼ SIGNAL"  :
+                     fksAddShort ? "+ ADD"   :
+                     not na(fksShortBar) and _bars_since_fks_short <= fksAddBars ? "watching (" + str.tostring(_bars_since_fks_short) + ")" : "—"
+    _fks_long_col  = fksLong or fksAddLong ? color.lime   :
+                     not na(fksLongBar) and _bars_since_fks_long <= fksAddBars ? color.yellow : color.gray
+    _fks_short_col = fksShort or fksAddShort ? color.red  :
+                     not na(fksShortBar) and _bars_since_fks_short <= fksAddBars ? color.yellow : color.gray
+
+    table.cell(dash, 0, 12, "FKS L",   text_color=color.gray,   text_size=size.normal)
+    table.cell(dash, 1, 12, _fks_long_txt,  text_color=_fks_long_col,  text_size=size.normal)
+
+    table.cell(dash, 0, 13, "FKS S",   text_color=color.gray,   text_size=size.normal)
+    table.cell(dash, 1, 13, _fks_short_txt, text_color=_fks_short_col, text_size=size.normal)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ALERTS
@@ -585,3 +667,23 @@ alertcondition(tg_top,
 alertcondition(tg_p_bot or tg_p_top,
      title="Ruby TG Potential Signal",
      message="Ruby {{ticker}} {{interval}} TG price entering channel zone")
+
+alertcondition(fksLong,
+     title="Ruby FKS Long Signal",
+     message="Ruby {{ticker}} {{interval}} FKS LONG — TG bounce + AO bullish confirmed")
+
+alertcondition(fksShort,
+     title="Ruby FKS Short Signal",
+     message="Ruby {{ticker}} {{interval}} FKS SHORT — TG rejection + AO bearish confirmed")
+
+alertcondition(fksAddLong,
+     title="Ruby FKS ADD Long",
+     message="Ruby {{ticker}} {{interval}} FKS ADD LONG — pullback to TG support zone")
+
+alertcondition(fksAddShort,
+     title="Ruby FKS ADD Short",
+     message="Ruby {{ticker}} {{interval}} FKS ADD SHORT — pullback to TG resistance zone")
+
+alertcondition(fksLong or fksShort or fksAddLong or fksAddShort,
+     title="Ruby FKS All Signals",
+     message="Ruby {{ticker}} {{interval}} FKS signal fired")

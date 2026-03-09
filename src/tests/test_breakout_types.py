@@ -371,7 +371,7 @@ class TestDefaultConfigs:
 class TestBuildWeeklyRange:
     def test_basic_weekly_range(self):
         bars = _make_multi_day_bars(n_days=10, bars_per_day=200, seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.WEEKLY]
+        config = DEFAULT_CONFIGS[BreakoutType.Weekly]
         high, low, count, complete = _build_weekly_range(bars, config)
 
         if complete:
@@ -380,7 +380,7 @@ class TestBuildWeeklyRange:
 
     def test_insufficient_data(self):
         bars = _make_1m_bars(n=5, start_price=2700.0)
-        config = DEFAULT_CONFIGS[BreakoutType.WEEKLY]
+        config = DEFAULT_CONFIGS[BreakoutType.Weekly]
         high, low, count, complete = _build_weekly_range(bars, config)
         # With only 5 bars on one day, unlikely to have prior week data
         assert not complete or (high > low > 0)
@@ -388,7 +388,7 @@ class TestBuildWeeklyRange:
     def test_empty_bars(self):
         bars = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
         bars.index = pd.DatetimeIndex([], tz=_EST)
-        config = DEFAULT_CONFIGS[BreakoutType.WEEKLY]
+        config = DEFAULT_CONFIGS[BreakoutType.Weekly]
         high, low, count, complete = _build_weekly_range(bars, config)
         assert high == 0.0 and low == 0.0 and not complete
 
@@ -402,7 +402,7 @@ class TestBuildMonthlyRange:
     def test_basic_monthly_range(self):
         # Create bars spanning two months
         bars = _make_multi_day_bars(n_days=35, bars_per_day=100, start_date="2026-01-15", seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.MONTHLY]
+        config = DEFAULT_CONFIGS[BreakoutType.Monthly]
         high, low, count, complete = _build_monthly_range(bars, config)
 
         if complete:
@@ -411,14 +411,14 @@ class TestBuildMonthlyRange:
 
     def test_insufficient_data(self):
         bars = _make_1m_bars(n=5, start_price=2700.0)
-        config = DEFAULT_CONFIGS[BreakoutType.MONTHLY]
+        config = DEFAULT_CONFIGS[BreakoutType.Monthly]
         high, low, count, complete = _build_monthly_range(bars, config)
         assert not complete or (high > low > 0)
 
     def test_empty_bars(self):
         bars = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
         bars.index = pd.DatetimeIndex([], tz=_EST)
-        config = DEFAULT_CONFIGS[BreakoutType.MONTHLY]
+        config = DEFAULT_CONFIGS[BreakoutType.Monthly]
         high, low, count, complete = _build_monthly_range(bars, config)
         assert high == 0.0 and low == 0.0 and not complete
 
@@ -431,7 +431,7 @@ class TestBuildMonthlyRange:
 class TestBuildAsianRange:
     def test_basic_asian_range(self):
         bars = _make_asian_session_bars(start_date="2026-02-26", seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.ASIAN]
+        config = DEFAULT_CONFIGS[BreakoutType.Asian]
         high, low, count, complete = _build_asian_range(bars, config)
 
         # The bars span 18:00–10:00 next day, so Asian (19:00–02:00) should be complete
@@ -443,7 +443,7 @@ class TestBuildAsianRange:
 
     def test_asian_wraps_midnight(self):
         """Asian window 19:00–02:00 ET wraps midnight."""
-        config = DEFAULT_CONFIGS[BreakoutType.ASIAN]
+        config = DEFAULT_CONFIGS[BreakoutType.Asian]
         assert config.asian_start_time == dt_time(19, 0)
         assert config.asian_end_time == dt_time(2, 0)
         # start > end means the window wraps midnight
@@ -458,7 +458,7 @@ class TestBuildAsianRange:
             start_time="2026-02-26 19:00:00",
             seed=42,
         )
-        config = DEFAULT_CONFIGS[BreakoutType.ASIAN]
+        config = DEFAULT_CONFIGS[BreakoutType.Asian]
         high, low, count, complete = _build_asian_range(bars, config)
         # Bars end at ~01:00 ET which is still inside 19:00–02:00, so not complete
         last_time = bars.index[-1].to_pydatetime().time()
@@ -468,7 +468,7 @@ class TestBuildAsianRange:
     def test_empty_bars(self):
         bars = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
         bars.index = pd.DatetimeIndex([], tz=_EST)
-        config = DEFAULT_CONFIGS[BreakoutType.ASIAN]
+        config = DEFAULT_CONFIGS[BreakoutType.Asian]
         high, low, count, complete = _build_asian_range(bars, config)
         assert high == 0.0 and low == 0.0
 
@@ -482,7 +482,7 @@ class TestBuildBBSqueezeRange:
     def test_no_squeeze_with_normal_bars(self):
         """Normal volatility bars should not produce a squeeze."""
         bars = _make_1m_bars(n=100, start_price=2700.0, volatility=0.003, seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.BBSQUEEZE]
+        config = DEFAULT_CONFIGS[BreakoutType.BollingerSqueeze]
         atr = _compute_atr(bars, period=14)
         high, low, count, squeeze, *_ = _build_bbsqueeze_range(bars, config, atr)
         # With high volatility, BB should not be inside KC (no squeeze)
@@ -492,7 +492,7 @@ class TestBuildBBSqueezeRange:
     def test_squeeze_with_tight_bars(self):
         """Very tight bars should produce a squeeze."""
         bars = _make_squeeze_bars(n=100, squeeze_start=30, squeeze_bars=30, seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.BBSQUEEZE]
+        config = DEFAULT_CONFIGS[BreakoutType.BollingerSqueeze]
         atr = _compute_atr(bars, period=14)
         result = _build_bbsqueeze_range(bars, config, atr)
         # result: (r_high, r_low, bar_count, squeeze_detected, squeeze_bar_count, bb_width, bb_upper, bb_lower)
@@ -500,14 +500,14 @@ class TestBuildBBSqueezeRange:
 
     def test_insufficient_data(self):
         bars = _make_1m_bars(n=5, start_price=2700.0)
-        config = DEFAULT_CONFIGS[BreakoutType.BBSQUEEZE]
+        config = DEFAULT_CONFIGS[BreakoutType.BollingerSqueeze]
         atr = _compute_atr(bars, period=14)
         high, low, count, squeeze, *_ = _build_bbsqueeze_range(bars, config, atr)
         assert not squeeze, "Should not detect squeeze with insufficient data"
 
     def test_zero_atr(self):
         bars = _make_1m_bars(n=50, start_price=2700.0)
-        config = DEFAULT_CONFIGS[BreakoutType.BBSQUEEZE]
+        config = DEFAULT_CONFIGS[BreakoutType.BollingerSqueeze]
         high, low, count, squeeze, *_ = _build_bbsqueeze_range(bars, config, 0.0)
         assert not squeeze
 
@@ -520,7 +520,7 @@ class TestBuildBBSqueezeRange:
 class TestBuildVARange:
     def test_basic_va_range(self):
         bars = _make_multi_day_bars(n_days=3, bars_per_day=200, seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.VA]
+        config = DEFAULT_CONFIGS[BreakoutType.ValueArea]
         vah, val, count, complete, poc, vah2, val2 = _build_va_range(bars, config)
 
         if complete:
@@ -532,7 +532,7 @@ class TestBuildVARange:
         """When volume is zero, should fall back to price-based VA."""
         bars = _make_multi_day_bars(n_days=3, bars_per_day=200, seed=42)
         bars["Volume"] = 0.0
-        config = DEFAULT_CONFIGS[BreakoutType.VA]
+        config = DEFAULT_CONFIGS[BreakoutType.ValueArea]
         vah, val, count, complete, poc, vah2, val2 = _build_va_range(bars, config)
         # Should still produce a result via fallback
         if complete:
@@ -540,7 +540,7 @@ class TestBuildVARange:
 
     def test_insufficient_data(self):
         bars = _make_1m_bars(n=3, start_price=2700.0)
-        config = DEFAULT_CONFIGS[BreakoutType.VA]
+        config = DEFAULT_CONFIGS[BreakoutType.ValueArea]
         vah, val, count, complete, *_ = _build_va_range(bars, config)
         assert not complete
 
@@ -559,7 +559,7 @@ class TestBuildInsideDayRange:
             inside_low=2690.0,
             seed=42,
         )
-        config = DEFAULT_CONFIGS[BreakoutType.INSIDE]
+        config = DEFAULT_CONFIGS[BreakoutType.InsideDay]
         result = _build_inside_day_range(bars, config)
         # result: (mother_high, mother_low, bar_count, inside_detected, today_high, today_low, yest_high, yest_low)
         mother_high, mother_low, bar_count, inside_detected, today_high, today_low, yest_high, yest_low = result
@@ -577,7 +577,7 @@ class TestBuildInsideDayRange:
             inside_low=2680.0,  # today's low exceeds mother
             seed=42,
         )
-        config = DEFAULT_CONFIGS[BreakoutType.INSIDE]
+        config = DEFAULT_CONFIGS[BreakoutType.InsideDay]
         result = _build_inside_day_range(bars, config)
         _, _, _, inside_detected, *_ = result
         assert not inside_detected, "Should NOT detect inside day when today exceeds yesterday"
@@ -592,7 +592,7 @@ class TestBuildInsideDayRange:
             inside_low=2695.0,  # 10 pt range = 10% compression
             seed=42,
         )
-        config = DEFAULT_CONFIGS[BreakoutType.INSIDE]
+        config = DEFAULT_CONFIGS[BreakoutType.InsideDay]
         result = _build_inside_day_range(bars, config)
         _, _, _, inside_detected, *_ = result
         # 10/100 = 0.10 compression — below the 0.30 floor
@@ -600,7 +600,7 @@ class TestBuildInsideDayRange:
 
     def test_insufficient_data(self):
         bars = _make_1m_bars(n=5, start_price=2700.0)
-        config = DEFAULT_CONFIGS[BreakoutType.INSIDE]
+        config = DEFAULT_CONFIGS[BreakoutType.InsideDay]
         result = _build_inside_day_range(bars, config)
         _, _, _, inside_detected, *_ = result
         # With only 5 bars there's not enough for two sessions
@@ -616,7 +616,7 @@ class TestBuildGapRejectionRange:
     def test_gap_up_detected(self):
         bars = _make_gap_bars(yesterday_close=2700.0, gap_size=20.0, seed=42)
         atr = _compute_atr(bars, period=14)
-        config = DEFAULT_CONFIGS[BreakoutType.GAP]
+        config = DEFAULT_CONFIGS[BreakoutType.GapRejection]
         r_high, r_low, count, gap_detected, gap_size, yc, direction = _build_gap_rejection_range(bars, config, atr)
 
         if gap_detected:
@@ -627,7 +627,7 @@ class TestBuildGapRejectionRange:
     def test_gap_down_detected(self):
         bars = _make_gap_bars(yesterday_close=2700.0, gap_size=-20.0, seed=42)
         atr = _compute_atr(bars, period=14)
-        config = DEFAULT_CONFIGS[BreakoutType.GAP]
+        config = DEFAULT_CONFIGS[BreakoutType.GapRejection]
         r_high, r_low, count, gap_detected, gap_size, yc, direction = _build_gap_rejection_range(bars, config, atr)
 
         if gap_detected:
@@ -638,13 +638,13 @@ class TestBuildGapRejectionRange:
         """A tiny overnight move should not be detected as a gap."""
         bars = _make_gap_bars(yesterday_close=2700.0, gap_size=0.01, seed=42)
         atr = _compute_atr(bars, period=14)
-        config = DEFAULT_CONFIGS[BreakoutType.GAP]
+        config = DEFAULT_CONFIGS[BreakoutType.GapRejection]
         r_high, r_low, count, gap_detected, *_ = _build_gap_rejection_range(bars, config, atr)
         assert not gap_detected, "Tiny gap should not be detected"
 
     def test_zero_atr(self):
         bars = _make_gap_bars(yesterday_close=2700.0, gap_size=20.0, seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.GAP]
+        config = DEFAULT_CONFIGS[BreakoutType.GapRejection]
         r_high, r_low, count, gap_detected, *_ = _build_gap_rejection_range(bars, config, 0.0)
         assert not gap_detected
 
@@ -657,7 +657,7 @@ class TestBuildGapRejectionRange:
 class TestBuildPivotRange:
     def test_classic_pivots(self):
         bars = _make_multi_day_bars(n_days=3, bars_per_day=200, seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.PIVOT]
+        config = DEFAULT_CONFIGS[BreakoutType.PivotPoints]
         r1, s1, count, complete, pivot, r1_val, s1_val, prev_close = _build_pivot_range(bars, config)
 
         if complete:
@@ -671,7 +671,7 @@ class TestBuildPivotRange:
         from dataclasses import replace
 
         bars = _make_multi_day_bars(n_days=3, bars_per_day=200, seed=42)
-        config = replace(DEFAULT_CONFIGS[BreakoutType.PIVOT], pivot_formula="woodie")
+        config = replace(DEFAULT_CONFIGS[BreakoutType.PivotPoints], pivot_formula="woodie")
         r1, s1, count, complete, pivot, *_ = _build_pivot_range(bars, config)
 
         if complete:
@@ -681,7 +681,7 @@ class TestBuildPivotRange:
         from dataclasses import replace
 
         bars = _make_multi_day_bars(n_days=3, bars_per_day=200, seed=42)
-        config = replace(DEFAULT_CONFIGS[BreakoutType.PIVOT], pivot_formula="camarilla")
+        config = replace(DEFAULT_CONFIGS[BreakoutType.PivotPoints], pivot_formula="camarilla")
         r1, s1, count, complete, pivot, *_ = _build_pivot_range(bars, config)
 
         if complete:
@@ -689,7 +689,7 @@ class TestBuildPivotRange:
 
     def test_insufficient_data(self):
         bars = _make_1m_bars(n=5, start_price=2700.0)
-        config = DEFAULT_CONFIGS[BreakoutType.PIVOT]
+        config = DEFAULT_CONFIGS[BreakoutType.PivotPoints]
         r1, s1, count, complete, *_ = _build_pivot_range(bars, config)
         assert not complete or (r1 > s1)
 
@@ -704,7 +704,7 @@ class TestBuildFibonacciRange:
         # Create bars with a clear upswing
         bars = _make_1m_bars(n=120, start_price=2650.0, trend=0.002, volatility=0.001, seed=42)
         atr = _compute_atr(bars, period=14)
-        config = DEFAULT_CONFIGS[BreakoutType.FIB]
+        config = DEFAULT_CONFIGS[BreakoutType.Fibonacci]
         r_high, r_low, count, valid, swing_high, swing_low, fib_382, fib_618 = _build_fibonacci_range(bars, config, atr)
 
         if valid:
@@ -722,20 +722,20 @@ class TestBuildFibonacciRange:
 
         bars = _make_1m_bars(n=120, start_price=2700.0, trend=0.0, volatility=0.0000001, seed=42)
         atr = _compute_atr(bars, period=14)
-        config = replace(DEFAULT_CONFIGS[BreakoutType.FIB], fib_min_swing_atr_mult=100.0)
+        config = replace(DEFAULT_CONFIGS[BreakoutType.Fibonacci], fib_min_swing_atr_mult=100.0)
         r_high, r_low, count, valid, *_ = _build_fibonacci_range(bars, config, atr)
         assert not valid, "Flat market should not produce valid fib range"
 
     def test_insufficient_data(self):
         bars = _make_1m_bars(n=5, start_price=2700.0)
         atr = _compute_atr(bars, period=14)
-        config = DEFAULT_CONFIGS[BreakoutType.FIB]
+        config = DEFAULT_CONFIGS[BreakoutType.Fibonacci]
         r_high, r_low, count, valid, *_ = _build_fibonacci_range(bars, config, atr)
         assert not valid
 
     def test_zero_atr(self):
         bars = _make_1m_bars(n=120, start_price=2700.0, trend=0.002)
-        config = DEFAULT_CONFIGS[BreakoutType.FIB]
+        config = DEFAULT_CONFIGS[BreakoutType.Fibonacci]
         r_high, r_low, count, valid, *_ = _build_fibonacci_range(bars, config, 0.0)
         assert not valid
 
@@ -743,7 +743,7 @@ class TestBuildFibonacciRange:
         """Verify fib levels are properly computed from swing."""
         bars = _make_1m_bars(n=120, start_price=2600.0, trend=0.003, volatility=0.001, seed=99)
         atr = _compute_atr(bars, period=14)
-        config = DEFAULT_CONFIGS[BreakoutType.FIB]
+        config = DEFAULT_CONFIGS[BreakoutType.Fibonacci]
         r_high, r_low, count, valid, swing_high, swing_low, fib_382, fib_618 = _build_fibonacci_range(bars, config, atr)
         if valid:
             # For an upswing: fib_382 = swing_high - 0.382 * swing_size
@@ -763,41 +763,41 @@ class TestDetectRangeBreakoutNewTypes:
 
     def test_weekly_detection(self):
         bars = _make_multi_day_bars(n_days=10, bars_per_day=200, seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.WEEKLY]
+        config = DEFAULT_CONFIGS[BreakoutType.Weekly]
         result = detect_range_breakout(bars, "MES=F", config)
         assert isinstance(result, BreakoutResult)
-        assert result.breakout_type == BreakoutType.WEEKLY
+        assert result.breakout_type == BreakoutType.Weekly
         assert result.symbol == "MES=F"
         # Even if no breakout, the result should be well-formed
         assert result.evaluated_at != ""
 
     def test_monthly_detection(self):
         bars = _make_multi_day_bars(n_days=35, bars_per_day=100, start_date="2026-01-15", seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.MONTHLY]
+        config = DEFAULT_CONFIGS[BreakoutType.Monthly]
         result = detect_range_breakout(bars, "MGC=F", config)
         assert isinstance(result, BreakoutResult)
-        assert result.breakout_type == BreakoutType.MONTHLY
+        assert result.breakout_type == BreakoutType.Monthly
 
     def test_asian_detection(self):
         bars = _make_asian_session_bars(start_date="2026-02-26", seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.ASIAN]
+        config = DEFAULT_CONFIGS[BreakoutType.Asian]
         result = detect_range_breakout(bars, "MNQ=F", config)
         assert isinstance(result, BreakoutResult)
-        assert result.breakout_type == BreakoutType.ASIAN
+        assert result.breakout_type == BreakoutType.Asian
 
     def test_bbsqueeze_detection(self):
         bars = _make_squeeze_bars(n=100, squeeze_start=30, squeeze_bars=30, seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.BBSQUEEZE]
+        config = DEFAULT_CONFIGS[BreakoutType.BollingerSqueeze]
         result = detect_range_breakout(bars, "MES=F", config)
         assert isinstance(result, BreakoutResult)
-        assert result.breakout_type == BreakoutType.BBSQUEEZE
+        assert result.breakout_type == BreakoutType.BollingerSqueeze
 
     def test_va_detection(self):
         bars = _make_multi_day_bars(n_days=3, bars_per_day=200, seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.VA]
+        config = DEFAULT_CONFIGS[BreakoutType.ValueArea]
         result = detect_range_breakout(bars, "MES=F", config)
         assert isinstance(result, BreakoutResult)
-        assert result.breakout_type == BreakoutType.VA
+        assert result.breakout_type == BreakoutType.ValueArea
 
     def test_inside_detection(self):
         bars = _make_inside_day_bars(
@@ -806,31 +806,31 @@ class TestDetectRangeBreakoutNewTypes:
             inside_high=2710.0,
             inside_low=2690.0,
         )
-        config = DEFAULT_CONFIGS[BreakoutType.INSIDE]
+        config = DEFAULT_CONFIGS[BreakoutType.InsideDay]
         result = detect_range_breakout(bars, "MES=F", config)
         assert isinstance(result, BreakoutResult)
-        assert result.breakout_type == BreakoutType.INSIDE
+        assert result.breakout_type == BreakoutType.InsideDay
 
     def test_gap_detection(self):
         bars = _make_gap_bars(yesterday_close=2700.0, gap_size=20.0, seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.GAP]
+        config = DEFAULT_CONFIGS[BreakoutType.GapRejection]
         result = detect_range_breakout(bars, "MES=F", config)
         assert isinstance(result, BreakoutResult)
-        assert result.breakout_type == BreakoutType.GAP
+        assert result.breakout_type == BreakoutType.GapRejection
 
     def test_pivot_detection(self):
         bars = _make_multi_day_bars(n_days=3, bars_per_day=200, seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.PIVOT]
+        config = DEFAULT_CONFIGS[BreakoutType.PivotPoints]
         result = detect_range_breakout(bars, "MES=F", config)
         assert isinstance(result, BreakoutResult)
-        assert result.breakout_type == BreakoutType.PIVOT
+        assert result.breakout_type == BreakoutType.PivotPoints
 
     def test_fib_detection(self):
         bars = _make_1m_bars(n=120, start_price=2650.0, trend=0.002, volatility=0.001, seed=42)
-        config = DEFAULT_CONFIGS[BreakoutType.FIB]
+        config = DEFAULT_CONFIGS[BreakoutType.Fibonacci]
         result = detect_range_breakout(bars, "MES=F", config)
         assert isinstance(result, BreakoutResult)
-        assert result.breakout_type == BreakoutType.FIB
+        assert result.breakout_type == BreakoutType.Fibonacci
 
     def test_empty_bars_all_types(self):
         """All types should handle empty bars gracefully."""
@@ -886,7 +886,7 @@ class TestDetectAllBreakoutTypes:
     def test_subset_of_types(self):
         """Running with a specific subset returns only those types."""
         bars = _make_multi_day_bars(n_days=10, bars_per_day=200, seed=42)
-        subset = [BreakoutType.WEEKLY, BreakoutType.PIVOT, BreakoutType.FIB]
+        subset = [BreakoutType.Weekly, BreakoutType.PivotPoints, BreakoutType.Fibonacci]
         results = detect_all_breakout_types(bars, "MES=F", types=subset)
         assert len(results) == 3
         for btype in subset:
@@ -895,7 +895,7 @@ class TestDetectAllBreakoutTypes:
     def test_original_4_types(self):
         """The original 4 types still work in the combined dispatch."""
         bars = _make_multi_day_bars(n_days=3, bars_per_day=200, seed=42)
-        original = [BreakoutType.ORB, BreakoutType.PDR, BreakoutType.IB, BreakoutType.CONS]
+        original = [BreakoutType.ORB, BreakoutType.PrevDay, BreakoutType.InitialBalance, BreakoutType.Consolidation]
         results = detect_all_breakout_types(
             bars,
             "MES=F",
@@ -911,17 +911,17 @@ class TestDetectAllBreakoutTypes:
 
         bars = _make_multi_day_bars(n_days=3, bars_per_day=200, seed=42)
         custom = replace(
-            DEFAULT_CONFIGS[BreakoutType.PIVOT],
+            DEFAULT_CONFIGS[BreakoutType.PivotPoints],
             pivot_formula="woodie",
             label="Custom Woodie Pivots",
         )
         results = detect_all_breakout_types(
             bars,
             "MES=F",
-            types=[BreakoutType.PIVOT],
-            configs={BreakoutType.PIVOT: custom},
+            types=[BreakoutType.PivotPoints],
+            configs={BreakoutType.PivotPoints: custom},
         )
-        assert results[BreakoutType.PIVOT].label == "Custom Woodie Pivots"
+        assert results[BreakoutType.PivotPoints].label == "Custom Woodie Pivots"
 
     def test_exception_handling(self):
         """A bad bar DataFrame should produce error results, not crash."""
@@ -944,28 +944,28 @@ class TestBreakoutResultExtra:
 
     def test_weekly_extra(self):
         bars = _make_multi_day_bars(n_days=10, bars_per_day=200, seed=42)
-        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.WEEKLY])
+        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.Weekly])
         if result.range_complete:
             assert "weekly_high" in result.extra
             assert "weekly_low" in result.extra
 
     def test_monthly_extra(self):
         bars = _make_multi_day_bars(n_days=35, bars_per_day=100, start_date="2026-01-15", seed=42)
-        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.MONTHLY])
+        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.Monthly])
         if result.range_complete:
             assert "monthly_high" in result.extra
             assert "monthly_low" in result.extra
 
     def test_asian_extra(self):
         bars = _make_asian_session_bars(seed=42)
-        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.ASIAN])
+        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.Asian])
         if result.range_complete:
             assert "asian_high" in result.extra
             assert "asian_low" in result.extra
 
     def test_va_extra(self):
         bars = _make_multi_day_bars(n_days=3, bars_per_day=200, seed=42)
-        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.VA])
+        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.ValueArea])
         if result.range_complete:
             assert "poc" in result.extra
             assert "vah" in result.extra
@@ -973,7 +973,7 @@ class TestBreakoutResultExtra:
 
     def test_inside_extra(self):
         bars = _make_inside_day_bars(mother_high=2720.0, mother_low=2680.0, inside_high=2710.0, inside_low=2690.0)
-        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.INSIDE])
+        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.InsideDay])
         if result.range_complete:
             assert "inside_detected" in result.extra
             assert "yesterday_high" in result.extra
@@ -981,14 +981,14 @@ class TestBreakoutResultExtra:
 
     def test_gap_extra(self):
         bars = _make_gap_bars(yesterday_close=2700.0, gap_size=20.0)
-        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.GAP])
+        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.GapRejection])
         if result.range_complete:
             assert "gap_detected" in result.extra
             assert "gap_direction" in result.extra
 
     def test_pivot_extra(self):
         bars = _make_multi_day_bars(n_days=3, bars_per_day=200, seed=42)
-        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.PIVOT])
+        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.PivotPoints])
         if result.range_complete:
             assert "pivot" in result.extra
             assert "r1" in result.extra
@@ -996,7 +996,7 @@ class TestBreakoutResultExtra:
 
     def test_fib_extra(self):
         bars = _make_1m_bars(n=120, start_price=2650.0, trend=0.002, volatility=0.001, seed=42)
-        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.FIB])
+        result = detect_range_breakout(bars, "MES=F", DEFAULT_CONFIGS[BreakoutType.Fibonacci])
         if result.range_complete:
             assert "swing_high" in result.extra
             assert "swing_low" in result.extra
@@ -1132,20 +1132,20 @@ class TestRangeConfigNewFields:
     """Verify the new fields on the engine-side RangeConfig."""
 
     def test_weekly_fields(self):
-        cfg = DEFAULT_CONFIGS[BreakoutType.WEEKLY]
+        cfg = DEFAULT_CONFIGS[BreakoutType.Weekly]
         assert cfg.weekly_lookback_days == 5
 
     def test_monthly_fields(self):
-        cfg = DEFAULT_CONFIGS[BreakoutType.MONTHLY]
+        cfg = DEFAULT_CONFIGS[BreakoutType.Monthly]
         assert cfg.monthly_lookback_days == 20
 
     def test_asian_fields(self):
-        cfg = DEFAULT_CONFIGS[BreakoutType.ASIAN]
+        cfg = DEFAULT_CONFIGS[BreakoutType.Asian]
         assert cfg.asian_start_time == dt_time(19, 0)
         assert cfg.asian_end_time == dt_time(2, 0)
 
     def test_bbsqueeze_fields(self):
-        cfg = DEFAULT_CONFIGS[BreakoutType.BBSQUEEZE]
+        cfg = DEFAULT_CONFIGS[BreakoutType.BollingerSqueeze]
         assert cfg.bbsqueeze_bb_period == 20
         assert cfg.bbsqueeze_bb_std == 2.0
         assert cfg.bbsqueeze_kc_period == 20
@@ -1153,27 +1153,27 @@ class TestRangeConfigNewFields:
         assert cfg.bbsqueeze_min_squeeze_bars == 6
 
     def test_va_fields(self):
-        cfg = DEFAULT_CONFIGS[BreakoutType.VA]
+        cfg = DEFAULT_CONFIGS[BreakoutType.ValueArea]
         assert cfg.va_value_area_pct == 0.70
         assert cfg.va_n_bins == 50
 
     def test_inside_fields(self):
-        cfg = DEFAULT_CONFIGS[BreakoutType.INSIDE]
+        cfg = DEFAULT_CONFIGS[BreakoutType.InsideDay]
         assert cfg.inside_min_compression == 0.30
         assert cfg.inside_max_compression == 0.85
 
     def test_gap_fields(self):
-        cfg = DEFAULT_CONFIGS[BreakoutType.GAP]
+        cfg = DEFAULT_CONFIGS[BreakoutType.GapRejection]
         assert cfg.gap_min_atr_pct == 0.15
         assert cfg.gap_fill_threshold_pct == 0.50
         assert cfg.gap_rejection_bars == 3
 
     def test_pivot_fields(self):
-        cfg = DEFAULT_CONFIGS[BreakoutType.PIVOT]
+        cfg = DEFAULT_CONFIGS[BreakoutType.PivotPoints]
         assert cfg.pivot_formula == "classic"
 
     def test_fib_fields(self):
-        cfg = DEFAULT_CONFIGS[BreakoutType.FIB]
+        cfg = DEFAULT_CONFIGS[BreakoutType.Fibonacci]
         assert cfg.fib_upper == 0.618
         assert cfg.fib_lower == 0.382
         assert cfg.fib_swing_lookback == 100
@@ -1181,7 +1181,7 @@ class TestRangeConfigNewFields:
 
     def test_frozen_config(self):
         """RangeConfig should be frozen (immutable)."""
-        cfg = DEFAULT_CONFIGS[BreakoutType.WEEKLY]
+        cfg = DEFAULT_CONFIGS[BreakoutType.Weekly]
         with pytest.raises(AttributeError):
             cfg.weekly_lookback_days = 10  # type: ignore[misc]
 
@@ -1200,26 +1200,26 @@ class TestFeatureContractGeneration:
         contract = generate_feature_contract()
         assert isinstance(contract, dict)
 
-    def test_version_is_6(self):
+    def test_version_is_7(self):
         from lib.analysis.breakout_cnn import FEATURE_CONTRACT_VERSION, generate_feature_contract
 
         contract = generate_feature_contract()
         assert contract["version"] == FEATURE_CONTRACT_VERSION
-        assert contract["version"] == 6
+        assert contract["version"] == 7
 
     def test_num_tabular_matches_constant(self):
         from lib.analysis.breakout_cnn import NUM_TABULAR, generate_feature_contract
 
         contract = generate_feature_contract()
         assert contract["num_tabular"] == NUM_TABULAR
-        assert contract["num_tabular"] == 18
+        assert contract["num_tabular"] == 28
 
     def test_tabular_features_list(self):
         from lib.analysis.breakout_cnn import TABULAR_FEATURES, generate_feature_contract
 
         contract = generate_feature_contract()
         assert contract["tabular_features"] == TABULAR_FEATURES
-        assert len(contract["tabular_features"]) == 18
+        assert len(contract["tabular_features"]) == 28
         # Spot-check v4 core features
         assert "quality_pct_norm" in contract["tabular_features"]
         assert "direction_flag" in contract["tabular_features"]
@@ -1230,6 +1230,18 @@ class TestFeatureContractGeneration:
         assert "asset_volatility_class" in contract["tabular_features"]
         assert "hour_of_day" in contract["tabular_features"]
         assert "tp3_atr_mult_norm" in contract["tabular_features"]
+        # v7 additions — Daily Strategy layer
+        assert "daily_bias_direction" in contract["tabular_features"]
+        assert "daily_bias_confidence" in contract["tabular_features"]
+        assert "prior_day_pattern" in contract["tabular_features"]
+        assert "weekly_range_position" in contract["tabular_features"]
+        assert "monthly_trend_score" in contract["tabular_features"]
+        assert "crypto_momentum_score" in contract["tabular_features"]
+        # v7.1 additions — Phase 4B sub-features
+        assert "breakout_type_category" in contract["tabular_features"]
+        assert "session_overlap_flag" in contract["tabular_features"]
+        assert "atr_trend" in contract["tabular_features"]
+        assert "volume_trend" in contract["tabular_features"]
 
     def test_all_13_breakout_types_present(self):
         from lib.analysis.breakout_cnn import generate_feature_contract
@@ -1359,4 +1371,4 @@ class TestFeatureContractGeneration:
 
         result = generate_feature_contract(output_path=None)
         assert isinstance(result, dict)
-        assert result["version"] == 6
+        assert result["version"] == 7

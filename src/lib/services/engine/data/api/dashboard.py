@@ -2710,7 +2710,7 @@ def _render_structured_grok_brief(grok_analysis: dict[str, Any], grok_available:
     top_assets_html = ""
     if top_assets:
         chips = []
-        for i, asset in enumerate(top_assets):
+        for _i, asset in enumerate(top_assets):
             name = asset.get("name", "?")
             reason = asset.get("reason", "")
             key_level = asset.get("key_level", "")
@@ -2983,7 +2983,7 @@ def _render_swing_card(
     """
     symbol = asset.get("symbol", "?")
     bias = asset.get("bias", "NEUTRAL")
-    bias_emoji = asset.get("bias_emoji", "⚪")
+    asset.get("bias_emoji", "⚪")
     last_price = asset.get("last_price", 0)
     quality_pct = asset.get("quality_pct", 0)
     wave_ratio = asset.get("wave_ratio", 1.0)

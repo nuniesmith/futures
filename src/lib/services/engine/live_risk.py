@@ -30,6 +30,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
@@ -39,7 +40,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
-    from lib.services.engine.position_manager import MicroPosition, PositionManager
+    from lib.services.engine.position_manager import PositionManager
     from lib.services.engine.risk import RiskManager
 
 logger = logging.getLogger("engine.live_risk")
@@ -378,7 +379,7 @@ def compute_live_risk(
             all_positions = position_manager.get_all_positions()
             position_snapshots: list[PositionSnapshot] = []
 
-            for sym, micro_pos in all_positions.items():
+            for _sym, micro_pos in all_positions.items():
                 snap = _micro_position_to_snapshot(micro_pos)
                 position_snapshots.append(snap)
 
@@ -464,23 +465,17 @@ def _micro_position_to_snapshot(micro_pos: Any) -> PositionSnapshot:
     # Compute R-multiple
     r_mult = 0.0
     if hasattr(micro_pos, "r_multiple"):
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             r_mult = float(micro_pos.r_multiple)
-        except (TypeError, ValueError):
-            pass
     elif "r_multiple" in d:
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             r_mult = float(d["r_multiple"])
-        except (TypeError, ValueError):
-            pass
 
     # Hold duration
     hold_secs = 0
     if hasattr(micro_pos, "hold_duration_seconds"):
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             hold_secs = int(micro_pos.hold_duration_seconds)
-        except (TypeError, ValueError):
-            pass
 
     # Bracket phase
     phase = "INITIAL"

@@ -16,11 +16,11 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -42,13 +42,13 @@ _EST = ZoneInfo("America/New_York")
 # ---------------------------------------------------------------------------
 
 
-class _SwingEntryStyle(str, Enum):
+class _SwingEntryStyle(StrEnum):
     PULLBACK = "pullback_entry"
     BREAKOUT = "breakout_entry"
     GAP_CONTINUATION = "gap_continuation"
 
 
-class _SwingPhase(str, Enum):
+class _SwingPhase(StrEnum):
     WATCHING = "watching"
     ENTRY_READY = "entry_ready"
     ACTIVE = "active"

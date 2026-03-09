@@ -195,7 +195,7 @@ def persist_breakout_result(result: Any, session_key: str = "") -> int | None:
 
 def dispatch_to_position_manager(
     result: Any,
-    bars_1m: "pd.DataFrame | None" = None,
+    bars_1m: pd.DataFrame | None = None,
     session_key: str = "us",
 ) -> None:
     """Forward a breakout result to the PositionManager for order execution.
@@ -259,7 +259,7 @@ def publish_pipeline(
     result: Any,
     breakout_type: BreakoutType,
     session_key: str = "us",
-    bars_1m: "pd.DataFrame | None" = None,
+    bars_1m: pd.DataFrame | None = None,
 ) -> None:
     """Run the full post-detection pipeline: persist → publish → dispatch → alert.
 

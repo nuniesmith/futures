@@ -34,16 +34,12 @@ import contextlib
 import io
 import json
 import logging
-import math
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger("engine.swing")
 
@@ -708,7 +704,7 @@ def tick_swing_detector(engine: Any, account_size: int) -> dict[str, Any]:
     global _active_swing_states, _last_scan_ts
 
     now_ts = time.time()
-    now = datetime.now(tz=_EST)
+    datetime.now(tz=_EST)
 
     # Rate-limit scans (defensive — scheduler already gates at 2 min)
     if now_ts - _last_scan_ts < _MIN_SCAN_INTERVAL:

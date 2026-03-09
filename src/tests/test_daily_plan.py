@@ -16,7 +16,6 @@ Covers:
 from __future__ import annotations
 
 import json
-import math
 from datetime import datetime
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -24,7 +23,6 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-import pytest
 
 # ---------------------------------------------------------------------------
 # Imports under test
@@ -931,7 +929,7 @@ class TestBiasAnalyzerIntegration:
         assert all(isinstance(b, DailyBias) for b in biases.values())
 
         # All biases should have direction and confidence set
-        for name, bias in biases.items():
+        for _name, bias in biases.items():
             assert bias.direction in (BiasDirection.LONG, BiasDirection.SHORT, BiasDirection.NEUTRAL)
             assert 0.0 <= bias.confidence <= 1.0
             assert bias.reasoning  # Non-empty reasoning

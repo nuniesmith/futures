@@ -53,14 +53,11 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import pandas as pd
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger("analysis.cross_asset")
 
@@ -455,10 +452,7 @@ def compute_cross_asset_features(
                     baseline_std = float(rolling_clean.iloc[-long_window:].std())
                     current = float(rolling_clean.iloc[-1])
 
-                    if baseline_std > 1e-6:
-                        z = (current - baseline_mean) / baseline_std
-                    else:
-                        z = 0.0
+                    z = (current - baseline_mean) / baseline_std if baseline_std > 1e-06 else 0.0
 
                     result.regime_z_score = z
 

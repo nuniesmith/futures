@@ -653,13 +653,12 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                             if not _should_throttle("swing-update"):
                                 yield _format_sse(data=data, event="swing-update")
 
-                        elif channel == "dashboard:tv_alert":
+                        elif channel == "dashboard:tv_alert" and not _should_throttle("tv-alert"):
                             # TradingView webhook alert (Phase TV-D)
                             # Pushed when TradingView fires an outbound webhook
                             # to POST /api/tv/alert. Forwarded to dashboard so
                             # the market events feed shows TV alerts in real-time.
-                            if not _should_throttle("tv-alert"):
-                                yield _format_sse(data=data, event="tv-alert")
+                            yield _format_sse(data=data, event="tv-alert")
 
                 except Exception as exc:
                     pubsub_errors += 1

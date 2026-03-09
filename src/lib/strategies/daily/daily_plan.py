@@ -45,8 +45,6 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-import pandas as pd
-
 from lib.strategies.daily.bias_analyzer import (
     BiasDirection,
     DailyBias,
@@ -55,6 +53,8 @@ from lib.strategies.daily.bias_analyzer import (
 
 if TYPE_CHECKING:
     from typing import Any as _Any  # noqa: F401 — keep block non-empty
+
+    import pandas as pd
 
 logger = logging.getLogger("strategies.daily.daily_plan")
 

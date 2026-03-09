@@ -37,7 +37,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 import numpy as np
 import pandas as pd
@@ -48,7 +48,7 @@ logger = logging.getLogger("strategies.daily.bias_analyzer")
 # ---------------------------------------------------------------------------
 # Enums & data classes
 # ---------------------------------------------------------------------------
-class BiasDirection(str, Enum):
+class BiasDirection(StrEnum):
     """Directional bias for the trading day."""
 
     LONG = "LONG"
@@ -56,7 +56,7 @@ class BiasDirection(str, Enum):
     NEUTRAL = "NEUTRAL"
 
 
-class CandlePattern(str, Enum):
+class CandlePattern(StrEnum):
     """Prior day candle classification."""
 
     INSIDE_DAY = "inside_day"
@@ -232,7 +232,7 @@ def _classify_candle(
     body_ratio = body / candle_range
     upper_wick = h - max(o, c)
     lower_wick = min(o, c) - l
-    prev_range = prev_h - prev_l
+    prev_h - prev_l
 
     # Inside day: today's range entirely within yesterday's range
     if h <= prev_h and l >= prev_l:

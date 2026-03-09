@@ -61,16 +61,17 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, time
-from enum import Enum
-from typing import Any
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
-
-import pandas as pd
 
 from lib.strategies.daily.bias_analyzer import (
     BiasDirection,
     DailyBias,
 )
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 logger = logging.getLogger("strategies.daily.swing_detector")
 
@@ -127,7 +128,7 @@ TRAIL_EMA_PERIOD = 21
 # ---------------------------------------------------------------------------
 
 
-class SwingEntryStyle(str, Enum):
+class SwingEntryStyle(StrEnum):
     """Available swing entry styles."""
 
     PULLBACK = "pullback_entry"
@@ -135,7 +136,7 @@ class SwingEntryStyle(str, Enum):
     GAP_CONTINUATION = "gap_continuation"
 
 
-class SwingExitReason(str, Enum):
+class SwingExitReason(StrEnum):
     """Reason a swing exit was triggered."""
 
     TP1_HIT = "tp1_hit"
@@ -147,7 +148,7 @@ class SwingExitReason(str, Enum):
     INVALIDATED = "invalidated"  # Bias reversal or structure break
 
 
-class SwingPhase(str, Enum):
+class SwingPhase(StrEnum):
     """Current phase of a swing trade lifecycle."""
 
     WATCHING = "watching"  # Signal detected, waiting for confirmation
@@ -554,11 +555,13 @@ def detect_pullback_entry(
 
     # Confirmation: body ≥ 50% of range AND closing in bias direction
     confirmed = False
-    if body_ratio >= CONFIRM_BAR_BODY_PCT:
-        if direction == "LONG" and close_pos >= BREAKOUT_CLOSE_PCT:
-            confirmed = True
-        elif direction == "SHORT" and close_pos <= (1.0 - BREAKOUT_CLOSE_PCT):
-            confirmed = True
+    if body_ratio >= CONFIRM_BAR_BODY_PCT and (
+        direction == "LONG"
+        and close_pos >= BREAKOUT_CLOSE_PCT
+        or direction == "SHORT"
+        and close_pos <= (1.0 - BREAKOUT_CLOSE_PCT)
+    ):
+        confirmed = True
 
     tick_size = _get_tick_size(asset_name)
     decimals = _price_decimals_from_tick(tick_size)
@@ -700,9 +703,12 @@ def detect_breakout_entry(
 
     # Check if price has broken through
     broken = False
-    if direction == "LONG" and current_price > breakout_level:
-        broken = True
-    elif direction == "SHORT" and current_price < breakout_level:
+    if (
+        direction == "LONG"
+        and current_price > breakout_level
+        or direction == "SHORT"
+        and current_price < breakout_level
+    ):
         broken = True
 
     if not broken:
@@ -723,9 +729,12 @@ def detect_breakout_entry(
 
     # Breakout bar quality check
     bar_quality_ok = False
-    if direction == "LONG" and close_pos >= BREAKOUT_CLOSE_PCT:
-        bar_quality_ok = True
-    elif direction == "SHORT" and close_pos <= (1.0 - BREAKOUT_CLOSE_PCT):
+    if (
+        direction == "LONG"
+        and close_pos >= BREAKOUT_CLOSE_PCT
+        or direction == "SHORT"
+        and close_pos <= (1.0 - BREAKOUT_CLOSE_PCT)
+    ):
         bar_quality_ok = True
 
     if not bar_quality_ok:
@@ -955,9 +964,7 @@ def detect_gap_continuation(
     lb_close = _safe_float(last_bar.get("Close", 0))
 
     confirmed = False
-    if direction == "LONG" and lb_close > lb_open:
-        confirmed = True
-    elif direction == "SHORT" and lb_close < lb_open:
+    if direction == "LONG" and lb_close > lb_open or direction == "SHORT" and lb_close < lb_open:
         confirmed = True
 
     tick_size = _get_tick_size(asset_name)
@@ -1213,10 +1220,7 @@ def evaluate_swing_exits(
         lowest_since_entry = min(lowest_since_entry, current_price)
 
     # Compute P&L
-    if direction == "LONG":
-        pnl_points = current_price - entry_price
-    else:
-        pnl_points = entry_price - current_price
+    pnl_points = current_price - entry_price if direction == "LONG" else entry_price - current_price
 
     pnl_dollars = pnl_points * point_value * position_size
     risk_per_r = risk_dollars if risk_dollars > 0 else abs(entry_price - stop_loss) * point_value
@@ -1224,9 +1228,7 @@ def evaluate_swing_exits(
 
     # ── 1. Stop Loss ────────────────────────────────────────────────────
     stop_hit = False
-    if direction == "LONG" and current_price <= stop_loss:
-        stop_hit = True
-    elif direction == "SHORT" and current_price >= stop_loss:
+    if direction == "LONG" and current_price <= stop_loss or direction == "SHORT" and current_price >= stop_loss:
         stop_hit = True
 
     if stop_hit:
@@ -1245,9 +1247,7 @@ def evaluate_swing_exits(
     # ── 2. TP1 Hit (scale out 50%) ─────────────────────────────────────
     if phase == SwingPhase.ACTIVE:
         tp1_hit = False
-        if direction == "LONG" and current_price >= tp1:
-            tp1_hit = True
-        elif direction == "SHORT" and current_price <= tp1:
+        if direction == "LONG" and current_price >= tp1 or direction == "SHORT" and current_price <= tp1:
             tp1_hit = True
 
         if tp1_hit:
@@ -1267,9 +1267,7 @@ def evaluate_swing_exits(
     # ── 3. TP2 Hit (close remaining) ───────────────────────────────────
     if phase in (SwingPhase.TP1_HIT, SwingPhase.TRAILING):
         tp2_hit = False
-        if direction == "LONG" and current_price >= tp2:
-            tp2_hit = True
-        elif direction == "SHORT" and current_price <= tp2:
+        if direction == "LONG" and current_price >= tp2 or direction == "SHORT" and current_price <= tp2:
             tp2_hit = True
 
         if tp2_hit:
@@ -1287,85 +1285,85 @@ def evaluate_swing_exits(
             return exits  # TP2 is terminal for the remainder
 
     # ── 4. EMA-21 Trailing Stop (after TP1 hit) ────────────────────────
-    if phase in (SwingPhase.TP1_HIT, SwingPhase.TRAILING):
-        if bars is not None and len(bars) >= TRAIL_EMA_PERIOD + 3:
-            ema = _compute_ema(bars["Close"], TRAIL_EMA_PERIOD)
-            ema_val = _safe_float(ema.iloc[-1])
+    if phase in (SwingPhase.TP1_HIT, SwingPhase.TRAILING) and bars is not None and len(bars) >= TRAIL_EMA_PERIOD + 3:
+        ema = _compute_ema(bars["Close"], TRAIL_EMA_PERIOD)
+        ema_val = _safe_float(ema.iloc[-1])
 
-            if ema_val > 0:
-                ema_trail_hit = False
-                if direction == "LONG" and current_price < ema_val:
-                    ema_trail_hit = True
-                elif direction == "SHORT" and current_price > ema_val:
-                    ema_trail_hit = True
+        if ema_val > 0:
+            ema_trail_hit = False
+            if direction == "LONG" and current_price < ema_val or direction == "SHORT" and current_price > ema_val:
+                ema_trail_hit = True
 
-                if ema_trail_hit:
-                    remaining_frac = 1.0 - TP1_SCALE_FRACTION
-                    trail_pnl = pnl_points * point_value * position_size * remaining_frac
-                    exits.append(
-                        SwingExitSignal(
-                            reason=SwingExitReason.EMA_TRAIL,
-                            exit_price=current_price,
-                            pnl_estimate=trail_pnl,
-                            r_multiple=r_multiple,
-                            scale_fraction=remaining_frac,
-                            trailing_stop_price=ema_val,
-                            reasoning=f"EMA-{TRAIL_EMA_PERIOD} trail exit at {ema_val:.4f} (price={current_price})",
-                        )
+            if ema_trail_hit:
+                remaining_frac = 1.0 - TP1_SCALE_FRACTION
+                trail_pnl = pnl_points * point_value * position_size * remaining_frac
+                exits.append(
+                    SwingExitSignal(
+                        reason=SwingExitReason.EMA_TRAIL,
+                        exit_price=current_price,
+                        pnl_estimate=trail_pnl,
+                        r_multiple=r_multiple,
+                        scale_fraction=remaining_frac,
+                        trailing_stop_price=ema_val,
+                        reasoning=f"EMA-{TRAIL_EMA_PERIOD} trail exit at {ema_val:.4f} (price={current_price})",
                     )
-                    return exits
-                else:
-                    # Not hit yet — report updated trailing level
-                    exits.append(
-                        SwingExitSignal(
-                            reason=SwingExitReason.TRAILING_STOP,
-                            exit_price=0.0,  # Not exiting
-                            pnl_estimate=pnl_dollars,
-                            r_multiple=r_multiple,
-                            scale_fraction=0.0,  # No exit action
-                            trailing_stop_price=ema_val,
-                            reasoning=f"EMA-{TRAIL_EMA_PERIOD} trailing stop at {ema_val:.4f}",
-                        )
+                )
+                return exits
+            else:
+                # Not hit yet — report updated trailing level
+                exits.append(
+                    SwingExitSignal(
+                        reason=SwingExitReason.TRAILING_STOP,
+                        exit_price=0.0,  # Not exiting
+                        pnl_estimate=pnl_dollars,
+                        r_multiple=r_multiple,
+                        scale_fraction=0.0,  # No exit action
+                        trailing_stop_price=ema_val,
+                        reasoning=f"EMA-{TRAIL_EMA_PERIOD} trailing stop at {ema_val:.4f}",
                     )
+                )
 
     # ── 5. ATR-based Trailing Stop (fallback if EMA unavailable) ───────
-    if phase in (SwingPhase.TP1_HIT, SwingPhase.TRAILING) and atr > 0:
-        if bars is None or len(bars) < TRAIL_EMA_PERIOD + 3:
-            trail_distance = atr * SWING_TRAIL_ATR_MULT
-            if direction == "LONG":
-                atr_trail_level = highest_since_entry - trail_distance
-                if current_price < atr_trail_level:
-                    remaining_frac = 1.0 - TP1_SCALE_FRACTION
-                    trail_pnl = pnl_points * point_value * position_size * remaining_frac
-                    exits.append(
-                        SwingExitSignal(
-                            reason=SwingExitReason.TRAILING_STOP,
-                            exit_price=current_price,
-                            pnl_estimate=trail_pnl,
-                            r_multiple=r_multiple,
-                            scale_fraction=remaining_frac,
-                            trailing_stop_price=atr_trail_level,
-                            reasoning=f"ATR trail stop at {atr_trail_level:.4f} (high={highest_since_entry})",
-                        )
+    if (
+        phase in (SwingPhase.TP1_HIT, SwingPhase.TRAILING)
+        and atr > 0
+        and (bars is None or len(bars) < TRAIL_EMA_PERIOD + 3)
+    ):
+        trail_distance = atr * SWING_TRAIL_ATR_MULT
+        if direction == "LONG":
+            atr_trail_level = highest_since_entry - trail_distance
+            if current_price < atr_trail_level:
+                remaining_frac = 1.0 - TP1_SCALE_FRACTION
+                trail_pnl = pnl_points * point_value * position_size * remaining_frac
+                exits.append(
+                    SwingExitSignal(
+                        reason=SwingExitReason.TRAILING_STOP,
+                        exit_price=current_price,
+                        pnl_estimate=trail_pnl,
+                        r_multiple=r_multiple,
+                        scale_fraction=remaining_frac,
+                        trailing_stop_price=atr_trail_level,
+                        reasoning=f"ATR trail stop at {atr_trail_level:.4f} (high={highest_since_entry})",
                     )
-                    return exits
-            else:
-                atr_trail_level = lowest_since_entry + trail_distance
-                if current_price > atr_trail_level:
-                    remaining_frac = 1.0 - TP1_SCALE_FRACTION
-                    trail_pnl = pnl_points * point_value * position_size * remaining_frac
-                    exits.append(
-                        SwingExitSignal(
-                            reason=SwingExitReason.TRAILING_STOP,
-                            exit_price=current_price,
-                            pnl_estimate=trail_pnl,
-                            r_multiple=r_multiple,
-                            scale_fraction=remaining_frac,
-                            trailing_stop_price=atr_trail_level,
-                            reasoning=f"ATR trail stop at {atr_trail_level:.4f} (low={lowest_since_entry})",
-                        )
+                )
+                return exits
+        else:
+            atr_trail_level = lowest_since_entry + trail_distance
+            if current_price > atr_trail_level:
+                remaining_frac = 1.0 - TP1_SCALE_FRACTION
+                trail_pnl = pnl_points * point_value * position_size * remaining_frac
+                exits.append(
+                    SwingExitSignal(
+                        reason=SwingExitReason.TRAILING_STOP,
+                        exit_price=current_price,
+                        pnl_estimate=trail_pnl,
+                        r_multiple=r_multiple,
+                        scale_fraction=remaining_frac,
+                        trailing_stop_price=atr_trail_level,
+                        reasoning=f"ATR trail stop at {atr_trail_level:.4f} (low={lowest_since_entry})",
                     )
-                    return exits
+                )
+                return exits
 
     # ── 6. Time Stop ───────────────────────────────────────────────────
     if _is_time_stop_due(now):

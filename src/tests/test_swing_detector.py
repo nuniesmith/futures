@@ -19,9 +19,7 @@ Covers:
 
 from __future__ import annotations
 
-import json
-import math
-from datetime import datetime, time, timedelta
+from datetime import datetime
 from typing import Any
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
@@ -37,17 +35,13 @@ from lib.strategies.daily.bias_analyzer import (
     KeyLevels,
 )
 from lib.strategies.daily.swing_detector import (
-    BREAKOUT_CLOSE_PCT,
     BREAKOUT_VOLUME_MULT,
-    CONFIRM_BAR_BODY_PCT,
     GAP_FILL_THRESHOLD,
     GAP_MIN_ATR_RATIO,
-    GAP_SETTLE_BARS,
     MAX_SWING_CONTRACTS,
     MIN_SWING_CONTRACTS,
     PULLBACK_MAX_RETRACE_PCT,
     PULLBACK_MIN_RETRACE_PCT,
-    PULLBACK_TOLERANCE_ATR,
     REDIS_KEY_SWING_SIGNALS,
     REDIS_KEY_SWING_STATES,
     REDIS_PUBSUB_SWING,
@@ -55,7 +49,6 @@ from lib.strategies.daily.swing_detector import (
     SWING_SL_ATR_MULT,
     SWING_TP1_ATR_MULT,
     SWING_TP2_ATR_MULT,
-    SWING_TRAIL_ATR_MULT,
     TIME_STOP_HOUR,
     TIME_STOP_MINUTE,
     TP1_SCALE_FRACTION,
@@ -308,10 +301,7 @@ def _make_gap_bars(
     with_pullback: bool = True,
 ) -> pd.DataFrame:
     """Build bars simulating a gap open with or without fill."""
-    if direction == "LONG":
-        session_open = prior_close + gap_size
-    else:
-        session_open = prior_close - gap_size
+    session_open = prior_close + gap_size if direction == "LONG" else prior_close - gap_size
 
     # Build bars starting from session open
     close = np.zeros(n)
@@ -1249,7 +1239,7 @@ class TestGapContinuation:
         bias = _make_bias(direction=BiasDirection.LONG, prior_day_close=prior_close)
 
         # Session open = None; should use bars.iloc[0]["Open"]
-        result = detect_gap_continuation(
+        detect_gap_continuation(
             bars,
             bias,
             2710.0,
@@ -2357,7 +2347,7 @@ class TestEdgeCases:
         result = detect_breakout_entry(bars, bias, price, atr, "Euro FX")
         if result is not None:
             # Entry price should have proper FX precision
-            entry_str = str(result.entry_price)
+            str(result.entry_price)
             # Should not be rounded to 2 decimals
             assert result.atr == pytest.approx(0.003, abs=0.0001)
 

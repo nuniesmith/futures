@@ -951,7 +951,6 @@ def run_daily_plan_grok_analysis(
           - swing_insights: dict[str, str] — per-asset swing trade notes
           - raw_text: str — the full Grok response for logging/display
     """
-    import json as _json
     import os
 
     if api_key is None:

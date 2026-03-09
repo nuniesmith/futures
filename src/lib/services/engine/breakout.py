@@ -1641,15 +1641,15 @@ def detect_consolidation_breakout(
 def detect_all_breakout_types(
     bars: pd.DataFrame,
     symbol: str,
-    types: "list[BreakoutType] | None" = None,
-    configs: "dict[BreakoutType, RangeConfig] | None" = None,
+    types: list[BreakoutType] | None = None,
+    configs: dict[BreakoutType, RangeConfig] | None = None,
     prev_day_high: float | None = None,
     prev_day_low: float | None = None,
     ib_high: float | None = None,
     ib_low: float | None = None,
     orb_session_start: dt_time | None = None,
     orb_session_end: dt_time | None = None,
-) -> "dict[BreakoutType, BreakoutResult]":
+) -> dict[BreakoutType, BreakoutResult]:
     """Run all (or a subset of) breakout type detectors for a single symbol.
 
     Args:

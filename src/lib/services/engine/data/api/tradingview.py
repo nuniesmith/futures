@@ -41,7 +41,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -181,7 +181,6 @@ class _SignalStore:
             Also includes a special ``"_all"`` key with all assets combined
             (most recent signal per asset, sorted by time desc).
         """
-        from datetime import datetime as _dt
 
         files: dict[str, str] = {}
         header = "time,open,high,low,close,volume"
@@ -205,7 +204,7 @@ class _SignalStore:
 
         # Combined "_all" file: one row per asset (most recent), sorted by time desc
         all_rows: list[tuple[int, str]] = []
-        for asset, sig in self._active.items():
+        for _asset, sig in self._active.items():
             ts_ms = self._parse_timestamp_ms(sig)
             entry = float(sig.get("entry", 0))
             stop = float(sig.get("stop", 0))
@@ -918,10 +917,7 @@ async def get_signals(
             headers={"Content-Type": "application/json"},
         )
 
-    if asset:
-        signals = _signal_store.get_active(asset)
-    else:
-        signals = _signal_store.get_active()
+    signals = _signal_store.get_active(asset) if asset else _signal_store.get_active()
 
     return JSONResponse(
         {

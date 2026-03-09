@@ -44,8 +44,6 @@ The system is a **manual trading co-pilot**. It informs entries, it doesn't exec
 Python Engine (Pi)
     ├── Computes: daily bias, ORB levels, PDR, IB, CNN signals, entry/stop/TP
     ├── Dashboard: focus mode cards, risk strip, swing actions, Grok brief
-    └── Writes signals.csv → GitHub (nuniesmith/futures-signals)
-               ↓ request.seed() reads (2-5 min lag)
 
 TradingView (browser, Linux-native)
     ├── Ruby Futures indicator (Pine Script)
@@ -148,7 +146,7 @@ Reduce complexity before the v7.1 retrain. These make the codebase easier to rea
   - Session-aware filter windows extracted to `handlers.get_filter_windows_for_session()`
   - All 11 ORB session handlers (`_handle_check_orb_london`, etc.) are now one-liners
   - ORB-specific Redis publishing handled via `_publish_orb_result()` shim for backward compat
-- [ ] **Remaining:** `orb.py` still has `detect_opening_range_breakout()` and `ORBResult` — can be deprecated once v7.1 retrain validates the unified path
+- [ ] **Remaining (post-retrain):** `orb.py` still has `detect_opening_range_breakout()` and `ORBResult` — can be deprecated once v7.1 retrain validates the unified path
 
 ### Phase 1D: Extract Generic Handler Pipeline from `main.py` ✅
 - [x] One handler function for all 13 breakout types — `handle_breakout_check()` in `handlers.py`
@@ -170,7 +168,19 @@ Reduce complexity before the v7.1 retrain. These make the codebase easier to rea
   - `lib/trading/strategies.py` → `lib/strategies/strategy_defs.py` (shim in place)
   - `lib/trading/engine.py` → `lib/strategies/backtesting.py` (shim in place)
   - `RBSession` alias added in `multi_session.py`, exported from `lib.core`
-- [ ] **Remaining:** Bulk-rename `ORBSession` → `RBSession` in callers (non-breaking — alias works)
+- [ ] **Remaining (non-blocking):** Bulk-rename `ORBSession` → `RBSession` in callers (non-breaking — alias works)
+
+### Phase 1H: Pre-Retrain Test Cleanup ✅
+- [x] All unit tests passing (2552 passed, 0 failed, 1 skipped)
+- [x] Fixed all `BreakoutType.UPPER_CASE` → `BreakoutType.PascalCase` enum name mismatches in `test_breakout_types.py` (76 occurrences)
+- [x] Updated feature contract test expectations from v6 (18 features) to v7.1 (28 features):
+  - `test_breakout_types.py::TestFeatureContractGeneration` — version 7, 28 tabular features, v7/v7.1 feature spot-checks
+  - `test_kraken_training_pipeline.py::TestFeatureContract` — version 7.1 (on-disk JSON), 28 features
+  - `test_kraken_training_pipeline.py::TestTabularFeatureShape` — 28 features with all v7/v7.1 entries
+- [x] Fixed `lib/trading/strategies.py` backward-compat shim — added missing re-exports:
+  - `_atr`, `_ema` (used by `test_strategies_ict.py`)
+  - `_ict_confluence_array`, `_compute_ict_confluence` (used by ICT confluence tests)
+- [x] Fixed `positions.py` `clear_positions()` cache isolation bug — `REDIS_AVAILABLE` was a stale name binding from import time; now reads from `lib.core.cache` module at call time so test fixtures that toggle Redis mode are respected
 
 ---
 
@@ -204,18 +214,7 @@ This is the gate before going live. Everything above unblocks a cleaner training
 
 The Pine Script indicator is the primary live trading chart. The Python dashboard runs alongside it for CNN context and risk management.
 
-### Phase TV-A: `signals.csv` GitHub Publisher
-- [ ] **Add `signals_publisher.py`** to engine — writes engine signals to a GitHub-hosted CSV on every signal fire
-  - On breakout signal + CNN gate pass: append row to `signals.csv`:
-    `timestamp, symbol, direction, breakout_type, session, entry, stop, tp1, tp2, tp3, cnn_prob, atr`
-  - Push to `nuniesmith/futures-signals` repo via GitHub API (or git push via deploy key)
-  - Keep last 500 rows — prune older entries on each push
-  - Rate-limit: max one push per 30 seconds (debounce for multiple simultaneous signals)
-  - `GITHUB_SIGNALS_TOKEN` env var for auth, `ENABLE_SIGNALS_PUBLISHER=1` feature flag
-  - TradingView `request.seed()` reads this with a 2-5 min natural lag — acceptable for signal levels
-
 ### Phase TV-B: Ruby Futures Indicator — Engine Signal Overlay
-- [ ] **Add engine signal layer to `ruby_futures.pine`** using `request.seed()` to read `signals.csv`
   - Parse the CSV: filter to current chart symbol + recent timestamps (last 5 bars)
   - Draw on chart: entry line (dashed), stop line (red), TP1/TP2/TP3 levels (green dashes)
   - Signal label box: breakout type name, CNN probability, contract sizing
@@ -224,7 +223,7 @@ The Pine Script indicator is the primary live trading chart. The Python dashboar
   - Only show signals from last N hours (configurable input, default 4h) to avoid chart clutter
 
 ### Phase TV-C: Ruby Futures Indicator — Core Futures Layer
-- [ ] **Pure price calculations** that run at zero delay (no `request.seed()` dependency)
+- [ ] **Pure price calculations** that run at zero delay
   - ORB box: session open high/low as shaded rectangle, extends until broken
   - PDR: prior day high/low as dashed lines (extend right across chart)
   - Initial Balance: first 60-min RTH high/low
@@ -246,7 +245,6 @@ The Pine Script indicator is the primary live trading chart. The Python dashboar
   - Left monitor: TradingView with Ruby Futures indicator + Tradovate demo connected
   - Right monitor: Python dashboard (focus mode, risk strip, swing signals)
   - Pre-market: dashboard daily bias + Grok brief → informs TV watchlist
-  - During session: TV draws engine levels (via `request.seed()`) → execute manually in Tradovate demo
   - Dashboard tracks signals + updates risk strip
   - Zero dependency on NinjaTrader or Windows for live trading
 
@@ -369,9 +367,7 @@ Asset N (...)  → train → best_xxx.pt  ─┘
 - Deploy to Pi via `sync_models.sh`
 
 **Step 3 — TradingView integration (live trading UI):**
-- Phase TV-A — `signals.csv` GitHub publisher
 - Phase TV-C — Ruby Futures core futures layer (pure price, zero delay)
-- Phase TV-B — engine signal overlay via `request.seed()`
 - Phase TV-D — TV → Python webhook endpoint
 - Phase TV-E — end-to-end workflow test on Tradovate demo
 
@@ -510,7 +506,7 @@ Engine fires CNN-gated signal
   ├─ signals_publisher.append_and_push(signal)
   │    → signals.csv committed to nuniesmith/futures-signals (GitHub API)
   │
-  └─ TradingView ruby_futures.pine (request.seed(), 2-5 min lag)
+  └─ TradingView ruby_futures.pine)
        → Parses signals.csv, matches current chart symbol
        → Draws entry/stop/TP lines + CNN label + dual contract sizing
        → Trader sees the level, decides manually whether to execute in Tradovate

@@ -61,14 +61,11 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import TYPE_CHECKING, Any
+from enum import StrEnum
+from typing import Any
 
 import numpy as np
 import pandas as pd
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger("analysis.asset_fingerprint")
 
@@ -78,7 +75,7 @@ logger = logging.getLogger("analysis.asset_fingerprint")
 # ---------------------------------------------------------------------------
 
 
-class VolumeProfileShape(str, Enum):
+class VolumeProfileShape(StrEnum):
     """Classification of intraday volume distribution shape."""
 
     U_SHAPED = "U-shaped"
@@ -398,8 +395,8 @@ def _compute_session_concentration(
                 if not session_bars.empty:
                     try:
                         h = float(session_bars[high_col].max())
-                        l = float(session_bars[low_col].min())
-                        range_list.append(max(0.0, h - l))
+                        lo = float(session_bars[low_col].min())
+                        range_list.append(max(0.0, h - lo))
                     except Exception:
                         range_list.append(0.0)
                 else:
@@ -578,9 +575,8 @@ def _classify_volume_profile(
             second_vol = float(vol_norm.get(rth_hours[1], 0))
             last_third_mean = float(vol_norm.loc[rth_hours[-len(rth_hours) // 3 :]].mean())
 
-            if first_vol > 0.7 and last_third_mean < first_vol * 0.5:
-                if second_vol < first_vol:
-                    return VolumeProfileShape.L_SHAPED
+            if first_vol > 0.7 and last_third_mean < first_vol * 0.5 and second_vol < first_vol:
+                return VolumeProfileShape.L_SHAPED
 
         # Check for front-loaded: big spike at open, quick fade
         if len(rth_hours) >= 2:
@@ -634,7 +630,7 @@ def _compute_overnight_gap_stats(
 
             prev_high = float(prev_row["High"])
             prev_low = float(prev_row["Low"])
-            prev_close = float(prev_row["Close"])
+            float(prev_row["Close"])
             curr_open = float(curr_row["Open"])
             curr_high = float(curr_row["High"])
             curr_low = float(curr_row["Low"])
