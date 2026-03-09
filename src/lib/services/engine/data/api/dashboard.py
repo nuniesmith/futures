@@ -1,7 +1,7 @@
 """
 Dashboard API Router
 =====================
-ORB-centric futures trading co-pilot dashboard.
+ORB-centric Ruby Futures dashboard.
 
 Layout:
   - Header bar: service health dots + market session clock strip
@@ -51,7 +51,7 @@ router = APIRouter(tags=["Dashboard"])
 # ---------------------------------------------------------------------------
 
 # This is the same self-contained CSS the main dashboard uses, extracted so
-# the ORB History, Journal, and any future standalone pages can share it
+# the RB History, Journal, and any future standalone pages can share it
 # without duplicating the stylesheet or depending on an external CDN.
 _SHARED_CSS = """
 /* ── Reset ── */
@@ -268,9 +268,12 @@ function toggleTheme(){
 
 _SHARED_NAV_LINKS = [
     ("/", "📊 Dashboard"),
-    ("/orb-history", "📅 ORB History"),
-    ("/trainer", "🧠 Trainer"),
+    ("/charts", "📈 Charts"),
+    ("/account", "💰 Account"),
+    ("/orb-history", "📅 RB History"),
     ("/journal/page", "📓 Journal"),
+    ("/connections", "🔌 Connections"),
+    ("/trainer", "🧠 Trainer"),
     ("/settings", "⚙️ Settings"),
 ]
 
@@ -313,7 +316,7 @@ def _build_page_shell(
 </head>
 <body>
 <nav class="co-nav">
-  <a class="co-nav-brand" href="/">📈 Co-Pilot</a>
+  <a class="co-nav-brand" href="/">💎 Ruby Futures</a>
   {nav_links_html}
   <div class="co-nav-right">
     <button class="co-theme-btn" onclick="toggleTheme()">☀/🌙</button>
@@ -1879,14 +1882,15 @@ def _render_asset_card(asset: dict[str, Any]) -> str:
 
 
 def _render_no_trade_banner(reason: str = "Low-conviction day") -> str:
-    """Render the NO TRADE warning banner."""
+    """Render a subtle no-trade inline indicator (not a blocking banner)."""
     return f"""
     <div id="no-trade-banner"
-         class="bg-red-900/60 border border-red-500 rounded-lg p-4 text-center animate-pulse"
+         style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;
+                border-radius:6px;background:rgba(239,68,68,0.1);
+                border:1px solid rgba(239,68,68,0.25);font-size:11px;color:#fca5a5"
          hx-swap-oob="true">
-        <div class="text-3xl mb-2">⛔</div>
-        <div class="text-xl font-bold text-red-300">NO TRADE TODAY</div>
-        <div class="text-sm text-red-400 mt-1">{reason}</div>
+        <span style="font-size:13px">⚠️</span>
+        <span style="font-weight:600">Caution:</span> {reason}
     </div>
     """
 
@@ -2139,9 +2143,10 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
     - **Stream area** — hidden by default; shown while a Grok SSE stream
       is active so tokens appear progressively as they arrive.
 
-    Two action buttons live in the header:
+    Three action buttons live in the header:
     - 📋 Brief  → opens /sse/grok/briefing  (morning briefing)
     - ⚡ Update → opens /sse/grok/update    (compact live update)
+    - 🔍 Audit  → opens /sse/grok/update    (manual market audit for live trading)
 
     The JS that drives the stream is emitted inline once and reused
     across re-renders via the ``_grokStreamInit`` guard flag.
@@ -2207,6 +2212,10 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
                         title="Stream live update"
                         style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(52,211,153,0.15);border:1px solid rgba(52,211,153,0.3);color:#6ee7b7;cursor:pointer"
                         id="grok-btn-update">⚡ Update</button>
+                <button onclick="grokStream('audit')"
+                        title="Manual market audit — use during live trading for a full reassessment"
+                        style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.3);color:#fcd34d;cursor:pointer"
+                        id="grok-btn-audit">🔍 Audit</button>
             </div>
         </div>
 
@@ -2241,7 +2250,10 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
             // Close any existing stream first
             if (_grokEs) {{ try {{ _grokEs.close(); }} catch(e) {{}} _grokEs = null; }}
 
-            var url = type === 'briefing' ? '/sse/grok/briefing' : '/sse/grok/update?update_number=1';
+            var url;
+            if (type === 'briefing') url = '/sse/grok/briefing';
+            else if (type === 'audit') url = '/sse/grok/update?update_number=1&audit=true';
+            else url = '/sse/grok/update?update_number=1';
             var streamArea  = document.getElementById('grok-stream-area');
             var streamText  = document.getElementById('grok-stream-text');
             var streamCursor = document.getElementById('grok-stream-cursor');
@@ -2251,6 +2263,7 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
             var timeLabel   = document.getElementById('grok-time-label');
             var btnBrief    = document.getElementById('grok-btn-brief');
             var btnUpdate   = document.getElementById('grok-btn-update');
+            var btnAudit    = document.getElementById('grok-btn-audit');
 
             if (!streamArea || !streamText) return;
 
@@ -2263,6 +2276,7 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
             if (errDiv) errDiv.style.display = 'none';
             if (btnBrief)  btnBrief.disabled  = true;
             if (btnUpdate) btnUpdate.disabled = true;
+            if (btnAudit)  btnAudit.disabled  = true;
 
             _grokEs = new EventSource(url);
             var accumulated = '';
@@ -2291,6 +2305,7 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
                 if (statusDot) statusDot.style.display = 'none';
                 if (btnBrief)  btnBrief.disabled  = false;
                 if (btnUpdate) btnUpdate.disabled = false;
+                if (btnAudit)  btnAudit.disabled  = false;
 
                 // Parse completion meta
                 try {{
@@ -2303,9 +2318,10 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
                 // cached area so it persists after the next HTMX re-render
                 setTimeout(function() {{
                     if (cachedArea) {{
-                        var badge = type === 'briefing'
-                            ? '<span style="font-size:9px;padding:1px 5px;border-radius:9999px;background:rgba(96,165,250,0.15);color:#60a5fa;margin-right:4px">briefing</span>'
-                            : '<span style="font-size:9px;padding:1px 5px;border-radius:9999px;background:rgba(52,211,153,0.15);color:#34d399;margin-right:4px">live</span>';
+                        var badge;
+                        if (type === 'briefing') badge = '<span style="font-size:9px;padding:1px 5px;border-radius:9999px;background:rgba(96,165,250,0.15);color:#60a5fa;margin-right:4px">briefing</span>';
+                        else if (type === 'audit') badge = '<span style="font-size:9px;padding:1px 5px;border-radius:9999px;background:rgba(251,191,36,0.15);color:#fcd34d;margin-right:4px">audit</span>';
+                        else badge = '<span style="font-size:9px;padding:1px 5px;border-radius:9999px;background:rgba(52,211,153,0.15);color:#34d399;margin-right:4px">live</span>';
                         cachedArea.innerHTML = '<div id="grok-cached-text" style="display:flex;align-items:flex-start;gap:4px">'
                             + badge
                             + '<div style="font-size:10px;color:var(--text-secondary);font-family:monospace;white-space:pre-wrap;line-height:1.55">'
@@ -2323,6 +2339,7 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
                 if (statusDot) statusDot.style.display = 'none';
                 if (btnBrief)  btnBrief.disabled  = false;
                 if (btnUpdate) btnUpdate.disabled = false;
+                if (btnAudit)  btnAudit.disabled  = false;
                 if (cachedArea) cachedArea.style.display = 'block';
                 streamArea.style.display = 'none';
                 try {{
@@ -2341,6 +2358,7 @@ def _render_grok_panel(grok_data: dict[str, Any] | None) -> str:
                     if (statusDot) statusDot.style.display = 'none';
                     if (btnBrief)  btnBrief.disabled  = false;
                     if (btnUpdate) btnUpdate.disabled = false;
+                    if (btnAudit)  btnAudit.disabled  = false;
                     // Only hide stream area if we got no content
                     if (!accumulated) {{
                         if (cachedArea) cachedArea.style.display = 'block';
@@ -3262,15 +3280,22 @@ def _render_swing_card(
     """
 
 
+# CME crypto futures tickers that should appear in asset focus
+_CME_CRYPTO_FUTURES = {"MBT", "MET", "Bitcoin", "Ether"}
+
+
 def _render_focus_mode_grid(focus_data: dict[str, Any] | None) -> str:
     """Render the full focus mode grid: focused scalp cards, swing cards, background.
 
     Phase 3B: Replaces the flat asset card grid with a structured layout:
       1. Daily plan header (Grok brief + focus summary chips)
       2. "Why these assets?" collapsible scoring breakdown
-      3. Prominent 3-4 scalp focus cards (full size, 2-col grid)
+      3. Up to 4 scalp focus cards (full size, 2-col grid)
       4. 1-2 swing candidate cards (amber styling, wider TPs)
       5. Collapsed/expandable background assets section
+
+    Crypto spot pairs are excluded from asset focus unless they have a
+    CME futures equivalent (MBT, MET). Max 4 focus assets displayed.
 
     Falls back to the plain flat grid when no daily plan is active.
     """
@@ -3286,10 +3311,22 @@ def _render_focus_mode_grid(focus_data: dict[str, Any] | None) -> str:
     focus_mode_active = focus_data.get("focus_mode_active", False)
     all_assets = focus_data.get("assets", [])
 
-    # If focus mode is NOT active, render the old flat grid
+    # Filter out crypto spot pairs that don't have CME futures
+    def _is_cme_crypto_or_non_crypto(asset: dict[str, Any]) -> bool:
+        ac = asset.get("asset_class", "")
+        sym = asset.get("symbol", "")
+        name = asset.get("name", sym)
+        if ac == "crypto":
+            # Keep only if it's a CME futures crypto (MBT, MET)
+            return any(tag in name for tag in _CME_CRYPTO_FUTURES) or any(tag in sym for tag in _CME_CRYPTO_FUTURES)
+        return True
+
+    all_assets = [a for a in all_assets if _is_cme_crypto_or_non_crypto(a)]
+
+    # If focus mode is NOT active, render the old flat grid (max 4)
     if not focus_mode_active:
         cards = ""
-        for asset in all_assets:
+        for asset in all_assets[:4]:
             cards += _render_asset_card(asset)
         return cards
 
@@ -3323,6 +3360,9 @@ def _render_focus_mode_grid(focus_data: dict[str, Any] | None) -> str:
             swing_assets.append(asset)
         else:
             background_assets.append(asset)
+
+    # Limit scalp focus to max 4 assets to reduce distraction
+    scalp_assets = scalp_assets[:4]
 
     html_parts: list[str] = []
 
@@ -3423,7 +3463,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     # Asset cards grid — Phase 3B: use focus mode when daily plan is active
     cards_html = _render_focus_mode_grid(focus_data)
 
-    # No-trade banner
+    # No-trade indicator (subtle inline, not a blocking banner)
     no_trade_html = ""
     if focus_data and focus_data.get("no_trade"):
         no_trade_html = _render_no_trade_banner(str(focus_data.get("no_trade_reason", "Low-conviction day")))
@@ -3439,9 +3479,10 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     except Exception:
         pass
 
+    risk_status = _get_risk_status()
+
     if _live_positions_enabled:
         positions = _get_positions()
-        risk_status = _get_risk_status()
         _bridge_info = _get_bridge_info()
         positions_html = _render_positions_panel(
             positions,
@@ -3486,7 +3527,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Futures Trading Co-Pilot</title>
+    <title>Ruby Futures</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
     <!-- Apply saved theme AND dashboard mode BEFORE paint to prevent flash -->
     <script>
@@ -3495,23 +3536,12 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             if (t === 'light') document.documentElement.classList.remove('dark');
             else document.documentElement.classList.add('dark');
         }})();
-        // Apply dashboard mode before body renders to avoid review-only panel flash
+        // Apply dashboard mode before body renders — default to Review
         (function() {{
             var saved = localStorage.getItem('dashMode');
             if (!saved) {{
-                // Auto-detect from ET hour
-                try {{
-                    var etStr = new Date().toLocaleString('en-US', {{
-                        timeZone: 'America/New_York', hour: 'numeric', hour12: false
-                    }});
-                    var h = parseInt(etStr, 10);
-                    saved = (h >= 3 && h < 16) ? 'trading' : 'review';
-                }} catch(e) {{
-                    saved = 'trading';
-                }}
+                saved = 'review';
             }}
-            // Patch body class before it is painted — body tag already has mode-trading
-            // as a fallback; override if saved preference differs
             document.addEventListener('DOMContentLoaded', function() {{
                 document.body.classList.remove('mode-trading', 'mode-review');
                 document.body.classList.add(saved === 'review' ? 'mode-review' : 'mode-trading');
@@ -3523,7 +3553,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     <script src="https://unpkg.com/hyperscript.org@0.9.14"></script>
     <style>
         /* ═══════════════════════════════════════════════════════════
-           SELF-CONTAINED CSS — Futures Trading Co-Pilot
+           SELF-CONTAINED CSS — Ruby Futures
            No Tailwind CDN needed.  All utility classes are defined
            below so the dashboard works on air-gapped hosts.
         ═══════════════════════════════════════════════════════════ */
@@ -3876,7 +3906,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         details > summary::-webkit-details-marker {{ display: none; }}
         details[open] > summary .rotate-on-open {{ transform: rotate(90deg); }}
 
-        /* ── Health dot bar (Co-Pilot header) ──────────────────── */
+        /* ── Health dot bar (Ruby Futures header) ──────────────── */
         .health-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }}
         .health-dot.green {{ background: #22c55e; }}
         .health-dot.red   {{ background: #ef4444; }}
@@ -3884,7 +3914,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         .health-dot.yellow {{ background: #eab308; }}
         .health-label {{ font-size: 11px; margin-right: 12px; vertical-align: middle; }}
 
-        /* ── Co-Pilot clock ─────────────────────────────────────── */
+        /* ── Dashboard clock ────────────────────────────────────── */
         .copilot-clock {{
             font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
             font-size: 1.5rem;
@@ -4017,17 +4047,20 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
         }}
     </style>
 </head>
-<body class="mode-trading">
+<body class="mode-review">
 
 <!-- ═══════════════════════════════════════════════════════════════
      TOP NAV BAR
 ═══════════════════════════════════════════════════════════════════ -->
 <nav class="co-nav">
-    <a class="co-nav-brand" href="/">📈 Co-Pilot</a>
+    <a class="co-nav-brand" href="/">💎 Ruby Futures</a>
     <a class="co-nav-tab active" href="/">📊 Dashboard</a>
-    <a class="co-nav-tab" href="/orb-history">📅 ORB History</a>
-    <a class="co-nav-tab" href="/trainer">🧠 Trainer</a>
+    <a class="co-nav-tab" href="/charts">📈 Charts</a>
+    <a class="co-nav-tab" href="/account">💰 Account</a>
+    <a class="co-nav-tab" href="/orb-history">📅 RB History</a>
     <a class="co-nav-tab" href="/journal/page">📓 Journal</a>
+    <a class="co-nav-tab" href="/connections">🔌 Connections</a>
+    <a class="co-nav-tab" href="/trainer">🧠 Trainer</a>
     <a class="co-nav-tab" href="/settings">⚙️ Settings</a>
     <div class="co-nav-right">
         <span id="nav-sse-dot" style="font-size:10px;color:#52525b" title="SSE connection">●</span>
@@ -4057,24 +4090,25 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 <div class="container">
 
     <!-- ═══════════════════════════════════════════════════════════════
-         HEADER — Futures Trading Co-Pilot
+         HEADER — Ruby Futures
          Left: Title + date + live badge
          Centre: Health dot bar
          Right: Clock + session badge + theme toggle
     ═══════════════════════════════════════════════════════════════════ -->
     <header style="margin-bottom:0.75rem;padding-bottom:0.5rem;border-bottom:1px solid var(--border-subtle)">
         <div class="flex items-center justify-between" style="flex-wrap:wrap;gap:0.5rem">
-            <!-- LEFT: Title + date -->
+            <!-- LEFT: Title + date + no-trade caution -->
             <div class="min-w-0">
                 <div style="font-size:1.35rem;font-weight:700;line-height:1.2">
-                    <span style="color:#a78bfa">Futures</span> <span class="t-text">Trading Co-Pilot</span>
+                    <span style="color:#f43f5e">Ruby</span> <span class="t-text">Futures</span>
                 </div>
-                <div style="font-size:11px;margin-top:2px" class="t-text-muted">
-                    {session["date"]}
-                    <span style="margin-left:6px">
+                <div style="font-size:11px;margin-top:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap" class="t-text-muted">
+                    <span>{session["date"]}</span>
+                    <span>
                         <span id="sse-status-dot" class="connecting" title="SSE" style="font-size:10px">●</span>
                         <span id="sse-status-text" class="t-text-faint" style="font-size:10px">connecting</span>
                     </span>
+                    <span id="no-trade-container">{no_trade_html}</span>
                 </div>
             </div>
 
@@ -4082,7 +4116,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             <div id="health-bar"
                  class="flex items-center"
                  style="gap:3px;flex-wrap:wrap"
-                 hx-get="/api/nt8/health/html"
+                 hx-get="/api/health/html"
                  hx-trigger="load, every 10s"
                  hx-swap="innerHTML">
                 <span class="health-dot gray"></span><span class="health-label t-text-faint">Loading...</span>
@@ -4129,12 +4163,6 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     ═══════════════════════════════════════════════════════════════════ -->
     <div class="mobile-scroll">
         {session_strip_html}
-    </div>
-
-    <!-- No-trade banner -->
-    <div id="no-trade-container"
-         _="on `no-trade-alert` add .glow-red to me then wait 2s then remove .glow-red from me">
-        {no_trade_html}
     </div>
 
     <!-- Focus summary bar — Phase 3B: show focus mode indicator -->
@@ -4233,161 +4261,6 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
                 <div class="t-text-faint text-xs">Loading...</div>
             </div>
 
-            <!-- CNN Dataset Preview — review only -->
-            <details class="review-only">
-                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
-                         style="padding:4px 0">
-                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
-                    Dataset Preview
-                </summary>
-                <div class="t-panel border t-border rounded-lg p-3"
-                     style="border-left:3px solid rgba(139,92,246,0.5)">
-                    <div class="flex items-center justify-between mb-2">
-                        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">🖼️ Training Snapshots</h3>
-                    </div>
-                    <div id="cnn-dataset-preview-container"
-                         hx-get="/cnn/dataset/preview"
-                         hx-trigger="revealed"
-                         hx-swap="innerHTML">
-                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
-                    </div>
-                </div>
-            </details>
-
-            <!-- Kraken Crypto health + prices -->
-            <div id="kraken-panel"
-                 class="t-panel border t-border rounded-lg p-3"
-                 style="border-left:3px solid #f7931a"
-                 hx-get="/kraken/health/html"
-                 hx-trigger="load, every 10s"
-                 hx-swap="innerHTML">
-                <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-1">🪙 Crypto (Kraken)</h3>
-                <div class="t-text-faint text-xs">Loading...</div>
-            </div>
-
-            <!-- Kraken Candlestick Chart — review only -->
-            <details class="review-only">
-                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
-                         style="padding:4px 0">
-                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
-                    Crypto Chart
-                </summary>
-                <div class="t-panel border t-border rounded-lg p-3"
-                     style="border-left:3px solid rgba(247,147,26,0.5)">
-                    <div class="flex items-center justify-between mb-2">
-                        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">📈 Crypto Chart</h3>
-                    </div>
-                    <div id="kraken-chart-container"
-                         hx-get="/kraken/chart/html"
-                         hx-trigger="revealed"
-                         hx-swap="innerHTML">
-                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
-                    </div>
-                </div>
-            </details>
-
-            <!-- Kraken Account (private API) -->
-            <details>
-                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
-                         style="padding:4px 0">
-                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
-                    Kraken Account
-                </summary>
-                <div class="t-panel border t-border rounded-lg p-3"
-                     style="border-left:3px solid rgba(247,147,26,0.4)">
-                    <div id="kraken-account-container"
-                         hx-get="/kraken/account/html"
-                         hx-trigger="revealed, every 30s"
-                         hx-swap="innerHTML">
-                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
-                    </div>
-                </div>
-            </details>
-
-            <!-- Crypto/Futures Correlation — review only -->
-            <details class="review-only">
-                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
-                         style="padding:4px 0">
-                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
-                    Correlation
-                </summary>
-                <div class="t-panel border t-border rounded-lg p-3"
-                     style="border-left:3px solid rgba(99,102,241,0.5)">
-                    <div class="flex items-center justify-between mb-2">
-                        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">🔗 Crypto / Futures Correlation</h3>
-                    </div>
-                    <div id="correlation-container"
-                         hx-get="/kraken/correlation/html"
-                         hx-trigger="revealed, every 300s"
-                         hx-swap="innerHTML">
-                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
-                    </div>
-                </div>
-            </details>
-
-            <!-- Volume Profile — review only -->
-            <details class="review-only">
-                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
-                         style="padding:4px 0">
-                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
-                    Volume Profile
-                </summary>
-                <div class="t-panel border t-border rounded-lg p-3"
-                     style="border-left:3px solid rgba(245,158,11,0.5)">
-                    <div class="flex items-center justify-between mb-2">
-                        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">📊 Volume Profile</h3>
-                    </div>
-                    <div id="vp-container"
-                         hx-get="/api/volume-profile/html"
-                         hx-trigger="revealed"
-                         hx-swap="innerHTML">
-                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
-                    </div>
-                </div>
-            </details>
-
-            <!-- Performance Charts — review only -->
-            <details class="review-only">
-                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
-                         style="padding:4px 0">
-                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
-                    Performance
-                </summary>
-                <div class="t-panel border t-border rounded-lg p-3"
-                     style="border-left:3px solid rgba(34,197,94,0.4)">
-                    <div class="flex items-center justify-between mb-2">
-                        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">📈 Performance</h3>
-                    </div>
-                    <div id="perf-container"
-                         hx-get="/api/performance/html"
-                         hx-trigger="revealed"
-                         hx-swap="innerHTML">
-                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
-                    </div>
-                </div>
-            </details>
-
-            <!-- Trade Journal — review only -->
-            <details class="review-only">
-                <summary class="cursor-pointer t-text-muted text-xs font-semibold uppercase tracking-wide flex items-center gap-1"
-                         style="padding:4px 0">
-                    <span class="rotate-on-open" style="transition:transform .15s">▶</span>
-                    Trade Journal
-                </summary>
-                <div class="t-panel border t-border rounded-lg p-3"
-                     style="border-left:3px solid rgba(167,139,250,0.5)">
-                    <div class="flex items-center justify-between mb-2">
-                        <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">📓 Trade Journal</h3>
-                    </div>
-                    <div id="journal-panel-inner"
-                         hx-get="/journal/html"
-                         hx-trigger="revealed"
-                         hx-swap="innerHTML">
-                        <div class="t-text-faint text-xs text-center py-3">Loading...</div>
-                    </div>
-                </div>
-            </details>
-
             <!-- Grok AI Brief — manual pull only in Trading Mode, auto-refresh in Review Mode -->
             <div id="grok-container"
                  hx-get="/api/grok/html"
@@ -4447,7 +4320,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     <!-- Footer -->
     <footer style="margin-top:1.5rem;padding-top:0.5rem;border-top:1px solid var(--border-subtle);text-align:center">
         <span class="t-text-faint" style="font-size:10px">
-            Pilot v1.0 — Session rules: Pre-market 00–03 | Active 03–12 | Off-hours 12–00 ET
+            Ruby Futures v1.0 — Session rules: Pre-market 00–03 | Active 03–12 | Off-hours 12–00 ET
             &nbsp;|&nbsp;
             <a href="/sse/health" class="underline hover:opacity-80">SSE Health</a>
             &nbsp;|&nbsp;
@@ -4602,25 +4475,14 @@ function toggleTheme() {{
      TRADING / REVIEW MODE TOGGLE
      - Trading Mode: active session focus — hides review-only panels
      - Review Mode:  all panels visible — for post-session analysis
-     - Default: Trading Mode during 03:00–16:00 ET, Review Mode otherwise
+     - Default: Review Mode (user switches to Trading when live)
      - Persisted in localStorage as 'dashMode'
 ═══════════════════════════════════════════════════════ -->
 <script>
 (function() {{
-    // Determine default mode based on current ET hour
+    // Default mode is always Review — user explicitly switches to Trading
     function _defaultMode() {{
-        try {{
-            var etStr = new Date().toLocaleString('en-US', {{
-                timeZone: 'America/New_York',
-                hour: 'numeric',
-                hour12: false
-            }});
-            var h = parseInt(etStr, 10);
-            // Active session hours 03:00–16:00 → Trading; off-hours → Review
-            return (h >= 3 && h < 16) ? 'trading' : 'review';
-        }} catch(e) {{
-            return 'trading';
-        }}
+        return 'review';
     }}
 
     // Apply the given mode to the document
@@ -4755,7 +4617,7 @@ function toggleTheme() {{
                 var lastEl = document.getElementById('sse-last-update');
                 if (lastEl) lastEl.textContent = 'Last focus: ' + new Date().toLocaleTimeString();
             }} catch(err) {{}}
-            if (typeof htmx!=='undefined') htmx.ajax('GET','/api/nt8/health/html',{{target:'#health-bar',swap:'innerHTML'}});
+            if (typeof htmx!=='undefined') htmx.ajax('GET','/api/health/html',{{target:'#health-bar',swap:'innerHTML'}});
         }});
 
         // Session change
@@ -4779,7 +4641,7 @@ function toggleTheme() {{
         _es.addEventListener('positions-update', function() {{
             if (typeof htmx!=='undefined') {{
                 htmx.ajax('GET','/api/positions/html',{{target:'#positions-container',swap:'innerHTML'}});
-                htmx.ajax('GET','/api/nt8/health/html',{{target:'#health-bar',swap:'innerHTML'}});
+                htmx.ajax('GET','/api/health/html',{{target:'#health-bar',swap:'innerHTML'}});
             }}
             _pushEvent('📋','Position update','#60a5fa');
         }});
@@ -4791,7 +4653,7 @@ function toggleTheme() {{
                 // Always refresh the positions panel so the broker dot + button state updates
                 if (typeof htmx!=='undefined') {{
                     htmx.ajax('GET','/api/positions/html',{{target:'#positions-container',swap:'innerHTML'}});
-                    htmx.ajax('GET','/api/nt8/health/html',{{target:'#health-bar',swap:'innerHTML'}});
+                    htmx.ajax('GET','/api/health/html',{{target:'#health-bar',swap:'innerHTML'}});
                 }}
                 if (bs.connected) {{
                     var acct = bs.account ? ' (' + bs.account + ')' : '';
@@ -5930,7 +5792,7 @@ def get_no_trade():
 
 
 # ---------------------------------------------------------------------------
-# ORB History — standalone full-page view
+# RB History — standalone full-page view
 # ---------------------------------------------------------------------------
 
 _ORB_HISTORY_BODY = """
@@ -6075,6 +5937,229 @@ _ORB_HISTORY_EXTRA_SCRIPT = """<script>
 
 
 @router.get("/orb-history", response_class=HTMLResponse)
+# ---------------------------------------------------------------------------
+# NEW PAGES: Charts, Account, Connections
+# ---------------------------------------------------------------------------
+
+
+def charts_page() -> str:
+    """Render the Charts page — crypto charts, volume profile, candlestick views."""
+    body = """
+    <div style="margin-bottom:1rem">
+        <h1 style="font-size:1.3rem;font-weight:700">📈 Charts</h1>
+        <p class="t-text-muted" style="font-size:0.8rem;margin-top:4px">
+            Crypto charts, volume profile, and candlestick analysis.
+        </p>
+    </div>
+
+    <div class="grid grid-cols-1" style="gap:12px;max-width:1200px">
+        <!-- Crypto Chart -->
+        <div class="t-panel border t-border rounded-lg p-4"
+             style="border-left:3px solid rgba(247,147,26,0.5)">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">📈 Crypto Chart</h3>
+            <div id="charts-kraken-chart"
+                 hx-get="/kraken/chart/html"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading chart...</div>
+            </div>
+        </div>
+
+        <!-- Volume Profile -->
+        <div class="t-panel border t-border rounded-lg p-4"
+             style="border-left:3px solid rgba(245,158,11,0.5)">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">📊 Volume Profile</h3>
+            <div id="charts-vp"
+                 hx-get="/api/volume-profile/html"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading volume profile...</div>
+            </div>
+        </div>
+
+        <!-- CNN Dataset Preview -->
+        <div class="t-panel border t-border rounded-lg p-4"
+             style="border-left:3px solid rgba(139,92,246,0.5)">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">🖼️ CNN Training Snapshots</h3>
+            <div id="charts-cnn-preview"
+                 hx-get="/cnn/dataset/preview"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Performance Charts -->
+        <div class="t-panel border t-border rounded-lg p-4"
+             style="border-left:3px solid rgba(34,197,94,0.4)">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">📈 Performance</h3>
+            <div id="charts-perf"
+                 hx-get="/api/performance/html"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading performance...</div>
+            </div>
+        </div>
+    </div>
+    """
+    return _build_page_shell(
+        title="Charts — Ruby Futures",
+        favicon_emoji="📈",
+        active_path="/charts",
+        body_content=body,
+    )
+
+
+def account_page() -> str:
+    """Render the Account page — Kraken account, balances, crypto prices, correlation."""
+    body = """
+    <div style="margin-bottom:1rem">
+        <h1 style="font-size:1.3rem;font-weight:700">💰 Account</h1>
+        <p class="t-text-muted" style="font-size:0.8rem;margin-top:4px">
+            Kraken account balances, crypto prices, and cross-asset correlation.
+        </p>
+    </div>
+
+    <div class="grid grid-cols-1" style="gap:12px;max-width:1200px">
+        <!-- Kraken Crypto health + prices -->
+        <div class="t-panel border t-border rounded-lg p-4"
+             style="border-left:3px solid #f7931a">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">🪙 Crypto Prices (Kraken)</h3>
+            <div id="acct-kraken-prices"
+                 hx-get="/kraken/health/html"
+                 hx-trigger="load, every 10s"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Kraken Account (private API) -->
+        <div class="t-panel border t-border rounded-lg p-4"
+             style="border-left:3px solid rgba(247,147,26,0.4)">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">💰 Kraken Account</h3>
+            <div id="acct-kraken-account"
+                 hx-get="/kraken/account/html"
+                 hx-trigger="load, every 30s"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading account data...</div>
+            </div>
+        </div>
+
+        <!-- Crypto/Futures Correlation -->
+        <div class="t-panel border t-border rounded-lg p-4"
+             style="border-left:3px solid rgba(99,102,241,0.5)">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">🔗 Crypto / Futures Correlation</h3>
+            <div id="acct-correlation"
+                 hx-get="/kraken/correlation/html"
+                 hx-trigger="load, every 300s"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading correlation data...</div>
+            </div>
+        </div>
+    </div>
+    """
+    return _build_page_shell(
+        title="Account — Ruby Futures",
+        favicon_emoji="💰",
+        active_path="/account",
+        body_content=body,
+    )
+
+
+def connections_page() -> str:
+    """Render the Connections page — external API status, data feeds, service health."""
+    body = """
+    <div style="margin-bottom:1rem">
+        <h1 style="font-size:1.3rem;font-weight:700">🔌 Connections</h1>
+        <p class="t-text-muted" style="font-size:0.8rem;margin-top:4px">
+            External API connections, data feeds, and service health.
+        </p>
+    </div>
+
+    <div class="grid grid-cols-1" style="gap:12px;max-width:1200px">
+        <!-- System Health -->
+        <div class="t-panel border t-border rounded-lg p-4">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">🏥 System Health</h3>
+            <div id="conn-health"
+                 hx-get="/api/health/html"
+                 hx-trigger="load, every 10s"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading health status...</div>
+            </div>
+        </div>
+
+        <!-- Kraken API Status -->
+        <div class="t-panel border t-border rounded-lg p-4"
+             style="border-left:3px solid #f7931a">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">🪙 Kraken API</h3>
+            <div id="conn-kraken"
+                 hx-get="/kraken/health/html"
+                 hx-trigger="load, every 15s"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Data Feed Status -->
+        <div class="t-panel border t-border rounded-lg p-4">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">📡 Data Feed</h3>
+            <div id="conn-feed"
+                 hx-get="/api/time"
+                 hx-trigger="load, every 5s"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading...</div>
+            </div>
+        </div>
+
+        <!-- SSE Connection -->
+        <div class="t-panel border t-border rounded-lg p-4">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">📡 SSE Stream</h3>
+            <div id="conn-sse"
+                 hx-get="/sse/health"
+                 hx-trigger="load, every 10s"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Broker Bridge Status (placeholder for future Tradovate) -->
+        <div class="t-panel border t-border rounded-lg p-4"
+             style="border-left:3px solid rgba(99,102,241,0.4)">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">🔗 Broker Bridge</h3>
+            <div class="t-text-faint text-xs" style="padding:1rem 0;text-align:center">
+                No broker bridge connected.<br/>
+                <span style="font-size:10px;color:var(--text-faint)">Tradovate bridge coming soon — configure in <a href="/settings" style="text-decoration:underline">Settings</a>.</span>
+            </div>
+        </div>
+    </div>
+    """
+    return _build_page_shell(
+        title="Connections — Ruby Futures",
+        favicon_emoji="🔌",
+        active_path="/connections",
+        body_content=body,
+    )
+
+
+@router.get("/charts", response_class=HTMLResponse)
+def charts_page_route():
+    """Serve the Charts page."""
+    return HTMLResponse(content=charts_page())
+
+
+@router.get("/account", response_class=HTMLResponse)
+def account_page_route():
+    """Serve the Account page."""
+    return HTMLResponse(content=account_page())
+
+
+@router.get("/connections", response_class=HTMLResponse)
+def connections_page_route():
+    """Serve the Connections page."""
+    return HTMLResponse(content=connections_page())
+
+
+@router.get("/orb-history", response_class=HTMLResponse)
 def orb_history_page():
     """Serve the standalone ORB Signal History full-page view."""
     # Widen the page container slightly so the table has room to breathe
@@ -6083,7 +6168,7 @@ def orb_history_page():
 </style>"""
     return HTMLResponse(
         content=_build_page_shell(
-            title="ORB Signal History — Futures Co-Pilot",
+            title="ORB Signal History — Ruby Futures",
             favicon_emoji="📅",
             active_path="/orb-history",
             body_content=_ORB_HISTORY_BODY,

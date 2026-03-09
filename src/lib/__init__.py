@@ -1,5 +1,5 @@
 """
-lib — Shared library for the Futures Trading Co-Pilot.
+lib — Shared library for Ruby Futures.
 
 All business logic modules live under organised sub-packages:
 

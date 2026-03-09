@@ -791,7 +791,7 @@ def get_journal_page():
 
     return HTMLResponse(
         content=_build_page_shell(
-            title="Trade Journal — Futures Co-Pilot",
+            title="Trade Journal — Ruby Futures",
             favicon_emoji="📓",
             active_path="/journal/page",
             body_content=_JOURNAL_BODY,

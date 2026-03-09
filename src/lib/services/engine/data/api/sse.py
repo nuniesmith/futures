@@ -20,7 +20,6 @@ Event types sent to browser:
     - positions-update   — Live positions changed
     - grok-update        — Grok compact AI summary (TASK-602)
     - risk-update        — Risk status changed (TASK-502)
-    - bridge-status      — NT8 Bridge online/offline state changed
     - heartbeat          — Keep-alive every 30 seconds
 """
 

@@ -568,9 +568,7 @@ Key classes and functions:
 - `should_reverse()` — reversal gate logic
 - `update_bracket_phase()` — phase transitions (TP1→BE, TP2→trail)
 - `update_ema9_trail()` — trailing stop computation
-- `get_order_commands()` — return pending orders for NT8 Bridge
 
-### Phase 4: NinjaTrader Integration
 
 **Files in `ninjatrader` repo:**
 
@@ -601,9 +599,7 @@ python scripts/smoke_test_trainer.py \
 # 3. Evaluate + promote champion
 # (automated by trainer_server pipeline)
 
-# 4. Sync to repos
-./scripts/sync_models.sh  # futures pulls .pt from rb
-# NT8 PowerShell pulls .onnx from rb
+
 
 # 5. Verify
 python -c "from lib.analysis.breakout_cnn import model_info; print(model_info())"

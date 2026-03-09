@@ -250,7 +250,7 @@ _TRAINER_PAGE_HTML = """\
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
-<title>CNN Trainer — Futures Co-Pilot</title>
+<title>CNN Trainer — Ruby Futures</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>"/>
 <script>(function(){var t=localStorage.getItem('theme');if(t==='light')document.documentElement.classList.remove('dark');else document.documentElement.classList.add('dark');})();</script>
 <script src="https://unpkg.com/htmx.org@2.0.4"></script>
@@ -411,11 +411,14 @@ tr:hover td{background:var(--bg-inner)}
 
 <!-- Nav bar -->
 <nav class="nav">
-  <a class="nav-brand" href="/">📈 Co-Pilot</a>
+  <a class="nav-brand" href="/">💎 Ruby Futures</a>
   <a class="nav-tab" href="/">📊 Dashboard</a>
-  <a class="nav-tab" href="/orb-history">📅 ORB History</a>
-  <a class="nav-tab active" href="/trainer">🧠 Trainer</a>
+  <a class="nav-tab" href="/charts">📈 Charts</a>
+  <a class="nav-tab" href="/account">💰 Account</a>
+  <a class="nav-tab" href="/orb-history">📅 RB History</a>
   <a class="nav-tab" href="/journal/page">📓 Journal</a>
+  <a class="nav-tab" href="/connections">🔌 Connections</a>
+  <a class="nav-tab active" href="/trainer">🧠 Trainer</a>
   <a class="nav-tab" href="/settings">⚙️ Settings</a>
   <div class="nav-right">
     <div id="nav-trainer-badge" class="badge b-unknown" style="font-size:0.65rem">trainer ···</div>
@@ -432,7 +435,6 @@ tr:hover td{background:var(--bg-inner)}
     <div class="svc-pill" id="svc-trainer"><span class="dot dot-gray dot-pulse" id="dot-trainer"></span>Trainer</div>
     <div class="svc-pill" id="svc-redis"><span class="dot dot-gray" id="dot-redis"></span>Redis</div>
     <div class="svc-pill" id="svc-pg"><span class="dot dot-gray" id="dot-pg"></span>Postgres</div>
-    <div class="svc-pill" id="svc-bridge"><span class="dot dot-gray" id="dot-bridge"></span>NT8 Bridge</div>
     <div class="svc-pill" id="svc-model" style="display:none"><span class="dot dot-gray" id="dot-model"></span>CNN Model</div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
       <span style="font-size:0.68rem;color:var(--muted)">Trainer URL:</span>

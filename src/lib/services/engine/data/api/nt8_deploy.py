@@ -290,25 +290,43 @@ def _render_health_bar(health: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/nt8/panel/html", response_class=HTMLResponse)
-def get_panel_html():
-    """Return an empty HTML fragment (legacy toolbar placeholder).
-
-    The NT8 toolbar dropdown has been removed.  This endpoint remains
-    so existing HTMX ``hx-get="/api/nt8/panel/html"`` calls don't 404.
-    """
-    return HTMLResponse(content="")
+# ---------------------------------------------------------------------------
+# Primary routes (clean paths)
+# ---------------------------------------------------------------------------
 
 
-@router.get("/api/nt8/health/html", response_class=HTMLResponse)
+@router.get("/api/health/html", response_class=HTMLResponse)
 def get_health_html():
     """Return system health indicators as an HTML fragment (polled by HTMX)."""
     health = _compute_health()
     return HTMLResponse(content=_render_health_bar(health))
 
 
-@router.get("/api/nt8/health")
+@router.get("/api/health")
 def get_health():
     """Return system health status as JSON."""
     health = _compute_health()
     return JSONResponse(content=health)
+
+
+# ---------------------------------------------------------------------------
+# Legacy routes — kept so old HTMX references don't 404
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/nt8/panel/html", response_class=HTMLResponse)
+def get_panel_html_legacy():
+    """Return an empty HTML fragment (legacy toolbar placeholder)."""
+    return HTMLResponse(content="")
+
+
+@router.get("/api/nt8/health/html", response_class=HTMLResponse)
+def get_health_html_legacy():
+    """Legacy route — redirects to /api/health/html."""
+    return get_health_html()
+
+
+@router.get("/api/nt8/health")
+def get_health_legacy():
+    """Legacy route — redirects to /api/health."""
+    return get_health()

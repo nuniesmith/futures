@@ -533,7 +533,7 @@ def format_market_context(
 # ---------------------------------------------------------------------------
 
 _MORNING_SYSTEM = (
-    "You are a disciplined futures trading co-pilot focused on micro contracts "
+    "You are a disciplined futures trading analyst focused on micro contracts "
     "(MES, MNQ, MCL, MGC, MHG, SIL). You prioritize capital preservation and "
     "quality setups over quantity. Be concise, use bullet points, and always "
     "anchor prices to the scanner's 'Last' column. NEVER use bare $ signs — "
@@ -545,7 +545,7 @@ _MORNING_SYSTEM = (
 # ---------------------------------------------------------------------------
 
 _DAILY_PLAN_SYSTEM = (
-    "You are a disciplined futures trading co-pilot. You will receive bias "
+    "You are a disciplined futures trading analyst. You will receive bias "
     "analysis and key levels for several assets. Your job is to provide "
     "structured macro context and asset-specific insights. Respond ONLY with "
     "valid JSON — no markdown fences, no commentary outside the JSON object. "
@@ -622,7 +622,7 @@ Keep it actionable. No fluff. This is my reference card for the trading session.
 # ---------------------------------------------------------------------------
 
 _LIVE_SYSTEM = (
-    "You are a real-time futures trading co-pilot. Give concise, actionable "
+    "You are a real-time futures trading analyst. Give concise, actionable "
     "15-minute updates. Use bullet points. Focus on what changed since last "
     "update and what to do about it. NEVER use bare $ signs — write 'USD' instead."
 )
@@ -666,7 +666,7 @@ def run_live_analysis(
 # ---------------------------------------------------------------------------
 
 _COMPACT_SYSTEM = (
-    "You are a real-time futures trading co-pilot. Respond in EXACTLY this format with no extra lines:\n"
+    "You are a real-time futures trading analyst. Respond in EXACTLY this format with no extra lines:\n"
     "Line 1-N: One status line per focus asset: SYMBOL EMOJI PRICE (CHANGE) | Bias STATUS | Watch LEVEL\n"
     "Line N+1: blank line\n"
     "Line N+2: DO NOW: one clear actionable sentence\n\n"

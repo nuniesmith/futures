@@ -1,5 +1,5 @@
 """
-Integration Tests for the Futures Trading Co-Pilot
+Integration Tests for Ruby Futures
 ===============================================================
 Verify cross-module wiring end-to-end:
 

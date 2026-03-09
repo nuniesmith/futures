@@ -1,5 +1,5 @@
 """
-Structured logging configuration for the Futures Trading Co-Pilot.
+Structured logging configuration for Ruby Futures.
 
 Provides a unified logging setup using ``structlog`` across all services
 (data-service, engine, background tasks).  Call ``setup_logging()``

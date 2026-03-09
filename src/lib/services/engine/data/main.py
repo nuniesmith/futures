@@ -410,9 +410,9 @@ async def lifespan(app: FastAPI):
 # FastAPI application
 # ---------------------------------------------------------------------------
 app = FastAPI(
-    title="Futures Data Service",
+    title="Ruby Futures Data Service",
     description=(
-        "Background data service for the Futures Trading Co-Pilot. "
+        "Background data service for Ruby Futures. "
         "Runs the DashboardEngine, Massive WS listener, and all FKS "
         "computation modules. Exposes REST endpoints and an HTMX dashboard."
     ),

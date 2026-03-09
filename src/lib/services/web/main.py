@@ -172,9 +172,9 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Futures Trading Co-Pilot — Web Dashboard",
+    title="Ruby Futures — Web Dashboard",
     description=(
-        "HTMX dashboard frontend for the Futures Trading Co-Pilot. "
+        "HTMX dashboard frontend for Ruby Futures. "
         "Serves the dashboard HTML and proxies API/SSE requests to "
         "the data service backend."
     ),
@@ -650,6 +650,46 @@ async def proxy_journal_page(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# New pages: Charts, Account, Connections
+# ---------------------------------------------------------------------------
+
+
+@app.get("/charts", response_class=HTMLResponse)
+async def proxy_charts(request: Request):
+    """Proxy the Charts page from the data service."""
+    return await _proxy_request(request, "/charts")
+
+
+@app.get("/account", response_class=HTMLResponse)
+async def proxy_account(request: Request):
+    """Proxy the Account page from the data service."""
+    return await _proxy_request(request, "/account")
+
+
+@app.get("/connections", response_class=HTMLResponse)
+async def proxy_connections(request: Request):
+    """Proxy the Connections page from the data service."""
+    return await _proxy_request(request, "/connections")
+
+
+# ---------------------------------------------------------------------------
+# Health API — clean paths (proxied to data service)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/health/html")
+async def proxy_health_html(request: Request):
+    """Proxy system health HTML fragment."""
+    return await _proxy_request(request, "/api/health/html")
+
+
+@app.get("/api/health")
+async def proxy_health_json(request: Request):
+    """Proxy system health JSON."""
+    return await _proxy_request(request, "/api/health")
+
+
+# ---------------------------------------------------------------------------
 # Trainer proxy — forwards /trainer/* to the DATA service (port 8000)
 #
 # The data service hosts the full trainer dashboard page at GET /trainer and
@@ -706,7 +746,6 @@ async def proxy_trainer(request: Request, path: str):
 #   GET  /settings/services/config       → service URL config
 #   POST /settings/services/update       → save service URLs
 #   GET  /settings/services/probe        → probe all service health
-#   GET  /settings/services/bridge_status → NT8 Bridge heartbeat
 #   GET  /settings/features/config       → feature toggle state
 #   POST /settings/features/update       → save feature toggles
 #   GET  /settings/risk/config           → risk parameter config
@@ -982,7 +1021,7 @@ def _render_error_page(title: str, message: str) -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title} — Futures Trading Co-Pilot</title>
+    <title>{title} — Ruby Futures</title>
     <meta http-equiv="refresh" content="10">
     <style>
         body {{

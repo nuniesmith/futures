@@ -111,7 +111,7 @@ class RiskState:
 
 
 class RiskManager:
-    """Automated risk rules engine for the futures trading co-pilot.
+    """Automated risk rules engine for Ruby Futures.
 
     Tracks open positions, daily P&L, and enforces risk rules to prevent
     overtrading and excessive drawdown.

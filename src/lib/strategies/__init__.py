@@ -1,7 +1,7 @@
 """
 Strategies Package
 ==================
-Trading strategy modules for the futures co-pilot.
+Trading strategy modules for Ruby Futures.
 
 Sub-packages:
   - daily/   — Daily bias analysis, trade plan generation, swing detection

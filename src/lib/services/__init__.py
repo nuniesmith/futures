@@ -1,5 +1,5 @@
 """
-lib.services — Service-layer modules for the Futures Trading Co-Pilot.
+lib.services — Service-layer modules for Ruby Futures.
 
 Sub-packages:
     engine   — Background computation worker (scheduling, breakout detection,

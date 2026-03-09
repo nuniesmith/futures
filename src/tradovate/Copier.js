@@ -1,61 +1,47 @@
 // =============================================================================
-// tradovate_copier.js
+// tradovate_copier.js  —  Production Farm Copier
 // =============================================================================
 //
-// Trade copier for Tradovate accounts.
+// Designed for:
+//   Phase 1 — 5× TakeProfit Trader $150k
+//   Phase 2 — add up to 20× Apex $300k
 //
 // ARCHITECTURE
-// ────────────
+// ─────────────
 //
-//   ┌─────────────────────────────────────────────────────────────────┐
-//   │  MASTER ACCOUNT                                                  │
-//   │  (your main Tradovate / TradingView-connected account)           │
-//   │                                                                  │
-//   │  tradovate_bridge.js  →  Python engine (positions, risk)         │
-//   │  tradovate_copier.js  →  watches fills via WS syncrequest        │
-//   └───────────────────┬─────────────────────────────────────────────┘
-//                       │ fill event
-//              ┌────────┴────────┐
-//              ▼                 ▼
-//   ┌─────────────────┐  ┌─────────────────┐
-//   │  FOLLOWER 1     │  │  FOLLOWER 2     │  ... (add more in .env)
-//   │  Apex acct A    │  │  Apex acct B    │
-//   │  REST placeorder│  │  REST placeorder│
-//   └─────────────────┘  └─────────────────┘
+//   ┌──────────────────────────────────────────────────────────┐
+//   │  MASTER  (your live Tradovate / TradingView account)     │
+//   │  WebSocket user/syncrequest  →  fill events              │
+//   └────────────────────────┬─────────────────────────────────┘
+//                            │ fill event
+//              ┌─────────────▼──────────────┐
+//              │      Focus Tag (Redis)      │  ← Python engine writes focus:top_assets
+//              │      Fan-Out Queue          │  batches of 5, serial per account
+//              └─────────┬──────────────────┘
+//                        │
+//     ┌──────────────────┼──────────────────┐
+//     ▼                  ▼                  ▼
+//  [TPT_1]           [TPT_2..5]         [Apex_1..20]
+//  CircuitBreaker    CircuitBreaker     CircuitBreaker
+//  $4500 daily DD    $4500 daily DD     $4500 daily DD
+//  $9000 trailing    $9000 trailing     $7500 trailing
+//  Same contracts    Same contracts     Auto → micros
 //
-// WHAT IT COPIES
-// ──────────────
-//  • Market entries  (Buy/Sell market)
-//  • Limit entries
-//  • Stop-market entries
-//  • Exits / reversals (detected by position flip)
-//  • Flatten (full position close propagated to all followers)
+//   Python engine ──→ GET  /dashboard        — full farm health
+//   Python engine ──→ POST /kill/:id         — kill switch per account
+//   Python engine ──→ POST /kill/all
+//   Python engine ──→ POST /revive/:id
+//   Python engine ──→ POST /revive/all
+//   Python engine ──→ POST /enable/:id | /disable/:id
 //
-// WHAT IT DOES NOT COPY
-// ─────────────────────
-//  • Stop-loss / take-profit bracket orders (placed separately by follower
-//    risk rules — too risky to blindly mirror across funded accounts)
-//  • Order modifications or cancellations
-//
-// CONTRACT SCALING
-// ────────────────
-//  Each follower can have its own scale ratio and contract map.
-//  Example: master trades ES → follower trades MES at 10× ratio (same $ risk).
-//  Set per-follower in FOLLOWERS array below.
-//
-// TRADINGVIEW WEBHOOK
-// ───────────────────
-//  The copier also listens for TradingView JSON alerts on port 5682.
-//  These go directly to the master account AND trigger a copy to all followers.
-//  Alert JSON format:
-//    { "action": "buy"|"sell"|"close", "symbol": "ESM5", "qty": 1,
-//      "orderType": "Market"|"Limit"|"Stop", "price": 0, "stopPrice": 0 }
+// CONTRACT AUTO-MAP (Apex only, autoMicros: true)
+//   ES → MES   NQ → MNQ   GC → MGC   RTY → M2K
+//   YM → MYM   BTC → MBTC  6E → M6E  6J → M6J
 //
 // QUICK START
 // ───────────
-//  1. npm install ws node-fetch@2 dotenv
-//  2. Configure .env (see bottom of this file)
-//  3. node scripts/tradovate_copier.js
+//   npm install ws node-fetch@2 dotenv ioredis
+//   node scripts/tradovate_copier.js
 //
 // =============================================================================
 
@@ -66,21 +52,65 @@ const WebSocket = require("ws");
 const http = require("http");
 const fetch = require("node-fetch"); // npm install node-fetch@2
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Config helpers
-// ─────────────────────────────────────────────────────────────────────────────
-function env(key, def = "") {
-    return process.env[key] || def;
-}
-function envInt(key, def) {
-    return parseInt(env(key, String(def)), 10);
-}
-function envBool(key) {
-    return env(key, "false").toLowerCase() === "true";
-}
+let Redis = null;
+try {
+    Redis = require("ioredis");
+} catch (_) {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Master account credentials
+// Env helpers
+// ─────────────────────────────────────────────────────────────────────────────
+const env = (k, d = "") => process.env[k] || d;
+const envInt = (k, d) => parseInt(env(k, String(d)), 10);
+const envBool = (k, d = false) =>
+    env(k, d ? "true" : "false").toLowerCase() === "true";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Broker rule configs
+// ─────────────────────────────────────────────────────────────────────────────
+const BROKER_RULES = {
+    TPT_150K: {
+        label: "TakeProfit Trader $150k",
+        dailyLossLimit: 4500,
+        trailingDD: 9000,
+        autoMicros: false,
+    },
+    APEX_300K: {
+        label: "Apex $300k",
+        dailyLossLimit: 4500,
+        trailingDD: 7500,
+        autoMicros: true,
+    },
+    APEX_150K: {
+        label: "Apex $150k",
+        dailyLossLimit: 3000,
+        trailingDD: 4500,
+        autoMicros: true,
+    },
+    CUSTOM: {
+        label: "Custom",
+        dailyLossLimit: 99999,
+        trailingDD: 99999,
+        autoMicros: false,
+    },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Micro contract map  (applied when autoMicros = true)
+// ─────────────────────────────────────────────────────────────────────────────
+const MICRO_MAP = {
+    ES: "MES",
+    NQ: "MNQ",
+    GC: "MGC",
+    RTY: "M2K",
+    YM: "MYM",
+    BTC: "MBTC",
+    "6E": "M6E",
+    "6J": "M6J",
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Master config
 // ─────────────────────────────────────────────────────────────────────────────
 const MASTER = {
     name: env("TRADOVATE_NAME"),
@@ -90,123 +120,329 @@ const MASTER = {
     cid: envInt("TRADOVATE_CID", 0),
     sec: env("TRADOVATE_SEC"),
     demo: envBool("TRADOVATE_DEMO"),
-    // Override to watch a specific account name (blank = first account)
     accountName: env("TRADOVATE_ACCOUNT_NAME"),
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Follower accounts
-// ─────────────────────────────────────────────────────────────────────────────
-// Define followers inline here OR via JSON in .env FOLLOWERS_JSON.
-//
-// Each follower object:
-//   name        — Tradovate login
-//   password    — Tradovate password
-//   cid         — numeric client ID
-//   sec         — secret key
-//   demo        — boolean (can be different from master)
-//   accountName — specific account name/spec (blank = first account)
-//   scale       — multiplier applied to master qty  (1.0 = same size)
-//   contractMap — optional symbol remapping, e.g. {"ES":"MES","NQ":"MNQ"}
-//                 useful for trading micros on funded accounts
-//   enabled     — set false to pause this follower without removing it
-//
-// Example FOLLOWERS_JSON in .env:
-//   FOLLOWERS_JSON=[{"name":"apex1@email.com","password":"pw1","cid":123,"sec":"s1","demo":false,"accountName":"","scale":1,"contractMap":{"ES":"MES","NQ":"MNQ"},"enabled":true}]
-//
-const FOLLOWERS = JSON.parse(env("FOLLOWERS_JSON", "[]"));
+const IS_DEMO = MASTER.demo;
+const REST_BASE = IS_DEMO
+    ? "https://demo.tradovateapi.com/v1"
+    : "https://live.tradovateapi.com/v1";
+const WS_URL = IS_DEMO
+    ? "wss://demo.tradovateapi.com/v1/websocket"
+    : "wss://live.tradovateapi.com/v1/websocket";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Global settings
-// ─────────────────────────────────────────────────────────────────────────────
-const CFG = {
-    demo: MASTER.demo,
-    copierPort: envInt("COPIER_PORT", 5682), // HTTP / webhook port
-    heartbeatMs: envInt("HEARTBEAT_SEC", 15) * 1000,
-    copyFlattens: envBool("COPY_FLATTENS") !== false, // default true
-    dashboardUrl: env("DASHBOARD_BASE_URL", "http://localhost:8100").replace(
-        /\/$/,
-        "",
-    ),
-    maxRetries: 3,
-    retryDelayMs: 500,
-};
-
-const ENDPOINTS = {
-    auth: MASTER.demo
-        ? "https://demo.tradovateapi.com/v1/auth/accesstokenrequest"
-        : "https://live.tradovateapi.com/v1/auth/accesstokenrequest",
-    ws: MASTER.demo
-        ? "wss://demo.tradovateapi.com/v1/websocket"
-        : "wss://live.tradovateapi.com/v1/websocket",
-    restBase: MASTER.demo
-        ? "https://demo.tradovateapi.com/v1"
-        : "https://live.tradovateapi.com/v1",
-};
-
-function followerRestBase(f) {
-    return f.demo
+const followerBase = (demo) =>
+    demo
         ? "https://demo.tradovateapi.com/v1"
         : "https://live.tradovateapi.com/v1";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Follower definitions  (FOLLOWERS_JSON in .env — see bottom of file)
+// ─────────────────────────────────────────────────────────────────────────────
+const FOLLOWER_DEFS = JSON.parse(env("FOLLOWERS_JSON", "[]"));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Global config
+// ─────────────────────────────────────────────────────────────────────────────
+const CFG = {
+    copierPort: envInt("COPIER_PORT", 5682),
+    maxConcurrentCopies: envInt("MAX_CONCURRENT_COPIES", 5),
+    orderTimeoutMs: 8000,
+    maxRetries: 3,
+    retryBaseMs: 400,
+    dailyLossWarnPct: 0.8,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Redis (optional — focus-asset tagging from Python engine)
+// ─────────────────────────────────────────────────────────────────────────────
+let redis = null;
+if (Redis) {
+    try {
+        redis = new Redis({
+            host: env("REDIS_HOST", "localhost"),
+            port: envInt("REDIS_PORT", 6380),
+            password: env("REDIS_PASSWORD") || undefined,
+            lazyConnect: true,
+        });
+        redis.connect().catch(() => {
+            redis = null;
+        });
+    } catch (_) {
+        redis = null;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// State
+// Logging
 // ─────────────────────────────────────────────────────────────────────────────
+const ts = () => new Date().toISOString();
+const log = (m) => console.log(`${ts()} [Copier] ${m}`);
+const warn = (m) => console.warn(`${ts()} [Copier] ⚠ ${m}`);
+const err = (m) => console.error(`${ts()} [Copier] ✗ ${m}`);
 
-// Master WS state
-let ws = null;
-let masterToken = null;
-let masterAccountId = null;
-let masterAccountSpec = "";
-let isAuthenticated = false;
-let authSent = false;
-let syncCompleted = false;
-let reqIdCounter = 2;
-let lastServerMsg = Date.now();
-let heartbeatTimer = null;
-
-// Copy tracking — prevent duplicate copies on the same fill
-const copiedFillIds = new Set(); // executionReport ids already processed
-const masterPositions = {}; // symbol → { qty, avgPrice }  — tracks net position
-
-// Follower sessions: each has token + accountId after init
-// followerSessions[i] = { token, accountId, accountSpec, restBase }
-const followerSessions = new Array(FOLLOWERS.length).fill(null);
-
+// ─────────────────────────────────────────────────────────────────────────────
 // Metrics
+// ─────────────────────────────────────────────────────────────────────────────
 const metrics = {
     fillsSeen: 0,
     copiesAttempted: 0,
     copiesOk: 0,
     copiesFailed: 0,
-    tvWebhooks: 0,
+    circuitTrips: 0,
+    killSwitches: 0,
     startTime: Date.now(),
+    fillLog: [], // last 100 fills with per-account results
 };
 
-// Reconnect
-let reconnectAttempts = 0;
-let shouldReconnect = true;
-let isReconnecting = false;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Logging
-// ─────────────────────────────────────────────────────────────────────────────
-function log(m) {
-    console.log(`[Copier] ${m}`);
-}
-function warn(m) {
-    console.warn(`[Copier] ⚠ ${m}`);
-}
-function err(m) {
-    console.error(`[Copier] ✗ ${m}`);
+function recordFill(fill, focus, results) {
+    metrics.fillLog.unshift({ ts: ts(), fill, focus, results });
+    if (metrics.fillLog.length > 100) metrics.fillLog.pop();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Auth helper (shared by master + all followers)
+// CircuitBreaker  — per account
 // ─────────────────────────────────────────────────────────────────────────────
-async function authenticate(creds, restBase) {
-    const resp = await fetch(`${restBase}/auth/accesstokenrequest`, {
+class CircuitBreaker {
+    constructor(id, rules) {
+        this.id = id;
+        this.rules = rules;
+        this.killed = false; // manual
+        this.autoTripped = false; // P&L guard
+        this.tripReason = "";
+        this.dailyPnl = 0;
+        this.peakBalance = 0;
+    }
+
+    get blocked() {
+        return this.killed || this.autoTripped;
+    }
+    get status() {
+        return this.killed ? "KILLED" : this.autoTripped ? "TRIPPED" : "OK";
+    }
+
+    kill(reason = "manual") {
+        this.killed = true;
+        this.tripReason = reason;
+        metrics.killSwitches++;
+        warn(`CB[${this.id}] KILLED — ${reason}`);
+    }
+
+    revive() {
+        this.killed = this.autoTripped = false;
+        this.tripReason = "";
+        log(`CB[${this.id}] revived`);
+    }
+
+    checkPnl(dailyPnl, balance) {
+        if (this.killed) return;
+        this.dailyPnl = dailyPnl;
+        if (balance > this.peakBalance) this.peakBalance = balance;
+
+        const loss = Math.abs(Math.min(dailyPnl, 0));
+        const ddPeak = this.peakBalance > 0 ? this.peakBalance - balance : 0;
+
+        if (
+            !this.autoTripped &&
+            loss >= this.rules.dailyLossLimit * CFG.dailyLossWarnPct
+        )
+            warn(
+                `CB[${this.id}] daily loss warning — $${loss.toFixed(0)} / $${this.rules.dailyLossLimit}`,
+            );
+
+        if (loss >= this.rules.dailyLossLimit) {
+            this.autoTripped = true;
+            this.tripReason = `Daily loss $${loss.toFixed(0)} ≥ limit $${this.rules.dailyLossLimit}`;
+            metrics.circuitTrips++;
+            err(`CB[${this.id}] TRIPPED — ${this.tripReason}`);
+        }
+        if (ddPeak >= this.rules.trailingDD) {
+            this.autoTripped = true;
+            this.tripReason = `Trailing DD $${ddPeak.toFixed(0)} ≥ limit $${this.rules.trailingDD}`;
+            metrics.circuitTrips++;
+            err(`CB[${this.id}] TRIPPED — ${this.tripReason}`);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AccountSession  — one per follower account
+// ─────────────────────────────────────────────────────────────────────────────
+class AccountSession {
+    constructor(def, index) {
+        this.index = index;
+        this.id = def.id || `acct_${index}`;
+        this.label = def.label || def.name;
+        this.def = def;
+        this.rules = BROKER_RULES[def.broker] || BROKER_RULES.CUSTOM;
+        this.restBase = followerBase(def.demo === true);
+        this.token = null;
+        this.accountId = null;
+        this.accountSpec = null;
+        this.scale = def.scale || 1;
+        this.enabled = def.enabled !== false;
+        this.ready = false;
+        this.cb = new CircuitBreaker(this.id, this.rules);
+        this._queue = Promise.resolve(); // serial per-account order queue
+    }
+
+    // Map symbol and calculate qty for this account
+    resolveOrder(masterSymbol, masterQty) {
+        let symbol = masterSymbol;
+        const qty = Math.max(1, Math.round(masterQty * this.scale));
+
+        if (this.rules.autoMicros) {
+            const root = masterSymbol.replace(/[A-Z]\d+$/, "");
+            const micro = MICRO_MAP[root];
+            if (micro) symbol = micro + masterSymbol.slice(root.length);
+        }
+
+        return { symbol, qty };
+    }
+
+    // Enqueue — guarantees no double-fill per account even if two fills arrive quickly
+    enqueue(params) {
+        this._queue = this._queue
+            .then(() => this._place(params))
+            .catch(() => {});
+        return this._queue;
+    }
+
+    async _place(params) {
+        if (!this.ready || !this.enabled || this.cb.blocked)
+            return {
+                skipped: true,
+                reason: this.cb.blocked ? this.cb.status : "not_ready",
+            };
+
+        const body = {
+            accountSpec: this.accountSpec,
+            accountId: this.accountId,
+            action: params.action,
+            symbol: params.symbol,
+            orderQty: params.qty,
+            orderType: "Market",
+            timeInForce: "GTC",
+        };
+
+        for (let attempt = 1; attempt <= CFG.maxRetries; attempt++) {
+            try {
+                const resp = await fetch(`${this.restBase}/order/placeorder`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${this.token}`,
+                    },
+                    body: JSON.stringify(body),
+                    timeout: CFG.orderTimeoutMs,
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    metrics.copiesOk++;
+                    log(
+                        `✓ [${this.id}] ${body.action} ${body.orderQty} ${body.symbol} orderId=${data.orderId || data.id}`,
+                    );
+                    this._refreshPnl().catch(() => {});
+                    return { ok: true, id: this.id, orderId: data.orderId };
+                }
+                throw new Error(`${resp.status}: ${JSON.stringify(data)}`);
+            } catch (ex) {
+                if (attempt < CFG.maxRetries)
+                    await sleep(CFG.retryBaseMs * attempt);
+                else {
+                    metrics.copiesFailed++;
+                    err(
+                        `✗ [${this.id}] FAILED ${body.action} ${body.orderQty} ${body.symbol}: ${ex.message}`,
+                    );
+                    return { ok: false, id: this.id, error: ex.message };
+                }
+            }
+        }
+    }
+
+    async _refreshPnl() {
+        try {
+            const resp = await fetch(
+                `${this.restBase}/account/find?name=${encodeURIComponent(this.accountSpec)}`,
+                {
+                    headers: { Authorization: `Bearer ${this.token}` },
+                    timeout: 5000,
+                },
+            );
+            if (!resp.ok) return;
+            const d = await resp.json();
+            this.cb.checkPnl(
+                d.dailyRealizedPnl || d.realizedPnl || 0,
+                d.balance || d.cashValue || 0,
+            );
+        } catch (_) {}
+    }
+
+    async init() {
+        log(`Init [${this.id}] ${this.label} (${this.rules.label})…`);
+        const tok = await authRest(this.def, this.restBase);
+        this.token = tok.accessToken;
+
+        const r = await fetch(`${this.restBase}/account/list`, {
+            headers: { Authorization: `Bearer ${this.token}` },
+            timeout: 10000,
+        });
+        if (!r.ok) throw new Error(`account/list ${r.status}`);
+        const accounts = await r.json();
+        let acct = accounts[0];
+        if (this.def.accountName)
+            acct =
+                accounts.find((a) => a.name === this.def.accountName) || acct;
+        if (!acct) throw new Error("No account found");
+        this.accountId = acct.id;
+        this.accountSpec = acct.name;
+        this.ready = true;
+        log(`[${this.id}] ready — ${this.accountSpec}`);
+        setTimeout(() => this._refreshToken(), 85 * 60 * 1000);
+    }
+
+    async _refreshToken() {
+        try {
+            const tok = await authRest(this.def, this.restBase);
+            this.token = tok.accessToken;
+            log(`[${this.id}] token refreshed`);
+        } catch (ex) {
+            warn(`[${this.id}] token refresh failed: ${ex.message}`);
+        }
+        setTimeout(() => this._refreshToken(), 85 * 60 * 1000);
+    }
+
+    toStatus() {
+        return {
+            id: this.id,
+            label: this.label,
+            broker: this.rules.label,
+            account: this.accountSpec,
+            ready: this.ready,
+            enabled: this.enabled,
+            circuit: this.cb.status,
+            trip_reason: this.cb.tripReason || null,
+            daily_pnl: this.cb.dailyPnl,
+            auto_micros: this.rules.autoMicros,
+            limits: {
+                daily_loss: this.rules.dailyLossLimit,
+                trailing_dd: this.rules.trailingDD,
+            },
+        };
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Account pool
+// ─────────────────────────────────────────────────────────────────────────────
+const pool = FOLLOWER_DEFS.map((def, i) => new AccountSession(def, i));
+const getSession = (id) => pool.find((s) => s.id === id);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth REST
+// ─────────────────────────────────────────────────────────────────────────────
+async function authRest(creds, base) {
+    const r = await fetch(`${base}/auth/accesstokenrequest`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -219,345 +455,171 @@ async function authenticate(creds, restBase) {
         }),
         timeout: 10000,
     });
-    if (!resp.ok) throw new Error(`Auth ${resp.status}: ${await resp.text()}`);
-    const data = await resp.json();
-    if (!data.accessToken)
-        throw new Error("No accessToken: " + JSON.stringify(data));
-    return data; // { accessToken, userId, name, expirationTime, … }
+    if (!r.ok) throw new Error(`Auth ${r.status}: ${await r.text()}`);
+    const d = await r.json();
+    if (!d.accessToken) throw new Error("No accessToken");
+    return d;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Follower initialisation — auth + resolve account
+// Focus-asset tag  — reads from Python engine's Redis keys
 // ─────────────────────────────────────────────────────────────────────────────
-async function initFollower(index) {
-    const f = FOLLOWERS[index];
-    const base = followerRestBase(f);
-
-    log(`Initialising follower[${index}]: ${f.name}`);
-    const tokenData = await authenticate(f, base);
-
-    // Resolve account
-    const acctResp = await fetch(`${base}/account/list`, {
-        headers: { Authorization: `Bearer ${tokenData.accessToken}` },
-        timeout: 10000,
-    });
-    if (!acctResp.ok)
-        throw new Error(`account/list failed for follower ${index}`);
-    const accounts = await acctResp.json();
-
-    let account = accounts[0];
-    if (f.accountName)
-        account = accounts.find((a) => a.name === f.accountName) || account;
-    if (!account) throw new Error(`No account found for follower ${index}`);
-
-    followerSessions[index] = {
-        token: tokenData.accessToken,
-        userId: tokenData.userId,
-        accountId: account.id,
-        accountSpec: account.name,
-        restBase: base,
-        name: f.name,
-        scale: f.scale || 1.0,
-        contractMap: f.contractMap || {},
-        enabled: f.enabled !== false,
-    };
-
-    log(
-        `Follower[${index}] ready — account: ${account.name} (id=${account.id}), scale: ${f.scale || 1}`,
-    );
-
-    // Schedule token refresh at 85 minutes
-    setTimeout(
-        async () => {
-            try {
-                const refreshed = await authenticate(f, base);
-                followerSessions[index].token = refreshed.accessToken;
-                log(`Follower[${index}] token refreshed`);
-            } catch (e) {
-                warn(`Follower[${index}] token refresh failed: ${e.message}`);
-            }
-        },
-        85 * 60 * 1000,
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// REST order placement (used for all follower order submissions)
-// ─────────────────────────────────────────────────────────────────────────────
-async function placeFollowerOrder(session, orderParams) {
-    // orderParams: { action, symbol, orderQty, orderType, price, stopPrice, timeInForce }
-    const body = {
-        accountSpec: session.accountSpec,
-        accountId: session.accountId,
-        action: orderParams.action, // "Buy" | "Sell"
-        symbol: orderParams.symbol, // e.g. "ESM5" or mapped "MESM5"
-        orderQty: Math.max(1, Math.round(orderParams.orderQty * session.scale)),
-        orderType: orderParams.orderType || "Market",
-        timeInForce: orderParams.timeInForce || "GTC",
-    };
-
-    // Add price fields only when relevant
-    if (body.orderType === "Limit" && orderParams.price)
-        body.price = orderParams.price;
-    if (
-        (body.orderType === "Stop" || body.orderType === "StopLimit") &&
-        orderParams.stopPrice
-    )
-        body.stopPrice = orderParams.stopPrice;
-
-    // Apply contract map (e.g. ES → MES)
-    const mappedSymbol = mapSymbol(session.contractMap, body.symbol);
-    body.symbol = mappedSymbol;
-
-    for (let attempt = 1; attempt <= CFG.maxRetries; attempt++) {
-        try {
-            const resp = await fetch(`${session.restBase}/order/placeorder`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${session.token}`,
-                },
-                body: JSON.stringify(body),
-                timeout: 8000,
-            });
-
-            const data = await resp.json();
-            if (resp.ok) {
-                metrics.copiesOk++;
-                log(
-                    `✓ Follower[${session.name}] ${body.action} ${body.orderQty} ${body.symbol} — orderId=${data.orderId || data.id}`,
-                );
-                return data;
-            } else {
-                throw new Error(`${resp.status}: ${JSON.stringify(data)}`);
-            }
-        } catch (e) {
-            if (attempt < CFG.maxRetries) {
-                warn(
-                    `Follower[${session.name}] attempt ${attempt} failed: ${e.message} — retrying`,
-                );
-                await sleep(CFG.retryDelayMs * attempt);
-            } else {
-                metrics.copiesFailed++;
-                err(
-                    `Follower[${session.name}] FAILED after ${CFG.maxRetries} attempts: ${e.message}`,
-                );
-                throw e;
-            }
-        }
+async function checkFocus(symbol) {
+    if (!redis) return { inFocus: null };
+    try {
+        const root = symbol.replace(/[A-Z]\d+$/, "");
+        const inFocus = (await redis.sismember("focus:top_assets", root)) === 1;
+        const bias = await redis.hget(`focus:bias:${root}`, "direction");
+        return { inFocus, root, bias: bias || null };
+    } catch (_) {
+        return { inFocus: null };
     }
 }
 
-// Close/flatten a follower position (liquidate by sending opposite order)
-async function flattenFollower(session, symbol, currentQty, currentDirection) {
-    if (currentQty === 0) return;
-    const action = currentDirection === "long" ? "Sell" : "Buy";
-    log(
-        `Flattening follower[${session.name}] — ${action} ${currentQty} ${symbol}`,
-    );
-    await placeFollowerOrder(session, {
-        action,
-        symbol,
-        orderQty: currentQty,
-        orderType: "Market",
-        timeInForce: "GTC",
-    });
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Core copy logic — called on every master fill event
+// Fan-out  — called on every master fill
 // ─────────────────────────────────────────────────────────────────────────────
-async function onMasterFill(fill) {
-    // fill shape from Tradovate executionReport:
-    //   { id, orderId, contractId, contractName, action (Buy/Sell), qty, price,
-    //     cumQty, ordStatus, accountId, … }
-
-    // Dedup
-    if (copiedFillIds.has(fill.id)) return;
-    copiedFillIds.add(fill.id);
-    if (copiedFillIds.size > 5000) {
-        // Trim oldest half
-        const arr = [...copiedFillIds];
-        arr.slice(0, 2500).forEach((id) => copiedFillIds.delete(id));
-    }
-
+async function fanOut(fill) {
     metrics.fillsSeen++;
 
-    const symbol = fill.contractName || fill.symbol;
-    const action = fill.action; // "Buy" | "Sell"
-    const qty = fill.qty || fill.orderQty || 1;
-    const fillPrice = fill.price || 0;
+    const masterSymbol = fill.contractName || fill.symbol || "";
+    const action = fill.action;
+    const masterQty = fill.qty || 1;
+    const price = fill.price || 0;
 
-    log(`Master fill: ${action} ${qty} ${symbol} @ ${fillPrice}`);
+    const focus = await checkFocus(masterSymbol);
 
-    // Update master position tracker
-    trackMasterPosition(symbol, action, qty);
+    if (focus.inFocus === true)
+        log(
+            `Fill [IN FOCUS]: ${action} ${masterQty} ${masterSymbol} @ ${price} bias=${focus.bias || "?"}`,
+        );
+    else
+        log(
+            `Fill [off-focus]: ${action} ${masterQty} ${masterSymbol} @ ${price}`,
+        );
 
-    // Fire off copies to all enabled followers in parallel
-    const tasks = followerSessions
-        .filter((s, i) => s && s.enabled && FOLLOWERS[i]?.enabled !== false)
-        .map((session) => {
-            metrics.copiesAttempted++;
-            return placeFollowerOrder(session, {
-                action,
-                symbol,
-                orderQty: qty,
-                orderType: "Market", // always market on copy (fill already happened on master)
-                timeInForce: "GTC",
-            }).catch((e) => {
-                // Non-fatal — log and continue
-                err(`Copy to ${session.name} failed: ${e.message}`);
-            });
-        });
+    const active = pool.filter((s) => s.ready && s.enabled && !s.cb.blocked);
+    const batches = chunk(active, CFG.maxConcurrentCopies);
+    const results = [];
 
-    await Promise.allSettled(tasks);
-}
-
-// Called when master account sends a flatten/close-all signal
-async function onMasterFlatten() {
-    if (!CFG.copyFlattens) return;
-    log("Master flatten detected — propagating to all followers");
-
-    for (let i = 0; i < followerSessions.length; i++) {
-        const session = followerSessions[i];
-        if (!session || !session.enabled) continue;
-
-        // Get follower positions via REST and close each
-        try {
-            const resp = await fetch(`${session.restBase}/position/list`, {
-                headers: { Authorization: `Bearer ${session.token}` },
-                timeout: 8000,
-            });
-            if (!resp.ok) continue;
-            const positions = await resp.json();
-            const myPositions = positions.filter(
-                (p) =>
-                    p.accountId === session.accountId &&
-                    (p.netPos || p.quantity) !== 0,
-            );
-            for (const pos of myPositions) {
-                const sym = pos.contractName || String(pos.contractId);
-                const qty = Math.abs(pos.netPos || pos.quantity || 0);
-                const dir = (pos.netPos || pos.quantity) > 0 ? "long" : "short";
-                await flattenFollower(session, sym, qty, dir);
-            }
-        } catch (e) {
-            err(`Flatten follower[${session.name}] error: ${e.message}`);
-        }
+    for (const batch of batches) {
+        const settled = await Promise.allSettled(
+            batch.map((s) => {
+                metrics.copiesAttempted++;
+                const { symbol, qty } = s.resolveOrder(masterSymbol, masterQty);
+                return s
+                    .enqueue({ action, symbol, qty })
+                    .then((r) => ({
+                        ...r,
+                        id: s.id,
+                        label: s.label,
+                        symbol,
+                        qty,
+                    }))
+                    .catch((ex) => ({
+                        ok: false,
+                        id: s.id,
+                        error: ex.message,
+                    }));
+            }),
+        );
+        results.push(
+            ...settled.map((r) =>
+                r.status === "fulfilled" ? r.value : r.reason,
+            ),
+        );
     }
-}
 
-function trackMasterPosition(symbol, action, qty) {
-    const pos = masterPositions[symbol] || { qty: 0, direction: "flat" };
-    const delta = action === "Buy" ? qty : -qty;
-    pos.qty += delta;
-    if (pos.qty > 0) pos.direction = "long";
-    else if (pos.qty < 0) pos.direction = "short";
-    else pos.direction = "flat";
-    masterPositions[symbol] = pos;
+    recordFill(
+        { symbol: masterSymbol, action, qty: masterQty, price },
+        { inFocus: focus.inFocus, bias: focus.bias },
+        results,
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Symbol mapping  (e.g. ES → MES, NQ → MNQ)
+// Master WebSocket
 // ─────────────────────────────────────────────────────────────────────────────
-function mapSymbol(contractMap, symbol) {
-    if (!contractMap || !symbol) return symbol;
-    // Exact match first
-    if (contractMap[symbol]) return contractMap[symbol];
-    // Root match — strip expiry suffix (e.g. "ESM5" → root "ES" → "MESM5")
-    for (const [from, to] of Object.entries(contractMap)) {
-        if (symbol.startsWith(from)) {
-            return to + symbol.slice(from.length);
-        }
-    }
-    return symbol;
-}
+let ws = null;
+let masterToken = null;
+let masterAccountId = null;
+let masterAccountSpec = "";
+let isAuthenticated = false;
+let authSent = false;
+let syncCompleted = false;
+let lastServerMsg = Date.now();
+let heartbeatTimer = null;
+let reconnectAttempts = 0;
+let shouldReconnect = true;
+let isReconnecting = false;
+const copiedFillIds = new Set();
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Master WebSocket (user/syncrequest — same pattern as tradovate_bridge.js)
-// ─────────────────────────────────────────────────────────────────────────────
 async function connectMaster() {
-    log(`Connecting master WS to ${ENDPOINTS.ws}…`);
-    ws = new WebSocket(ENDPOINTS.ws);
-
+    log(`Connecting master WS → ${WS_URL}`);
+    ws = new WebSocket(WS_URL);
     ws.on("open", () => {
         lastServerMsg = Date.now();
     });
-    ws.on("message", onMasterMessage);
+    ws.on("message", onMsg);
     ws.on("close", (code) => {
         log(`Master WS closed (${code})`);
         resetMasterState();
         if (shouldReconnect && !isReconnecting) scheduleReconnect();
     });
-    ws.on("error", (e) => {
-        err("Master WS error: " + e.message);
+    ws.on("error", (ex) => {
+        err("Master WS: " + ex.message);
     });
 }
 
-function onMasterMessage(raw) {
+function onMsg(raw) {
     lastServerMsg = Date.now();
-    const msg = raw.toString();
-
-    if (msg === "o") {
-        sendMasterAuth();
+    const m = raw.toString();
+    if (m === "o") {
+        sendAuth();
         return;
     }
-    if (msg === "h" || msg === "c") return;
-
-    if (msg.startsWith("a[")) {
-        let frames;
-        try {
-            frames = JSON.parse(msg.slice(1));
-        } catch (e) {
-            return;
-        }
-        for (const f of frames) handleMasterFrame(f);
+    if (m === "h" || m === "c") return;
+    if (!m.startsWith("a[")) return;
+    let frames;
+    try {
+        frames = JSON.parse(m.slice(1));
+    } catch (_) {
+        return;
     }
+    frames.forEach(handleFrame);
 }
 
-function sendMasterAuth() {
+function sendAuth() {
     if (authSent) return;
     authSent = true;
     ws.send(`authorize\n0\n\n${masterToken.accessToken}`);
 }
 
-function handleMasterFrame(m) {
-    // Auth response
-    if (m.i === 0) {
-        if (m.s === 200) {
+function handleFrame(f) {
+    if (f.i === 0) {
+        if (f.s === 200) {
             isAuthenticated = true;
             log("Master authenticated ✓");
-            startMasterHeartbeat();
-            sendMasterSync();
+            startHeartbeat();
+            ws.send(
+                `user/syncrequest\n1\n\n${JSON.stringify({ users: [masterToken.userId] })}`,
+            );
         } else {
             err("Master auth rejected — check credentials");
             shouldReconnect = false;
         }
         return;
     }
-
-    // Sync response
-    if (m.i === 1 && !syncCompleted) {
+    if (f.i === 1 && !syncCompleted) {
         syncCompleted = true;
-        log("Master syncrequest complete ✓");
-        if (m.d) processMasterSync(m.d);
+        log("Master sync complete ✓");
+        if (f.d) resolveAccount(f.d);
         return;
     }
-
-    // Real-time props events
-    if (m.e === "props" && m.d) {
-        processMasterProps(m.d);
-    }
+    if (f.e === "props" && f.d) handleProps(f.d);
 }
 
-function sendMasterSync() {
-    if (!masterToken) return;
-    const body = { users: [masterToken.userId] };
-    ws.send(`user/syncrequest\n1\n\n${JSON.stringify(body)}`);
-}
-
-function processMasterSync(data) {
-    // Resolve account
+function resolveAccount(data) {
     const accounts = data.accounts || [];
     let acct = accounts[0];
     if (MASTER.accountName)
@@ -567,75 +629,44 @@ function processMasterSync(data) {
         masterAccountSpec = acct.name;
         log(`Master account: ${masterAccountSpec} (id=${masterAccountId})`);
     }
-    // Baseline positions (don't copy on startup — just track)
-    for (const pos of data.positions || []) {
-        if (pos.accountId !== masterAccountId) continue;
-        const sym = pos.contractName || String(pos.contractId);
-        masterPositions[sym] = {
-            qty: Math.abs(pos.netPos || 0),
-            direction: (pos.netPos || 0) > 0 ? "long" : "short",
-        };
-    }
-    log(
-        `Master baseline — ${Object.keys(masterPositions).length} open positions`,
-    );
 }
 
-function processMasterProps(data) {
-    // ── Fills → copy ──────────────────────────────────────────────────────────
+function handleProps(data) {
     const fills = data.executionReports || data.fills || [];
     for (const fill of fills) {
         if (fill.accountId !== masterAccountId) continue;
         if (fill.ordStatus !== "Filled" && fill.ordStatus !== "PartFill")
             continue;
-        onMasterFill(fill).catch((e) => err("onMasterFill: " + e.message));
-    }
-
-    // ── Detect flatten: position goes to zero ────────────────────────────────
-    if (CFG.copyFlattens) {
-        for (const pos of data.positions || []) {
-            if (pos.accountId !== masterAccountId) continue;
-            if ((pos.netPos || pos.quantity || 0) === 0) {
-                const sym = pos.contractName || String(pos.contractId);
-                if (masterPositions[sym]?.qty > 0) {
-                    log(`Master position closed: ${sym}`);
-                    delete masterPositions[sym];
-                    // Don't call full flatten — the individual fill copy already handles it.
-                    // A position → 0 is caused by a fill we already copied above.
-                }
-            }
+        if (copiedFillIds.has(fill.id)) continue;
+        copiedFillIds.add(fill.id);
+        if (copiedFillIds.size > 5000) {
+            [...copiedFillIds]
+                .slice(0, 2500)
+                .forEach((id) => copiedFillIds.delete(id));
         }
+        fanOut(fill).catch((ex) => err("fanOut: " + ex.message));
     }
 }
 
-function startMasterHeartbeat() {
-    stopMasterHeartbeat();
+function startHeartbeat() {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
     heartbeatTimer = setInterval(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send("[]");
+        if (ws?.readyState === WebSocket.OPEN) ws.send("[]");
         if (Date.now() - lastServerMsg > 10000) {
-            warn("Master WS timeout — reconnecting");
-            if (ws) ws.close(4000, "timeout");
+            warn("Master WS dead — forcing reconnect");
+            ws?.close(4000, "timeout");
         }
     }, 2500);
 }
 
-function stopMasterHeartbeat() {
+function resetMasterState() {
+    isAuthenticated = authSent = syncCompleted = false;
     if (heartbeatTimer) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
     }
 }
 
-function resetMasterState() {
-    isAuthenticated = false;
-    authSent = false;
-    syncCompleted = false;
-    stopMasterHeartbeat();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Reconnection
-// ─────────────────────────────────────────────────────────────────────────────
 function scheduleReconnect() {
     if (reconnectAttempts >= 10) {
         err("Max reconnects reached");
@@ -645,9 +676,7 @@ function scheduleReconnect() {
         Math.min(1000 * Math.pow(2, reconnectAttempts), 60000) *
         (1 + Math.random() * 0.1);
     reconnectAttempts++;
-    log(
-        `Reconnect in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts}/10)…`,
-    );
+    log(`Reconnect in ${(delay / 1000).toFixed(1)}s (${reconnectAttempts}/10)`);
     setTimeout(doReconnect, delay);
 }
 
@@ -655,18 +684,13 @@ async function doReconnect() {
     if (!shouldReconnect || isReconnecting) return;
     isReconnecting = true;
     try {
-        if (ws) {
-            ws.removeAllListeners();
-            ws = null;
-        }
-        masterToken = await authenticate(
-            MASTER,
-            ENDPOINTS.restBase.replace("/v1", "") + "/v1",
-        );
+        ws?.removeAllListeners();
+        ws = null;
+        masterToken = await authRest(MASTER, REST_BASE);
         await connectMaster();
         reconnectAttempts = 0;
-    } catch (e) {
-        err("Reconnect failed: " + e.message);
+    } catch (ex) {
+        err("Reconnect failed: " + ex.message);
         scheduleReconnect();
     } finally {
         isReconnecting = false;
@@ -674,188 +698,159 @@ async function doReconnect() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TradingView webhook receiver
+// HTTP server  — dashboard + kill switches
 // ─────────────────────────────────────────────────────────────────────────────
-// Alert JSON from TradingView:
-//   { "action": "buy"|"sell"|"close", "symbol": "ESM5",
-//     "qty": 1, "orderType": "Market", "price": 0, "stopPrice": 0 }
-//
-// In TradingView Pine: alert("{{strategy.order.action}} ...", alert.freq_once_per_bar_close)
-// Webhook URL: http://YOUR_SERVER_IP:5682/webhook
-//
-async function handleTvWebhook(body) {
-    metrics.tvWebhooks++;
-    log(`TradingView webhook: ${JSON.stringify(body)}`);
-
-    const action = (body.action || "").toLowerCase();
-    const symbol = body.symbol || "";
-    const qty = parseInt(body.qty || body.quantity || "1", 10);
-    const orderType = body.orderType || "Market";
-    const price = body.price || 0;
-    const stopPrice = body.stopPrice || 0;
-
-    if (!symbol) {
-        warn("Webhook missing symbol");
-        return;
-    }
-
-    // Normalise action
-    let tvAction;
-    if (action === "buy" || action === "long") tvAction = "Buy";
-    else if (action === "sell" || action === "short") tvAction = "Sell";
-    else if (action === "close" || action === "flat") {
-        // Close master + propagate flatten
-        log(`TradingView close signal for ${symbol}`);
-        await onMasterFlatten();
-        return;
-    } else {
-        warn(`Unknown TradingView action: ${action}`);
-        return;
-    }
-
-    // Place on master account (via REST — we're not on the WS path)
-    try {
-        const masterSession = {
-            token: masterToken?.accessToken,
-            accountSpec: masterAccountSpec,
-            accountId: masterAccountId,
-            restBase: ENDPOINTS.restBase,
-            scale: 1,
-            contractMap: {},
-            name: "MASTER",
-        };
-        await placeFollowerOrder(masterSession, {
-            action: tvAction,
-            symbol,
-            orderQty: qty,
-            orderType,
-            price,
-            stopPrice,
-        });
-    } catch (e) {
-        err(`TradingView → master order failed: ${e.message}`);
-    }
-
-    // Also copy directly to all followers (the fill event will arrive via WS
-    // a moment later, but we copy eagerly here in case WS is slow)
-    const tasks = followerSessions
-        .filter((s) => s && s.enabled)
-        .map((session) =>
-            placeFollowerOrder(session, {
-                action: tvAction,
-                symbol,
-                orderQty: qty,
-                orderType,
-                price,
-                stopPrice,
-            }).catch((e) =>
-                err(
-                    `TradingView → follower ${session.name} failed: ${e.message}`,
-                ),
-            ),
-        );
-    await Promise.allSettled(tasks);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// HTTP server — health + TradingView webhook
-// ─────────────────────────────────────────────────────────────────────────────
-const httpServer = http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
     const path = req.url.split("?")[0];
-
-    // ── POST /webhook  — TradingView alerts ───────────────────────────────────
-    if (req.method === "POST" && path === "/webhook") {
-        let rawBody = "";
-        req.on("data", (chunk) => {
-            rawBody += chunk.toString();
-        });
-        req.on("end", async () => {
-            try {
-                const body = JSON.parse(rawBody);
-                await handleTvWebhook(body);
-                res.writeHead(200, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ status: "ok" }));
-            } catch (e) {
-                warn("Webhook parse error: " + e.message);
-                res.writeHead(400, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ error: e.message }));
-            }
-        });
-        return;
-    }
-
+    const method = req.method;
     res.setHeader("Content-Type", "application/json");
 
-    // ── GET /health ────────────────────────────────────────────────────────────
-    if (path === "/health") {
+    // GET /health
+    if (method === "GET" && path === "/health") {
         res.writeHead(200);
-        res.end(
+        return res.end(
             JSON.stringify({
-                status: "ok",
+                status: isAuthenticated && syncCompleted ? "ok" : "degraded",
                 master: masterAccountSpec || null,
                 authenticated: isAuthenticated,
-                sync_complete: syncCompleted,
-                followers: followerSessions.map((s, i) => ({
-                    index: i,
-                    name: s?.name || FOLLOWERS[i]?.name,
-                    account: s?.accountSpec || null,
-                    ready: !!s,
-                    enabled: s?.enabled !== false,
-                })),
+                accounts: pool.length,
+                ready: pool.filter((s) => s.ready).length,
+                ok: pool.filter((s) => s.ready && !s.cb.blocked).length,
+                killed: pool.filter((s) => s.cb.killed).length,
+                tripped: pool.filter((s) => s.cb.autoTripped).length,
             }),
         );
-        return;
     }
 
-    // ── GET /status ────────────────────────────────────────────────────────────
-    if (path === "/status") {
+    // GET /dashboard  — full farm snapshot for Python engine
+    if (method === "GET" && path === "/dashboard") {
         res.writeHead(200);
-        res.end(
+        return res.end(
             JSON.stringify({
-                master_account: masterAccountSpec,
-                master_positions: masterPositions,
-                metrics,
-                followers: followerSessions.map((s, i) => ({
-                    index: i,
-                    name: s?.name || FOLLOWERS[i]?.name,
-                    account: s?.accountSpec,
-                    scale: s?.scale,
-                    contract_map: s?.contractMap,
-                    enabled: s?.enabled,
-                })),
+                master: {
+                    account: masterAccountSpec,
+                    authenticated: isAuthenticated,
+                    sync: syncCompleted,
+                },
+                accounts: pool.map((s) => s.toStatus()),
+                metrics: {
+                    fills_seen: metrics.fillsSeen,
+                    copies_attempted: metrics.copiesAttempted,
+                    copies_ok: metrics.copiesOk,
+                    copies_failed: metrics.copiesFailed,
+                    circuit_trips: metrics.circuitTrips,
+                    kill_switches: metrics.killSwitches,
+                    uptime_sec: Math.round(
+                        (Date.now() - metrics.startTime) / 1000,
+                    ),
+                },
+                recent_fills: metrics.fillLog.slice(0, 20),
             }),
         );
-        return;
     }
 
-    // ── GET /metrics  — Prometheus ─────────────────────────────────────────────
-    if (path === "/metrics") {
+    // GET /accounts
+    if (method === "GET" && path === "/accounts") {
+        res.writeHead(200);
+        return res.end(JSON.stringify(pool.map((s) => s.toStatus())));
+    }
+
+    // POST /kill/:id  or  /kill/all
+    if (method === "POST" && path.startsWith("/kill/")) {
+        const id = path.slice(6);
+        if (id === "all") {
+            pool.forEach((s) => s.cb.kill("killall"));
+            res.writeHead(200);
+            return res.end(JSON.stringify({ ok: true, killed: pool.length }));
+        }
+        const s = getSession(id);
+        if (!s) {
+            res.writeHead(404);
+            return res.end(JSON.stringify({ error: "not found" }));
+        }
+        s.cb.kill("dashboard");
+        res.writeHead(200);
+        return res.end(JSON.stringify({ ok: true, id, circuit: s.cb.status }));
+    }
+
+    // POST /revive/:id  or  /revive/all
+    if (method === "POST" && path.startsWith("/revive/")) {
+        const id = path.slice(8);
+        if (id === "all") {
+            pool.forEach((s) => s.cb.revive());
+            res.writeHead(200);
+            return res.end(JSON.stringify({ ok: true, revived: pool.length }));
+        }
+        const s = getSession(id);
+        if (!s) {
+            res.writeHead(404);
+            return res.end(JSON.stringify({ error: "not found" }));
+        }
+        s.cb.revive();
+        res.writeHead(200);
+        return res.end(JSON.stringify({ ok: true, id, circuit: s.cb.status }));
+    }
+
+    // POST /enable/:id  |  /disable/:id  (pause without killing)
+    if (
+        method === "POST" &&
+        (path.startsWith("/enable/") || path.startsWith("/disable/"))
+    ) {
+        const on = path.startsWith("/enable/");
+        const id = path.slice(on ? 8 : 9);
+        const targets = id === "all" ? pool : [getSession(id)].filter(Boolean);
+        if (!targets.length) {
+            res.writeHead(404);
+            return res.end(JSON.stringify({ error: "not found" }));
+        }
+        targets.forEach((s) => {
+            s.enabled = on;
+        });
+        res.writeHead(200);
+        return res.end(
+            JSON.stringify({ ok: true, enabled: on, count: targets.length }),
+        );
+    }
+
+    // GET /metrics  — Prometheus
+    if (method === "GET" && path === "/metrics") {
         res.setHeader(
             "Content-Type",
             "text/plain; version=0.0.4; charset=utf-8",
         );
         const uptime = (Date.now() - metrics.startTime) / 1000;
+        const lines = [
+            `tradovate_copier_up ${isAuthenticated && syncCompleted ? 1 : 0}`,
+            `tradovate_copier_accounts_total ${pool.length}`,
+            `tradovate_copier_accounts_ok ${pool.filter((s) => s.ready && !s.cb.blocked).length}`,
+            `tradovate_copier_fills_seen_total ${metrics.fillsSeen}`,
+            `tradovate_copier_copies_ok_total ${metrics.copiesOk}`,
+            `tradovate_copier_copies_failed_total ${metrics.copiesFailed}`,
+            `tradovate_copier_circuit_trips_total ${metrics.circuitTrips}`,
+            `tradovate_copier_uptime_seconds ${uptime.toFixed(0)}`,
+            ...pool.map(
+                (s) =>
+                    `tradovate_account_ok{id="${s.id}"} ${s.cb.blocked ? 0 : 1}`,
+            ),
+        ];
         res.writeHead(200);
-        res.end(
-            [
-                `tradovate_copier_up ${isAuthenticated && syncCompleted ? 1 : 0}`,
-                `tradovate_copier_fills_seen_total ${metrics.fillsSeen}`,
-                `tradovate_copier_copies_attempted_total ${metrics.copiesAttempted}`,
-                `tradovate_copier_copies_ok_total ${metrics.copiesOk}`,
-                `tradovate_copier_copies_failed_total ${metrics.copiesFailed}`,
-                `tradovate_copier_tv_webhooks_total ${metrics.tvWebhooks}`,
-                `tradovate_copier_followers ${followerSessions.filter((s) => s?.enabled).length}`,
-                `tradovate_copier_uptime_seconds ${uptime.toFixed(0)}`,
-            ].join("\n") + "\n",
-        );
-        return;
+        return res.end(lines.join("\n") + "\n");
     }
 
     res.writeHead(404);
     res.end(
         JSON.stringify({
             error: "not found",
-            endpoints: ["/health", "/status", "/metrics", "/webhook"],
+            endpoints: [
+                "GET /health",
+                "GET /dashboard",
+                "GET /accounts",
+                "GET /metrics",
+                "POST /kill/:id|all",
+                "POST /revive/:id|all",
+                "POST /enable/:id|all",
+                "POST /disable/:id|all",
+            ],
         }),
     );
 });
@@ -863,91 +858,95 @@ const httpServer = http.createServer(async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
-function sleep(ms) {
-    return new Promise((r) => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function chunk(arr, n) {
+    const out = [];
+    for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+    return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main
 // ─────────────────────────────────────────────────────────────────────────────
 async function main() {
-    log("Tradovate Trade Copier starting…");
-    log(`Master account: ${MASTER.name} (${MASTER.demo ? "DEMO" : "LIVE"})`);
-    log(`Followers configured: ${FOLLOWERS.length}`);
+    const tpt = pool.filter((s) => s.def.broker === "TPT_150K").length;
+    const apex = pool.filter((s) => s.def.broker?.startsWith("APEX")).length;
+    log("════════════════════════════════════════════");
+    log(" Tradovate Farm Copier");
+    log(`   Master  : ${MASTER.name} (${IS_DEMO ? "DEMO" : "LIVE"})`);
+    log(
+        `   Pool    : ${pool.length} accounts — ${tpt} TPT $150k  +  ${apex} Apex`,
+    );
+    log("════════════════════════════════════════════");
 
-    // Validate
-    if (!MASTER.name || !MASTER.password || !MASTER.cid || !MASTER.sec) {
+    if (!MASTER.name || !MASTER.cid || !MASTER.sec) {
         err(
-            "Missing master credentials — set TRADOVATE_NAME, TRADOVATE_PASSWORD, TRADOVATE_CID, TRADOVATE_SEC",
+            "Missing master credentials — set TRADOVATE_NAME / CID / SEC in .env",
         );
         process.exit(1);
     }
-    if (FOLLOWERS.length === 0) {
-        warn("No followers configured — set FOLLOWERS_JSON in .env");
-    }
 
-    // Start health/webhook HTTP server
-    httpServer.listen(CFG.copierPort, () => {
-        log(`HTTP server on port ${CFG.copierPort}`);
-        log(`  /health    — liveness`);
-        log(`  /status    — full state`);
-        log(`  /metrics   — Prometheus`);
-        log(`  POST /webhook — TradingView alert receiver`);
+    server.listen(CFG.copierPort, () => {
+        log(`HTTP on :${CFG.copierPort}`);
+        log("  GET  /dashboard          — full farm health");
+        log("  POST /kill/:id|all       — kill switch");
+        log("  POST /revive/:id|all     — revive");
+        log("  POST /disable/:id|all    — pause without killing");
     });
 
-    // Init all followers in parallel
-    const followerInits = FOLLOWERS.map((_, i) =>
-        initFollower(i).catch((e) =>
-            err(`Follower[${i}] init failed: ${e.message}`),
-        ),
-    );
-    await Promise.allSettled(followerInits);
-
-    // Auth master and connect WS
-    try {
-        masterToken = await authenticate(MASTER, ENDPOINTS.restBase);
-        log(`Master token acquired — user: ${masterToken.name}`);
-        await connectMaster();
-    } catch (e) {
-        err("Master init failed: " + e.message);
-        scheduleReconnect();
+    // Init followers in batches of 5 (avoids rate-limiting Tradovate auth)
+    for (const batch of chunk(pool, 5)) {
+        await Promise.allSettled(
+            batch.map((s) =>
+                s.init().catch((ex) => err(`Init [${s.id}]: ${ex.message}`)),
+            ),
+        );
+        await sleep(600);
     }
+    log(`Pool ready: ${pool.filter((s) => s.ready).length} / ${pool.length}`);
 
-    // Master token refresh at 85m
+    masterToken = await authRest(MASTER, REST_BASE);
+    log(`Master token: ${masterToken.name}`);
+    await connectMaster();
+
     setInterval(
         async () => {
             try {
-                masterToken = await authenticate(MASTER, ENDPOINTS.restBase);
-                log("Master token refreshed ✓");
-            } catch (e) {
-                warn("Master token refresh failed: " + e.message);
+                masterToken = await authRest(MASTER, REST_BASE);
+                log("Master token refreshed");
+            } catch (ex) {
+                warn("Master token refresh: " + ex.message);
             }
         },
         85 * 60 * 1000,
     );
 }
 
-function shutdown(sig) {
-    log(`${sig} — shutting down`);
+process.on("SIGINT", () => {
     shouldReconnect = false;
-    stopMasterHeartbeat();
-    if (ws) ws.close(1000, "shutdown");
-    httpServer.close();
-    setTimeout(() => process.exit(0), 1000);
-}
-
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+    ws?.close();
+    server.close();
+    process.exit(0);
+});
+process.on("SIGTERM", () => {
+    shouldReconnect = false;
+    ws?.close();
+    server.close();
+    process.exit(0);
+});
 process.on("unhandledRejection", (r) => warn("Unhandled: " + r));
 process.on("uncaughtException", (e) => err("Uncaught: " + e.message));
 
-main();
+main().catch((ex) => {
+    err("Fatal: " + ex.message);
+    process.exit(1);
+});
 
 // =============================================================================
-// .env additions needed for the copier
+// .env reference
 // =============================================================================
 //
-// # ── Existing master creds (already in your .env from tradovate_bridge.js) ──
+// # ── Master ────────────────────────────────────────────────────────────────
 // TRADOVATE_NAME=your_login
 // TRADOVATE_PASSWORD=your_password
 // TRADOVATE_APP_ID=FuturesCoPilot
@@ -957,32 +956,37 @@ main();
 // TRADOVATE_DEMO=false
 // TRADOVATE_ACCOUNT_NAME=          # blank = first account
 //
-// # ── Copier-specific ─────────────────────────────────────────────────────────
+// # ── Copier ─────────────────────────────────────────────────────────────────
 // COPIER_PORT=5682
-// HEARTBEAT_SEC=15
-// COPY_FLATTENS=true
+// MAX_CONCURRENT_COPIES=5          # fan-out batch size (5 is safe for Tradovate rate limits)
 //
-// # ── Followers (JSON array) ──────────────────────────────────────────────────
-// # Each object: name, password, cid, sec, demo, accountName, scale, contractMap, enabled
-// #
-// # Example 1: Same contracts, same size, live account
-// # FOLLOWERS_JSON=[{"name":"apex_login","password":"pw","cid":999,"sec":"sec","demo":false,"accountName":"","scale":1,"contractMap":{},"enabled":true}]
-// #
-// # Example 2: Master trades ES/NQ, follower trades MES/MNQ at 1:1 $ risk
-// # FOLLOWERS_JSON=[{"name":"apex_login","password":"pw","cid":999,"sec":"sec","demo":false,"accountName":"","scale":1,"contractMap":{"ES":"MES","NQ":"MNQ","GC":"MGC"},"enabled":true}]
-// #
-// # Example 3: Two followers
-// # FOLLOWERS_JSON=[
-// #   {"name":"acct1","password":"pw1","cid":101,"sec":"s1","demo":false,"scale":1,"contractMap":{},"enabled":true},
-// #   {"name":"acct2","password":"pw2","cid":102,"sec":"s2","demo":false,"scale":0.5,"contractMap":{"ES":"MES"},"enabled":true}
-// # ]
+// # ── Redis (your existing instance) ────────────────────────────────────────
+// REDIS_HOST=localhost
+// REDIS_PORT=6380
+// REDIS_PASSWORD=your_redis_pw
 //
-// # ── TradingView webhook ──────────────────────────────────────────────────────
-// # In TradingView → Alerts → Webhook URL:
-// #   http://YOUR_SERVER_IP_OR_TAILSCALE_IP:5682/webhook
+// # Python engine writes focus like this (your scorer.py already has this info):
+// #   await redis.delete("focus:top_assets")
+// #   await redis.sadd("focus:top_assets", "NQ", "ES")
+// #   await redis.hset("focus:bias:NQ", "direction", "long")  # from daily bias analyzer
+//
+// # ── Phase 1: 5× TPT $150k ──────────────────────────────────────────────────
+// # ── Phase 2: add Apex accounts to the array below ─────────────────────────
 // #
-// # Alert message JSON (paste into TradingView alert message box):
-// # {"action":"{{strategy.order.action}}","symbol":"{{ticker}}","qty":1,"orderType":"Market"}
+// # broker options: TPT_150K | APEX_300K | APEX_150K | CUSTOM
 // #
-// # Or for manual alerts with fixed values:
-// # {"action":"buy","symbol":"ESM5","qty":1,"orderType":"Market"}
+// # TPT_150K  → same contracts as master (ES copies as ES)
+// # APEX_300K → auto-maps to micros (ES→MES, NQ→MNQ, etc)  +  $7500 trailing DD guard
+// #
+// # scale: multiplier on top of the auto-micro map.
+// #   scale:1 + APEX_300K = master trades 1 ES → follower gets 1 MES (10× less notional, correct)
+// #   scale:2 + APEX_300K = master trades 1 ES → follower gets 2 MES
+//
+// FOLLOWERS_JSON=[
+//   {"id":"tpt_1","label":"TPT 1","name":"tpt1@x.com","password":"pw","cid":101,"sec":"s","demo":false,"broker":"TPT_150K","scale":1,"enabled":true},
+//   {"id":"tpt_2","label":"TPT 2","name":"tpt2@x.com","password":"pw","cid":102,"sec":"s","demo":false,"broker":"TPT_150K","scale":1,"enabled":true},
+//   {"id":"tpt_3","label":"TPT 3","name":"tpt3@x.com","password":"pw","cid":103,"sec":"s","demo":false,"broker":"TPT_150K","scale":1,"enabled":true},
+//   {"id":"tpt_4","label":"TPT 4","name":"tpt4@x.com","password":"pw","cid":104,"sec":"s","demo":false,"broker":"TPT_150K","scale":1,"enabled":true},
+//   {"id":"tpt_5","label":"TPT 5","name":"tpt5@x.com","password":"pw","cid":105,"sec":"s","demo":false,"broker":"TPT_150K","scale":1,"enabled":true},
+//   {"id":"apex_1","label":"Apex 1","name":"apex1@x.com","password":"pw","cid":201,"sec":"s","demo":false,"broker":"APEX_300K","scale":1,"enabled":true}
+// ]

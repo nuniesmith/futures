@@ -145,7 +145,7 @@ _SETTINGS_PAGE_HTML = """\
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
-<title>Settings — Futures Co-Pilot</title>
+<title>Settings — Ruby Futures</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>"/>
 <script>(function(){var t=localStorage.getItem('theme');if(t==='light')document.documentElement.classList.remove('dark');else document.documentElement.classList.add('dark');})();</script>
 <script src="https://unpkg.com/htmx.org@2.0.4"></script>
@@ -318,11 +318,14 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
 
 <!-- Nav bar -->
 <nav class="nav">
-  <a class="nav-brand" href="/">📈 Co-Pilot</a>
+  <a class="nav-brand" href="/">💎 Ruby Futures</a>
   <a class="nav-tab" href="/">📊 Dashboard</a>
-  <a class="nav-tab" href="/orb-history">📅 ORB History</a>
-  <a class="nav-tab" href="/trainer">🧠 Trainer</a>
+  <a class="nav-tab" href="/charts">📈 Charts</a>
+  <a class="nav-tab" href="/account">💰 Account</a>
+  <a class="nav-tab" href="/orb-history">📅 RB History</a>
   <a class="nav-tab" href="/journal/page">📓 Journal</a>
+  <a class="nav-tab" href="/connections">🔌 Connections</a>
+  <a class="nav-tab" href="/trainer">🧠 Trainer</a>
   <a class="nav-tab active" href="/settings">⚙️ Settings</a>
   <div class="nav-right">
     <button class="theme-btn" onclick="toggleTheme()">☀/🌙</button>
@@ -478,7 +481,7 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
           <div class="card-title">About</div>
           <div class="status-row">
             <span class="status-key">Service</span>
-            <span class="status-val">Futures Trading Co-Pilot</span>
+            <span class="status-val">Ruby Futures</span>
           </div>
           <div class="status-row">
             <span class="status-key">Data Service</span>

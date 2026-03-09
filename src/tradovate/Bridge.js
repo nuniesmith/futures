@@ -2,9 +2,6 @@
 // tradovate_bridge.js  —  Node.js
 // =============================================================================
 //
-// Drop this file into:
-//   scripts/tradovate_bridge.js
-//
 // PURPOSE
 // -------
 // JavaScript equivalent of Bridge.cs for Tradovate accounts.
@@ -20,10 +17,11 @@
 //   3. Push position snapshots to the Python dashboard on every fill and
 //      on a 15-second heartbeat
 //   4. Parse risk-gate feedback from the dashboard response (can_trade,
-//      block_reason) and surface it in /health
-//   5. Expose a tiny HTTP /health endpoint (port 5681) for liveness probes
+//      block_reason) and propagate to Copier (/disable/all or /enable/all)
+//   5. Expose a tiny HTTP /health + /status + /metrics endpoint (port 5681)
 //   6. Auto-refresh the Tradovate access token before it expires (1h limit)
 //   7. Exponential-backoff reconnection (max 10 attempts)
+//   8. Copier integration — risk gate changes propagate to the copier farm
 //
 // QUICK START
 // -----------
@@ -42,6 +40,7 @@
 //   DASHBOARD_BASE_URL=http://localhost:8100 # matches ENGINE_PORT in your docker-compose
 //   BRIDGE_PORT=5681                        # HTTP health port
 //   HEARTBEAT_SEC=15                        # position push interval
+//   COPIER_URL=http://localhost:5682        # set empty to disable copier integration
 //
 // Run as a Docker service by adding to docker-compose.yml:
 //   tradovate_bridge:
@@ -74,7 +73,7 @@ const CFG = {
     // Tradovate credentials (all from .env)
     name: process.env.TRADOVATE_NAME || "",
     password: process.env.TRADOVATE_PASSWORD || "",
-    appId: process.env.TRADOVATE_APP_ID || "FuturesCoPilot",
+    appId: process.env.TRADOVATE_APP_ID || "RubyFutures",
     appVersion: process.env.TRADOVATE_APP_VERSION || "1.0",
     cid: parseInt(process.env.TRADOVATE_CID || "0", 10),
     sec: process.env.TRADOVATE_SEC || "",
@@ -97,7 +96,13 @@ const CFG = {
     heartbeatMs: parseInt(process.env.HEARTBEAT_SEC || "15", 10) * 1000,
 
     // Bridge version (shown in /health)
-    version: "1.0",
+    version: "1.1",
+
+    // URL of the copier process.  Set COPIER_URL= in .env to disable.
+    copierUrl: (process.env.COPIER_URL || "http://localhost:5682").replace(
+        /\/$/,
+        "",
+    ),
 };
 
 // Tradovate endpoints
@@ -413,7 +418,6 @@ function processPropUpdates(data) {
         metrics.orderEvents += orderUpdates.length;
         // Recount working orders for this account
         const workingStates = ["Working", "Accepted", "PendingNew"];
-        // We don't have full order list in prop update — approximate with increments
         const newWorking = orderUpdates.filter(
             (o) =>
                 o.accountId === accountId &&
@@ -467,6 +471,36 @@ function updatePositionFromProp(pos) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Copier integration
+// Notifies the copier farm of risk gate state changes (non-fatal if down).
+// ─────────────────────────────────────────────────────────────────────────────
+async function notifyCopier(endpoint, reason) {
+    const url = CFG.copierUrl;
+    if (!url) return; // disabled via empty COPIER_URL
+
+    try {
+        const resp = await Promise.race([
+            fetch(`${url}/${endpoint}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reason }),
+            }),
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("timeout")), 3000),
+            ),
+        ]);
+        if (resp.ok) {
+            log(`Copier notified: /${endpoint} (${reason})`);
+        } else {
+            warn(`Copier notify failed: ${resp.status}`);
+        }
+    } catch (ex) {
+        // Non-fatal — copier may not be running
+        warn(`Copier notify error (/${endpoint}): ${ex.message}`);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Position push  — same payload as Bridge.cs → /api/positions/update
 // Python engine receives this at positions.py and does not need to change
 // ─────────────────────────────────────────────────────────────────────────────
@@ -517,10 +551,11 @@ async function pushPositionUpdate() {
         }
 
         // Parse risk-gate feedback (mirrors ParseRiskFeedback in Bridge.cs)
+        // Awaited so copier propagation completes before the next push cycle
         if (resp.ok) {
             try {
                 const feedback = await resp.json();
-                parseRiskFeedback(feedback);
+                await parseRiskFeedback(feedback);
             } catch (_) {}
         }
     } catch (err) {
@@ -532,7 +567,8 @@ async function pushPositionUpdate() {
     }
 }
 
-function parseRiskFeedback(data) {
+// Async — propagates risk gate changes to the copier farm
+async function parseRiskFeedback(data) {
     let canTrade = true;
     let blockReason = "";
 
@@ -546,8 +582,17 @@ function parseRiskFeedback(data) {
     isRiskBlocked = !canTrade;
     riskBlockReason = blockReason;
 
-    if (!canTrade && !wasBlocked) warn(`Risk BLOCKED: ${blockReason}`);
-    if (canTrade && wasBlocked) log("Risk block cleared ✓");
+    if (!canTrade && !wasBlocked) {
+        warn(`Risk BLOCKED: ${blockReason}`);
+        // Propagate block to copier farm — pauses all copy slots
+        await notifyCopier("disable/all", `risk_block: ${blockReason}`);
+    }
+
+    if (canTrade && wasBlocked) {
+        log("Risk block cleared ✓");
+        // Un-pause copier farm
+        await notifyCopier("enable/all", "risk_cleared");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -640,9 +685,53 @@ async function doReconnect() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// /status builder — includes copier farm health (best-effort)
+// ─────────────────────────────────────────────────────────────────────────────
+async function buildStatusWithCopier() {
+    const totalUnrealized = Object.values(positions).reduce(
+        (s, p) => s + p.unrealizedPnl,
+        0,
+    );
+
+    const core = {
+        account: accountName || "tradovate",
+        connected: isAuthenticated && syncCompleted,
+        positions: Object.keys(positions).length,
+        pending_orders: pendingOrderCount,
+        cash_balance: Math.round(cashBalance * 100) / 100,
+        realized_pnl: Math.round(realizedPnl * 100) / 100,
+        unrealized_pnl: Math.round(totalUnrealized * 100) / 100,
+        risk_blocked: isRiskBlocked,
+        risk_block_reason: riskBlockReason,
+        demo: CFG.demo,
+        bridge_version: CFG.version,
+        timestamp: new Date().toISOString(),
+    };
+
+    // Fetch copier farm status — non-blocking, 2s timeout
+    let copierHealth = null;
+    if (CFG.copierUrl) {
+        try {
+            const r = await Promise.race([
+                fetch(`${CFG.copierUrl}/health`),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error("timeout")), 2000),
+                ),
+            ]);
+            if (r.ok) copierHealth = await r.json();
+            else copierHealth = { status: `error_${r.status}` };
+        } catch (_) {
+            copierHealth = { status: "unreachable" };
+        }
+    }
+
+    return { ...core, copier: copierHealth };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Health HTTP server  (mirrors Bridge.cs /health + /metrics endpoints)
 // ─────────────────────────────────────────────────────────────────────────────
-const healthServer = http.createServer((req, res) => {
+const healthServer = http.createServer(async (req, res) => {
     const path = req.url.split("?")[0];
     res.setHeader("Content-Type", "application/json");
 
@@ -660,33 +749,21 @@ const healthServer = http.createServer((req, res) => {
                 risk_blocked: isRiskBlocked,
                 risk_block_reason: riskBlockReason,
                 reconnect_attempts: reconnectAttempts,
+                copier_url: CFG.copierUrl || null,
             }),
         );
         return;
     }
 
     if (path === "/status") {
-        const totalUnrealized = Object.values(positions).reduce(
-            (s, p) => s + p.unrealizedPnl,
-            0,
-        );
-        res.writeHead(200);
-        res.end(
-            JSON.stringify({
-                account: accountName,
-                connected: isAuthenticated && syncCompleted,
-                positions: Object.keys(positions).length,
-                pending_orders: pendingOrderCount,
-                cash_balance: Math.round(cashBalance * 100) / 100,
-                realized_pnl: Math.round(realizedPnl * 100) / 100,
-                unrealized_pnl: Math.round(totalUnrealized * 100) / 100,
-                risk_blocked: isRiskBlocked,
-                risk_block_reason: riskBlockReason,
-                demo: CFG.demo,
-                bridge_version: CFG.version,
-                timestamp: new Date().toISOString(),
-            }),
-        );
+        try {
+            const body = await buildStatusWithCopier();
+            res.writeHead(200);
+            res.end(JSON.stringify(body));
+        } catch (err) {
+            res.writeHead(500);
+            res.end(JSON.stringify({ error: err.message }));
+        }
         return;
     }
 
@@ -732,6 +809,9 @@ const healthServer = http.createServer((req, res) => {
                 `# HELP tradovate_bridge_reconnects_total Reconnection attempts.`,
                 `# TYPE tradovate_bridge_reconnects_total counter`,
                 `tradovate_bridge_reconnects_total ${metrics.reconnects}`,
+                `# HELP tradovate_bridge_risk_blocked Risk gate blocked state.`,
+                `# TYPE tradovate_bridge_risk_blocked gauge`,
+                `tradovate_bridge_risk_blocked ${isRiskBlocked ? 1 : 0}`,
                 `# HELP tradovate_bridge_info Bridge metadata.`,
                 `# TYPE tradovate_bridge_info gauge`,
                 `tradovate_bridge_info{version="${CFG.version}",account="${accountName}",demo="${CFG.demo}"} 1`,
@@ -767,9 +847,17 @@ async function main() {
         process.exit(1);
     }
 
+    if (CFG.copierUrl) {
+        log(`Copier integration enabled: ${CFG.copierUrl}`);
+    } else {
+        log("Copier integration disabled (COPIER_URL not set)");
+    }
+
     // Start health server
     healthServer.listen(CFG.bridgePort, () => {
         log(`Health endpoint: http://localhost:${CFG.bridgePort}/health`);
+        log(`Status endpoint: http://localhost:${CFG.bridgePort}/status`);
+        log(`Metrics endpoint: http://localhost:${CFG.bridgePort}/metrics`);
     });
 
     // Initial connection
@@ -798,8 +886,8 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("unhandledRejection", (reason) =>
     warn("Unhandled rejection: " + reason),
 );
-process.on("uncaughtException", (err) =>
-    error("Uncaught exception: " + err.message),
-);
 
-main();
+main().catch((err) => {
+    error("Fatal startup error: " + err.message);
+    process.exit(1);
+});

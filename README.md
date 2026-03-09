@@ -1,4 +1,4 @@
-# Futures Trading Co-Pilot
+# Ruby Futures
 
 > Live dashboard, market stats & web UI for futures trading — real-time range breakout detection,
 > session-aware scheduling, and a full HTMX dashboard powered by FastAPI.
@@ -11,7 +11,6 @@
 - [Quick Start](#quick-start)
 - [Docker Deployment](#docker-deployment)
 - [Local Development](#local-development)
-- [NinjaTrader 8 Deploy](#ninjatrader-8-deploy)
 - [CNN Model Training](#cnn-model-training)
 - [Project Structure](#project-structure)
 - [Configuration](#configuration)
@@ -25,14 +24,12 @@
 ## Architecture
 
 Everything lives in this single repo. There is no external training repo — models are trained
-by the built-in trainer service and stored in `models/`. The NinjaTrader C# source lives in
-`src/ninja/`. A companion [ninjatrader](https://github.com/nuniesmith/ninjatrader) repo exists
-only as a convenience for Windows traders: it holds the `.ps1` / `.bat` deploy scripts that
-pull C# files and models from **this** repo and install them into NT8.
+by the built-in trainer service and stored in `models/`.
+
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                        Futures Trading Co-Pilot                         │
+│                            Ruby Futures                                 │
 │                                                                         │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐  │
 │  │   Postgres   │  │    Redis     │  │ Data Service │  │   Engine   │  │
@@ -59,12 +56,6 @@ pull C# files and models from **this** repo and install them into NT8.
 │  │  port 8200           │  │                                         │  │
 │  └──────────────────────┘  └─────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
-         │
-         ▼
-   ninjatrader repo
-   deploy_nt8.ps1 / .bat
-   pulls C# + ONNX from
-   this repo → NT8 install
 ```
 
 **Docker services:**
@@ -200,62 +191,8 @@ ruff check src/                         # linting
 ./run.sh --test                         # tests + lint together
 ```
 
----
 
-## NinjaTrader 8 Deploy
 
-The C# strategies, indicators, Bridge add-on, and OnnxRuntime DLLs all live in `src/ninja/`
-in this repo. The champion ONNX model is stored in `models/breakout_cnn_best.onnx`.
-
-### Deploy from this repo (Linux / Mac / WSL)
-
-```bash
-# Sync model files locally (pulls from this repo's models/ branch via Git LFS)
-bash scripts/sync_models.sh
-
-# The deploy scripts pull src/ninja/ CS files + models/breakout_cnn_best.onnx
-# directly from GitHub and install into NT8 — see scripts/deploy_nt8.ps1
-```
-
-### Deploy from Windows (recommended for NT8 users)
-
-The [ninjatrader](https://github.com/nuniesmith/ninjatrader) companion repo contains
-only Windows deploy scripts (`.ps1` / `.bat`) that pull everything they need from
-**this** repo at runtime. No Python or Docker required on the Windows machine.
-
-```powershell
-# Option A — double-click deploy_nt8.bat
-# Option B — PowerShell direct
-powershell -ExecutionPolicy Bypass -File deploy_nt8.ps1
-
-# Dry-run (shows what would be copied, no changes made)
-powershell -ExecutionPolicy Bypass -File deploy_nt8.ps1 -DryRun
-
-# Skip OnnxRuntime DLL copy (DLLs already installed)
-powershell -ExecutionPolicy Bypass -File deploy_nt8.ps1 -NoDlls
-
-# Deploy from a local clone of this repo (offline / no internet)
-powershell -ExecutionPolicy Bypass -File deploy_nt8.ps1 -LocalRepo C:\code\futures
-
-# Deploy + launch NinjaTrader immediately after
-powershell -ExecutionPolicy Bypass -File deploy_nt8.ps1 -Launch
-```
-
-The scripts install:
-
-| Source (this repo) | NT8 destination |
-|---|---|
-| `src/ninja/BreakoutStrategy.cs` | `Documents\NinjaTrader 8\bin\Custom\Strategies\` |
-| `src/ninja/RubyIndicator.cs` | `Documents\NinjaTrader 8\bin\Custom\Indicators\` |
-| `src/ninja/addons/Bridge.cs` | `Documents\NinjaTrader 8\bin\Custom\AddOns\` |
-| `src/ninja/addons/DataPreloader.cs` | `Documents\NinjaTrader 8\bin\Custom\AddOns\` |
-| `src/ninja/dll/*.dll` | `Documents\NinjaTrader 8\bin\Custom\` |
-| `models/breakout_cnn_best.onnx` | `Documents\NinjaTrader 8\bin\Custom\Models\` |
-
-> **Note:** Close NinjaTrader 8 before running the deploy script.
-> NT8 locks compiled DLLs while it is open.
-
----
 
 ## CNN Model Training
 
@@ -282,7 +219,6 @@ docker compose --profile training run --rm trainer \
 | File | Description |
 |---|---|
 | `models/breakout_cnn_best.pt` | PyTorch checkpoint — used by the Python engine for live inference |
-| `models/breakout_cnn_best.onnx` | ONNX export — used by NinjaTrader 8 (`OnnxRuntime`) |
 | `models/breakout_cnn_best_meta.json` | Metadata: accuracy, precision, recall, training date |
 | `models/feature_contract.json` | Feature names + normalization constants for inference |
 
@@ -306,7 +242,7 @@ futures/
 ├── src/
 │   ├── lib/
 │   │   ├── analysis/                   # Market analysis modules
-│   │   │   ├── breakout_cnn.py         #   CNN inference (ONNX + PyTorch)
+│   │   │   ├── breakout_cnn.py         #   CNN inference (PyTorch)
 │   │   │   ├── confluence.py           #   Multi-timeframe confluence filter
 │   │   │   ├── cvd.py                  #   Cumulative Volume Delta + divergences
 │   │   │   ├── ict.py                  #   ICT/SMC: FVGs, order blocks, sweeps
@@ -346,33 +282,19 @@ futures/
 │   │       │       ├── dashboard.py    #     Main HTMX dashboard page
 │   │       │       ├── trainer.py      #     🧠 Trainer page + proxy to trainer:8200
 │   │       │       ├── settings.py     #     ⚙️ Settings page
-│   │       │       ├── actions.py      #     Engine mutation endpoints
-│   │       │       ├── analysis.py     #     Analysis + status endpoints
-│   │       │       ├── positions.py    #     NT8 Bridge position sync
-│   │       │       ├── risk.py         #     Risk engine API
-│   │       │       ├── journal.py      #     Trade journal CRUD + HTMX
+
 │   │       │       ├── sse.py          #     Server-sent events stream
 │   │       │       └── ...
 │   │       ├── engine/                 #   Background engine service
 │   │       └── web/                    #   HTMX dashboard frontend (reverse proxy)
 │   │
-│   ├── ninja/                          # NinjaTrader 8 C# source
-│   │   ├── BreakoutStrategy.cs         #   ORB breakout execution strategy
-│   │   ├── RubyIndicator.cs            #   Ruby signal indicator
-│   │   ├── addons/
-│   │   │   ├── Bridge.cs               #   NT8 ↔ Co-Pilot Bridge (positions, signals)
-│   │   │   └── DataPreloader.cs        #   Historical bar pre-loader add-on
-│   │   └── dll/                        #   OnnxRuntime DLLs for NT8
-│   │       ├── Microsoft.ML.OnnxRuntime.dll
-│   │       ├── onnxruntime.dll
-│   │       └── ...
+│   ├── tradovate/                      # Tradovate broker bridge (JS)
+│   │   ├── Bridge.js                   #   Broker bridge connector
+│   │   └── Copier.js                   #   Trade copier
 │   │
 │   └── tests/                          # Pytest test suite
 │
 ├── scripts/
-│   ├── sync_models.sh                  # Pull/check model files from this repo
-│   ├── deploy_nt8.ps1                  # Windows: deploy C# + ONNX → NT8
-│   ├── deploy_nt8.bat                  # Windows: launcher wrapper for deploy_nt8.ps1
 │   ├── daily_report.py                 # End-of-day breakout session summary
 │   ├── monitor_signals.py              # Live breakout signal terminal monitor
 │   ├── session_signal_audit.py         # Per-session signal quality audit
@@ -383,7 +305,6 @@ futures/
 │
 ├── models/                             # CNN model files (git-tracked via LFS)
 │   ├── breakout_cnn_best.pt            #   Champion PyTorch checkpoint
-│   ├── breakout_cnn_best.onnx          #   Champion ONNX export (NT8 inference)
 │   ├── breakout_cnn_best_meta.json     #   Champion metadata (acc, prec, recall, date)
 │   └── feature_contract.json           #   Feature names + normalization constants
 │
@@ -527,9 +448,7 @@ PYTHONPATH=src python scripts/session_signal_audit.py --days 14            # las
 PYTHONPATH=src python scripts/session_signal_audit.py --export-json out.json
 ```
 
-### NT8 Source Patching
 
-```bash
 # Patch BreakoutStrategy.cs with latest model params from feature_contract.json
 PYTHONPATH=src python scripts/patch_breakout_strategy.py
 
@@ -541,10 +460,7 @@ PYTHONPATH=src python scripts/patch_datapreloader.py
 
 ## Related Repos
 
-- **[ninjatrader](https://github.com/nuniesmith/ninjatrader)** — Windows-only deploy scripts
-  (`deploy_nt8.ps1` / `deploy_nt8.bat`). They pull C# source from `src/ninja/` and the champion
-  ONNX model from `models/` in **this** repo, then install everything into the local NT8
-  installation. No Python, no Docker — just PowerShell and an internet connection.
+
 
 ---
 

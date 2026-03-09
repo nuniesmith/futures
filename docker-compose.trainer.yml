@@ -1,5 +1,5 @@
 # =============================================================================
-# Futures Trading Co-Pilot — Trainer-Only Docker Compose
+# Ruby Futures — Trainer-Only Docker Compose
 # =============================================================================
 #
 # Standalone compose file for the GPU training rig (home laptop).
