@@ -180,7 +180,7 @@ class _AlertStore:
                                 "datetime": datetime.fromtimestamp(ts_val, tz=_EST).strftime("%H:%M:%S"),
                             }
                         )
-                return sorted(alerts, key=lambda x: cast(float, x["timestamp"]), reverse=True)[:limit]
+                return sorted(alerts, key=lambda x: cast("float", x["timestamp"]), reverse=True)[:limit]
             except Exception:
                 pass
 
@@ -193,7 +193,7 @@ class _AlertStore:
             }
             for k, v in self._memory_store.items()
         ]
-        return sorted(alerts, key=lambda x: cast(float, x["timestamp"]), reverse=True)[:limit]
+        return sorted(alerts, key=lambda x: cast("float", x["timestamp"]), reverse=True)[:limit]
 
     def clear(self) -> None:
         """Clear all stored alert timestamps."""

@@ -49,9 +49,10 @@ import io
 import json
 import logging
 import os
+from collections.abc import Callable
 from datetime import datetime
 from datetime import time as dt_time
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
