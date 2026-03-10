@@ -70,19 +70,17 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
 # ---------------------------------------------------------------------------
 # Redis — imported at module level so tests can patch these names directly.
 # ---------------------------------------------------------------------------
 REDIS_AVAILABLE: bool = False
 _r: Any = None
-try:
+with contextlib.suppress(Exception):
     from lib.core.cache import REDIS_AVAILABLE, _r  # type: ignore[assignment]
-except Exception:  # pragma: no cover
-    pass
-
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 
 logger = logging.getLogger("api.copy_trade")
 
