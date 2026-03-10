@@ -22,12 +22,13 @@ All results are stored in the Redis/memory cache layer so the dashboard
 simply reads from cache without blocking on heavy computation.
 """
 
+import asyncio
 import contextlib
 import json
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -1063,6 +1064,11 @@ class DashboardEngine:
         last_bt = 0.0
         last_confluence = 0.0
 
+        # EOD action tracking — store the calendar date on which each action
+        # last fired so we fire at most once per trading day.
+        _eod_warning_fired_date: date | None = None
+        _eod_close_fired_date: date | None = None
+
         # Initial data load immediately
         self._refresh_data()
 
@@ -1086,11 +1092,132 @@ class DashboardEngine:
                 self._check_confluence_alerts()
                 last_confluence = now
 
+            # ------------------------------------------------------------------
+            # EOD safety actions — time-of-day checks in ET (DST-aware)
+            # ------------------------------------------------------------------
+            _now_et = datetime.now(tz=_EST)
+            _today = _now_et.date()
+            _hm = (_now_et.hour, _now_et.minute)
+
+            # 15:45 ET — position-close warning (fires once per calendar day,
+            # in the window 15:45–15:59 so a restart at 15:50 still fires).
+            if _hm >= (15, 45) and _hm < (16, 0) and _eod_warning_fired_date != _today:
+                _eod_warning_fired_date = _today
+                try:
+                    self._eod_warning()
+                except Exception as _exc:
+                    logger.error("EOD warning raised: %s", _exc)
+
+            # 16:00 ET — hard cancel + flatten (fires once per calendar day,
+            # catch-up window extends to 16:14 so a restart shortly after
+            # 16:00 still triggers the close).
+            if _hm >= (16, 0) and _hm < (16, 15) and _eod_close_fired_date != _today:
+                _eod_close_fired_date = _today
+                try:
+                    self._eod_close_positions()
+                except Exception as _exc:
+                    logger.error("EOD close raised: %s", _exc)
+
             # Sleep in short increments so stop() is responsive
             for _ in range(10):
                 if not self._running:
                     break
                 time.sleep(1)
+
+    # -- EOD safety actions --------------------------------------------------
+
+    def _eod_warning(self) -> None:
+        """Fire the 15:45 ET position-close warning alert.
+
+        Dispatched once per calendar day via the alert channels (Slack /
+        Discord / Telegram) and logged at WARNING level so it surfaces in
+        any log aggregator.  Does NOT touch orders or positions.
+        """
+        try:
+            dispatcher = get_dispatcher()
+            msg = (
+                "⚠️  *15-minute warning*: all open positions should be manually "
+                "flattened before 16:00 ET.  The automated EOD close will fire at "
+                "16:00 and will market-flatten any remaining positions across all "
+                "connected Rithmic accounts."
+            )
+            logger.warning("EOD WARNING (15:45 ET): automated close fires in 15 minutes")
+            if dispatcher.has_channels:
+                dispatcher.send_risk_alert(
+                    title="EOD Position Close — 15-min Warning",
+                    message=msg,
+                    extra_fields={"Scheduled hard-close": "16:00 ET"},
+                )
+        except Exception as exc:
+            logger.debug("EOD warning dispatch failed: %s", exc)
+
+    def _eod_close_positions(self) -> None:
+        """Cancel all working orders then flatten all positions at market (16:00 ET).
+
+        Runs the async ``RithmicAccountManager.eod_close_all_positions()`` from
+        inside the synchronous engine thread by spinning up a fresh event loop.
+        If ``async-rithmic`` is not installed, or no accounts are configured,
+        the method is a safe no-op.
+
+        A risk alert is dispatched afterwards summarising which accounts were
+        closed and whether any errors occurred.
+        """
+        logger.warning("EOD HARD CLOSE (16:00 ET): cancelling all orders and flattening all positions")
+
+        results: list[dict[str, Any]] = []
+        try:
+            from lib.integrations.rithmic_client import get_manager as _get_rithmic_manager
+
+            mgr = _get_rithmic_manager()
+            # Run the async coroutine in a fresh event loop on this engine thread.
+            loop = asyncio.new_event_loop()
+            try:
+                results = loop.run_until_complete(mgr.eod_close_all_positions(dry_run=False))
+            finally:
+                loop.close()
+        except ImportError:
+            logger.debug("EOD close skipped — rithmic_client not importable")
+            return
+        except Exception as exc:
+            logger.error("EOD close encountered an unexpected error: %s", exc)
+
+        # Build a summary for the alert channels
+        ok_accounts = [r for r in results if not r.get("error") and not r.get("skipped")]
+        err_accounts = [r for r in results if r.get("error")]
+        skipped = [r for r in results if r.get("skipped")]
+
+        summary_lines = []
+        for r in ok_accounts:
+            label = r.get("label", r.get("key", "?"))
+            summary_lines.append(f"✅ {label}: cancelled={r.get('cancelled')} flattened={r.get('flattened')}")
+        for r in err_accounts:
+            label = r.get("label", r.get("key", "?"))
+            summary_lines.append(f"❌ {label}: {r.get('error')}")
+        for r in skipped:
+            label = r.get("label", r.get("key", "?"))
+            summary_lines.append(f"⏭  {label}: {r.get('skipped')}")
+
+        summary = "\n".join(summary_lines) if summary_lines else "No Rithmic accounts configured."
+        any_error = bool(err_accounts)
+
+        title = "EOD Position Close — " + ("ERRORS DETECTED ⚠️" if any_error else "Complete ✅")
+        try:
+            dispatcher = get_dispatcher()
+            if dispatcher.has_channels:
+                dispatcher.send_risk_alert(
+                    title=title,
+                    message=summary,
+                    extra_fields={"Time": datetime.now(tz=_EST).strftime("%H:%M:%S ET")},
+                )
+        except Exception as exc:
+            logger.debug("EOD close alert dispatch failed: %s", exc)
+
+        logger.info(
+            "EOD close complete: %d ok  %d errors  %d skipped",
+            len(ok_accounts),
+            len(err_accounts),
+            len(skipped),
+        )
 
     # -- data refresh --------------------------------------------------------
 

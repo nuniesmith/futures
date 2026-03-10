@@ -322,7 +322,7 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
   <a class="nav-tab" href="/">📊 Dashboard</a>
   <a class="nav-tab" href="/charts">📈 Charts</a>
   <a class="nav-tab" href="/account">💰 Account</a>
-  <a class="nav-tab" href="/orb-history">📅 RB History</a>
+  <a class="nav-tab" href="/rb-history">📅 RB History</a>
   <a class="nav-tab" href="/journal/page">📓 Journal</a>
   <a class="nav-tab" href="/connections">🔌 Connections</a>
   <a class="nav-tab" href="/trainer">🧠 Trainer</a>
@@ -337,7 +337,7 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
     <div>
       <div style="font-size:1.2rem;font-weight:700">⚙️ Settings</div>
-      <div style="font-size:0.72rem;color:var(--muted);margin-top:2px">Engine · services · features · risk · API keys</div>
+      <div style="font-size:0.72rem;color:var(--muted);margin-top:2px">Engine · services · features · risk · prop accounts · API keys</div>
     </div>
     <div id="engine-badge" class="badge b-gray">checking…</div>
   </div>
@@ -348,6 +348,7 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
     <button class="section-tab" onclick="showSection('services')">🌐 Services</button>
     <button class="section-tab" onclick="showSection('features')">🎛️ Features</button>
     <button class="section-tab" onclick="showSection('risk')">🛡️ Risk &amp; Trading</button>
+    <button class="section-tab" onclick="showSection('propaccounts')">🏦 Prop Accounts</button>
     <button class="section-tab" onclick="showSection('keys')">🔑 API Keys</button>
   </div>
 
@@ -912,6 +913,94 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- PROP ACCOUNTS SECTION — Rithmic read-only account monitor -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <div id="section-propaccounts" class="section-content">
+    <div class="grid-2">
+      <div>
+        <div class="card">
+          <div class="card-title">
+            <span>🏦 Rithmic Prop Accounts</span>
+            <button class="btn btn-neutral btn-sm"
+                    onclick="loadRithmicPanel()"
+                    style="font-size:0.68rem;padding:2px 8px">↺ Refresh</button>
+          </div>
+          <!-- Panel is loaded/reloaded via HTMX when the tab is shown -->
+          <div id="rithmic-settings-panel">
+            <div style="color:var(--faint);font-size:0.8rem;text-align:center;padding:20px 0">
+              Loading account config…
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <div class="card-title">ℹ️ How Rithmic Monitoring Works</div>
+          <div style="font-size:0.72rem;color:var(--muted);line-height:1.7">
+            <div style="margin-bottom:6px">
+              Uses <code style="background:var(--bg-input);padding:1px 5px;border-radius:3px">async-rithmic</code>
+              to open a short-lived, read-only session to each prop firm account.
+              No orders are placed — only balances, positions, and P&amp;L are read.
+            </div>
+            <div style="margin-bottom:6px">
+              Your Rithmic credentials are <strong>AES-256 encrypted</strong>
+              before storage and are never returned to the browser.
+              The UI only shows whether credentials are configured.
+            </div>
+            <div style="margin-bottom:6px">
+              <strong>Supported firms:</strong><br/>
+              Take Profit Trader (TPT) · Apex Trader Funding ·
+              TopStep · TradeDay · My Funded Futures · Custom
+            </div>
+            <div style="margin-bottom:6px">
+              <strong>One-time setup per account:</strong><br/>
+              Accept market data agreements at
+              <a href="https://rtraderpro.rithmic.com" target="_blank"
+                 style="color:#818cf8">rtraderpro.rithmic.com</a>
+              before the first Python connection.
+            </div>
+            <div>
+              <strong>Multiple accounts:</strong> Add up to 5 accounts.
+              Each account gets its own connection slot. Copy-trade
+              support (Account 1 → Account 2) will be added in a
+              future release once 2 funded accounts are active.
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">📦 Dependency Check</div>
+          <div id="rithmic-dep-check">
+            <div style="color:var(--faint);font-size:0.8rem;text-align:center;padding:8px 0">
+              Checking…
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-neutral btn-sm"
+                    onclick="checkRithmicDeps()">↺ Check</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">🔌 Live Account Status</div>
+          <div id="rithmic-live-status">
+            <div style="color:var(--faint);font-size:0.8rem;text-align:center;padding:8px 0">
+              Click "Refresh All" on the left to poll accounts.
+            </div>
+          </div>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn btn-neutral btn-sm"
+                    onclick="refreshAllRithmicSettings()">🔄 Refresh All Accounts</button>
+          </div>
+          <div id="rithmic-refresh-msg"
+               style="font-size:0.72rem;color:var(--muted);margin-top:6px;min-height:14px"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
   <!-- API KEYS SECTION                                          -->
   <!-- ═══════════════════════════════════════════════════════════ -->
   <div id="section-keys" class="section-content">
@@ -996,6 +1085,7 @@ function showSection(name) {
         (name === 'services' && el.textContent.includes('Services')) ||
         (name === 'features' && el.textContent.includes('Features')) ||
         (name === 'risk' && el.textContent.includes('Risk')) ||
+        (name === 'propaccounts' && el.textContent.includes('Prop')) ||
         (name === 'keys' && el.textContent.includes('Keys')))
       el.classList.add('active');
   });
@@ -1005,6 +1095,7 @@ function showSection(name) {
   if (name === 'features') loadFeatures();
   if (name === 'risk') loadRiskSettings();
   if (name === 'keys') loadApiKeyStatus();
+  if (name === 'propaccounts') { loadRithmicPanel(); checkRithmicDeps(); loadRithmicLiveStatus(); }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1560,7 +1651,88 @@ document.addEventListener('DOMContentLoaded', () => {
   // Restore last active tab
   const savedTab = localStorage.getItem('settingsTab');
   if (savedTab && savedTab !== 'engine') showSection(savedTab);
+
+  // If URL hash points to rithmic section, open it
+  if (window.location.hash === '#rithmic') showSection('propaccounts');
 });
+
+// ═══════════════════════════════════════════════════════
+// Prop Accounts (Rithmic)
+// ═══════════════════════════════════════════════════════
+
+function loadRithmicPanel() {
+  const panel = document.getElementById('rithmic-settings-panel');
+  if (!panel) return;
+  panel.innerHTML = '<div style="color:var(--faint);font-size:0.8rem;text-align:center;padding:16px 0">Loading…</div>';
+  fetch('/settings/rithmic/panel')
+    .then(r => r.text())
+    .then(html => { panel.innerHTML = html; })
+    .catch(() => { panel.innerHTML = '<div style="color:#f87171;font-size:0.8rem;text-align:center;padding:8px">Failed to load account config.</div>'; });
+}
+
+function checkRithmicDeps() {
+  const el = document.getElementById('rithmic-dep-check');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--faint);font-size:0.8rem;text-align:center;padding:4px 0">Checking…</div>';
+  fetch('/api/rithmic/deps')
+    .then(r => r.json())
+    .then(d => {
+      const rows = Object.entries(d.packages || {}).map(([pkg, info]) => {
+        const ok = info.installed;
+        const dot = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${ok ? '#22c55e' : '#ef4444'};margin-right:5px"></span>`;
+        return `<div class="status-row">${dot}<span class="status-key">${pkg}</span><span class="status-val" style="font-size:0.68rem">${ok ? (info.version || 'installed') : 'not installed'}</span></div>`;
+      }).join('');
+      el.innerHTML = rows || '<div style="color:var(--faint);font-size:0.8rem">No package info.</div>';
+    })
+    .catch(() => { el.innerHTML = '<div style="color:#f87171;font-size:0.8rem">Dep check failed.</div>'; });
+}
+
+function loadRithmicLiveStatus() {
+  const el = document.getElementById('rithmic-live-status');
+  if (!el) return;
+  fetch('/api/rithmic/status')
+    .then(r => r.json())
+    .then(d => {
+      const entries = Object.entries(d.status || {});
+      if (!entries.length) {
+        el.innerHTML = '<div style="color:var(--faint);font-size:0.8rem;text-align:center;padding:8px">No status data yet.</div>';
+        return;
+      }
+      const rows = entries.map(([key, st]) => {
+        const ok = st.connected;
+        const dot = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${ok ? '#22c55e' : '#ef4444'};margin-right:5px;flex-shrink:0"></span>`;
+        const pnl = st.pnl || {};
+        const unreal = pnl.unrealized != null ? `$${(+pnl.unrealized).toFixed(2)}` : 'n/a';
+        const posCount = (st.positions || []).length;
+        return `<div style="display:flex;align-items:center;gap:4px;padding:4px 0;border-bottom:1px solid var(--border-s)">
+          ${dot}
+          <div style="flex:1;min-width:0">
+            <span style="font-size:0.78rem;font-weight:600">${st.label || key}</span>
+            <span style="font-size:0.68rem;color:var(--muted);margin-left:6px">${st.prop_firm_label || ''}</span>
+            ${ok ? `<div style="font-size:0.68rem;color:var(--muted)">Unreal: ${unreal} · ${posCount} pos</div>` : `<div style="font-size:0.68rem;color:#f87171">${st.error || 'disconnected'}</div>`}
+          </div>
+        </div>`;
+      }).join('');
+      el.innerHTML = rows;
+    })
+    .catch(() => { el.innerHTML = '<div style="color:#f87171;font-size:0.8rem">Status fetch failed.</div>'; });
+}
+
+function refreshAllRithmicSettings() {
+  const msgEl = document.getElementById('rithmic-refresh-msg');
+  if (msgEl) msgEl.textContent = '🔄 Refreshing all accounts…';
+  fetch('/api/rithmic/refresh-all', {method: 'POST'})
+    .then(r => r.json())
+    .then(() => {
+      // Give the async refresh ~3s to complete, then reload status
+      setTimeout(() => {
+        loadRithmicLiveStatus();
+        if (msgEl) msgEl.textContent = '✅ Done';
+        setTimeout(() => { if (msgEl) msgEl.textContent = ''; }, 3000);
+      }, 3000);
+    })
+    .catch(() => { if (msgEl) msgEl.textContent = '❌ Refresh failed'; });
+}
 </script>
 </body>
 </html>

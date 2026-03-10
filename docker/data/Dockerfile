@@ -38,6 +38,9 @@ COPY --from=deps /usr/local/bin /usr/local/bin
 # Copy the full src/ tree (services + shared modules)
 COPY src/ ./src/
 
+# Copy static assets (trading dashboard HTML, etc.)
+COPY static/ ./static/
+
 # Copy the entrypoint shell script
 COPY docker/data/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

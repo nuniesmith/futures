@@ -14,7 +14,7 @@
 #   docker compose -f docker-compose.trainer.yml down
 #
 # Required .env variables:
-#   ENGINE_DATA_URL  — Engine HTTP API base URL (e.g. http://100.122.184.58:8100)
+#   ENGINE_DATA_URL  — Engine HTTP API base URL (e.g. http://100.122.184.58:8050)
 #
 # Optional .env variables:
 #   API_KEY          — Shared secret for inter-service authentication
@@ -75,7 +75,7 @@ services:
             # the engine's HTTP API. The engine handles Redis → Postgres →
             # Massive/Kraken resolution internally.
             # ----------------------------------------------------------------
-            - ENGINE_DATA_URL=${ENGINE_DATA_URL:-http://100.122.184.58:8100}
+            - ENGINE_DATA_URL=${ENGINE_DATA_URL:-http://100.122.184.58:8050}
 
             # ----------------------------------------------------------------
             # Validation gate thresholds (pipeline defaults — can be

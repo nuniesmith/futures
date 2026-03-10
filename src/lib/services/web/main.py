@@ -643,6 +643,12 @@ async def proxy_orb_history(request: Request):
     return await _proxy_request(request, "/orb-history")
 
 
+@app.get("/rb-history", response_class=HTMLResponse)
+async def proxy_rb_history(request: Request):
+    """Canonical RB History path — proxies to /orb-history on the data service."""
+    return await _proxy_request(request, "/orb-history")
+
+
 @app.get("/journal/page", response_class=HTMLResponse)
 async def proxy_journal_page(request: Request):
     """Proxy the standalone Journal full-page view from the data service."""
@@ -805,6 +811,85 @@ async def settings_keys_status(request: Request):
     return await _proxy_request(request, "/settings/keys/status")
 
 
+@app.get("/settings/rithmic/panel", response_class=HTMLResponse)
+async def settings_rithmic_panel(request: Request):
+    """Proxy the Rithmic account settings panel fragment."""
+    return await _proxy_request(request, "/settings/rithmic/panel")
+
+
+# ---------------------------------------------------------------------------
+# Rithmic proxy routes — read-only prop account monitoring
+#
+# Route map (web → data service):
+#   GET  /api/rithmic/accounts              → list configured accounts (no creds)
+#   GET  /api/rithmic/status                → live status JSON for all accounts
+#   GET  /api/rithmic/status/html           → HTMX fragment for Connections page
+#   GET  /api/rithmic/account/{key}         → single account detail JSON
+#   POST /api/rithmic/account/{key}/refresh → force-refresh a single account
+#   POST /api/rithmic/account/{key}/save    → save account config from UI
+#   POST /api/rithmic/account/{key}/config  → save account config (API)
+#   DELETE /api/rithmic/account/{key}/remove → remove account
+#   POST /api/rithmic/refresh-all           → refresh all enabled accounts
+#   POST /api/rithmic/config/new-key        → create blank account placeholder
+#   GET  /api/rithmic/deps                  → dependency check (async-rithmic etc.)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/rithmic/accounts")
+async def proxy_rithmic_accounts(request: Request):
+    return await _proxy_request(request, "/api/rithmic/accounts")
+
+
+@app.get("/api/rithmic/status")
+async def proxy_rithmic_status(request: Request):
+    return await _proxy_request(request, "/api/rithmic/status")
+
+
+@app.get("/api/rithmic/status/html", response_class=HTMLResponse)
+async def proxy_rithmic_status_html(request: Request):
+    return await _proxy_request(request, "/api/rithmic/status/html")
+
+
+@app.get("/api/rithmic/account/{key}")
+async def proxy_rithmic_account(request: Request, key: str):
+    return await _proxy_request(request, f"/api/rithmic/account/{key}")
+
+
+@app.post("/api/rithmic/account/{key}/refresh")
+async def proxy_rithmic_refresh(request: Request, key: str):
+    return await _proxy_request(request, f"/api/rithmic/account/{key}/refresh")
+
+
+@app.post("/api/rithmic/account/{key}/save")
+async def proxy_rithmic_save(request: Request, key: str):
+    return await _proxy_request(request, f"/api/rithmic/account/{key}/save")
+
+
+@app.post("/api/rithmic/account/{key}/config")
+async def proxy_rithmic_config(request: Request, key: str):
+    return await _proxy_request(request, f"/api/rithmic/account/{key}/config")
+
+
+@app.delete("/api/rithmic/account/{key}/remove")
+async def proxy_rithmic_remove(request: Request, key: str):
+    return await _proxy_request(request, f"/api/rithmic/account/{key}/remove")
+
+
+@app.post("/api/rithmic/refresh-all")
+async def proxy_rithmic_refresh_all(request: Request):
+    return await _proxy_request(request, "/api/rithmic/refresh-all")
+
+
+@app.post("/api/rithmic/config/new-key")
+async def proxy_rithmic_new_key(request: Request):
+    return await _proxy_request(request, "/api/rithmic/config/new-key")
+
+
+@app.get("/api/rithmic/deps")
+async def proxy_rithmic_deps(request: Request):
+    return await _proxy_request(request, "/api/rithmic/deps")
+
+
 # ---------------------------------------------------------------------------
 # Live Risk proxy routes
 # Phase 5B/5E: Real-time risk budget + persistent risk dashboard strip
@@ -835,6 +920,152 @@ async def proxy_live_risk_refresh(request: Request):
 @app.get("/api/live-risk/position/{asset_name}/html")
 async def proxy_live_risk_position_html(request: Request, asset_name: str):
     return await _proxy_request(request, f"/api/live-risk/position/{asset_name}/html")
+
+
+# ---------------------------------------------------------------------------
+# SSE proxy helper (for long-lived streaming endpoints)
+# ---------------------------------------------------------------------------
+
+
+async def _proxy_sse_request(request: Request, path: str) -> StreamingResponse:
+    """Forward an SSE request to the data service and stream the response.
+
+    Uses the dedicated SSE client with longer timeouts for long-lived
+    streaming connections (pipeline run, live price stream, etc.).
+    """
+    client = _get_sse_client()
+
+    url = path
+    if request.query_params:
+        url = f"{path}?{request.query_params}"
+
+    async def _stream():
+        try:
+            async with client.stream(
+                "GET",
+                url,
+                headers=_proxy_headers(request),
+                timeout=httpx.Timeout(
+                    connect=PROXY_CONNECT_TIMEOUT,
+                    read=SSE_READ_TIMEOUT,
+                    write=30.0,
+                    pool=30.0,
+                ),
+            ) as resp:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+        except httpx.ConnectError:
+            yield b'data: {"type":"error","message":"Data service unavailable"}\n\n'
+        except httpx.TimeoutException:
+            yield b'data: {"type":"error","message":"Data service timeout"}\n\n'
+        except Exception as exc:
+            logger.error("SSE proxy error for %s: %s", path, exc)
+            err_msg = str(exc).replace('"', '\\"')
+            yield f'data: {{"type":"error","message":"{err_msg}"}}\n\n'.encode()
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline / Trading Workflow proxy routes
+# Morning pipeline, plan management, live trading, journal, trading settings
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/pipeline/run")
+async def proxy_pipeline_run(request: Request):
+    """SSE proxy for the morning analysis pipeline."""
+    return await _proxy_sse_request(request, "/api/pipeline/run")
+
+
+@app.get("/api/pipeline/status")
+async def proxy_pipeline_status(request: Request):
+    return await _proxy_request(request, "/api/pipeline/status")
+
+
+@app.post("/api/pipeline/reset")
+async def proxy_pipeline_reset(request: Request):
+    return await _proxy_request(request, "/api/pipeline/reset")
+
+
+@app.get("/api/plan")
+async def proxy_plan(request: Request):
+    return await _proxy_request(request, "/api/plan")
+
+
+@app.post("/api/plan/confirm")
+async def proxy_plan_confirm(request: Request):
+    return await _proxy_request(request, "/api/plan/confirm")
+
+
+@app.post("/api/plan/unlock")
+async def proxy_plan_unlock(request: Request):
+    return await _proxy_request(request, "/api/plan/unlock")
+
+
+@app.get("/api/live/stream")
+async def proxy_live_stream(request: Request):
+    """SSE proxy for live price/signal stream."""
+    return await _proxy_sse_request(request, "/api/live/stream")
+
+
+@app.get("/api/market/candles")
+async def proxy_market_candles(request: Request):
+    return await _proxy_request(request, "/api/market/candles")
+
+
+@app.get("/api/market/cvd")
+async def proxy_market_cvd(request: Request):
+    return await _proxy_request(request, "/api/market/cvd")
+
+
+@app.get("/api/journal/trades")
+async def proxy_journal_trades(request: Request):
+    return await _proxy_request(request, "/api/journal/trades")
+
+
+@app.post("/api/journal/trades/{trade_id}/grade")
+async def proxy_journal_trade_grade(request: Request, trade_id: int):
+    return await _proxy_request(request, f"/api/journal/trades/{trade_id}/grade")
+
+
+@app.get("/api/trading/settings")
+async def proxy_trading_settings_get(request: Request):
+    return await _proxy_request(request, "/api/trading/settings")
+
+
+@app.post("/api/trading/settings")
+async def proxy_trading_settings_save(request: Request):
+    return await _proxy_request(request, "/api/trading/settings")
+
+
+@app.post("/api/trading/test-rithmic")
+async def proxy_trading_test_rithmic(request: Request):
+    return await _proxy_request(request, "/api/trading/test-rithmic")
+
+
+@app.post("/api/trading/test-massive")
+async def proxy_trading_test_massive(request: Request):
+    return await _proxy_request(request, "/api/trading/test-massive")
+
+
+@app.post("/api/trading/test-kraken")
+async def proxy_trading_test_kraken(request: Request):
+    return await _proxy_request(request, "/api/trading/test-kraken")
+
+
+@app.get("/trading", response_class=HTMLResponse)
+async def proxy_trading_page(request: Request):
+    """Proxy the full trading workflow dashboard page."""
+    return await _proxy_request(request, "/trading")
 
 
 # ---------------------------------------------------------------------------

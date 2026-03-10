@@ -1,10 +1,9 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © nuniesmith
-//
-// Ruby Futures — merged with FKS Top G Channel, S/R levels, entry zones, and volume bar coloring
 
+// Ruby Futures — Top G Channel, S/R levels, entry zones, and volume bar coloring
 //@version=6
-indicator("Ruby Futures", shorttitle="Ruby F", overlay=true,
+indicator("Ruby Futures", shorttitle="Ruby Futures", overlay=true,
      max_boxes_count=100, max_lines_count=500, max_labels_count=500)
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -37,10 +36,10 @@ dashPosition  = input.string("Top Right", "Dashboard Position",
      options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group="3. Plots")
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 4. TOP G CHANNEL  (from FKS)
+// 4. TOP G CHANNEL
 // ══════════════════════════════════════════════════════════════════════════════
 showTopG          = input.bool(true,  "Show Top G Channel",      group="4. Top G Channel")
-topGLength        = input.int(150,    "Channel Range Length",     minval=20,               group="4. Top G Channel")
+topGLength        = input.int(150,    "Channel Range Length",     minval=20, group="4. Top G Channel")
 showTopGMid       = input.bool(true,  "Show Mid Line",            group="4. Top G Channel")
 showTopGSignals   = input.bool(true,  "Show Strong Channel Signals", group="4. Top G Channel")
 showSimpleSigs    = input.bool(false, "Show Simple Signals (noisy)", group="4. Top G Channel")
@@ -50,34 +49,33 @@ signalSensitivity = input.float(0.5,  "Signal Sensitivity",
      minval=0.1, maxval=2.0, step=0.1,                           group="4. Top G Channel")
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 5. S/R LEVELS  (from FKS)
+// 5. S/R LEVELS
 // ══════════════════════════════════════════════════════════════════════════════
 showSR      = input.bool(true,  "Show HTF S/R Levels",    group="5. S/R Levels")
 show1mSR    = input.bool(false, "Show 1m S/R (fine)",     group="5. S/R Levels")
-srLookback  = input.int(20,     "S/R Lookback Periods",   minval=5,               group="5. S/R Levels")
-srThreshold = input.float(0.3,  "S/R Sensitivity",        minval=0.1, maxval=1.0,
-     step=0.1,                                                         group="5. S/R Levels")
+srLookback  = input.int(20,     "S/R Lookback Periods",   minval=5, group="5. S/R Levels")
+srThreshold = input.float(0.3,  "S/R Sensitivity",        minval=0.1, maxval=1.0, step=0.1, group="5. S/R Levels")
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 6. BAR COLORING  (from FKS — heatmap + new volume mode)
+// 6. BAR COLORING
 // ══════════════════════════════════════════════════════════════════════════════
 // Volume mode:   candles are dim when quiet, bright green/red when high volume hits
-// Heatmap mode:  FKS "weather" — price above/below regression line drives yellow→red / aqua→yellow
-barColorMode  = input.string("Volume",   "Bar Color Mode",
+// Heatmap mode:  Ruby "weather" — price above/below regression line drives yellow→red / aqua→yellow
+barColorMode  = input.string("Heatmap",   "Bar Color Mode",
      options=["Off", "Volume", "Heatmap"],                        group="6. Bar Coloring")
 heatSensitive = input.int(70, "Heatmap Sensitivity", minval=10,   group="6. Bar Coloring")
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 7. FKS SIGNALS  (Top G + AO confirmed entries)
+// 7. Ruby SIGNALS  (Top G + AO confirmed entries)
 // ══════════════════════════════════════════════════════════════════════════════
-showFKSSignals  = input.bool(true,  "Show FKS Long/Short Signals",  group="7. FKS Signals")
-showFKSAdd      = input.bool(true,  "Show FKS ADD Points",          group="7. FKS Signals")
-fksVolConfirm   = input.bool(true,  "Require Volume Confirmation",   group="7. FKS Signals")
-fksBiasConfirm  = input.bool(true,  "Require Session Bias Match",    group="7. FKS Signals")
-fksAddBars      = input.int(25,     "ADD Lookback Window (bars)",
-     minval=5, maxval=60,                                            group="7. FKS Signals")
-fksAOFast       = input.int(5,      "AO Fast Period",  minval=2,    group="7. FKS Signals")
-fksAOSlow       = input.int(34,     "AO Slow Period",  minval=5,    group="7. FKS Signals")
+showRubySignals  = input.bool(true,  "Show Ruby Long/Short Signals",  group="7. Ruby Signals")
+showRubyAdd      = input.bool(true,  "Show Ruby ADD Points",          group="7. Ruby Signals")
+rubyVolConfirm   = input.bool(true,  "Require Volume Confirmation",   group="7. Ruby Signals")
+rubyBiasConfirm  = input.bool(true,  "Require Session Bias Match",    group="7. Ruby Signals")
+rubyAddBars      = input.int(25,     "ADD Lookback Window (bars)",
+     minval=5, maxval=60,                                            group="7. Ruby Signals")
+rubyAOFast       = input.int(5,      "AO Fast Period",  minval=2,    group="7. Ruby Signals")
+rubyAOSlow       = input.int(34,     "AO Slow Period",  minval=5,    group="7. Ruby Signals")
 // ══════════════════════════════════════════════════════════════════════════════
 
 // Normalize a series relative to its mean (clamps to ±5 σ)
@@ -100,7 +98,7 @@ f_regression_line(_len) =>
     _x * _slope + _inter
 
 // ══════════════════════════════════════════════════════════════════════════════
-// TOP G CHANNEL FUNCTIONS  (FKS)
+// TOP G CHANNEL FUNCTIONS 
 // ══════════════════════════════════════════════════════════════════════════════
 
 // Support / Resistance / Mid bands
@@ -140,53 +138,34 @@ f_signals(_lo, _hi, _atr, _norm_roc) =>
     [_top, _bot, _s_bot, _s_top, _p_bot, _p_top]
 
 // ══════════════════════════════════════════════════════════════════════════════
-// S/R SWING DETECTION FUNCTIONS  (FKS)
+// S/R SWING DETECTION FUNCTIONS 
 // ══════════════════════════════════════════════════════════════════════════════
 
-find_swing_highs(_src, _len, _thr) =>
-    var float[] _pivots = array.new_float(0)
-    if _pivots.size() > 10
-        _pivots.shift()
-    float _hi   = ta.highest(_src, _len - 1)
-    float _lo   = ta.lowest(_src,  _len * 2)
-    float _atr  = ta.atr(14)
-    bool  _is   = _src[_len] > _src[_len + 1] and _src[_len] > _src[_len - 1] and
-                  _src[_len] > _hi and (_src[_len] - _lo) / _atr > _thr
-    if _is
-        _pivots.unshift(_src[_len])
-    _pivots
+// ── Returns the most recent confirmed swing HIGH as a scalar series
+f_swing_high_val(_src, _len, _thr) =>
+    float _hi  = ta.highest(_src, _len - 1)
+    float _lo  = ta.lowest(_src,  _len * 2)
+    float _atr = ta.atr(14)
+    bool  _is  = _src[_len] > _src[_len + 1] and _src[_len] > _src[_len - 1] and
+                 _src[_len] > _hi and (_src[_len] - _lo) / _atr > _thr
+    ta.valuewhen(_is, _src[_len], 0)
 
-find_swing_lows(_src, _len, _thr) =>
-    var float[] _pivots = array.new_float(0)
-    if _pivots.size() > 10
-        _pivots.shift()
-    float _lo   = ta.lowest(_src,  _len - 1)
-    float _hi   = ta.highest(_src, _len * 2)
-    float _atr  = ta.atr(14)
-    bool  _is   = _src[_len] < _src[_len + 1] and _src[_len] < _src[_len - 1] and
-                  _src[_len] < _lo and (_hi - _src[_len]) / _atr > _thr
-    if _is
-        _pivots.unshift(_src[_len])
-    _pivots
+// ── Returns the most recent confirmed swing LOW as a scalar series
+f_swing_low_val(_src, _len, _thr) =>
+    float _lo  = ta.lowest(_src,  _len - 1)
+    float _hi  = ta.highest(_src, _len * 2)
+    float _atr = ta.atr(14)
+    bool  _is  = _src[_len] < _src[_len + 1] and _src[_len] < _src[_len - 1] and
+                 _src[_len] < _lo and (_hi - _src[_len]) / _atr > _thr
+    ta.valuewhen(_is, _src[_len], 0)
 
-get_nearest_level(_price, _levels) =>
-    float _nearest  = na
-    float _min_dist = float(10000000)
-    if array.size(_levels) > 0
-        for _i = 0 to math.min(_levels.size() - 1, 5)
-            _lv   = array.get(_levels, _i)
-            _dist = math.abs(_price - _lv)
-            if _dist < _min_dist
-                _min_dist := _dist
-                _nearest  := _lv
-    _nearest
-
+// ── Replaces get_nearest_sr_levels() — returns scalars, safe for request.security
 get_nearest_sr_levels(_tf) =>
-    _highs = request.security(syminfo.tickerid, _tf,
-         find_swing_highs(high, srLookback, srThreshold), lookahead=barmerge.lookahead_off)
-    _lows  = request.security(syminfo.tickerid, _tf,
-         find_swing_lows(low, srLookback, srThreshold),  lookahead=barmerge.lookahead_off)
-    [get_nearest_level(close, _highs), get_nearest_level(close, _lows)]
+    _res = request.security(syminfo.tickerid, _tf,
+         f_swing_high_val(high, srLookback, srThreshold), lookahead=barmerge.lookahead_off)
+    _sup = request.security(syminfo.tickerid, _tf,
+         f_swing_low_val(low,  srLookback, srThreshold),  lookahead=barmerge.lookahead_off)
+    [_res, _sup]
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SESSION & TIME
@@ -206,7 +185,7 @@ volAvg                = ta.sma(volume, 20)
 atr14                 = ta.atr(14)
 
 // ══════════════════════════════════════════════════════════════════════════════
-// BAR COLORING  (FKS heatmap + volume mode)
+// BAR COLORING  (heatmap + volume mode)
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── Heatmap: normalise price deviation above/below regression line
@@ -233,7 +212,7 @@ barcolor(barColorMode == "Heatmap" ? heatmap_bar_color :
          barColorMode == "Volume"  ? vol_bar_color      : na)
 
 // ══════════════════════════════════════════════════════════════════════════════
-// TOP G CHANNEL CALCULATIONS  (FKS)
+// TOP G CHANNEL CALCULATIONS 
 // ══════════════════════════════════════════════════════════════════════════════
 [tg_lo, tg_hi, tg_mid] = f_lowest_highest(topGLength)
 tg_norm_roc = f_calc_norm_roc()
@@ -241,7 +220,7 @@ tg_norm_roc = f_calc_norm_roc()
 float tg_range = tg_hi - tg_lo
 
 // ══════════════════════════════════════════════════════════════════════════════
-// S/R LEVEL CALCULATIONS  (FKS)
+// S/R LEVEL CALCULATIONS 
 // ══════════════════════════════════════════════════════════════════════════════
 var float sr_res_1m = na
 var float sr_sup_1m = na
@@ -410,46 +389,46 @@ if longAdd or shortAdd
     addFired := true
 
 // ══════════════════════════════════════════════════════════════════════════════
-// FKS SIGNAL ENGINE
+// Ruby SIGNAL ENGINE
 // Confirmed long/short: Top G strong bounce/rejection + AO alignment
 //                       + session bias (optional) + volume (optional)
-// FKS ADD: Top G touch signal within fksAddBars after the initial signal
+// Ruby ADD: Top G touch signal within rubyAddBars after the initial signal
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Shared AO (may differ from Ruby's ao which uses hlc3; FKS AO uses hl2)
-fks_ao = ta.sma(hl2, fksAOFast) - ta.sma(hl2, fksAOSlow)
+// Shared AO (may differ from Ruby's ao which uses hlc3; Ruby AO uses hl2)
+ruby_ao = ta.sma(hl2, rubyAOFast) - ta.sma(hl2, rubyAOSlow)
 
-_fks_vol_ok     = not fksVolConfirm  or volume > volAvg * volMult
-_fks_long_bias  = not fksBiasConfirm or bullBias
-_fks_short_bias = not fksBiasConfirm or not bullBias
+_ruby_vol_ok     = not rubyVolConfirm  or volume > volAvg * volMult
+_ruby_long_bias  = not rubyBiasConfirm or bullBias
+_ruby_short_bias = not rubyBiasConfirm or not bullBias
 
 // ── Primary signals: TG strong bounce/rejection confirmed by AO direction
-fksLong  = showFKSSignals and tg_bot and fks_ao > 0 and _fks_long_bias  and _fks_vol_ok and barstate.isconfirmed
-fksShort = showFKSSignals and tg_top and fks_ao < 0 and _fks_short_bias and _fks_vol_ok and barstate.isconfirmed
+rubyLong  = showRubySignals and tg_bot and ruby_ao > 0 and _ruby_long_bias  and _ruby_vol_ok and barstate.isconfirmed
+rubyShort = showRubySignals and tg_top and ruby_ao < 0 and _ruby_short_bias and _ruby_vol_ok and barstate.isconfirmed
 
-// Track when the most recent FKS signal fired
-var int fksLongBar  = na
-var int fksShortBar = na
+// Track when the most recent Ruby signal fired
+var int rubyLongBar  = na
+var int rubyShortBar = na
 
-if fksLong
-    fksLongBar  := bar_index
-if fksShort
-    fksShortBar := bar_index
+if rubyLong
+    rubyLongBar  := bar_index
+if rubyShort
+    rubyShortBar := bar_index
 
 // ── ADD points: any TG touch (simple or potential) within the lookback window
 //    after a signal, while price remains on the right side of the channel mid
-_bars_since_fks_long  = na(fksLongBar)  ? 9999 : bar_index - fksLongBar
-_bars_since_fks_short = na(fksShortBar) ? 9999 : bar_index - fksShortBar
+_bars_since_ruby_long  = na(rubyLongBar)  ? 9999 : bar_index - rubyLongBar
+_bars_since_ruby_short = na(rubyShortBar) ? 9999 : bar_index - rubyShortBar
 
-fksAddLong  = showFKSAdd and
-              _bars_since_fks_long  >= 2 and _bars_since_fks_long  <= fksAddBars and
-              (tg_s_bot or tg_p_bot) and close > tg_mid and fks_ao > 0 and
-              not fksLong   // don't double-mark the initial signal bar
+rubyAddLong  = showRubyAdd and
+              _bars_since_ruby_long  >= 2 and _bars_since_ruby_long  <= rubyAddBars and
+              (tg_s_bot or tg_p_bot) and close > tg_mid and ruby_ao > 0 and
+              not rubyLong   // don't double-mark the initial signal bar
 
-fksAddShort = showFKSAdd and
-              _bars_since_fks_short >= 2 and _bars_since_fks_short <= fksAddBars and
-              (tg_s_top or tg_p_top) and close < tg_mid and fks_ao < 0 and
-              not fksShort
+rubyAddShort = showRubyAdd and
+              _bars_since_ruby_short >= 2 and _bars_since_ruby_short <= rubyAddBars and
+              (tg_s_top or tg_p_top) and close < tg_mid and ruby_ao < 0 and
+              not rubyShort
 
 // ══════════════════════════════════════════════════════════════════════════════
 // PLOTS
@@ -526,19 +505,19 @@ plotshape(series=showSimpleSigs and tg_s_top,  title="TG Simple Resistance", sty
 plotshape(series=showPotentialSigs and tg_p_bot, title="TG Potential Support", style=shape.diamond, location=location.belowbar, color=color.new(#00ffbb, 60), size=size.tiny)
 plotshape(series=showPotentialSigs and tg_p_top, title="TG Potential Resist",  style=shape.diamond, location=location.abovebar, color=color.new(#ff1100, 60), size=size.tiny)
 
-// ── FKS Long / Short confirmed signals — star shape, clearly distinct from breakout arrows
-plotshape(series=fksLong,      title="FKS Long",       style=shape.labelup,     location=location.belowbar, color=color.new(#00ff88, 0),  size=size.normal, text="L")
-plotshape(series=fksShort,     title="FKS Short",      style=shape.labeldown,   location=location.abovebar, color=color.new(#ff4444, 0),  size=size.normal, text="S")
+// ── Ruby Long / Short confirmed signals — star shape, clearly distinct from breakout arrows
+plotshape(series=rubyLong,      title="Ruby Long",       style=shape.labelup,     location=location.belowbar, color=color.new(#00ff88, 0),  size=size.normal, text="L")
+plotshape(series=rubyShort,     title="Ruby Short",      style=shape.labeldown,   location=location.abovebar, color=color.new(#ff4444, 0),  size=size.normal, text="S")
 
-// ── FKS ADD points — smaller, offset slightly further so they don't overlap
-plotshape(series=fksAddLong,   title="FKS ADD Long",   style=shape.triangleup,  location=location.belowbar, color=color.new(#00ffbb, 20), size=size.small,  text="+L")
-plotshape(series=fksAddShort,  title="FKS ADD Short",  style=shape.triangledown,location=location.abovebar, color=color.new(#ff8888, 20), size=size.small,  text="+S")
+// ── Ruby ADD points — smaller, offset slightly further so they don't overlap
+plotshape(series=rubyAddLong,   title="Ruby ADD Long",   style=shape.triangleup,  location=location.belowbar, color=color.new(#00ffbb, 20), size=size.small,  text="+L")
+plotshape(series=rubyAddShort,  title="Ruby ADD Short",  style=shape.triangledown,location=location.abovebar, color=color.new(#ff8888, 20), size=size.small,  text="+S")
 
 // ── Background tint (existing — uses chart background, not candle colour)
 bgcolor(close > ema9 and ao > 0  ? color.new(color.lime, 96) :
         close < ema9 and ao < 0  ? color.new(color.red,  96) : na)
 
-// ── Entry zone boxes (FKS)
+// ── Entry zone boxes
 //    Highlight the bottom 10 % and top 10 % of the Top G channel — the
 //    "fair value" / congestion zones where breakouts typically launch from.
 if showEntryZones and barstate.islast and not na(tg_range) and tg_range > 0
@@ -596,7 +575,7 @@ if barstate.islast and showTable
     table.cell(dash, 1, 6,  str.tostring(volume / volAvg, "0.00") + "×",
          text_color=volume > volAvg * volMult ? color.lime : color.gray, text_size=size.normal)
 
-    // ── Top G Channel (FKS)
+    // ── Top G Channel
     table.cell(dash, 0, 7,  "TG Chan", text_color=color.gray,   text_size=size.normal)
     table.cell(dash, 1, 7,
          str.tostring(tg_hi, "#.##") + " / " + str.tostring(tg_lo, "#.##"),
@@ -611,7 +590,7 @@ if barstate.islast and showTable
     table.cell(dash, 0, 8,  "TG Sig",  text_color=color.gray,   text_size=size.normal)
     table.cell(dash, 1, 8,  _tg_sig_txt, text_color=_tg_sig_col, text_size=size.normal)
 
-    // ── HTF S/R (FKS)
+    // ── HTF S/R
     table.cell(dash, 0, 9,  "1m S/R",  text_color=color.gray,   text_size=size.normal)
     table.cell(dash, 1, 9,
          (not na(sr_res_1m) ? str.tostring(sr_res_1m, "#.##") : "--") + " / " +
@@ -629,23 +608,23 @@ if barstate.islast and showTable
     table.cell(dash, 1, 11, barColorMode,
          text_color=barColorMode == "Off" ? color.gray : color.new(#00BFFF, 0), text_size=size.normal)
 
-    // ── FKS Signal status
-    _fks_long_txt  = fksLong  ? "▲ SIGNAL"  :
-                     fksAddLong ? "+ ADD"    :
-                     not na(fksLongBar) and _bars_since_fks_long <= fksAddBars ? "watching (" + str.tostring(_bars_since_fks_long) + ")" : "—"
-    _fks_short_txt = fksShort ? "▼ SIGNAL"  :
-                     fksAddShort ? "+ ADD"   :
-                     not na(fksShortBar) and _bars_since_fks_short <= fksAddBars ? "watching (" + str.tostring(_bars_since_fks_short) + ")" : "—"
-    _fks_long_col  = fksLong or fksAddLong ? color.lime   :
-                     not na(fksLongBar) and _bars_since_fks_long <= fksAddBars ? color.yellow : color.gray
-    _fks_short_col = fksShort or fksAddShort ? color.red  :
-                     not na(fksShortBar) and _bars_since_fks_short <= fksAddBars ? color.yellow : color.gray
+    // ── Ruby Signal status
+    _ruby_long_txt  = rubyLong  ? "▲ SIGNAL"  :
+                     rubyAddLong ? "+ ADD"    :
+                     not na(rubyLongBar) and _bars_since_ruby_long <= rubyAddBars ? "watching (" + str.tostring(_bars_since_ruby_long) + ")" : "—"
+    _ruby_short_txt = rubyShort ? "▼ SIGNAL"  :
+                     rubyAddShort ? "+ ADD"   :
+                     not na(rubyShortBar) and _bars_since_ruby_short <= rubyAddBars ? "watching (" + str.tostring(_bars_since_ruby_short) + ")" : "—"
+    _ruby_long_col  = rubyLong or rubyAddLong ? color.lime   :
+                     not na(rubyLongBar) and _bars_since_ruby_long <= rubyAddBars ? color.yellow : color.gray
+    _ruby_short_col = rubyShort or rubyAddShort ? color.red  :
+                     not na(rubyShortBar) and _bars_since_ruby_short <= rubyAddBars ? color.yellow : color.gray
 
-    table.cell(dash, 0, 12, "FKS L",   text_color=color.gray,   text_size=size.normal)
-    table.cell(dash, 1, 12, _fks_long_txt,  text_color=_fks_long_col,  text_size=size.normal)
+    table.cell(dash, 0, 12, "Ruby L",   text_color=color.gray,   text_size=size.normal)
+    table.cell(dash, 1, 12, _ruby_long_txt,  text_color=_ruby_long_col,  text_size=size.normal)
 
-    table.cell(dash, 0, 13, "FKS S",   text_color=color.gray,   text_size=size.normal)
-    table.cell(dash, 1, 13, _fks_short_txt, text_color=_fks_short_col, text_size=size.normal)
+    table.cell(dash, 0, 13, "Ruby S",   text_color=color.gray,   text_size=size.normal)
+    table.cell(dash, 1, 13, _ruby_short_txt, text_color=_ruby_short_col, text_size=size.normal)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ALERTS
@@ -670,22 +649,22 @@ alertcondition(tg_p_bot or tg_p_top,
      title="Ruby TG Potential Signal",
      message="Ruby {{ticker}} {{interval}} TG price entering channel zone")
 
-alertcondition(fksLong,
-     title="Ruby FKS Long Signal",
-     message="Ruby {{ticker}} {{interval}} FKS LONG — TG bounce + AO bullish confirmed")
+alertcondition(rubyLong,
+     title="Ruby Ruby Long Signal",
+     message="Ruby {{ticker}} {{interval}} Ruby LONG — TG bounce + AO bullish confirmed")
 
-alertcondition(fksShort,
-     title="Ruby FKS Short Signal",
-     message="Ruby {{ticker}} {{interval}} FKS SHORT — TG rejection + AO bearish confirmed")
+alertcondition(rubyShort,
+     title="Ruby Ruby Short Signal",
+     message="Ruby {{ticker}} {{interval}} Ruby SHORT — TG rejection + AO bearish confirmed")
 
-alertcondition(fksAddLong,
-     title="Ruby FKS ADD Long",
-     message="Ruby {{ticker}} {{interval}} FKS ADD LONG — pullback to TG support zone")
+alertcondition(rubyAddLong,
+     title="Ruby Ruby ADD Long",
+     message="Ruby {{ticker}} {{interval}} Ruby ADD LONG — pullback to TG support zone")
 
-alertcondition(fksAddShort,
-     title="Ruby FKS ADD Short",
-     message="Ruby {{ticker}} {{interval}} FKS ADD SHORT — pullback to TG resistance zone")
+alertcondition(rubyAddShort,
+     title="Ruby Ruby ADD Short",
+     message="Ruby {{ticker}} {{interval}} Ruby ADD SHORT — pullback to TG resistance zone")
 
-alertcondition(fksLong or fksShort or fksAddLong or fksAddShort,
-     title="Ruby FKS All Signals",
-     message="Ruby {{ticker}} {{interval}} FKS signal fired")
+alertcondition(rubyLong or rubyShort or rubyAddLong or rubyAddShort,
+     title="Ruby Ruby All Signals",
+     message="Ruby {{ticker}} {{interval}} Ruby signal fired")

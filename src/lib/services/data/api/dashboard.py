@@ -270,7 +270,7 @@ _SHARED_NAV_LINKS = [
     ("/", "📊 Dashboard"),
     ("/charts", "📈 Charts"),
     ("/account", "💰 Account"),
-    ("/orb-history", "📅 RB History"),
+    ("/rb-history", "📅 RB History"),
     ("/journal/page", "📓 Journal"),
     ("/connections", "🔌 Connections"),
     ("/trainer", "🧠 Trainer"),
@@ -397,39 +397,134 @@ def _get_focus_data() -> dict[str, Any] | None:
 def _get_session_info() -> dict[str, str]:
     """Get current session mode and display info.
 
-    Boundaries (all Eastern Time):
-      - Pre-market:           00:00–03:00
-      - Active / London Open: 03:00–08:00
-      - Active / US Open:     08:00–12:00
-      - Off-hours:            12:00–00:00
+    Boundaries (all Eastern Time, chronological Globex-day order):
+      - CME Globex Re-open:   18:00–18:30
+      - Sydney / ASX:         18:30–02:00 (wraps midnight)
+      - Tokyo / TSE:          19:00–02:25 (wraps midnight; lunch 22:30–23:30)
+      - Shanghai / HK:        21:00–03:00 (wraps midnight)
+      - Frankfurt / Xetra:    03:00–11:30
+      - London Open:          03:00–12:00  ← primary
+      - London-NY Crossover:  08:00–10:00
+      - US Equity Open:       09:30–16:00  ← primary
+      - CME Settlement:       14:00–14:30
+      - Off-hours:            16:00–18:00
     """
     now = datetime.now(tz=_EST)
     hour = now.hour
+    minute = now.minute
+    # fractional hour for sub-hour comparisons
+    fhour = hour + minute / 60.0
 
-    if 0 <= hour < 3:
-        mode = "pre-market"
-        emoji = "🌙"
-        label = "PRE-MARKET"
-        css_class = "text-purple-400"
-        color_hex = "#c084fc"
-    elif 3 <= hour < 8:
+    # Derive session boundaries from live UTC-converted ET hours so this
+    # function is automatically correct for both EDT (UTC-4) and EST (UTC-5).
+    try:
+        _sess_hours = _get_session_hours()
+
+        def _et(key: str, field: str, default: float) -> float:
+            entry = next((s for s in _sess_hours if s["key"] == key), None)
+            return entry[field] if entry else default  # type: ignore[index]
+
+        _cme_open = _et("cme", "et_open", 18.0)
+        _cme_close = _et("cme", "et_close", 18.5)
+        _syd_open = _et("sydney", "et_open", 19.0)
+        _tyo_open = _et("tokyo", "et_open", 20.0)
+        _tyo_close = _et("tokyo", "et_close", 27.42) % 24  # normalise to 0-24
+        _sha_open = _et("shanghai", "et_open", 21.5)
+        _fra_open = _et("frankfurt", "et_open", 3.0)
+        _lon_close = _et("london", "et_close", 11.5)
+        _us_open = _et("us", "et_open", 9.5)
+        _us_close = _et("us", "et_close", 16.0)
+        _set_open = _et("cme_settle", "et_open", 14.0)
+        _set_close = _et("cme_settle", "et_close", 14.5)
+    except Exception:
+        # Hard fallback to EST (UTC-5) values
+        _cme_open, _cme_close = 18.0, 18.5
+        _syd_open = 19.0
+        _tyo_open, _tyo_close = 20.0, 3.42
+        _sha_open = 21.5
+        _fra_open = 3.0
+        _lon_close = 11.5
+        _us_open, _us_close = 9.5, 16.0
+        _set_open, _set_close = 14.0, 14.5
+
+    # Overlap = from US open until London closes
+    _overlap_start = _us_open
+    _overlap_end = min(_lon_close, 12.0)
+
+    # Evaluate in priority order — most specific bands first.
+    if _overlap_start <= fhour < _overlap_end:
         mode = "active"
-        emoji = "🟢"
-        label = "LONDON OPEN"
-        css_class = "text-green-400"
-        color_hex = "#4ade80"
-    elif 8 <= hour < 12:
+        emoji = "⚡"
+        label = "LONDON/US OVERLAP"
+        css_class = "text-yellow-400"
+        color_hex = "#fbbf24"
+    elif _us_open <= fhour < _set_open:
         mode = "active"
         emoji = "🟢"
         label = "US OPEN"
         css_class = "text-green-400"
         color_hex = "#4ade80"
-    else:
+    elif _set_open <= fhour < _set_close:
+        mode = "active"
+        emoji = "📊"
+        label = "CME SETTLEMENT"
+        css_class = "text-orange-400"
+        color_hex = "#fb923c"
+    elif _set_close <= fhour < _us_close:
+        mode = "active"
+        emoji = "🟢"
+        label = "US OPEN"
+        css_class = "text-green-400"
+        color_hex = "#4ade80"
+    elif _us_close <= fhour < _cme_open:
         mode = "off-hours"
         emoji = "⚙️"
         label = "OFF-HOURS"
         css_class = "text-zinc-400"
         color_hex = "#a1a1aa"
+    elif _cme_open <= fhour < _cme_close:
+        mode = "overnight"
+        emoji = "🔔"
+        label = "CME GLOBEX OPEN"
+        css_class = "text-teal-400"
+        color_hex = "#2dd4bf"
+    elif _cme_close <= fhour < _tyo_open:
+        mode = "overnight"
+        emoji = "🌙"
+        label = "SYDNEY OPEN"
+        css_class = "text-cyan-400"
+        color_hex = "#22d3ee"
+    elif _tyo_open <= fhour < _sha_open:
+        mode = "overnight"
+        emoji = "🌙"
+        label = "TOKYO OPEN"
+        css_class = "text-indigo-400"
+        color_hex = "#818cf8"
+    elif _sha_open <= fhour < 24.0 or 0.0 <= fhour < _fra_open:
+        # Shanghai open + Tokyo afternoon + pre-London overnight
+        mode = "overnight"
+        emoji = "🌙"
+        label = "SHANGHAI / TOKYO" if fhour >= _sha_open else "TOKYO / LONDON PRE"
+        css_class = "text-red-400" if fhour >= _sha_open else "text-indigo-400"
+        color_hex = "#f87171" if fhour >= _sha_open else "#818cf8"
+    elif _tyo_close <= fhour < _fra_open:
+        mode = "overnight"
+        emoji = "🌙"
+        label = "PRE-LONDON"
+        css_class = "text-purple-400"
+        color_hex = "#c084fc"
+    elif _fra_open <= fhour < _us_open:
+        mode = "active"
+        emoji = "🟢"
+        label = "LONDON OPEN" if fhour < (_us_open - 1.5) else "LONDON-NY CROSSOVER"
+        css_class = "text-blue-400" if fhour < (_us_open - 1.5) else "text-indigo-400"
+        color_hex = "#60a5fa" if fhour < (_us_open - 1.5) else "#818cf8"
+    else:
+        mode = "active"
+        emoji = "🟢"
+        label = "ACTIVE"
+        css_class = "text-green-400"
+        color_hex = "#4ade80"
 
     return {
         "mode": mode,
@@ -444,23 +539,158 @@ def _get_session_info() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Market session definitions (all times in ET, displayed on the strip)
-# Each session: (label, short, start_hour_ET, end_hour_ET, color_class, bg_class)
+# Market session definitions — derived from exchange_hours_in_et() at render
+# time so they are always correct for both EDT (UTC-4) and EST (UTC-5).
+#
+# DO NOT hardcode ET hour floats here.  Use _get_session_hours() which calls
+# exchange_hours_in_et() from multi_session.py and caches the result for the
+# lifetime of a single request.
 # ---------------------------------------------------------------------------
-_SESSIONS = [
-    # (label,          short,   start, end,  bar_color,           text_color,       overlap_note)
-    ("Sydney", "SYD", 17, 2, "bg-slate-600", "text-slate-300", ""),
-    ("Tokyo", "TYO", 19, 4, "bg-indigo-700", "text-indigo-200", ""),
-    ("London", "LON", 3, 12, "bg-blue-700", "text-blue-200", ""),
-    ("US Equity", "US", 9, 16, "bg-emerald-700", "text-emerald-200", ""),
-    ("US Futures", "CME", 18, 17, "bg-teal-800", "text-teal-300", ""),  # ~23h
-]
 
-# ORB window markers shown on the session strip
-_ORB_WINDOWS = [
-    ("London ORB", 3, 3.5, "border-blue-400"),
-    ("US ORB", 9.5, 10.0, "border-emerald-400"),
-]
+
+def _get_session_hours() -> list[dict]:
+    """Return the current ET exchange hours from multi_session.exchange_hours_in_et().
+
+    Falls back to a hardcoded EST (UTC-5) table if the import fails, so the
+    dashboard still renders even during a partial startup.
+    """
+    try:
+        from lib.core.multi_session import exchange_hours_in_et
+
+        return exchange_hours_in_et()
+    except Exception:
+        # Fallback: hardcoded EST (UTC-5) values — used only if import fails.
+        return [
+            {
+                "key": "cme",
+                "label": "CME Re-open",
+                "et_open": 18.0,
+                "et_close": 18.5,
+                "fg_hex": "#2dd4bf",
+                "bg_hex": "#042f2e",
+                "row": 0,
+            },
+            {
+                "key": "cme_background",
+                "label": "CME Globex",
+                "et_open": 18.0,
+                "et_close": 41.0,
+                "fg_hex": "#5eead4",
+                "bg_hex": "#042f2e",
+                "row": 0,
+            },
+            {
+                "key": "sydney",
+                "label": "SYD/ASX",
+                "et_open": 19.0,
+                "et_close": 25.0,
+                "fg_hex": "#94a3b8",
+                "bg_hex": "#1e293b",
+                "row": 1,
+            },
+            {
+                "key": "tokyo",
+                "label": "TYO/TSE",
+                "et_open": 20.0,
+                "et_close": 27.42,
+                "fg_hex": "#a5b4fc",
+                "bg_hex": "#1e1b4b",
+                "row": 1,
+            },
+            {
+                "key": "shanghai",
+                "label": "SHA/SSE",
+                "et_open": 21.5,
+                "et_close": 26.0,
+                "fg_hex": "#fca5a5",
+                "bg_hex": "#3b0a0a",
+                "row": 1,
+            },
+            {
+                "key": "frankfurt",
+                "label": "FRA/Xetra",
+                "et_open": 3.0,
+                "et_close": 11.5,
+                "fg_hex": "#fde68a",
+                "bg_hex": "#1c1a08",
+                "row": 1,
+            },
+            {
+                "key": "london",
+                "label": "LON/LSE",
+                "et_open": 3.0,
+                "et_close": 11.5,
+                "fg_hex": "#93c5fd",
+                "bg_hex": "#1e3a5f",
+                "row": 2,
+            },
+            {
+                "key": "us",
+                "label": "US Equity",
+                "et_open": 9.5,
+                "et_close": 16.0,
+                "fg_hex": "#6ee7b7",
+                "bg_hex": "#052e16",
+                "row": 2,
+            },
+            {
+                "key": "cme_settle",
+                "label": "CME Settle",
+                "et_open": 14.0,
+                "et_close": 14.5,
+                "fg_hex": "#fb923c",
+                "bg_hex": "#1c0a00",
+                "row": 1,
+            },
+        ]
+
+
+def _get_orb_windows() -> list[tuple[str, float, float, str]]:
+    """Return ORB window markers derived from the live ET session hours.
+
+    Each ORB window is the 30-min opening-range window from the canonical
+    ORBSession.or_start time in multi_session.py (stored as ET wall-clock,
+    automatically correct for EDT and EST).
+
+    Returns list of (label, et_start, et_end, css_border_class).
+    """
+    try:
+        from lib.core.multi_session import SESSION_BY_KEY
+
+        windows = []
+        _orb_meta = [
+            ("cme", "CME ORB", "border-teal-400"),
+            ("sydney", "SYD ORB", "border-slate-400"),
+            ("tokyo", "TYO ORB", "border-indigo-400"),
+            ("shanghai", "SHA ORB", "border-red-400"),
+            ("frankfurt", "FRA/LON ORB", "border-blue-400"),
+            ("london_ny", "LN-NY ORB", "border-indigo-400"),
+            ("us", "US ORB", "border-emerald-400"),
+            ("cme_settle", "CME Settle", "border-orange-400"),
+        ]
+        for key, label, css in _orb_meta:
+            sess = SESSION_BY_KEY.get(key)
+            if sess is None:
+                continue
+            start = sess.or_start.hour + sess.or_start.minute / 60.0
+            end = sess.or_end.hour + sess.or_end.minute / 60.0
+            # Wrap-midnight sessions: or_end may be numerically less than or_start
+            # (e.g. 00:00 for a session that opens at 23:30).  We don't need to
+            # correct here — the strip renderer handles end < start gracefully.
+            windows.append((label, start, end, css))
+        return windows
+    except Exception:
+        # Fallback: EST (UTC-5) hardcoded values
+        return [
+            ("CME ORB", 18.0, 18.5, "border-teal-400"),
+            ("SYD ORB", 18.5, 19.0, "border-slate-400"),
+            ("TYO ORB", 19.0, 19.5, "border-indigo-400"),
+            ("SHA ORB", 21.0, 21.5, "border-red-400"),
+            ("FRA/LON ORB", 3.0, 3.5, "border-blue-400"),
+            ("LN-NY ORB", 8.0, 8.5, "border-indigo-400"),
+            ("US ORB", 9.5, 10.0, "border-emerald-400"),
+            ("CME Settle", 14.0, 14.5, "border-orange-400"),
+        ]
 
 
 def _render_session_strip() -> str:
@@ -468,32 +698,42 @@ def _render_session_strip() -> str:
 
     Shows a 24-hour bar (00:00–24:00 ET) with coloured session blocks,
     overlap highlights, ORB window markers, and a live cursor for now.
+    Session times are computed from UTC via exchange_hours_in_et() so they
+    are always correct for both EDT (UTC-4) and EST (UTC-5).
     Updated client-side via JS every minute.
     """
-    # Build session blocks as percentage offsets (each hour = 100/24 %)
+    import json as _json
+
     HOUR_PCT = 100.0 / 24.0
 
     def _pct(h: float) -> str:
         return f"{h * HOUR_PCT:.3f}%"
 
-    # Session blocks HTML
-    # Sydney wraps midnight: render two segments
-    # We use inline style for pixel-perfect positioning
+    # Fetch live ET-converted session hours
+    session_hours = _get_session_hours()
+    orb_windows = _get_orb_windows()
 
-    overlap_highlights = ""
-    # London + US overlap: 09:30–12:00 ET  (9.5–12)
-    overlap_highlights += f"""
+    # London/US overlap — derive from live session hours
+    lon_entry = next((s for s in session_hours if s["key"] == "london"), None)
+    us_entry = next((s for s in session_hours if s["key"] == "us"), None)
+    overlap_start = us_entry["et_open"] if us_entry else 9.5
+    overlap_end = min(lon_entry["et_close"], 12.0) if lon_entry else 12.0
+
+    overlap_highlights = f"""
         <div class="absolute top-0 bottom-0 border-l border-r border-yellow-400/30 bg-yellow-400/10"
-             style="left:{_pct(9.5)};width:{_pct(2.5)}"
-             title="London/US Overlap 09:30–12:00 ET"></div>
+             style="left:{_pct(overlap_start)};width:{_pct(max(0.0, overlap_end - overlap_start))}"
+             title="London/US Overlap {overlap_start:.4g}–{overlap_end:.4g}h ET"></div>
     """
 
     # ORB markers
     orb_markers = ""
-    for orb_label, start_h, end_h, border_cls in _ORB_WINDOWS:
+    for orb_label, start_h, end_h, border_cls in orb_windows:
+        width_h = end_h - start_h
+        if width_h <= 0:
+            width_h += 24  # wrap-midnight ORB (shouldn't happen, safety)
         orb_markers += f"""
         <div class="absolute top-0 bottom-0 {border_cls} border-l-2 border-r-2 bg-white/5"
-             style="left:{_pct(start_h)};width:{_pct(end_h - start_h)}"
+             style="left:{_pct(start_h % 24)};width:{_pct(width_h)}"
              title="{orb_label}">
             <span class="absolute top-0.5 left-0.5 text-[8px] text-white/60 leading-none whitespace-nowrap">ORB</span>
         </div>
@@ -503,7 +743,6 @@ def _render_session_strip() -> str:
     ticks = ""
     for h in range(0, 25, 3):
         label_h = h % 24
-        # On small screens only render the 00/06/12/18 labels to avoid crowding
         label_mobile_class = "" if label_h % 6 == 0 else "hidden sm:block"
         ticks += f"""
         <div class="absolute top-0 bottom-0 border-l border-zinc-700/50"
@@ -512,36 +751,54 @@ def _render_session_strip() -> str:
         </div>
         """
 
-    # Session label bars — stacked in two rows to avoid overlap
-    # Row 0: Sydney, Tokyo, CME (background/futures)
-    # Row 1: London, US Equity (foreground/primary)
-    row0 = [
-        ("Sydney", 17, 26, "#1e293b", "#94a3b8"),
-        ("Tokyo", 19, 28, "#1e1b4b", "#a5b4fc"),
-        ("CME 23h", 18, 41, "#042f2e", "#5eead4"),
-    ]
-    row1 = [("London", 3, 12, "#1e3a5f", "#93c5fd"), ("US", 9, 16, "#052e16", "#6ee7b7")]
-
-    def _bar(label: str, s: int, e: int, bg: str, fg: str, row: int) -> str:
-        # clamp to 0–24
+    # Session label bars — render rows 0, 1, 2 in order
+    def _bar(label: str, s: float, e: float, bg: str, fg: str, row: int) -> str:
         s24 = s % 24
-        width = (e - s) if e <= 24 else (24 - s)
-        width = min(width, 24 - s24)
-        top = "1px" if row == 0 else "13px"
-        height = "10px"
+        # Width: sessions ending past midnight (e > 24) render from s24 → end of strip
+        width = 24.0 - s24 if e > 24 else e - s
+        width = max(0.0, min(width, 24.0 - s24))
+        tops = {0: "1px", 1: "9px", 2: "17px"}
+        top = tops.get(row, "1px")
         return (
             f'<div class="absolute rounded-sm flex items-center px-1 overflow-hidden"'
-            f' style="left:{_pct(s24)};width:{_pct(width)};top:{top};height:{height};'
+            f' style="left:{_pct(s24)};width:{_pct(width)};top:{top};height:7px;'
             f'background:{bg};border:1px solid {fg}33" title="{label}">'
-            f'<span style="color:{fg};font-size:7px;white-space:nowrap;line-height:1">{label}</span>'
+            f'<span style="color:{fg};font-size:6px;white-space:nowrap;line-height:1">{label}</span>'
             f"</div>"
         )
 
     bars_html = ""
-    for label, s, e, bg, fg in row0:
-        bars_html += _bar(label, s, e, bg, fg, 0)
-    for label, s, e, bg, fg in row1:
-        bars_html += _bar(label, s, e, bg, fg, 1)
+    for sess in session_hours:
+        bars_html += _bar(
+            sess["label"],
+            sess["et_open"],
+            sess["et_close"],
+            sess["bg_hex"],
+            sess["fg_hex"],
+            sess["row"],
+        )
+
+    # Build the JS SESSIONS array from the same live data so the badge updater
+    # is always in sync with the rendered bars — no separate hardcoded array.
+    # We emit only the display sessions (skip the cme_background span row=0 entry).
+    js_sessions = [s for s in session_hours if s["key"] not in ("cme_background",)]
+    js_sessions_json = _json.dumps(
+        [[s["label"], s["et_open"], s["et_close"], s["fg_hex"], "#3f3f46"] for s in js_sessions],
+        separators=(",", ":"),
+    )
+
+    # Tokyo lunch break in ET (11:30–12:30 JST → UTC 02:30–03:30 → ET depends on offset)
+    try:
+        from lib.core.multi_session import _utc_frac_to_et_frac  # type: ignore[attr-defined]
+
+        tyo_lunch_start = _utc_frac_to_et_frac(2.5)  # 02:30 UTC
+        tyo_lunch_end = _utc_frac_to_et_frac(3.5)  # 03:30 UTC
+        if tyo_lunch_start < 0:
+            tyo_lunch_start += 24
+        if tyo_lunch_end < 0:
+            tyo_lunch_end += 24
+    except Exception:
+        tyo_lunch_start, tyo_lunch_end = 22.5, 23.5  # EST fallback
 
     return f"""
     <div id="session-strip"
@@ -551,15 +808,20 @@ def _render_session_strip() -> str:
          hx-swap="outerHTML">
         <div class="flex items-center justify-between mb-2">
             <span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Market Sessions (ET)</span>
-            <div class="hidden sm:flex items-center gap-3 text-[9px] text-zinc-600">
-                <span><span class="inline-block w-2 h-2 rounded-sm bg-blue-700 mr-1"></span>London</span>
-                <span><span class="inline-block w-2 h-2 rounded-sm bg-emerald-700 mr-1"></span>US Equity</span>
-                <span><span class="inline-block w-2 h-2 rounded-sm bg-yellow-400/30 border border-yellow-400/40 mr-1"></span>Overlap</span>
-                <span><span class="inline-block w-1 h-2 border-l-2 border-blue-400 mr-1"></span>ORB Window</span>
+            <div class="hidden sm:flex items-center gap-2 flex-wrap text-[9px] text-zinc-500">
+                <span><span class="inline-block w-2 h-2 rounded-sm mr-1" style="background:#042f2e;border:1px solid #2dd4bf44"></span>CME</span>
+                <span><span class="inline-block w-2 h-2 rounded-sm mr-1" style="background:#1e293b;border:1px solid #94a3b844"></span>Sydney</span>
+                <span><span class="inline-block w-2 h-2 rounded-sm mr-1" style="background:#1e1b4b;border:1px solid #a5b4fc44"></span>Tokyo</span>
+                <span><span class="inline-block w-2 h-2 rounded-sm mr-1" style="background:#3b0a0a;border:1px solid #fca5a544"></span>Shanghai</span>
+                <span><span class="inline-block w-2 h-2 rounded-sm mr-1" style="background:#1c1a08;border:1px solid #fde68a44"></span>Frankfurt</span>
+                <span><span class="inline-block w-2 h-2 rounded-sm mr-1" style="background:#1e3a5f;border:1px solid #93c5fd44"></span>London</span>
+                <span><span class="inline-block w-2 h-2 rounded-sm mr-1" style="background:#052e16;border:1px solid #6ee7b744"></span>US</span>
+                <span><span class="inline-block w-2 h-2 rounded-sm mr-1" style="background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.4)"></span>Overlap</span>
+                <span><span class="inline-block w-0.5 h-2 border-l-2 border-blue-400 mr-1"></span>ORB</span>
             </div>
         </div>
         <!-- Timeline bar — min-width keeps it readable on narrow screens -->
-        <div class="relative h-6 w-full min-w-[320px]" id="session-bar-inner">
+        <div class="relative h-7 w-full min-w-[320px]" id="session-bar-inner">
             <!-- Background -->
             <div class="absolute inset-0 bg-zinc-800/60 rounded"></div>
             {overlap_highlights}
@@ -577,6 +839,12 @@ def _render_session_strip() -> str:
         <div id="session-badges" class="flex flex-wrap gap-1 sm:gap-1.5 mt-2 sm:mt-3">
             <span class="text-[9px] text-zinc-600 self-center">Loading sessions...</span>
         </div>
+        <!-- Session data for JS badge updater — injected from Python at render time -->
+        <script>
+        window._RB_SESSIONS     = {js_sessions_json};
+        window._RB_OVERLAP      = [{overlap_start:.4f}, {overlap_end:.4f}];
+        window._RB_TYO_LUNCH    = [{tyo_lunch_start:.4f}, {tyo_lunch_end:.4f}];
+        </script>
     </div>
     """
 
@@ -4055,9 +4323,10 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 <nav class="co-nav">
     <a class="co-nav-brand" href="/">💎 Ruby Futures</a>
     <a class="co-nav-tab active" href="/">📊 Dashboard</a>
+    <a class="co-nav-tab" href="/trading">🚀 Trading</a>
     <a class="co-nav-tab" href="/charts">📈 Charts</a>
     <a class="co-nav-tab" href="/account">💰 Account</a>
-    <a class="co-nav-tab" href="/orb-history">📅 RB History</a>
+    <a class="co-nav-tab" href="/rb-history">📅 RB History</a>
     <a class="co-nav-tab" href="/journal/page">📓 Journal</a>
     <a class="co-nav-tab" href="/connections">🔌 Connections</a>
     <a class="co-nav-tab" href="/trainer">🧠 Trainer</a>
@@ -4320,7 +4589,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     <!-- Footer -->
     <footer style="margin-top:1.5rem;padding-top:0.5rem;border-top:1px solid var(--border-subtle);text-align:center">
         <span class="t-text-faint" style="font-size:10px">
-            Ruby Futures v1.0 — Session rules: Pre-market 00–03 | Active 03–12 | Off-hours 12–00 ET
+            Ruby Futures v1.0
             &nbsp;|&nbsp;
             <a href="/sse/health" class="underline hover:opacity-80">SSE Health</a>
             &nbsp;|&nbsp;
@@ -4338,13 +4607,11 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 (function() {{
     var HOUR_PCT = 100.0 / 24.0;
 
-    var SESSIONS = [
-        ['Sydney',    17, 26, '#22d3ee', '#3f3f46'],
-        ['Tokyo',     19, 28, '#818cf8', '#3f3f46'],
-        ['London',     3, 12, '#60a5fa', '#3f3f46'],
-        ['US Equity',  9, 16, '#34d399', '#3f3f46'],
-        ['CME 23h',   18, 41, '#2dd4bf', '#3f3f46'],
-    ];
+    // Session data injected by Python at render time from exchange_hours_in_et().
+    // Correct for both EDT (UTC-4) and EST (UTC-5) — no hardcoded offsets here.
+    var SESSIONS     = (window._RB_SESSIONS  || []);
+    var _OVERLAP     = (window._RB_OVERLAP   || [9.5, 12.0]);
+    var _TYO_LUNCH   = (window._RB_TYO_LUNCH || [22.5, 23.5]);
 
     function _etHour() {{
         var now = new Date();
@@ -4376,8 +4643,13 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
             html += (open ? '● ' : '○ ') + s[0];
             html += '</span>';
         }}
-        if (_isOpen(9, 12, h)) {{
+        // London/US overlap badge — bounds from Python-injected data
+        if (h >= _OVERLAP[0] && h < _OVERLAP[1]) {{
             html += '<span style="color:#fbbf24;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);font-size:9px;padding:1px 6px;border-radius:9999px;display:inline-block;margin:1px">⚡ London/US Overlap</span>';
+        }}
+        // Tokyo lunch break badge — bounds from Python-injected data
+        if (h >= _TYO_LUNCH[0] && h < _TYO_LUNCH[1]) {{
+            html += '<span style="color:#71717a;background:transparent;border:1px solid #3f3f46;font-size:9px;padding:1px 6px;border-radius:9999px;display:inline-block;margin:1px">🍱 Tokyo Lunch</span>';
         }}
         badgesEl.innerHTML = html;
     }}
@@ -4412,10 +4684,44 @@ function updateClock() {{
     }};
     if (badge) {{
         var c, txt;
-        if (etHour>=0&&etHour<3)       {{ c=colors.pre; txt='🌙 PRE-MARKET'; }}
-        else if (etHour>=3&&etHour<8)   {{ c=colors.london; txt='🟢 LONDON'; }}
-        else if (etHour>=8&&etHour<12)  {{ c=colors.us; txt='🟢 US OPEN'; }}
-        else                            {{ c=colors.off; txt='⚙️ OFF-HOURS'; }}
+        // Use fractional ET hour for sub-hour accuracy
+        var etMin  = parseInt(parts[1]||0);
+        var etFrac = etHour + etMin / 60.0;
+        // Session boundary hours are injected by Python from exchange_hours_in_et()
+        // so they are always correct for both EDT and EST without any hardcoded offsets.
+        var _ovL = _OVERLAP[0];     // London/US overlap start (= US open, e.g. 9.5)
+        var _ovE = _OVERLAP[1];     // London/US overlap end   (e.g. 12.0)
+        var _ses = {{}};             // key → o=open, c=close for quick lookup
+        for (var _i=0; _i<SESSIONS.length; _i++) {{
+            _ses[SESSIONS[_i][0]] = {{o: SESSIONS[_i][1], c: SESSIONS[_i][2]}};
+        }}
+        // Helper: look up a session's open/close by label prefix
+        function _sh(lbl) {{ return _ses[lbl] || null; }}
+        var _cme   = _sh('CME Re-open');
+        var _syd   = _sh('SYD/ASX');
+        var _tyo   = _sh('TYO/TSE');
+        var _sha   = _sh('SHA/SSE');
+        var _fra   = _sh('FRA/Xetra');
+        var _lon   = _sh('LON/LSE');
+        var _us    = _sh('US Equity');
+        var _set   = _sh('CME Settle');
+        // Evaluate daytime ET bands first (most common during US hours),
+        // then work through the overnight chain.  All boundary values come
+        // from the Python-injected data so DST is handled automatically.
+        if      (_us  && etFrac>=_ovL       && etFrac<_ovE)               {{ c='#fbbf24'; txt='⚡ LONDON/US OVERLAP'; }}
+        else if (_us  && etFrac>=_us.o      && etFrac<14.0)               {{ c=colors.us;     txt='🟢 US OPEN'; }}
+        else if (_set && etFrac>=_set.o     && etFrac<_set.c)             {{ c='#fb923c'; txt='📊 CME SETTLEMENT'; }}
+        else if (_us  && etFrac>=_set.c     && etFrac<_us.c)              {{ c=colors.us;     txt='🟢 US OPEN'; }}
+        else if (_lon && etFrac>=_fra.o     && etFrac<_us.o)              {{ c=colors.london; txt='🟢 LONDON OPEN'; }}
+        else if (_lon && etFrac>=_us.o      && etFrac<_ovL)               {{ c='#818cf8'; txt='🟢 LN-NY CROSSOVER'; }}
+        else if (_cme && etFrac>=_us.c      && etFrac<_cme.o)             {{ c=colors.off;    txt='⚙️ OFF-HOURS'; }}
+        else if (_cme && etFrac>=_cme.o     && etFrac<_cme.c)             {{ c='#2dd4bf'; txt='🔔 CME GLOBEX OPEN'; }}
+        else if (_syd && etFrac>=_syd.o     && etFrac<_tyo.o)             {{ c='#94a3b8'; txt='🌙 SYDNEY OPEN'; }}
+        else if (_tyo && etFrac>=_tyo.o     && etFrac<_sha.o)             {{ c='#a5b4fc'; txt='🌙 TOKYO OPEN'; }}
+        else if (_sha && (etFrac>=_sha.o    || etFrac<_fra.o))            {{ c='#fca5a5'; txt='🌙 SHANGHAI/TOKYO'; }}
+        else if (_tyo && etFrac>=0          && etFrac<(_tyo.c % 24))      {{ c='#a5b4fc'; txt='🌙 TOKYO / PRE-LONDON'; }}
+        else if (_fra && etFrac>=(_tyo.c%24)&& etFrac<_fra.o)             {{ c='#c084fc'; txt='🌙 PRE-LONDON'; }}
+        else                                                               {{ c=colors.off;    txt='⚙️ OFF-HOURS'; }}
         badge.innerHTML = txt;
         badge.style.color = c;
         if (el) el.style.color = c;
@@ -5935,7 +6241,32 @@ def charts_page() -> str:
         </p>
     </div>
 
+    <!-- Data init banner: fires a bar-fill check on load so regime + volume profile
+         have enough history to render even on a cold start. Hidden once done. -->
+    <div id="charts-init-banner"
+         style="margin-bottom:12px;padding:8px 12px;background:rgba(99,102,241,0.1);
+                border:1px solid rgba(99,102,241,0.3);border-radius:8px;
+                font-size:0.75rem;color:#818cf8;display:flex;align-items:center;gap:8px">
+        <span class="animate-pulse">⏳</span>
+        <span id="charts-init-msg">Initialising bar data for charts…</span>
+        <button onclick="document.getElementById('charts-init-banner').style.display='none'"
+                style="margin-left:auto;background:none;border:none;color:#52525b;
+                       cursor:pointer;font-size:1rem;line-height:1">✕</button>
+    </div>
+
     <div class="grid grid-cols-1" style="gap:12px;max-width:1200px">
+        <!-- Market Regime — needs ≥200 bars; init ensures data is available -->
+        <div class="t-panel border t-border rounded-lg p-4"
+             style="border-left:3px solid rgba(124,58,237,0.5)">
+            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">🧮 Market Regime</h3>
+            <div id="charts-regime"
+                 hx-get="/api/regime/html"
+                 hx-trigger="load, every 60s"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading regime…</div>
+            </div>
+        </div>
+
         <!-- Crypto Chart -->
         <div class="t-panel border t-border rounded-lg p-4"
              style="border-left:3px solid rgba(247,147,26,0.5)">
@@ -5984,6 +6315,41 @@ def charts_page() -> str:
             </div>
         </div>
     </div>
+
+    <script>
+    (function() {
+        // On charts page load, trigger a background bar fill so regime detection
+        // and volume profile have enough data.  Calls the existing fill-all endpoint
+        // which is idempotent — it only fetches missing gaps.
+        function chartsInit() {
+            var banner = document.getElementById('charts-init-banner');
+            var msg    = document.getElementById('charts-init-msg');
+            fetch('/api/bars/fill-all', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                         body: JSON.stringify({force: false})})
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    if (msg) msg.textContent = d.message || 'Bar data ready.';
+                    setTimeout(function() {
+                        if (banner) banner.style.display = 'none';
+                        // Refresh regime panel now that bars are available
+                        if (typeof htmx !== 'undefined') {
+                            htmx.ajax('GET', '/api/regime/html', {target: '#charts-regime', swap: 'innerHTML'});
+                            htmx.ajax('GET', '/api/volume-profile/html', {target: '#charts-vp', swap: 'innerHTML'});
+                        }
+                    }, 3000);
+                })
+                .catch(function() {
+                    if (msg) msg.textContent = 'Bar data check skipped (service unavailable).';
+                    setTimeout(function() { if (banner) banner.style.display = 'none'; }, 4000);
+                });
+        }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', chartsInit);
+        } else {
+            chartsInit();
+        }
+    })();
+    </script>
     """
     return _build_page_shell(
         title="Charts — Ruby Futures",
@@ -6060,7 +6426,7 @@ def connections_page() -> str:
     </div>
 
     <div class="grid grid-cols-1" style="gap:12px;max-width:1200px">
-        <!-- System Health -->
+        <!-- System Health — all services -->
         <div class="t-panel border t-border rounded-lg p-4">
             <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">🏥 System Health</h3>
             <div id="conn-health"
@@ -6105,13 +6471,21 @@ def connections_page() -> str:
             </div>
         </div>
 
-        <!-- Broker Bridge Status (placeholder for future Tradovate) -->
+        <!-- Rithmic Prop Accounts -->
         <div class="t-panel border t-border rounded-lg p-4"
-             style="border-left:3px solid rgba(99,102,241,0.4)">
-            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">🔗 Broker Bridge</h3>
-            <div class="t-text-faint text-xs" style="padding:1rem 0;text-align:center">
-                No broker bridge connected.<br/>
-                <span style="font-size:10px;color:var(--text-faint)">Tradovate bridge coming soon — configure in <a href="/settings" style="text-decoration:underline">Settings</a>.</span>
+             style="border-left:3px solid rgba(99,102,241,0.5)">
+            <div class="flex items-center justify-between mb-2">
+                <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">🏦 Rithmic Prop Accounts</h3>
+                <a href="/settings#rithmic"
+                   style="font-size:10px;color:#818cf8;text-decoration:none">
+                    ⚙️ Configure
+                </a>
+            </div>
+            <div id="conn-rithmic"
+                 hx-get="/api/rithmic/status/html"
+                 hx-trigger="load, every 30s"
+                 hx-swap="innerHTML">
+                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading Rithmic account status...</div>
             </div>
         </div>
     </div>
@@ -6128,6 +6502,14 @@ def connections_page() -> str:
 def charts_page_route():
     """Serve the Charts page."""
     return HTMLResponse(content=charts_page())
+
+
+@router.get("/rb-history", response_class=HTMLResponse)
+def rb_history_redirect():
+    """Serve RB History under the canonical /rb-history path."""
+    from fastapi.responses import RedirectResponse
+
+    return RedirectResponse(url="/orb-history", status_code=301)
 
 
 @router.get("/account", response_class=HTMLResponse)

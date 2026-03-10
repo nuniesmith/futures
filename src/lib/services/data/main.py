@@ -151,6 +151,9 @@ from lib.services.data.api.metrics import (  # noqa: E402
 from lib.services.data.api.nt8_deploy import (  # noqa: E402
     router as nt8_deploy_router,
 )
+from lib.services.data.api.pipeline import (  # noqa: E402
+    router as pipeline_router,
+)
 from lib.services.data.api.positions import (  # noqa: E402
     router as positions_router,
 )
@@ -650,6 +653,16 @@ app.include_router(trainer_router, tags=["Trainer"])
 # NOTE: settings_router is mounted WITHOUT a prefix — route is defined with /settings path.
 app.include_router(settings_router, tags=["Settings"])
 
+# Rithmic: /api/rithmic/accounts, /api/rithmic/status, /api/rithmic/status/html,
+#          /api/rithmic/account/{key}, /api/rithmic/account/{key}/refresh,
+#          /api/rithmic/account/{key}/config, /api/rithmic/account/{key}/remove,
+#          /api/rithmic/refresh-all, /api/rithmic/config/new-key, /api/rithmic/deps,
+#          /settings/rithmic/panel
+# NOTE: rithmic_router is mounted WITHOUT a prefix — routes are defined with full paths.
+from lib.integrations.rithmic_client import router as rithmic_router  # noqa: E402
+
+app.include_router(rithmic_router, tags=["Rithmic"])
+
 
 # Live Risk: /api/live-risk, /api/live-risk/html, /api/live-risk/summary,
 #            /api/live-risk/refresh, /api/live-risk/position/{asset_name}/html
@@ -670,6 +683,14 @@ app.include_router(swing_actions_router, tags=["Swing Actions"])
 #                   /api/reddit/snapshot, /htmx/reddit/panel, /htmx/reddit/asset/{asset}
 # NOTE: reddit_router is mounted WITHOUT a prefix — routes are defined with full paths.
 app.include_router(reddit_router, tags=["Reddit Sentiment"])
+
+# Pipeline: /api/pipeline/run, /api/pipeline/status, /api/pipeline/reset,
+#           /api/plan, /api/plan/confirm, /api/plan/unlock,
+#           /api/live/stream, /api/market/candles, /api/market/cvd,
+#           /api/journal/trades, /api/trading/settings, /trading (HTML page)
+# Morning workflow pipeline — SSE-driven analysis, plan management, live trading.
+# NOTE: pipeline_router is mounted WITHOUT a prefix — routes are defined with full paths.
+app.include_router(pipeline_router, tags=["Pipeline"])
 
 
 # ---------------------------------------------------------------------------

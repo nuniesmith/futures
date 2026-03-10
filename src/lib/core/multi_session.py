@@ -63,8 +63,10 @@ Design:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from datetime import time as dt_time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 # ---------------------------------------------------------------------------
 # Ordered session key list — chronological Globex-day (18:00 ET start)
@@ -374,6 +376,426 @@ SESSION_BY_KEY: dict[str, ORBSession] = {
     "us": _US_SESSION,
     "cme_settle": _CME_SETTLE_SESSION,
 }
+
+
+# ---------------------------------------------------------------------------
+# UTC exchange hours — single source of truth for all global session times
+# ---------------------------------------------------------------------------
+#
+# Every exchange opens and closes at a fixed UTC time (no DST — the exchange
+# doesn't move, only our local clock does).  We store open/close as fractional
+# UTC hours so that ``exchange_hours_in_et()`` can convert them to the correct
+# ET wall-clock hour automatically, handling both EST (UTC-5) and EDT (UTC-4).
+#
+# Format: (label, utc_open, utc_close, fg_hex, bg_hex, row)
+#   utc_close > 24 means the session closes the following UTC calendar day.
+#   row: 0 = background span (CME Globex), 1 = overnight/Asian/EU, 2 = primary
+#
+# UTC open/close derivations:
+#   CME Globex re-open : 22:00 UTC (18:00 EST / 17:00 EDT — but CME actually
+#                        re-opens at 18:00 ET, so UTC = 18:00+5=23:00 in winter,
+#                        18:00+4=22:00 in summer.  We store as ET wall-clock
+#                        via the ORBSession or_start already; see note below.)
+#
+# NOTE: CME, Sydney, Tokyo, Shanghai times are all defined in ET wall-clock in
+# the ORBSession objects above (they follow US DST, since CME is Chicago-based).
+# Frankfurt and London are fixed UTC — they DO shift relative to ET when DST
+# transitions happen on different dates in the US vs Europe.
+#
+# Full exchange hours (UTC, no DST):
+#   ASX / Sydney    :  23:00 – 06:00 UTC  (session open 10:00–16:00 AEST/AEDT;
+#                       AEDT=UTC+11 → 23:00–05:00 UTC Oct–Apr,
+#                       AEST=UTC+10 → 00:00–06:00 UTC Apr–Oct)
+#                      We use AEDT (active until ~early Apr): open=23:00, close=05:00
+#   Tokyo / TSE     :  00:00 – 06:25 UTC  (09:00–15:25 JST, UTC+9, no DST)
+#                      Lunch break 02:30–03:30 UTC (11:30–12:30 JST)
+#   Shanghai / SSE  :  01:30 – 07:00 UTC  (09:30–15:00 CST, UTC+8, no DST)
+#   Frankfurt/Xetra :  08:00 – 16:30 UTC  (09:00–17:30 CET=UTC+1 / CEST=UTC+2)
+#                      During CET  (winter): open=08:00, close=16:30 UTC
+#                      During CEST (summer): open=07:00, close=15:30 UTC
+#                      Europe switches ~last Sun Mar → last Sun Oct
+#   London / LSE    :  08:00 – 16:30 UTC  (08:00–16:30 GMT / 07:00–15:30 BST)
+#                      During GMT  (winter): open=08:00, close=16:30 UTC
+#                      During BST  (summer): open=07:00, close=15:30 UTC
+#   NYSE / CME RTH  :  14:30 – 21:00 UTC  (09:30–16:00 ET, DST-aware via ET)
+#   CME Settlement  :  19:00 – 19:30 UTC  (14:00–14:30 EST / 15:00–15:30 EDT)
+#                      We keep settlement as ET wall-clock (14:00 ET) in ORBSession.
+#
+# For the dashboard strip we store everything as UTC fractional hours and
+# convert at render time so the displayed ET positions are always correct.
+
+_UTC = UTC
+_ET = ZoneInfo("America/New_York")
+
+
+def _utc_frac_to_et_frac(utc_frac: float) -> float:
+    """Convert a fractional UTC hour (e.g. 8.5 = 08:30 UTC) to a fractional
+    ET wall-clock hour using the *current* UTC offset for America/New_York.
+
+    This correctly handles both EST (UTC-5, offset=-5) and EDT (UTC-4,
+    offset=-4) without any hardcoded offsets.
+
+    Returns a value in [0, 24) for same-day hours, or a negative / >24
+    value if the conversion crosses midnight — callers normalise with % 24
+    or handle wrap-around in the strip renderer.
+    """
+    # Use today's date to get an accurate DST-aware offset
+    today = datetime.now(tz=_UTC).date()
+    utc_h = int(utc_frac)
+    utc_m = int(round((utc_frac - utc_h) * 60))
+    # Clamp hour into 0-23 for the datetime constructor (wrap-around handled below)
+    utc_h_clamped = utc_h % 24
+    extra_days = utc_h // 24
+    from datetime import timedelta
+
+    dt_utc = datetime(today.year, today.month, today.day, utc_h_clamped, utc_m, tzinfo=_UTC) + timedelta(
+        days=extra_days
+    )
+    dt_et = dt_utc.astimezone(_ET)
+    return dt_et.hour + dt_et.minute / 60.0
+
+
+def _et_offset_hours() -> float:
+    """Return the current UTC offset for America/New_York as a signed float.
+
+    Examples: -5.0 during EST (winter), -4.0 during EDT (summer).
+    """
+    now_et = datetime.now(tz=_ET)
+    offset = now_et.utcoffset()
+    assert offset is not None
+    return offset.total_seconds() / 3600.0
+
+
+# ---------------------------------------------------------------------------
+# Exchange hours in UTC — used by exchange_hours_in_et()
+# ---------------------------------------------------------------------------
+#
+# Tuple fields:
+#   key        : matches SESSION_BY_KEY keys where applicable
+#   label      : display label for the session strip
+#   utc_open   : fractional UTC hour of exchange open
+#   utc_close  : fractional UTC hour of exchange close (>24 = next UTC day)
+#   fg_hex     : foreground / label colour
+#   bg_hex     : background bar colour
+#   row        : strip row (0=background, 1=overnight/Asian/EU, 2=primary)
+#   note       : human-readable note about DST behaviour
+
+_EXCHANGE_HOURS_UTC: list[dict] = [
+    # ── CME Globex background span (22:00 UTC → ~21:00 UTC next day, ~23 h) ──
+    # CME re-opens at 18:00 ET regardless of DST, so the UTC time shifts with
+    # the US DST transition.  We derive this from _ET offset rather than
+    # hardcoding UTC, via the OR start time in _CME_SESSION.
+    # The background bar is rendered separately using ET wall-clock from ORBSession.
+    # ── Asian overnight sessions ──
+    {
+        "key": "sydney",
+        "label": "SYD/ASX",
+        "utc_open": 23.0,  # 10:00 AEDT (UTC+11); shifts to 00:00 UTC when AEST (UTC+10) active Apr–Oct
+        "utc_close": 29.0,  # 06:00 UTC next day (16:00 AEDT) — stored as 24+5
+        "fg_hex": "#94a3b8",
+        "bg_hex": "#1e293b",
+        "row": 1,
+        "note": "AEDT=UTC+11 (Oct–Apr), AEST=UTC+10 (Apr–Oct). Open shifts 1h later in AEST.",
+    },
+    {
+        "key": "tokyo",
+        "label": "TYO/TSE",
+        "utc_open": 0.0,  # 09:00 JST (UTC+9), no DST
+        "utc_close": 6.4167,  # 15:25 JST = 06:25 UTC
+        "fg_hex": "#a5b4fc",
+        "bg_hex": "#1e1b4b",
+        "row": 1,
+        "note": "JST=UTC+9, no DST. Lunch 02:30–03:30 UTC (11:30–12:30 JST).",
+    },
+    {
+        "key": "shanghai",
+        "label": "SHA/SSE",
+        "utc_open": 1.5,  # 09:30 CST (UTC+8), no DST
+        "utc_close": 7.0,  # 15:00 CST = 07:00 UTC
+        "fg_hex": "#fca5a5",
+        "bg_hex": "#3b0a0a",
+        "row": 1,
+        "note": "CST=UTC+8, no DST.",
+    },
+    # ── European sessions ──
+    # Frankfurt and London share the same UTC hours (both CET/BST align with GMT/CET).
+    # During EU summer time (CEST/BST) the UTC open is 07:00 instead of 08:00.
+    # We compute the correct UTC open dynamically in exchange_hours_in_et().
+    {
+        "key": "frankfurt",
+        "label": "FRA/Xetra",
+        "utc_open": 8.0,  # 09:00 CET (UTC+1); 07:00 UTC during CEST (UTC+2)
+        "utc_close": 16.5,  # 17:30 CET = 16:30 UTC; 15:30 UTC during CEST
+        "fg_hex": "#fde68a",
+        "bg_hex": "#1c1a08",
+        "row": 1,
+        "note": "CET=UTC+1 (Oct–Mar), CEST=UTC+2 (Mar–Oct). Open shifts 1h earlier in CEST.",
+    },
+    {
+        "key": "london",
+        "label": "LON/LSE",
+        "utc_open": 8.0,  # 08:00 GMT (UTC+0); 07:00 UTC during BST (UTC+1)
+        "utc_close": 16.5,  # 16:30 GMT = 16:30 UTC; 15:30 UTC during BST
+        "fg_hex": "#93c5fd",
+        "bg_hex": "#1e3a5f",
+        "row": 2,
+        "note": "GMT=UTC+0 (Oct–Mar), BST=UTC+1 (Mar–Oct). Open shifts 1h earlier in BST.",
+    },
+    # ── US primary session ──
+    {
+        "key": "us",
+        "label": "US Equity",
+        "utc_open": 14.5,  # 09:30 ET — DST-aware: 14:30 UTC (EDT=UTC-4) or 14:30 UTC (EST=UTC-5=14:30... wait)
+        # NYSE 09:30 ET: EDT(UTC-4) → 13:30 UTC; EST(UTC-5) → 14:30 UTC
+        # We leave utc_open as 13.5 and recompute below via ET offset.
+        # Placeholder overridden in exchange_hours_in_et() for ET-anchored sessions.
+        "utc_close": 21.0,  # 16:00 ET → 20:00 UTC (EDT) or 21:00 UTC (EST)
+        "fg_hex": "#6ee7b7",
+        "bg_hex": "#052e16",
+        "row": 2,
+        "note": "NYSE RTH 09:30–16:00 ET. UTC time shifts with US DST.",
+    },
+]
+
+# Sessions whose open/close times are anchored to ET wall-clock (not fixed UTC).
+# These are derived from the ORBSession or_start and the known session length,
+# so they automatically follow the US DST schedule.
+_ET_ANCHORED_SESSION_KEYS = {"cme", "sydney", "tokyo", "shanghai", "us", "cme_settle"}
+
+
+def _eu_utc_offset(dt_utc: datetime) -> int:
+    """Return the UTC offset (hours) for Central European Time at a given UTC datetime.
+
+    CET  (winter) = UTC+1: last Sunday Oct → last Sunday Mar
+    CEST (summer) = UTC+2: last Sunday Mar → last Sunday Oct
+    UK/BST follows the same schedule: GMT=UTC+0 winter, BST=UTC+1 summer.
+
+    We determine this by asking ZoneInfo for Europe/Berlin (CET/CEST).
+    """
+    berlin = ZoneInfo("Europe/Berlin")
+    dt_berlin = dt_utc.astimezone(berlin)
+    offset = dt_berlin.utcoffset()
+    assert offset is not None
+    return int(offset.total_seconds() // 3600)
+
+
+def exchange_hours_in_et() -> list[dict]:
+    """Return all exchange session hours converted to ET wall-clock fractions.
+
+    This is the single authoritative source consumed by the dashboard session
+    strip renderer and the JS badge updater.  All times are expressed as
+    fractional ET hours (e.g. 9.5 = 09:30 ET).  Sessions that wrap past
+    midnight have ``et_close > 24`` (e.g. 26.0 = 02:00 ET next day).
+
+    The conversion is done at call time using the live UTC↔ET offset
+    (``ZoneInfo("America/New_York")``), so it is always correct for both
+    EDT (UTC-4, summer) and EST (UTC-5, winter) without any hardcoded offsets.
+
+    European sessions (Frankfurt, London) additionally account for the
+    EU DST schedule (CET/CEST, GMT/BST) which transitions on different dates
+    than the US schedule.
+
+    ET-anchored sessions (CME, Sydney, Tokyo, Shanghai, US Equity, CME
+    Settlement) are taken directly from the ORBSession ``or_start``/``or_end``
+    ET wall-clock times plus their known full-session lengths, so they
+    automatically follow the US DST calendar.
+
+    Returns a list of dicts, one per session, with keys:
+        key, label, et_open, et_close, fg_hex, bg_hex, row, note
+    """
+
+    now_utc = datetime.now(tz=_UTC)
+    et_offset = _et_offset_hours()  # e.g. -4.0 (EDT) or -5.0 (EST)
+    eu_offset = _eu_utc_offset(now_utc)  # e.g. +1 (CET) or +2 (CEST)
+
+    result: list[dict] = []
+
+    # ── ET-anchored sessions (follow US DST via ORBSession ET wall-clock) ──
+    # CME Globex re-open: 18:00–18:30 ET (ORB window only; full session is 23 h)
+    cme = SESSION_BY_KEY["cme"]
+    cme_open_et = cme.or_start.hour + cme.or_start.minute / 60.0
+    result.append(
+        {
+            "key": "cme",
+            "label": "CME Re-open",
+            "et_open": cme_open_et,  # 18.0
+            "et_close": cme_open_et + 0.5,  # 18.5  (ORB window end)
+            "fg_hex": "#2dd4bf",
+            "bg_hex": "#042f2e",
+            "row": 0,
+            "note": "CME Globex re-opens 18:00 ET (ORB window 18:00–18:30).",
+        }
+    )
+    # CME Globex full background bar: 18:00 ET → 17:00 ET next day (~23 h)
+    result.append(
+        {
+            "key": "cme_background",
+            "label": "CME Globex",
+            "et_open": cme_open_et,  # 18.0
+            "et_close": cme_open_et + 23.0,  # 41.0 → rendered as 18:00–41:00 (clips at 24h on strip)
+            "fg_hex": "#5eead4",
+            "bg_hex": "#042f2e",
+            "row": 0,
+            "note": "CME Globex full 23-hour background session.",
+        }
+    )
+
+    # Sydney / ASX: full exchange 10:00–16:00 AEST/AEDT
+    # AEDT (UTC+11, Oct–Apr): 23:00–05:00 UTC → ET via utc_frac_to_et
+    # AEST (UTC+10, Apr–Oct): 00:00–06:00 UTC → ET via utc_frac_to_et
+    # We determine which is active by asking Australia/Sydney ZoneInfo.
+    sydney_tz = ZoneInfo("Australia/Sydney")
+    dt_sydney = now_utc.astimezone(sydney_tz)
+    aest_offset = int(dt_sydney.utcoffset().total_seconds() // 3600)  # type: ignore[union-attr]
+    # ASX opens 10:00 local = 10:00 - aest_offset UTC
+    asx_open_utc = 10.0 - aest_offset
+    asx_close_utc = 16.0 - aest_offset
+    # Convert to ET: add et_offset (negative)
+    asx_open_et = asx_open_utc + et_offset
+    asx_close_et = asx_close_utc + et_offset
+    # Normalise into Globex-day frame (18:00 ET = hour 18; midnight = 24; etc.)
+    if asx_open_et < 0:
+        asx_open_et += 24
+    if asx_close_et <= asx_open_et:
+        asx_close_et += 24
+    result.append(
+        {
+            "key": "sydney",
+            "label": "SYD/ASX",
+            "et_open": asx_open_et,
+            "et_close": asx_close_et,
+            "fg_hex": "#94a3b8",
+            "bg_hex": "#1e293b",
+            "row": 1,
+            "note": f"ASX 10:00–16:00 local (AEDT/AEST=UTC+{aest_offset}). "
+            f"Opens {asx_open_et:.4g}h ET, closes {asx_close_et:.4g}h ET.",
+        }
+    )
+
+    # Tokyo / TSE: 09:00–15:25 JST (UTC+9, no DST)
+    tyo_open_utc = 0.0  # 09:00 JST - 9 = 00:00 UTC
+    tyo_close_utc = 6.4167  # 15:25 JST - 9 = 06:25 UTC
+    tyo_open_et = tyo_open_utc + et_offset
+    tyo_close_et = tyo_close_utc + et_offset
+    if tyo_open_et < 0:
+        tyo_open_et += 24
+    if tyo_close_et <= 0:
+        tyo_close_et += 24
+    # Ensure close > open in Globex-day frame
+    if tyo_close_et <= tyo_open_et:
+        tyo_close_et += 24
+    result.append(
+        {
+            "key": "tokyo",
+            "label": "TYO/TSE",
+            "et_open": tyo_open_et,
+            "et_close": tyo_close_et,
+            "fg_hex": "#a5b4fc",
+            "bg_hex": "#1e1b4b",
+            "row": 1,
+            "note": f"TSE 09:00–15:25 JST (UTC+9, no DST). "
+            f"Opens {tyo_open_et:.4g}h ET, closes {tyo_close_et:.4g}h ET. "
+            "Lunch break 11:30–12:30 JST.",
+        }
+    )
+
+    # Shanghai / SSE: 09:30–15:00 CST (UTC+8, no DST)
+    sha_open_utc = 1.5  # 09:30 CST - 8 = 01:30 UTC
+    sha_close_utc = 7.0  # 15:00 CST - 8 = 07:00 UTC
+    sha_open_et = sha_open_utc + et_offset
+    sha_close_et = sha_close_utc + et_offset
+    if sha_open_et < 0:
+        sha_open_et += 24
+    if sha_close_et < 0:
+        sha_close_et += 24
+    if sha_close_et <= sha_open_et:
+        sha_close_et += 24
+    result.append(
+        {
+            "key": "shanghai",
+            "label": "SHA/SSE",
+            "et_open": sha_open_et,
+            "et_close": sha_close_et,
+            "fg_hex": "#fca5a5",
+            "bg_hex": "#3b0a0a",
+            "row": 1,
+            "note": f"SSE 09:30–15:00 CST (UTC+8, no DST). Opens {sha_open_et:.4g}h ET, closes {sha_close_et:.4g}h ET.",
+        }
+    )
+
+    # Frankfurt / Xetra: 09:00–17:30 local (CET=UTC+1 or CEST=UTC+2)
+    fra_open_utc = 9.0 - eu_offset  # 08:00 UTC (CET) or 07:00 UTC (CEST)
+    fra_close_utc = 17.5 - eu_offset  # 16:30 UTC (CET) or 15:30 UTC (CEST)
+    fra_open_et = fra_open_utc + et_offset
+    fra_close_et = fra_close_utc + et_offset
+    result.append(
+        {
+            "key": "frankfurt",
+            "label": "FRA/Xetra",
+            "et_open": fra_open_et,
+            "et_close": fra_close_et,
+            "fg_hex": "#fde68a",
+            "bg_hex": "#1c1a08",
+            "row": 1,
+            "note": f"Xetra 09:00–17:30 local (CET/CEST=UTC+{eu_offset}). "
+            f"Opens {fra_open_et:.4g}h ET, closes {fra_close_et:.4g}h ET.",
+        }
+    )
+
+    # London / LSE: 08:00–16:30 local (GMT=UTC+0 or BST=UTC+1)
+    # BST offset = eu_offset - 1 (London is always 1h behind Frankfurt)
+    bst_offset = eu_offset - 1  # 0 (GMT winter) or 1 (BST summer)
+    lon_open_utc = 8.0 - bst_offset  # 08:00 UTC (GMT) or 07:00 UTC (BST)
+    lon_close_utc = 16.5 - bst_offset  # 16:30 UTC (GMT) or 15:30 UTC (BST)
+    lon_open_et = lon_open_utc + et_offset
+    lon_close_et = lon_close_utc + et_offset
+    result.append(
+        {
+            "key": "london",
+            "label": "LON/LSE",
+            "et_open": lon_open_et,
+            "et_close": lon_close_et,
+            "fg_hex": "#93c5fd",
+            "bg_hex": "#1e3a5f",
+            "row": 2,
+            "note": f"LSE 08:00–16:30 local (GMT/BST=UTC+{bst_offset}). "
+            f"Opens {lon_open_et:.4g}h ET, closes {lon_close_et:.4g}h ET.",
+        }
+    )
+
+    # US Equity / NYSE: 09:30–16:00 ET (ET-anchored, follows US DST)
+    us = SESSION_BY_KEY["us"]
+    us_open_et = us.or_start.hour + us.or_start.minute / 60.0  # 9.5
+    result.append(
+        {
+            "key": "us",
+            "label": "US Equity",
+            "et_open": us_open_et,  # 9.5
+            "et_close": 16.0,
+            "fg_hex": "#6ee7b7",
+            "bg_hex": "#052e16",
+            "row": 2,
+            "note": "NYSE/CME RTH 09:30–16:00 ET. ET-anchored, follows US DST.",
+        }
+    )
+
+    # CME Settlement: 14:00–14:30 ET (ET-anchored)
+    settle = SESSION_BY_KEY["cme_settle"]
+    settle_open_et = settle.or_start.hour + settle.or_start.minute / 60.0  # 14.0
+    result.append(
+        {
+            "key": "cme_settle",
+            "label": "CME Settle",
+            "et_open": settle_open_et,
+            "et_close": settle_open_et + 0.5,
+            "fg_hex": "#fb923c",
+            "bg_hex": "#1c0a00",
+            "row": 1,
+            "note": "CME metals/energy settlement window 14:00–14:30 ET.",
+        }
+    )
+
+    return result
 
 
 # ---------------------------------------------------------------------------

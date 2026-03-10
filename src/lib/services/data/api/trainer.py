@@ -415,7 +415,7 @@ tr:hover td{background:var(--bg-inner)}
   <a class="nav-tab" href="/">📊 Dashboard</a>
   <a class="nav-tab" href="/charts">📈 Charts</a>
   <a class="nav-tab" href="/account">💰 Account</a>
-  <a class="nav-tab" href="/orb-history">📅 RB History</a>
+  <a class="nav-tab" href="/rb-history">📅 RB History</a>
   <a class="nav-tab" href="/journal/page">📓 Journal</a>
   <a class="nav-tab" href="/connections">🔌 Connections</a>
   <a class="nav-tab active" href="/trainer">🧠 Trainer</a>

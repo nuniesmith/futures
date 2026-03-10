@@ -98,6 +98,11 @@ def _compute_health() -> dict[str, Any]:
         "engine_up": False,
         "redis_up": False,
         "postgres_up": False,
+        # Optional companion services (probed via HTTP)
+        "charting_up": False,
+        "trainer_up": False,
+        "grafana_up": False,
+        "prometheus_up": False,
         # Broker / TradingView health
         "broker_connected": False,
         "bridge_connected": False,  # Legacy alias for dashboard compat
@@ -208,6 +213,29 @@ def _compute_health() -> dict[str, Any]:
     except Exception:
         result["cnn_model_on_disk"] = False
 
+    # --- Optional companion services (non-blocking HTTP probes) ---
+    # These are best-effort — failures are silently absorbed so the health
+    # bar never hangs waiting for an optional service.
+    _companion_services = [
+        ("charting_up", os.getenv("CHARTING_SERVICE_URL", "http://charting:8090"), "/health"),
+        ("trainer_up", os.getenv("TRAINER_SERVICE_URL", "http://trainer:8200"), "/health"),
+        ("grafana_up", os.getenv("GRAFANA_URL", "http://grafana:3000"), "/api/health"),
+        ("prometheus_up", os.getenv("PROMETHEUS_URL", "http://prometheus:9090"), "/-/healthy"),
+    ]
+    try:
+        import httpx as _httpx
+
+        for _key, _base_url, _path in _companion_services:
+            try:
+                with _httpx.Client(timeout=2.0) as _c:
+                    _r = _c.get(f"{_base_url.rstrip('/')}{_path}")
+                    result[_key] = _r.status_code < 500
+            except Exception:
+                result[_key] = False
+    except ImportError:
+        # httpx not available — leave all companion flags False
+        pass
+
     return result
 
 
@@ -237,23 +265,36 @@ def _render_health_dot(label: str, is_up: bool, title_up: str, title_down: str) 
 def _render_health_bar(health: dict[str, Any]) -> str:
     """Render health indicators as a compact HTML fragment.
 
-    Shows colored dots for Data, Engine, Redis, Postgres (service-level)
+    Shows colored dots for Data, Engine, Redis, Postgres (core services),
+    Charting, Trainer, Grafana, Prometheus (companion services),
     and a CNN badge.  Designed to sit in the dashboard header bar.
     """
-    # --- Service-level indicators ---
+    # --- Core service indicators ---
     data_ok = health.get("data_service_up", True)
     engine_ok = health.get("engine_up", False)
     redis_ok = health.get("redis_up", False)
     postgres_ok = health.get("postgres_up", False)
 
+    # --- Companion service indicators ---
+    charting_ok = health.get("charting_up", False)
+    trainer_ok = health.get("trainer_up", False)
+    grafana_ok = health.get("grafana_up", False)
+    prom_ok = health.get("prometheus_up", False)
+
     # --- CNN model ---
     cnn_on_disk = health.get("cnn_model_on_disk", False)
 
-    # Service dots
+    # Core service dots
     data_dot = _render_health_dot("Data", data_ok, "Data Service: Running", "Data Service: Down")
     engine_dot = _render_health_dot("Engine", engine_ok, "Engine: Running", "Engine: Not running")
     redis_dot = _render_health_dot("Redis", redis_ok, "Redis: Connected", "Redis: Disconnected")
     pg_dot = _render_health_dot("Postgres", postgres_ok, "Postgres: Connected", "Postgres: Disconnected")
+
+    # Companion service dots (shown slightly dimmer when down to reduce noise)
+    charting_dot = _render_health_dot("Charts", charting_ok, "Charting: Running", "Charting: Down")
+    trainer_dot = _render_health_dot("Trainer", trainer_ok, "Trainer: Running", "Trainer: Down (optional)")
+    grafana_dot = _render_health_dot("Grafana", grafana_ok, "Grafana: Running", "Grafana: Down (optional)")
+    prom_dot = _render_health_dot("Prom", prom_ok, "Prometheus: Running", "Prometheus: Down (optional)")
 
     # CNN badge — purple when model is on disk, grey when missing
     if cnn_on_disk:
@@ -269,17 +310,27 @@ def _render_health_bar(health: dict[str, Any]) -> str:
         cnn_color = "#71717a"
         cnn_label = "CNN –"
 
-    cnn_badge = f"""<span style="padding:2px 6px;background:{cnn_bg};border:1px solid {cnn_border};
-                     border-radius:4px;font-size:10px;color:{cnn_color};font-weight:600;
-                     letter-spacing:0.025em;cursor:default" title="{cnn_title}">{cnn_label}</span>"""
+    cnn_badge = (
+        f'<span style="padding:2px 6px;background:{cnn_bg};border:1px solid {cnn_border};'
+        f"border-radius:4px;font-size:10px;color:{cnn_color};font-weight:600;"
+        f'letter-spacing:0.025em;cursor:default" title="{cnn_title}">{cnn_label}</span>'
+    )
+
+    # Thin vertical divider between core and companion groups
+    divider = '<span style="width:1px;height:14px;background:#3f3f46;border-radius:1px"></span>'
 
     return f"""
-    <span style="display:inline-flex;align-items:center;gap:10px">
+    <span style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap">
         {data_dot}
         {engine_dot}
         {redis_dot}
         {pg_dot}
-        <span style="margin-left:4px">{cnn_badge}</span>
+        {divider}
+        {charting_dot}
+        {trainer_dot}
+        {grafana_dot}
+        {prom_dot}
+        <span style="margin-left:2px">{cnn_badge}</span>
     </span>
     """
 

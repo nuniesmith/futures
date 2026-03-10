@@ -670,7 +670,7 @@ jobs:
                           echo "${key}=${val}" >> .env
                         fi
                       }
-                      upsert_env "ENGINE_DATA_URL"     "http://${{ secrets.PROD_TAILSCALE_IP }}:8100"
+                      upsert_env "ENGINE_DATA_URL"     "http://${{ secrets.PROD_TAILSCALE_IP }}:8050"
                       upsert_env "API_KEY"             "${{ secrets.API_KEY }}"
                       upsert_env "TRAINER_API_KEY"     "${{ secrets.API_KEY }}"
 

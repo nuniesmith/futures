@@ -222,7 +222,7 @@ services:
             - "8180:8080"
         environment:
             - DATA_SERVICE_URL=http://data:8000
-            - TRAINER_SERVICE_URL=http://100.113.72.63:8200
+            - TRAINER_SERVICE_URL=${TRAINER_SERVICE_URL:-http://100.113.72.63:8200}
             - WEB_HOST=0.0.0.0
             - WEB_PORT=8080
             - API_KEY=${API_KEY:-}

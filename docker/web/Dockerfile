@@ -27,6 +27,9 @@ COPY --from=deps /usr/local/bin /usr/local/bin
 # Copy the full src/ tree (web service + shared modules it may reference)
 COPY src/ ./src/
 
+# Copy static assets (trading dashboard HTML, etc.)
+COPY static/ ./static/
+
 # PYTHONPATH: bare imports resolve from /app/src
 ENV PYTHONPATH="/app/src"
 ENV PYTHONUNBUFFERED=1

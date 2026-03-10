@@ -150,6 +150,19 @@ class ActionType(StrEnum):
     # Daily report — runs once per day at end of active session (~12:00 ET)
     DAILY_REPORT = "daily_report"
 
+    # EOD position management — hard 4:00 PM ET stop
+    # POSITION_CLOSE_WARNING fires at 15:45 ET — 15-minute alert that EOD
+    # flat requirement is approaching.  Publishes a dashboard alert and
+    # sends a Grok notification.  Runs once per day.
+    POSITION_CLOSE_WARNING = "position_close_warning"
+    # EOD_POSITION_CLOSE fires at exactly 16:00 ET.  Calls
+    # cancel_all_orders() then exit_position() on every connected Rithmic
+    # account that has open positions.  Runs once per day.
+    # This is a hard safety net — the trader is expected to be flat before
+    # this fires.  Rithmic OrderPlacement.MANUAL is used so the audit trail
+    # shows a human-initiated close, not an algo.
+    EOD_POSITION_CLOSE = "eod_position_close"
+
     # Swing detector — runs every 2 min during active session (03:00–15:30 ET)
     # Scans daily-plan swing candidates for pullback/breakout/gap entries,
     # manages SwingState per asset, publishes signals + states to Redis.
@@ -894,6 +907,31 @@ class ScheduleManager:
                 )
             )
 
+        # ── EOD 15:45 ET warning — once per day ──────────────────────────────
+        # Fires a dashboard alert and Grok notification 15 minutes before the
+        # hard 4 PM close so the trader can flatten manually if they choose.
+        if now_time >= _dt_time(15, 45) and not self._ran_today(ActionType.POSITION_CLOSE_WARNING, today):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.POSITION_CLOSE_WARNING,
+                    priority=0,  # highest priority — safety critical
+                    description="EOD 15-min warning: 4:00 PM hard close approaching (15:45 ET)",
+                )
+            )
+
+        # ── EOD 16:00 ET hard position close — once per day ──────────────────
+        # cancel_all_orders() + exit_position() on every Rithmic account with
+        # an open position.  This is the last-resort safety net.  Fires as soon
+        # as the scheduler detects 16:00 ET has been reached.
+        if now_time >= _dt_time(16, 0) and not self._ran_today(ActionType.EOD_POSITION_CLOSE, today):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.EOD_POSITION_CLOSE,
+                    priority=0,  # highest priority — safety critical
+                    description="EOD hard close: cancel all orders + exit all positions (16:00 ET)",
+                )
+            )
+
         return actions
 
     def _get_off_hours_actions(self, ts: float, today: date | None = None) -> list[ScheduledAction]:
@@ -913,6 +951,19 @@ class ScheduleManager:
         now_time = now.time()
 
         from datetime import time as _dt_time
+
+        # ── EOD 16:00 ET hard position close — catch-up in off-hours ─────────
+        # If the scheduler was not running at exactly 16:00 ET (e.g. service
+        # restarted at 16:05), fire the hard close as soon as off-hours begins.
+        # The _ran_today guard prevents double-firing.
+        if not self._ran_today(ActionType.EOD_POSITION_CLOSE, today):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.EOD_POSITION_CLOSE,
+                    priority=0,
+                    description="EOD hard close (catch-up): cancel all orders + exit all positions",
+                )
+            )
 
         # --- CME Settlement ORB — every 2 min during 14:00–15:30 ET ---
         # Metals and energy settlement window; directional resolution before close.
