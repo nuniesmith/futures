@@ -73,11 +73,12 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Redis — imported at module level so tests can patch these names directly.
 # ---------------------------------------------------------------------------
+REDIS_AVAILABLE: bool = False
+_r: Any = None
 try:
-    from lib.core.cache import REDIS_AVAILABLE, _r
+    from lib.core.cache import REDIS_AVAILABLE, _r  # type: ignore[assignment]
 except Exception:  # pragma: no cover
-    REDIS_AVAILABLE: bool = False  # type: ignore[assignment]
-    _r = None  # type: ignore[assignment]
+    pass
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
