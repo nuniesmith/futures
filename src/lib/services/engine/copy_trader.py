@@ -707,10 +707,10 @@ class CopyTrader:
 
         return None
 
-    def invalidate_contract_cache(self, product_code: str | None = None) -> None:
+    def invalidate_contract_cache(self, ticker: str | None = None) -> None:
         """Clear cached front-month contract resolution."""
-        if product_code:
-            self._contract_cache.pop(product_code, None)
+        if ticker:
+            self._contract_cache.pop(ticker, None)
         else:
             self._contract_cache.clear()
 

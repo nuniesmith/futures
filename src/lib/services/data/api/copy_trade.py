@@ -70,6 +70,15 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+# ---------------------------------------------------------------------------
+# Redis — imported at module level so tests can patch these names directly.
+# ---------------------------------------------------------------------------
+try:
+    from lib.core.cache import REDIS_AVAILABLE, _r
+except Exception:  # pragma: no cover
+    REDIS_AVAILABLE: bool = False  # type: ignore[assignment]
+    _r = None  # type: ignore[assignment]
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -161,8 +170,6 @@ def _get_copy_trader_direct():
 def _publish_sse(payload: dict[str, Any]) -> None:
     """Publish a ``copy-trade-update`` event to the SSE dashboard channel."""
     try:
-        from lib.core.cache import REDIS_AVAILABLE, _r
-
         if REDIS_AVAILABLE and _r is not None:
             _r.publish("dashboard:copy_trade", json.dumps(payload, default=str))
     except Exception as exc:
@@ -172,8 +179,6 @@ def _publish_sse(payload: dict[str, Any]) -> None:
 def _enqueue_remote_command(batch_id: str, command: dict[str, Any]) -> None:
     """Write an order command to the Redis queue for the remote engine."""
     try:
-        from lib.core.cache import REDIS_AVAILABLE, _r
-
         if REDIS_AVAILABLE and _r is not None:
             entry = json.dumps({"batch_id": batch_id, **command}, default=str)
             _r.rpush(_CMD_KEY, entry)
@@ -187,8 +192,6 @@ async def _wait_for_remote_result(batch_id: str, timeout: float = _REMOTE_TIMEOU
     key = f"{_RESULT_KEY_PREFIX}{batch_id}"
     deadline = time.monotonic() + timeout
     try:
-        from lib.core.cache import REDIS_AVAILABLE, _r
-
         if not REDIS_AVAILABLE or _r is None:
             return None
 
@@ -217,8 +220,6 @@ def _get_compliance_log(limit: int = 20) -> list[dict[str, Any]]:
     """Read the last ``limit`` compliance log entries from Redis."""
     entries: list[dict[str, Any]] = []
     try:
-        from lib.core.cache import REDIS_AVAILABLE, _r
-
         if REDIS_AVAILABLE and _r is not None:
             raw_list = _r.lrange(_COMPLIANCE_KEY, 0, limit - 1)
             for raw in raw_list:
@@ -414,8 +415,6 @@ async def get_history(limit: int = 50) -> JSONResponse:
         # Fallback: read from Redis log
         history: list[dict[str, Any]] = []
         try:
-            from lib.core.cache import REDIS_AVAILABLE, _r
-
             if REDIS_AVAILABLE and _r is not None:
                 raw_list = _r.lrange("engine:copy_trader:order_log", 0, limit - 1)
                 for raw in raw_list:
@@ -496,7 +495,7 @@ async def invalidate_contract_cache(ticker: str | None = None) -> JSONResponse:
     if ct is None:
         raise HTTPException(status_code=503, detail="CopyTrader not initialised.")
 
-    ct.invalidate_contract_cache(product_code=ticker)
+    ct.invalidate_contract_cache(ticker=ticker)
     msg = f"Contract cache cleared for {ticker}" if ticker else "All contract caches cleared"
     logger.info("copy_trade: %s", msg)
     return JSONResponse(content={"ok": True, "message": msg})
@@ -512,8 +511,6 @@ async def poll_result(batch_id: str) -> JSONResponse:
     key = f"{_RESULT_KEY_PREFIX}{batch_id}"
     raw = None
     try:
-        from lib.core.cache import REDIS_AVAILABLE, _r
-
         if REDIS_AVAILABLE and _r is not None:
             raw = _r.get(key)
     except Exception:

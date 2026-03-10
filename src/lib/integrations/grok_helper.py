@@ -912,7 +912,7 @@ MNQ 🔴 21450 (-38) | Bias INVALID | Watch 21400
 
 DO NOW: Hold GOLD long, stop to 2700; skip MNQ — bias broken."""
 
-    result = _call_llm(
+    result = _call_grok(
         prompt,
         api_key,
         max_tokens=DEFAULT_MAX_TOKENS_LIVE_COMPACT,
