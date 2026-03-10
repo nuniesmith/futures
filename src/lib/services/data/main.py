@@ -151,9 +151,6 @@ from lib.services.data.api.metrics import (  # noqa: E402
     router as metrics_router,
 )
 from lib.services.data.api.news import router as news_router  # noqa: E402
-from lib.services.data.api.nt8_deploy import (  # noqa: E402
-    router as nt8_deploy_router,
-)
 from lib.services.data.api.pipeline import (  # noqa: E402
     router as pipeline_router,
 )
@@ -624,10 +621,8 @@ app.include_router(health_router, tags=["Health"])
 # Prometheus metrics: /metrics/prometheus  (TASK-704)
 app.include_router(metrics_router, tags=["Metrics"])
 
-# System Health: /api/nt8/panel/html, /api/nt8/health/html, /api/nt8/health
-# NOTE: nt8_deploy_router is mounted WITHOUT a prefix — routes use /api/nt8/ paths
-# for backward compat with existing dashboard HTMX calls.
-app.include_router(nt8_deploy_router, tags=["System Health"])
+# System Health: /api/health, /api/health/html
+app.include_router(health_router, tags=["System Health"])
 
 # CNN: /cnn/status, /cnn/retrain, /cnn/retrain/status, /cnn/history, /cnn/status/html
 # NOTE: cnn_router is mounted WITHOUT a prefix — routes are defined with /cnn/ paths.
@@ -758,10 +753,8 @@ def api_info():
             "data_source": "/data/source",
             "health": "/health",
             "metrics": "/metrics",
-            "nt8_installer": "/api/nt8/installer",
-            "nt8_deploy": "/api/nt8/deploy",
-            "nt8_health": "/api/nt8/health",
-            "nt8_health_html": "/api/nt8/health/html",
+            "system_health": "/api/health",
+            "system_health_html": "/api/health/html",
             "cnn_status": "/cnn/status",
             "cnn_status_html": "/cnn/status/html",
             "cnn_retrain": "/cnn/retrain",

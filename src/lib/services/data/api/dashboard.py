@@ -4689,6 +4689,8 @@ function updateClock() {{
         var etFrac = etHour + etMin / 60.0;
         // Session boundary hours are injected by Python from exchange_hours_in_et()
         // so they are always correct for both EDT and EST without any hardcoded offsets.
+        var _OVERLAP  = (window._RB_OVERLAP  || [9.5, 12.0]);
+        var SESSIONS  = (window._RB_SESSIONS || []);
         var _ovL = _OVERLAP[0];     // London/US overlap start (= US open, e.g. 9.5)
         var _ovE = _OVERLAP[1];     // London/US overlap end   (e.g. 12.0)
         var _ses = {{}};             // key → o=open, c=close for quick lookup

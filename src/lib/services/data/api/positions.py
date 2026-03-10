@@ -590,7 +590,6 @@ def _probe_broker_status() -> dict[str, Any]:
     return broker_status
 
 
-# Legacy alias used by nt8_deploy.py and other modules
 _probe_bridge_status = _probe_broker_status
 
 

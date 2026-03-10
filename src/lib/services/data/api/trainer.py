@@ -724,16 +724,16 @@ async function pollServiceStatus() {
     setDot('dot-trainer', 'red');
   }
 
-  // NT8 Bridge — read from engine health endpoint
+  // Bridge — read from system health endpoint
   try {
-    const r = await fetch('/api/nt8/health', {signal: AbortSignal.timeout(4000)});
+    const r = await fetch('/api/health', {signal: AbortSignal.timeout(4000)});
     const d = await r.json();
     setDot('dot-bridge', d.bridge_connected ? 'green' : 'red');
   } catch { setDot('dot-bridge', 'gray'); }
 
   // CNN model on disk
   try {
-    const r = await fetch('/api/nt8/health', {signal: AbortSignal.timeout(4000)});
+    const r = await fetch('/api/health', {signal: AbortSignal.timeout(4000)});
     const d = await r.json();
     const modelOk = !!d.cnn_model_on_disk;
     document.getElementById('svc-model').style.display = '';

@@ -1,11 +1,13 @@
 """
-Health check, metrics, and backfill status API router.
+Health check, metrics, backfill status, and system health bar API router.
 
 Provides:
     GET /health              — Service health check (Redis, Postgres, engine, live feed)
     GET /metrics             — Lightweight operational metrics
     GET /backfill/status     — Historical data backfill status (bar counts, date ranges)
     GET /backfill/gaps/{sym} — Gap analysis for a specific symbol's stored bars
+    GET /api/health          — System health status JSON (all services + broker + CNN)
+    GET /api/health/html     — System health bar HTML fragment (polled by dashboard HTMX)
 """
 
 import contextlib
@@ -18,6 +20,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter
+from fastapi.responses import HTMLResponse, JSONResponse
 
 _EST = ZoneInfo("America/New_York")
 logger = logging.getLogger("api.health")
@@ -489,3 +492,247 @@ def backfill_gaps(symbol: str, days_back: int = 30):
             "symbol": symbol,
             "error": str(exc),
         }
+
+
+# ---------------------------------------------------------------------------
+# System health bar — full-stack health probe used by the dashboard header
+# ---------------------------------------------------------------------------
+
+
+def _cnn_model_on_disk() -> bool:
+    """Return True if a usable CNN model file exists on disk."""
+    override = os.getenv("CNN_MODEL_PATH", "")
+    if override:
+        return os.path.isfile(override)
+
+    here = os.path.dirname(__file__)
+    root = os.path.normpath(os.path.join(here, "..", "..", "..", "..", ".."))
+
+    pt_path = os.path.join(root, "models", "breakout_cnn_best.pt")
+    if os.path.isfile(pt_path):
+        return True
+
+    onnx_path = os.path.join(root, "models", "breakout_cnn_best.onnx")
+    return os.path.isfile(onnx_path)
+
+
+def _compute_system_health() -> dict[str, Any]:
+    """Compute full system health status from all available cache sources.
+
+    Returns a dict covering:
+        - Core service indicators (data, engine, redis, postgres)
+        - Companion service indicators (charting, trainer, grafana, prometheus)
+        - Broker / TradingView heartbeat fields
+        - CNN model presence
+    """
+    result: dict[str, Any] = {
+        "data_service_up": True,
+        "engine_up": False,
+        "redis_up": False,
+        "postgres_up": False,
+        "charting_up": False,
+        "trainer_up": False,
+        "grafana_up": False,
+        "prometheus_up": False,
+        "broker_connected": False,
+        "bridge_connected": False,
+        "broker_state": "disconnected",
+        "bridge_state": "disconnected",
+        "broker_version": "",
+        "bridge_version": "",
+        "broker_account": "",
+        "bridge_account": "",
+        "broker_age_seconds": -1,
+        "bridge_age_seconds": -1,
+        "positions_count": 0,
+        "risk_blocked": False,
+        "last_heartbeat": None,
+        "cnn_model_on_disk": False,
+        "ruby_attached": False,
+        "signalbus_active": False,
+        "signalbus_pending": 0,
+        "breakout_instruments": 0,
+    }
+
+    # Redis
+    try:
+        from lib.core.cache import REDIS_AVAILABLE, _r
+
+        if REDIS_AVAILABLE and _r is not None:
+            _r.ping()
+            result["redis_up"] = True
+    except Exception:
+        pass
+
+    # Postgres
+    try:
+        database_url = os.getenv("DATABASE_URL", "")
+        if database_url.startswith("postgresql"):
+            from lib.core.models import _get_conn
+
+            conn = _get_conn()
+            try:
+                conn.execute("SELECT 1")
+                result["postgres_up"] = True
+            finally:
+                conn.close()
+    except Exception:
+        pass
+
+    # Engine (Redis-cached engine status)
+    try:
+        from lib.core.cache import cache_get as _cg
+
+        raw_status = _cg("engine:status")
+        if raw_status:
+            eng = json.loads(raw_status)
+            result["engine_up"] = eng.get("engine") == "running"
+    except Exception:
+        pass
+
+    # Broker heartbeat
+    heartbeat = None
+    try:
+        from lib.core.cache import cache_get
+
+        raw = cache_get("futures:broker_heartbeat:current")
+        if not raw:
+            raw = cache_get("futures:bridge_heartbeat:current")
+        if raw:
+            heartbeat = json.loads(raw)
+    except Exception:
+        pass
+
+    if heartbeat:
+        received_at = heartbeat.get("received_at", "")
+        account = heartbeat.get("account", "")
+        state = heartbeat.get("state", "unknown")
+        version = heartbeat.get("broker_version", heartbeat.get("bridge_version", ""))
+
+        result["broker_account"] = account
+        result["bridge_account"] = account
+        result["broker_state"] = state
+        result["bridge_state"] = state
+        result["broker_version"] = version
+        result["bridge_version"] = version
+        result["positions_count"] = heartbeat.get("positions", 0)
+        result["risk_blocked"] = heartbeat.get("riskBlocked", False)
+        result["last_heartbeat"] = received_at
+
+        if received_at:
+            try:
+                dt = datetime.fromisoformat(received_at)
+                age = (datetime.now(tz=_EST) - dt).total_seconds()
+                result["broker_age_seconds"] = round(age, 1)
+                result["bridge_age_seconds"] = round(age, 1)
+                connected = age < 60
+                result["broker_connected"] = connected
+                result["bridge_connected"] = connected
+            except Exception:
+                pass
+
+    # CNN model
+    try:
+        result["cnn_model_on_disk"] = _cnn_model_on_disk()
+    except Exception:
+        pass
+
+    # Companion services (best-effort HTTP probes)
+    _companion_services = [
+        ("charting_up", os.getenv("CHARTING_SERVICE_URL", "http://charting:8003"), "/health"),
+        ("trainer_up", os.getenv("TRAINER_SERVICE_URL", "http://trainer:8200"), "/health"),
+        ("grafana_up", os.getenv("GRAFANA_URL", "http://grafana:3000"), "/api/health"),
+        ("prometheus_up", os.getenv("PROMETHEUS_URL", "http://prometheus:9090"), "/-/healthy"),
+    ]
+    try:
+        import httpx as _httpx
+
+        for _key, _base_url, _path in _companion_services:
+            try:
+                with _httpx.Client(timeout=2.0) as _c:
+                    _r = _c.get(f"{_base_url.rstrip('/')}{_path}")
+                    result[_key] = _r.status_code < 500
+            except Exception:
+                result[_key] = False
+    except ImportError:
+        pass
+
+    return result
+
+
+def _render_health_dot(label: str, is_up: bool, title_up: str, title_down: str) -> str:
+    """Render a single health indicator dot with label."""
+    bg = "#22c55e" if is_up else "#ef4444"
+    title = title_up if is_up else title_down
+    text_color = "#d4d4d8" if is_up else "#71717a"
+    return (
+        f'<span style="display:inline-flex;align-items:center;gap:4px;cursor:default" title="{title}">'
+        f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{bg}"></span>'
+        f'<span style="font-size:11px;color:{text_color}">{label}</span>'
+        f"</span>"
+    )
+
+
+def _render_health_bar(health: dict[str, Any]) -> str:
+    """Render health indicators as a compact HTML fragment for the dashboard header."""
+    data_dot = _render_health_dot(
+        "Data", health.get("data_service_up", True), "Data Service: Running", "Data Service: Down"
+    )
+    engine_dot = _render_health_dot("Engine", health.get("engine_up", False), "Engine: Running", "Engine: Not running")
+    redis_dot = _render_health_dot("Redis", health.get("redis_up", False), "Redis: Connected", "Redis: Disconnected")
+    pg_dot = _render_health_dot(
+        "Postgres", health.get("postgres_up", False), "Postgres: Connected", "Postgres: Disconnected"
+    )
+    charting_dot = _render_health_dot("Charts", health.get("charting_up", False), "Charting: Running", "Charting: Down")
+    trainer_dot = _render_health_dot(
+        "Trainer", health.get("trainer_up", False), "Trainer: Running", "Trainer: Down (optional)"
+    )
+    grafana_dot = _render_health_dot(
+        "Grafana", health.get("grafana_up", False), "Grafana: Running", "Grafana: Down (optional)"
+    )
+    prom_dot = _render_health_dot(
+        "Prom", health.get("prometheus_up", False), "Prometheus: Running", "Prometheus: Down (optional)"
+    )
+
+    cnn_on_disk = health.get("cnn_model_on_disk", False)
+    if cnn_on_disk:
+        cnn_title = "CNN model ready"
+        cnn_bg = "rgba(88,28,135,0.5)"
+        cnn_border = "rgba(126,34,206,0.6)"
+        cnn_color = "#d8b4fe"
+        cnn_label = "CNN \u2713"
+    else:
+        cnn_title = "CNN model not found \u2014 run: bash scripts/sync_models.sh"
+        cnn_bg = "rgba(39,39,42,0.8)"
+        cnn_border = "#3f3f46"
+        cnn_color = "#71717a"
+        cnn_label = "CNN \u2013"
+
+    cnn_badge = (
+        f'<span style="padding:2px 6px;background:{cnn_bg};border:1px solid {cnn_border};'
+        f"border-radius:4px;font-size:10px;color:{cnn_color};font-weight:600;"
+        f'letter-spacing:0.025em;cursor:default" title="{cnn_title}">{cnn_label}</span>'
+    )
+
+    divider = '<span style="width:1px;height:14px;background:#3f3f46;border-radius:1px"></span>'
+
+    return (
+        '<span style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap">'
+        f"{data_dot}{engine_dot}{redis_dot}{pg_dot}"
+        f"{divider}"
+        f"{charting_dot}{trainer_dot}{grafana_dot}{prom_dot}"
+        f'<span style="margin-left:2px">{cnn_badge}</span>'
+        "</span>"
+    )
+
+
+@router.get("/api/health/html", response_class=HTMLResponse)
+def get_system_health_html():
+    """Return system health indicators as an HTML fragment (polled by HTMX)."""
+    return HTMLResponse(content=_render_health_bar(_compute_system_health()))
+
+
+@router.get("/api/health")
+def get_system_health():
+    """Return full system health status as JSON."""
+    return JSONResponse(content=_compute_system_health())
