@@ -268,6 +268,7 @@ function toggleTheme(){
 
 _SHARED_NAV_LINKS = [
     ("/", "📊 Dashboard"),
+    ("/trading", "🚀 Trading"),
     ("/charts", "📈 Charts"),
     ("/account", "💰 Account"),
     ("/rb-history", "📅 RB History"),
@@ -6227,130 +6228,79 @@ _ORB_HISTORY_EXTRA_SCRIPT = """<script>
 </script>"""
 
 
-@router.get("/orb-history", response_class=HTMLResponse)
 # ---------------------------------------------------------------------------
 # NEW PAGES: Charts, Account, Connections
 # ---------------------------------------------------------------------------
 
 
 def charts_page() -> str:
-    """Render the Charts page — crypto charts, volume profile, candlestick views."""
-    body = """
-    <div style="margin-bottom:1rem">
-        <h1 style="font-size:1.3rem;font-weight:700">📈 Charts</h1>
-        <p class="t-text-muted" style="font-size:0.8rem;margin-top:4px">
-            Crypto charts, volume profile, and candlestick analysis.
-        </p>
-    </div>
+    """Render the Charts page — embeds the charting service in a full-height iframe."""
+    import os as _os
 
-    <!-- Data init banner: fires a bar-fill check on load so regime + volume profile
-         have enough history to render even on a cold start. Hidden once done. -->
-    <div id="charts-init-banner"
-         style="margin-bottom:12px;padding:8px 12px;background:rgba(99,102,241,0.1);
-                border:1px solid rgba(99,102,241,0.3);border-radius:8px;
-                font-size:0.75rem;color:#818cf8;display:flex;align-items:center;gap:8px">
-        <span class="animate-pulse">⏳</span>
-        <span id="charts-init-msg">Initialising bar data for charts…</span>
-        <button onclick="document.getElementById('charts-init-banner').style.display='none'"
-                style="margin-left:auto;background:none;border:none;color:#52525b;
-                       cursor:pointer;font-size:1rem;line-height:1">✕</button>
-    </div>
+    charting_url = _os.getenv("CHARTING_SERVICE_URL", "http://localhost:8003")
+    body = f"""
+    <style>
+      /* Let the iframe fill the viewport below the nav bar */
+      .co-page {{
+        padding: 0 !important;
+        max-width: 100% !important;
+        height: calc(100vh - 44px);
+        display: flex;
+        flex-direction: column;
+      }}
+      #charts-frame {{
+        flex: 1;
+        width: 100%;
+        border: none;
+        background: #0a0a0f;
+      }}
+      #charts-offline {{
+        display: none;
+        flex: 1;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 12px;
+        color: var(--text-muted, #71717a);
+        font-size: 0.85rem;
+      }}
+    </style>
 
-    <div class="grid grid-cols-1" style="gap:12px;max-width:1200px">
-        <!-- Market Regime — needs ≥200 bars; init ensures data is available -->
-        <div class="t-panel border t-border rounded-lg p-4"
-             style="border-left:3px solid rgba(124,58,237,0.5)">
-            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">🧮 Market Regime</h3>
-            <div id="charts-regime"
-                 hx-get="/api/regime/html"
-                 hx-trigger="load, every 60s"
-                 hx-swap="innerHTML">
-                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading regime…</div>
-            </div>
-        </div>
+    <iframe
+      id="charts-frame"
+      src="{charting_url}"
+      title="Ruby Futures Charts"
+      allow="fullscreen"
+      loading="eager"
+    ></iframe>
 
-        <!-- Crypto Chart -->
-        <div class="t-panel border t-border rounded-lg p-4"
-             style="border-left:3px solid rgba(247,147,26,0.5)">
-            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">📈 Crypto Chart</h3>
-            <div id="charts-kraken-chart"
-                 hx-get="/kraken/chart/html"
-                 hx-trigger="load"
-                 hx-swap="innerHTML">
-                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading chart...</div>
-            </div>
-        </div>
-
-        <!-- Volume Profile -->
-        <div class="t-panel border t-border rounded-lg p-4"
-             style="border-left:3px solid rgba(245,158,11,0.5)">
-            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">📊 Volume Profile</h3>
-            <div id="charts-vp"
-                 hx-get="/api/volume-profile/html"
-                 hx-trigger="load"
-                 hx-swap="innerHTML">
-                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading volume profile...</div>
-            </div>
-        </div>
-
-        <!-- CNN Dataset Preview -->
-        <div class="t-panel border t-border rounded-lg p-4"
-             style="border-left:3px solid rgba(139,92,246,0.5)">
-            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">🖼️ CNN Training Snapshots</h3>
-            <div id="charts-cnn-preview"
-                 hx-get="/cnn/dataset/preview"
-                 hx-trigger="load"
-                 hx-swap="innerHTML">
-                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading...</div>
-            </div>
-        </div>
-
-        <!-- Performance Charts -->
-        <div class="t-panel border t-border rounded-lg p-4"
-             style="border-left:3px solid rgba(34,197,94,0.4)">
-            <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide mb-2">📈 Performance</h3>
-            <div id="charts-perf"
-                 hx-get="/api/performance/html"
-                 hx-trigger="load"
-                 hx-swap="innerHTML">
-                <div class="t-text-faint text-xs text-center" style="padding:2rem 0">Loading performance...</div>
-            </div>
-        </div>
+    <div id="charts-offline">
+      <span style="font-size:2rem">📡</span>
+      <div style="font-weight:600;color:var(--text-primary,#e4e4e7)">Charting service unavailable</div>
+      <div>Make sure the <code>charting</code> container is running on <code>{charting_url}</code></div>
+      <button onclick="document.getElementById('charts-frame').src=document.getElementById('charts-frame').src"
+              style="margin-top:8px;padding:6px 16px;background:#2563eb;color:#fff;
+                     border:none;border-radius:6px;cursor:pointer;font-size:0.8rem">
+        ↺ Retry
+      </button>
     </div>
 
     <script>
-    (function() {
-        // On charts page load, trigger a background bar fill so regime detection
-        // and volume profile have enough data.  Calls the existing fill-all endpoint
-        // which is idempotent — it only fetches missing gaps.
-        function chartsInit() {
-            var banner = document.getElementById('charts-init-banner');
-            var msg    = document.getElementById('charts-init-msg');
-            fetch('/api/bars/fill-all', {method: 'POST', headers: {'Content-Type': 'application/json'},
-                                         body: JSON.stringify({force: false})})
-                .then(function(r) { return r.json(); })
-                .then(function(d) {
-                    if (msg) msg.textContent = d.message || 'Bar data ready.';
-                    setTimeout(function() {
-                        if (banner) banner.style.display = 'none';
-                        // Refresh regime panel now that bars are available
-                        if (typeof htmx !== 'undefined') {
-                            htmx.ajax('GET', '/api/regime/html', {target: '#charts-regime', swap: 'innerHTML'});
-                            htmx.ajax('GET', '/api/volume-profile/html', {target: '#charts-vp', swap: 'innerHTML'});
-                        }
-                    }, 3000);
-                })
-                .catch(function() {
-                    if (msg) msg.textContent = 'Bar data check skipped (service unavailable).';
-                    setTimeout(function() { if (banner) banner.style.display = 'none'; }, 4000);
-                });
-        }
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', chartsInit);
-        } else {
-            chartsInit();
-        }
-    })();
+    (function() {{
+      var frame = document.getElementById('charts-frame');
+      var offline = document.getElementById('charts-offline');
+      frame.addEventListener('error', function() {{
+        frame.style.display = 'none';
+        offline.style.display = 'flex';
+      }});
+      // If the iframe loads a non-2xx page the error event won't fire in all
+      // browsers, so we do a lightweight fetch probe as a belt-and-suspenders check.
+      fetch('{charting_url}', {{method:'HEAD', mode:'no-cors'}})
+        .catch(function() {{
+          frame.style.display = 'none';
+          offline.style.display = 'flex';
+        }});
+    }})();
     </script>
     """
     return _build_page_shell(

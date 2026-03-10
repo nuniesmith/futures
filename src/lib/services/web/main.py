@@ -1068,6 +1068,12 @@ async def proxy_trading_page(request: Request):
     return await _proxy_request(request, "/trading")
 
 
+@app.get("/trading/app", response_class=HTMLResponse)
+async def proxy_trading_app(request: Request):
+    """Proxy the raw trading SPA served inside the /trading iframe."""
+    return await _proxy_request(request, "/trading/app")
+
+
 # ---------------------------------------------------------------------------
 # Chat — RustAssistant-powered multi-turn chat with RA→Grok fallback
 # ---------------------------------------------------------------------------

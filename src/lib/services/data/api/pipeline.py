@@ -1288,19 +1288,53 @@ async def test_kraken():
 
 @router.get("/trading", response_class=HTMLResponse)
 async def trading_dashboard_page():
-    """Serve the full trading workflow dashboard HTML."""
-    # Try to load from the static file first (built from todo/index.html)
-    # Resolution order:
-    #   1. Docker: /app/static/trading.html (COPY static/ ./static/ in Dockerfile)
-    #   2. Local dev from src/: walk up from this file to project root
-    #   3. CWD-relative: ./static/trading.html (running from project root)
+    """Serve the trading dashboard wrapped in the shared site nav."""
+    from lib.services.data.api.dashboard import _build_page_shell
+
+    body = """
+    <style>
+      /* Let the iframe fill the viewport below the nav bar */
+      .co-page {
+        padding: 0 !important;
+        max-width: 100% !important;
+        height: calc(100vh - 44px);
+        display: flex;
+        flex-direction: column;
+      }
+      #trading-frame {
+        flex: 1;
+        width: 100%;
+        border: none;
+        background: #07090F;
+      }
+    </style>
+    <iframe
+      id="trading-frame"
+      src="/trading/app"
+      title="Ruby Futures Trading"
+      allow="fullscreen"
+      loading="eager"
+    ></iframe>
+    """
+    return HTMLResponse(
+        content=_build_page_shell(
+            title="Trading — Ruby Futures",
+            favicon_emoji="🚀",
+            active_path="/trading",
+            body_content=body,
+        ),
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@router.get("/trading/app", response_class=HTMLResponse)
+async def trading_app_raw():
+    """Serve the raw trading SPA (no shared nav — loaded inside the iframe)."""
     static_paths = [
-        Path("/app/static/trading.html"),  # Docker container
-        Path(__file__).resolve().parent.parent.parent.parent.parent.parent
-        / "static"
-        / "trading.html",  # src/lib/services/data/api/ → project root
-        Path(__file__).resolve().parent.parent.parent.parent.parent / "static" / "trading.html",  # one level less
-        Path.cwd() / "static" / "trading.html",  # CWD = project root
+        Path("/app/static/trading.html"),
+        Path(__file__).resolve().parent.parent.parent.parent.parent.parent / "static" / "trading.html",
+        Path(__file__).resolve().parent.parent.parent.parent.parent / "static" / "trading.html",
+        Path.cwd() / "static" / "trading.html",
     ]
     for p in static_paths:
         if p.exists():
@@ -1308,100 +1342,11 @@ async def trading_dashboard_page():
             return HTMLResponse(content=p.read_text(), headers={"Cache-Control": "no-cache"})
 
     logger.warning("trading.html not found in any of: %s", [str(p) for p in static_paths])
-
-    # Fall back to inline minimal page that loads from the API
     return HTMLResponse(
-        content=_build_trading_page_html(),
+        content="<html><body style='background:#07090F;color:#94a3b8;font-family:monospace;"
+        "display:flex;align-items:center;justify-content:center;height:100vh'>"
+        "<div style='text-align:center'><div style='font-size:2rem;margin-bottom:1rem'>🚀</div>"
+        "<div>trading.html not found — place it at <code>static/trading.html</code></div></div>"
+        "</body></html>",
         headers={"Cache-Control": "no-cache"},
     )
-
-
-def _build_trading_page_html() -> str:
-    """Build the trading dashboard HTML inline.
-
-    This is the integration shim — it serves a page that tells the user
-    to use the full static/trading.html or provides a redirect to the
-    standalone prototype while it's being integrated.
-    """
-    now = datetime.now(tz=_ET)
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ruby Futures — Trading Dashboard</title>
-    <style>
-        * {{ margin:0; padding:0; box-sizing:border-box; }}
-        body {{
-            background: #0a0e17;
-            color: #c8cdd5;
-            font-family: 'Inter', -apple-system, sans-serif;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-        }}
-        .card {{
-            background: #111827;
-            border: 1px solid #1e293b;
-            border-radius: 8px;
-            padding: 40px;
-            max-width: 600px;
-            text-align: center;
-        }}
-        h1 {{ color: #10b981; font-size: 24px; margin-bottom: 16px; }}
-        p {{ color: #94a3b8; font-size: 14px; line-height: 1.8; margin-bottom: 16px; }}
-        a {{
-            display: inline-block;
-            background: #10b981;
-            color: #0a0e17;
-            padding: 10px 24px;
-            border-radius: 6px;
-            text-decoration: none;
-            font-weight: 600;
-            margin-top: 8px;
-        }}
-        a:hover {{ background: #34d399; }}
-        .status {{ font-size: 12px; color: #64748b; margin-top: 20px; }}
-        .endpoints {{
-            text-align: left;
-            background: #0f172a;
-            border: 1px solid #1e293b;
-            border-radius: 6px;
-            padding: 16px;
-            margin-top: 16px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 11px;
-            color: #94a3b8;
-            line-height: 2;
-        }}
-        .endpoints span {{ color: #10b981; }}
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>🚀 Ruby Trading Dashboard</h1>
-        <p>
-            The trading workflow dashboard is ready. API endpoints are live
-            and the morning pipeline can be triggered via SSE.
-        </p>
-        <a href="/">← Back to Main Dashboard</a>
-        <div class="endpoints">
-            <span>GET</span>  /api/pipeline/run?symbol=MES<br>
-            <span>GET</span>  /api/pipeline/status<br>
-            <span>POST</span> /api/pipeline/reset<br>
-            <span>GET</span>  /api/plan<br>
-            <span>POST</span> /api/plan/confirm<br>
-            <span>POST</span> /api/plan/unlock<br>
-            <span>GET</span>  /api/live/stream?symbol=MES<br>
-            <span>GET</span>  /api/market/candles?symbol=MES<br>
-            <span>GET</span>  /api/market/cvd?symbol=MES<br>
-            <span>GET</span>  /api/journal/trades<br>
-            <span>GET</span>  /api/trading/settings<br>
-        </div>
-        <div class="status">
-            Pipeline API mounted · {now.strftime("%Y-%m-%d %H:%M ET")}
-        </div>
-    </div>
-</body>
-</html>"""
