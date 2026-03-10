@@ -439,17 +439,32 @@ jobs:
                       echo "✅ Directories ready"
 
                   deploy-command: |
-                      cd ~/futures
+                      PROJ_DIR="$HOME/futures"
+                      cd "$PROJ_DIR"
+
+                      # Sanity-check: confirm docker-compose.yml is present and readable
+                      echo "📂 Working directory: $(pwd)"
+                      echo "📄 Compose file check:"
+                      ls -la "$PROJ_DIR/docker-compose.yml" || { echo "❌ docker-compose.yml not found in $PROJ_DIR"; exit 1; }
+
+                      # Alias — always use explicit -f and --project-directory so the
+                      # correct file is used regardless of shell CWD or Docker context.
+                      DC="docker compose --project-directory $PROJ_DIR -f $PROJ_DIR/docker-compose.yml"
+
+                      # Validate the compose config before doing anything destructive
+                      echo "🔍 Validating compose config..."
+                      $DC config --services
+                      echo "✅ Compose config valid"
 
                       # Remove stale docker-compose.prod.yml if it exists — we use docker-compose.yml exclusively
-                      if [ -f docker-compose.prod.yml ]; then
+                      if [ -f "$PROJ_DIR/docker-compose.prod.yml" ]; then
                         echo "🧹 Removing stale docker-compose.prod.yml..."
-                        rm -f docker-compose.prod.yml
+                        rm -f "$PROJ_DIR/docker-compose.prod.yml"
                       fi
 
                       # Stop existing services
                       echo "🐳 Stopping existing services..."
-                      docker compose down 2>/dev/null || true
+                      $DC down 2>/dev/null || true
 
                       # Log in to Docker Hub and pull latest per-service images
                       echo "🐳 Pulling latest images from Docker Hub..."
@@ -471,14 +486,16 @@ jobs:
                       # postgres and redis must be listed explicitly — when service names are
                       # given, Compose does NOT auto-start depends_on targets that aren't running.
                       echo "🚀 Starting postgres, redis, data, engine, web and charting services..."
-                      docker compose up -d --no-build --remove-orphans postgres redis data engine web charting prometheus grafana
+                      $DC up -d --no-build --remove-orphans postgres redis data engine web charting prometheus grafana
 
                   post-deploy-command: |
-                      cd ~/futures
+                      PROJ_DIR="$HOME/futures"
+                      cd "$PROJ_DIR"
+                      DC="docker compose --project-directory $PROJ_DIR -f $PROJ_DIR/docker-compose.yml"
 
                       echo ""
                       echo "📊 Container status:"
-                      docker compose ps postgres redis data engine web charting prometheus grafana 2>/dev/null || \
+                      $DC ps postgres redis data engine web charting prometheus grafana 2>/dev/null || \
                         docker ps --filter "name=futures" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
                       echo ""
@@ -488,6 +505,7 @@ jobs:
 
                       echo ""
                       echo "🧹 Pruning dangling Docker images..."
+                      $DC images --quiet 2>/dev/null || true
                       docker image prune -f 2>/dev/null || true
 
                       echo ""
