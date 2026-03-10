@@ -158,7 +158,7 @@ async def _run_step_overnight(symbol: str, plan: dict) -> str:
         pass
 
     try:
-        from lib.integrations.massive_client import MassiveClient
+        from lib.integrations.massive_client import MassiveClient  # type: ignore[attr-defined]
 
         api_key = _STATE.get("settings", {}).get("massive_api_key", "")
         if api_key:
@@ -177,7 +177,7 @@ async def _run_step_overnight(symbol: str, plan: dict) -> str:
 async def _run_step_kraken(symbol: str, plan: dict) -> str:
     """Pull crypto data from Kraken."""
     try:
-        from lib.integrations.kraken_client import KrakenClient
+        from lib.integrations.kraken_client import KrakenClient  # type: ignore[attr-defined]
 
         client = KrakenClient()
         btc = client.get_ticker("XBTUSD")
@@ -326,7 +326,7 @@ async def _run_step_crypto_mom(symbol: str, plan: dict) -> str:
         result = compute_crypto_momentum()
         if result:
             plan["crypto_momentum"] = result
-            return f"Crypto momentum: {result.get('direction', 'neutral')} — live computation"
+            return f"Crypto momentum: {result.direction} — live computation"
     except Exception:
         pass
 
@@ -485,9 +485,9 @@ async def _run_step_rb(symbol: str, plan: dict) -> str:
 async def _run_step_confluence(symbol: str, plan: dict) -> str:
     """Score entry zones by confluence."""
     try:
-        from lib.analysis.confluence import ConfluenceScorer
+        from lib.analysis.confluence import MultiTimeframeFilter
 
-        ConfluenceScorer()
+        MultiTimeframeFilter()
         # Would need levels from ICT + volume + ORB steps
         pass
     except Exception:
@@ -548,9 +548,9 @@ async def _run_step_bias(symbol: str, plan: dict) -> str:
 async def _run_step_fingerprint(symbol: str, plan: dict) -> str:
     """Load asset personality fingerprint."""
     try:
-        from lib.analysis.asset_fingerprint import get_fingerprint
+        from lib.analysis.asset_fingerprint import compute_asset_fingerprint
 
-        fp = get_fingerprint(symbol)
+        fp = compute_asset_fingerprint(symbol)
         if fp:
             plan["fingerprint"] = fp
             return f"{symbol}: fingerprint loaded — live analysis"
@@ -959,7 +959,7 @@ async def _live_stream_generator(symbol: str):
     price = b - 18.0  # start near Zone A
     tick = 0
     pnl = 0.0
-    position = {"qty": 2, "entry": round(b - 19.5, 2), "dir": "LONG"}
+    position: dict[str, float | int | str] = {"qty": 2, "entry": round(b - 19.5, 2), "dir": "LONG"}
     last_signal_tick = -20
 
     while True:
@@ -971,7 +971,7 @@ async def _live_stream_generator(symbol: str):
         price = max(b - 40, min(b + 70, price))
 
         # P&L
-        pnl = (price - position["entry"]) * position["qty"] * 5  # MES = $5/pt
+        pnl = (price - float(position["entry"])) * int(position["qty"]) * 5  # MES = $5/pt
 
         # Candle update
         candle = {
@@ -1008,7 +1008,7 @@ async def _live_stream_generator(symbol: str):
             last_signal_tick = tick
             sig_fn = random.choice(SIGNAL_TEMPLATES)
             sig = sig_fn(b)
-            sig["tick"] = tick
+            sig["tick"] = str(tick)
             sig["ts"] = datetime.now(tz=_ET).strftime("%H:%M:%S")
             yield f"data: {json.dumps({'type': 'signal', 'signal': sig})}\n\n"
 

@@ -562,10 +562,19 @@ def test_full_symbols_list() -> None:
 
     # Check asset class coverage
     try:
-        from lib.core.asset_registry import get_asset_class
+        from lib.core.asset_registry import get_asset_by_ticker
+
+        def _get_asset_class(sym: str) -> str:
+            asset = get_asset_by_ticker(sym)
+            return asset.asset_class.value if asset else "unknown"
+
     except ImportError:
         try:
-            from lib.analysis.breakout_cnn import _asset_class_from_symbol as get_asset_class
+            from lib.analysis.breakout_cnn import get_asset_class_id
+
+            def _get_asset_class(sym: str) -> str:  # type: ignore[misc]
+                return str(get_asset_class_id(sym))
+
         except ImportError:
             skip("Cannot import asset class resolver — skipping class coverage check")
             return
@@ -573,7 +582,7 @@ def test_full_symbols_list() -> None:
     classes: dict[str, list[str]] = {}
     for sym in DEFAULT_SYMBOLS:
         try:
-            cls = get_asset_class(sym)
+            cls = _get_asset_class(sym)
             classes.setdefault(str(cls), []).append(sym)
         except Exception:
             classes.setdefault("unknown", []).append(sym)

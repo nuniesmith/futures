@@ -539,7 +539,7 @@ async def poll_result(batch_id: str) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/copy-trade/status/html", response_class=None)
+@router.get("/api/copy-trade/status/html", response_class=None)  # type: ignore[arg-type]
 async def get_status_html() -> Any:
     """Return an HTMX-ready HTML fragment for the copy-trade status strip."""
     from fastapi.responses import HTMLResponse
@@ -605,7 +605,7 @@ async def get_status_html() -> Any:
     )
 
 
-@router.get("/api/copy-trade/history/html", response_class=None)
+@router.get("/api/copy-trade/history/html", response_class=None)  # type: ignore[arg-type]
 async def get_history_html(limit: int = 10) -> Any:
     """Return an HTMX-ready HTML table of the last N order batches."""
     from fastapi.responses import HTMLResponse
