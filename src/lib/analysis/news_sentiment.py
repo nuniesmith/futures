@@ -637,10 +637,18 @@ def compute_news_sentiment(
     avg_vader = round(sum(a.vader_score for a in relevant) / n, 4)
 
     av_articles = [a for a in relevant if a.av_score is not None]
-    avg_av = round(sum(a.av_score for a in av_articles) / len(av_articles), 4) if av_articles else 0.0
+    avg_av = (
+        round(sum(a.av_score for a in av_articles if a.av_score is not None) / len(av_articles), 4)
+        if av_articles
+        else 0.0
+    )
 
     grok_articles = [a for a in relevant if a.grok_score is not None]
-    avg_grok = round(sum(a.grok_score for a in grok_articles) / len(grok_articles), 4) if grok_articles else 0.0
+    avg_grok = (
+        round(sum(a.grok_score for a in grok_articles if a.grok_score is not None) / len(grok_articles), 4)
+        if grok_articles
+        else 0.0
+    )
 
     # Weighted hybrid aggregate — weight by recency (newer = higher weight)
     # using an exponential decay so the last 6 hours dominate

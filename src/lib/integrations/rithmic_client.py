@@ -626,10 +626,10 @@ class RithmicAccountManager:
                 account_ids: list[str] = []
                 with contextlib.suppress(Exception):
                     accounts = await asyncio.wait_for(client.list_accounts(), timeout=10.0)
-                    account_ids = [getattr(a, "account_id", str(a)) for a in (accounts or [])]
+                    account_ids = [str(getattr(a, "account_id", None) or a) for a in (accounts or [])]
 
                 # Fall back to config-level account_id if discovery fails.
-                if not account_ids and getattr(config, "account_id", ""):
+                if not account_ids and hasattr(config, "account_id") and config.account_id:  # type: ignore[attr-defined]
                     account_ids = [config.account_id]  # type: ignore[attr-defined]
 
                 result["account_ids"] = account_ids

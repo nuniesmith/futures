@@ -696,7 +696,9 @@ class CopyTrader:
                 timeout=10.0,
             )
             if contract:
-                sec_code = getattr(contract, "security_code", None) or getattr(contract, "symbol", str(contract))
+                sec_code: str = str(
+                    getattr(contract, "security_code", None) or getattr(contract, "symbol", None) or contract
+                )
                 self._contract_cache[product_code] = sec_code
                 logger.info("Resolved %s → %s (%s)", ticker, sec_code, exchange)
                 return sec_code, exchange

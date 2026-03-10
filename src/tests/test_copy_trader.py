@@ -1689,6 +1689,7 @@ class TestModifyStopOnAll:
                 entry_price=2000.0,
             )
 
+        assert ct_wired._main is not None
         assert ct_wired._main.key in result["accounts_failed"]  # type: ignore[operator]
         assert result["ok"] is False
 
@@ -1803,6 +1804,7 @@ class TestCancelOnAll:
         assert len(captured) == 1
         assert captured[0].get("security_code") == "MGCQ6"
         assert result["ok"] is True
+        assert ct_wired._main is not None
         assert ct_wired._main.key in result["accounts_cancelled"]  # type: ignore[operator]
 
     @pytest.mark.asyncio()
@@ -1850,6 +1852,7 @@ class TestCancelOnAll:
             result = await ct_wired.cancel_on_all(security_code="MGCQ6", exchange="NYMEX")
 
         assert result["ok"] is False
+        assert ct_wired._main is not None
         assert ct_wired._main.key in result["accounts_failed"]  # type: ignore[operator]
 
     @pytest.mark.asyncio()
