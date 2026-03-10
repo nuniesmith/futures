@@ -352,13 +352,16 @@ jobs:
                   git-branch: main
                   docker-prune: false
                   pre-deploy-command: |
+                      set -euo pipefail
                       echo "📦 Preparing Futures deployment on cloud server..."
 
+                      PROJ_DIR="$HOME/futures"
+
                       # Handle git repository setup
-                      if [ ! -d "$HOME/futures/.git" ]; then
-                        if [ -d "$HOME/futures" ]; then
+                      if [ ! -d "$PROJ_DIR/.git" ]; then
+                        if [ -d "$PROJ_DIR" ]; then
                           echo "📁 Directory exists but is not a git repo — initializing..."
-                          cd ~/futures
+                          cd "$PROJ_DIR"
                           git init
                           git remote add origin https://github.com/${{ github.repository }}.git
                           git fetch origin
@@ -366,20 +369,27 @@ jobs:
                           git branch --set-upstream-to=origin/main main
                         else
                           echo "📥 First deployment — cloning repository..."
-                          git clone https://github.com/${{ github.repository }}.git ~/futures
-                          cd ~/futures
-                          git checkout main
+                          git clone https://github.com/${{ github.repository }}.git "$PROJ_DIR"
                         fi
                       else
-                        cd ~/futures
-                        echo "📥 Pulling latest changes..."
+                        echo "📥 Force-syncing to origin/main..."
+                        cd "$PROJ_DIR"
                         git fetch origin
                         git checkout main
-                        git pull origin main
+                        # Hard reset — this is a deployment target, not a dev machine.
+                        # Ensures local modifications or a partially applied pull never
+                        # leave the server on a stale commit.
+                        git reset --hard origin/main
+                        echo "✅ Now at: $(git log --oneline -1)"
                       fi
 
+                      # Confirm the compose file on disk matches what we expect
+                      cd "$PROJ_DIR"
+                      echo "📄 docker-compose.yml services on disk:"
+                      grep -E "^    [a-z]" docker-compose.yml | grep -v "^    #" || true
+
                       # Ensure scripts are executable
-                      find . -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+                      find "$PROJ_DIR" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
 
                       # Create .env file if it doesn't exist
                       if [ ! -f ".env" ]; then
@@ -439,6 +449,7 @@ jobs:
                       echo "✅ Directories ready"
 
                   deploy-command: |
+                      set -euo pipefail
                       PROJ_DIR="$HOME/futures"
                       cd "$PROJ_DIR"
 
@@ -489,6 +500,7 @@ jobs:
                       $DC up -d --no-build --remove-orphans postgres redis data engine web charting prometheus grafana
 
                   post-deploy-command: |
+                      set -euo pipefail
                       PROJ_DIR="$HOME/futures"
                       cd "$PROJ_DIR"
                       DC="docker compose --project-directory $PROJ_DIR -f $PROJ_DIR/docker-compose.yml"
