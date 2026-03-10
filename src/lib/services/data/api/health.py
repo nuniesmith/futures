@@ -632,10 +632,8 @@ def _compute_system_health() -> dict[str, Any]:
                 pass
 
     # CNN model
-    try:
+    with contextlib.suppress(Exception):
         result["cnn_model_on_disk"] = _cnn_model_on_disk()
-    except Exception:
-        pass
 
     # Companion services (best-effort HTTP probes)
     _companion_services = [
