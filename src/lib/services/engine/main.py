@@ -69,6 +69,15 @@ _position_manager = None
 # ---------------------------------------------------------------------------
 _live_risk_publisher = None
 
+# ---------------------------------------------------------------------------
+# Module-level CopyTrader singleton (initialised in main())
+# Wires PositionManager → Rithmic multi-account copy trading.
+# Only activated when RITHMIC_COPY_TRADING=1 env var is set so the engine
+# can still run without Rithmic credentials in dev/CI environments.
+# ---------------------------------------------------------------------------
+_copy_trader = None
+_COPY_TRADING_ENABLED = os.getenv("RITHMIC_COPY_TRADING", "0") == "1"
+
 
 def _get_position_manager(account_size: int = 50_000):
     """Lazy-init and return the global PositionManager singleton."""
@@ -86,6 +95,27 @@ def _get_position_manager(account_size: int = 50_000):
         except Exception as exc:
             logger.warning("PositionManager init failed (non-fatal): %s", exc)
     return _position_manager
+
+
+def _get_copy_trader():
+    """Lazy-init and return the global CopyTrader singleton.
+
+    Returns ``None`` (and logs a debug message) when
+    ``RITHMIC_COPY_TRADING=1`` is not set, so the rest of the engine
+    degrades gracefully to NT8-bridge-only mode.
+    """
+    global _copy_trader
+    if not _COPY_TRADING_ENABLED:
+        return None
+    if _copy_trader is None:
+        try:
+            from lib.services.engine.copy_trader import CopyTrader
+
+            _copy_trader = CopyTrader()
+            logger.info("CopyTrader initialised (RITHMIC_COPY_TRADING=1)")
+        except Exception as exc:
+            logger.warning("CopyTrader init failed (non-fatal): %s", exc)
+    return _copy_trader
 
 
 def _get_live_risk_publisher():
@@ -1068,7 +1098,7 @@ def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "u
 
 
 def _publish_pm_orders(orders: list) -> None:  # type: ignore[type-arg]
-    """Publish PositionManager OrderCommands to Redis for the NT8 Bridge and dashboard.
+    """Publish PositionManager OrderCommands to the NT8 Bridge, dashboard, and CopyTrader.
 
     Each order is written to:
       - ``engine:pm:orders`` — a list (RPUSH) of JSON-serialised commands (TTL 60s)
@@ -1076,6 +1106,17 @@ def _publish_pm_orders(orders: list) -> None:  # type: ignore[type-arg]
 
     The NT8 Bridge subscribes to ``dashboard:pm_orders`` and translates each
     command into a NinjaScript order submission.
+
+    When ``RITHMIC_COPY_TRADING=1`` the same orders are also forwarded to the
+    :class:`~lib.services.engine.copy_trader.CopyTrader` via
+    ``execute_order_commands()``.  The CopyTrader runs in a fire-and-forget
+    asyncio task so it never blocks the synchronous engine loop.
+
+    Rithmic path (when enabled):
+      - Entry BUY/SELL → ``CopyTrader.send_order_and_copy()`` (main + slaves, MANUAL flag)
+      - MODIFY_STOP    → ``CopyTrader.modify_stop_on_all()`` (MANUAL flag)
+      - CANCEL         → ``CopyTrader.cancel_on_all()`` (MANUAL flag)
+      - STOP companion → silently skipped (covered by server-side bracket on entry)
     """
     if not orders:
         return
@@ -1141,6 +1182,75 @@ def _publish_pm_orders(orders: list) -> None:  # type: ignore[type-arg]
         )
     except Exception as exc:
         logger.debug("_publish_pm_orders error (non-fatal): %s", exc)
+
+    # ------------------------------------------------------------------
+    # Rithmic copy-trading path (only when RITHMIC_COPY_TRADING=1)
+    # ------------------------------------------------------------------
+    ct = _get_copy_trader()
+    if ct is not None and orders:
+        _dispatch_orders_to_copy_trader(ct, orders)
+
+
+def _dispatch_orders_to_copy_trader(ct: Any, orders: list) -> None:  # type: ignore[type-arg]
+    """Fire-and-forget: run ``ct.execute_order_commands(orders)`` in an asyncio task.
+
+    The engine main loop is synchronous; we bridge into async by either
+    scheduling a task on a running event loop or spinning up a short-lived
+    one.  Any failure is non-fatal and logged at DEBUG level so it never
+    interrupts the alert pipeline.
+
+    The ``entry_prices`` dict is built from the current PositionManager state
+    so that ``modify_stop_on_all`` has accurate tick-conversion data.
+    """
+    try:
+        import asyncio
+
+        # Build entry_prices from active positions so MODIFY_STOP conversions
+        # are accurate (ticker → entry_price from the live MicroPosition).
+        entry_prices: dict[str, float] = {}
+        pm = _position_manager
+        if pm is not None:
+            try:
+                for ticker, pos in pm.get_all_positions().items():
+                    entry_prices[ticker] = getattr(pos, "entry_price", 0.0)
+            except Exception:
+                pass
+
+        async def _run() -> None:
+            try:
+                results = await ct.execute_order_commands(orders, entry_prices=entry_prices)
+                ok = sum(
+                    1
+                    for r in results
+                    if (hasattr(r, "all_submitted") and r.all_submitted) or (isinstance(r, dict) and r.get("ok"))
+                )
+                logger.info(
+                    "🔗 CopyTrader: %d order command(s) → %d result(s) (%d ok)",
+                    len(orders),
+                    len(results),
+                    ok,
+                )
+            except Exception as exc:
+                logger.debug("CopyTrader execute_order_commands error (non-fatal): %s", exc)
+
+        # Try to schedule on an already-running loop (e.g. if engine ever
+        # becomes async).  Fall back to a new one-shot loop.
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(_run())
+            else:
+                loop.run_until_complete(_run())
+        except RuntimeError:
+            # No current event loop — spin up a fresh one
+            new_loop = asyncio.new_event_loop()
+            try:
+                new_loop.run_until_complete(_run())
+            finally:
+                new_loop.close()
+
+    except Exception as exc:
+        logger.debug("_dispatch_orders_to_copy_trader error (non-fatal): %s", exc)
 
 
 def _dispatch_to_position_manager(
@@ -1728,6 +1838,94 @@ def _build_session_stats(today) -> dict:
         return {}
 
 
+def _handle_check_news_sentiment(engine, label: str = "morning") -> None:
+    """Run the news sentiment pipeline and cache results in Redis.
+
+    Fetches articles from Finnhub + Alpha Vantage, scores them with
+    VADER + optional Grok (ambiguous-only), aggregates per symbol, and
+    writes results to ``engine:news_sentiment:<SYMBOL>`` (2h TTL) and
+    ``engine:news_spike`` in Redis.
+
+    Args:
+        engine: DashboardEngine instance (used to access Redis + watchlist).
+        label:  "morning" or "midday" — used in log messages only.
+    """
+    logger.info("▶ News sentiment pipeline (%s run)...", label)
+    t0 = time.time()
+
+    try:
+        from lib.analysis.news_sentiment import run_news_sentiment_pipeline
+
+        # Resolve API keys from environment
+        finnhub_key = os.getenv("FINNHUB_API_KEY")
+        alpha_key = os.getenv("ALPHA_VANTAGE_API_KEY")
+        grok_key = os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY")
+
+        if not finnhub_key and not alpha_key:
+            logger.warning("News sentiment: no API keys configured (set FINNHUB_API_KEY and/or ALPHA_VANTAGE_API_KEY)")
+            return
+
+        # Use the engine's watchlist symbols; fall back to core futures set
+        try:
+            symbols: list[str] = list(engine.get_watchlist())
+        except Exception:
+            symbols = ["MES", "MNQ", "MGC", "MCL", "M2K", "MYM", "M6E", "M6B", "MBT", "MET"]
+
+        from lib.core.cache import REDIS_AVAILABLE, _r
+
+        redis = _r if REDIS_AVAILABLE else None
+
+        sentiments = run_news_sentiment_pipeline(
+            symbols=symbols,
+            finnhub_key=finnhub_key,
+            alpha_key=alpha_key,
+            grok_key=grok_key,
+            redis=redis,
+            days_back=2,
+            max_per_ticker=5,
+        )
+
+        elapsed = time.time() - t0
+        spike_count = sum(1 for ns in sentiments.values() if ns.is_spike)
+        logger.info(
+            "✅ News sentiment (%s): %d symbols scored in %.1fs — %d spike(s)",
+            label,
+            len(sentiments),
+            elapsed,
+            spike_count,
+        )
+
+        # Publish spike events to SSE so the dashboard can alert immediately
+        if spike_count:
+            try:
+                for sym, ns in sentiments.items():
+                    if ns.is_spike:
+                        import json as _json
+
+                        payload = _json.dumps(
+                            {
+                                "symbol": sym,
+                                "articles_last_hour": ns.articles_last_hour,
+                                "sentiment": round(ns.weighted_hybrid, 3),
+                                "signal": ns.signal,
+                            }
+                        )
+                        if REDIS_AVAILABLE and _r is not None:
+                            _r.publish("dashboard:news_spike", payload)
+                        logger.warning(
+                            "📰 NEWS SPIKE: %s — %d art/hr  sentiment %.2f (%s)",
+                            sym,
+                            ns.articles_last_hour,
+                            ns.weighted_hybrid,
+                            ns.signal,
+                        )
+            except Exception as exc:
+                logger.warning("News sentiment: spike publish failed: %s", exc)
+
+    except Exception as exc:
+        logger.error("News sentiment pipeline (%s) failed: %s", label, exc, exc_info=True)
+
+
 def _handle_daily_report(engine) -> None:
     """Generate the daily trading session report and publish it to Redis.
 
@@ -2259,6 +2457,14 @@ def main():
     # Initialise the PositionManager — loads any persisted positions from Redis
     _get_position_manager(account_size)
 
+    # Initialise the CopyTrader if Rithmic copy-trading is enabled
+    if _COPY_TRADING_ENABLED:
+        ct = _get_copy_trader()
+        if ct is not None:
+            logger.info("CopyTrader ready — orders from PositionManager will be mirrored to Rithmic accounts")
+    else:
+        logger.info("CopyTrader disabled (set RITHMIC_COPY_TRADING=1 to enable Rithmic order mirroring)")
+
     # Initialise the LiveRiskPublisher — merges RiskManager + PositionManager
     # into a unified LiveRiskState and publishes to Redis every 5 seconds.
     # Also wired into the live_risk API module for /api/live-risk/refresh.
@@ -2310,6 +2516,8 @@ def main():
             types=getattr(pending[0] if pending else None, "payload", None) and pending[0].payload.get("types") or None,
         ),
         ActionType.CHECK_SWING: lambda: _handle_check_swing(engine, account_size),
+        ActionType.CHECK_NEWS_SENTIMENT: lambda: _handle_check_news_sentiment(engine, label="morning"),
+        ActionType.CHECK_NEWS_SENTIMENT_MIDDAY: lambda: _handle_check_news_sentiment(engine, label="midday"),
         ActionType.HISTORICAL_BACKFILL: lambda: _handle_historical_backfill(engine),
         ActionType.RUN_OPTIMIZATION: lambda: _handle_run_optimization(engine),
         ActionType.RUN_BACKTEST: lambda: _handle_run_backtest(engine),

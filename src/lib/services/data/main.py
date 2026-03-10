@@ -125,6 +125,8 @@ from lib.services.data.api.bars import (  # noqa: E402
 from lib.services.data.api.bars import (  # noqa: E402
     startup_warm_caches,
 )
+from lib.services.data.api.chat import router as chat_router  # noqa: E402
+from lib.services.data.api.chat import set_engine as chat_set_engine  # noqa: E402
 from lib.services.data.api.cnn import router as cnn_router  # noqa: E402
 from lib.services.data.api.dashboard import (  # noqa: E402
     router as dashboard_router,
@@ -148,6 +150,7 @@ from lib.services.data.api.metrics import PrometheusMiddleware  # noqa: E402
 from lib.services.data.api.metrics import (  # noqa: E402
     router as metrics_router,
 )
+from lib.services.data.api.news import router as news_router  # noqa: E402
 from lib.services.data.api.nt8_deploy import (  # noqa: E402
     router as nt8_deploy_router,
 )
@@ -170,6 +173,7 @@ from lib.services.data.api.sse import router as sse_router  # noqa: E402
 from lib.services.data.api.swing_actions import (  # noqa: E402
     router as swing_actions_router,
 )
+from lib.services.data.api.tasks import router as tasks_router  # noqa: E402
 from lib.services.data.api.trades import (  # noqa: E402
     router as trades_router,
 )
@@ -325,6 +329,7 @@ async def lifespan(app: FastAPI):
     analysis_set_engine(_engine)
     actions_set_engine(_engine)
     grok_set_engine(_engine)
+    chat_set_engine(_engine)
 
     # 4b. Start Reddit watcher + aggregation job (non-fatal if credentials missing)
     try:
@@ -684,6 +689,12 @@ app.include_router(swing_actions_router, tags=["Swing Actions"])
 # NOTE: reddit_router is mounted WITHOUT a prefix — routes are defined with full paths.
 app.include_router(reddit_router, tags=["Reddit Sentiment"])
 
+# News Sentiment: /api/news/sentiment, /api/news/sentiment/{symbol},
+#                 /api/news/headlines, /api/news/spike,
+#                 /htmx/news/panel, /htmx/news/asset/{symbol}
+# NOTE: news_router is mounted WITHOUT a prefix — routes are defined with full paths.
+app.include_router(news_router, tags=["News Sentiment"])
+
 # Pipeline: /api/pipeline/run, /api/pipeline/status, /api/pipeline/reset,
 #           /api/plan, /api/plan/confirm, /api/plan/unlock,
 #           /api/live/stream, /api/market/candles, /api/market/cvd,
@@ -691,6 +702,30 @@ app.include_router(reddit_router, tags=["Reddit Sentiment"])
 # Morning workflow pipeline — SSE-driven analysis, plan management, live trading.
 # NOTE: pipeline_router is mounted WITHOUT a prefix — routes are defined with full paths.
 app.include_router(pipeline_router, tags=["Pipeline"])
+
+# Chat: /api/chat, /sse/chat, /api/chat/history, /api/chat/status
+# RustAssistant-powered multi-turn chat with RA→Grok fallback.
+# History stored in Redis per session_id. Market context auto-injected.
+# NOTE: chat_router is mounted WITHOUT a prefix — routes use /api/chat/ and /sse/chat paths.
+app.include_router(chat_router, tags=["Chat"])
+
+# Tasks: /api/tasks, /api/tasks/{id}, /api/tasks/{id}/github, /api/tasks/html
+# Lightweight issue/bug/note capture with RustAssistant GitHub integration.
+# Stored in SQLite/Postgres tasks table. Pushes to GitHub via RA when configured.
+# NOTE: tasks_router is mounted WITHOUT a prefix — routes use /api/tasks/ paths.
+app.include_router(tasks_router, tags=["Tasks"])
+
+# Copy Trade: /api/copy-trade/send, /api/copy-trade/send-from-ticker,
+#             /api/copy-trade/status, /api/copy-trade/history,
+#             /api/copy-trade/compliance-log, /api/copy-trade/rate,
+#             /api/copy-trade/high-impact, /api/copy-trade/invalidate-cache,
+#             /api/copy-trade/result/{batch_id},
+#             /api/copy-trade/status/html, /api/copy-trade/history/html
+# RITHMIC-F: WebUI "SEND ALL" button + prop-firm compliant copy trading.
+# NOTE: copy_trade_router is mounted WITHOUT a prefix — routes use /api/copy-trade/ paths.
+from lib.services.data.api.copy_trade import router as copy_trade_router  # noqa: E402
+
+app.include_router(copy_trade_router, tags=["Copy Trade"])
 
 
 # ---------------------------------------------------------------------------

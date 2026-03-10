@@ -1069,6 +1069,110 @@ async def proxy_trading_page(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Chat — RustAssistant-powered multi-turn chat with RA→Grok fallback
+# ---------------------------------------------------------------------------
+
+
+@app.get("/chat", response_class=HTMLResponse)
+async def proxy_chat_page(request: Request):
+    """Proxy the standalone chat page."""
+    return await _proxy_request(request, "/chat")
+
+
+@app.post("/api/chat")
+async def proxy_chat(request: Request):
+    """Proxy non-streaming chat POST to data service."""
+    return await _proxy_request(request, "/api/chat")
+
+
+@app.get("/api/chat/status")
+async def proxy_chat_status(request: Request):
+    """Proxy chat backend status check."""
+    return await _proxy_request(request, "/api/chat/status")
+
+
+@app.get("/api/chat/history")
+async def proxy_chat_history(request: Request):
+    """Proxy chat history fetch."""
+    return await _proxy_request(request, "/api/chat/history")
+
+
+@app.delete("/api/chat/history")
+async def proxy_chat_history_delete(request: Request):
+    """Proxy chat history clear."""
+    return await _proxy_request(request, "/api/chat/history")
+
+
+@app.get("/sse/chat")
+async def proxy_sse_chat(request: Request):
+    """Proxy the streaming SSE chat endpoint from the data service.
+
+    Uses the dedicated SSE client (no keepalive expiry) so long-running
+    chat streams are not reaped by the connection pool.
+    """
+    return await _proxy_sse_request(request, "/sse/chat")
+
+
+# ---------------------------------------------------------------------------
+# Tasks — issue/bug/note capture with RustAssistant GitHub integration
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/tasks")
+async def proxy_tasks_create(request: Request):
+    """Proxy task creation."""
+    return await _proxy_request(request, "/api/tasks")
+
+
+@app.get("/api/tasks")
+async def proxy_tasks_list(request: Request):
+    """Proxy task list."""
+    return await _proxy_request(request, "/api/tasks")
+
+
+@app.get("/api/tasks/html")
+async def proxy_tasks_html(request: Request):
+    """Proxy tasks HTMX fragment."""
+    return await _proxy_request(request, "/api/tasks/html")
+
+
+@app.get("/api/tasks/status")
+async def proxy_tasks_status(request: Request):
+    """Proxy tasks subsystem status."""
+    return await _proxy_request(request, "/api/tasks/status")
+
+
+@app.get("/api/tasks/{task_id}")
+async def proxy_task_get(request: Request, task_id: int):
+    """Proxy single task fetch."""
+    return await _proxy_request(request, f"/api/tasks/{task_id}")
+
+
+@app.get("/api/tasks/{task_id}/html")
+async def proxy_task_html(request: Request, task_id: int):
+    """Proxy single task card fragment."""
+    return await _proxy_request(request, f"/api/tasks/{task_id}/html")
+
+
+@app.put("/api/tasks/{task_id}")
+async def proxy_task_update(request: Request, task_id: int):
+    """Proxy task update."""
+    return await _proxy_request(request, f"/api/tasks/{task_id}")
+
+
+@app.delete("/api/tasks/{task_id}")
+async def proxy_task_delete(request: Request, task_id: int):
+    """Proxy task deletion."""
+    return await _proxy_request(request, f"/api/tasks/{task_id}")
+
+
+@app.post("/api/tasks/{task_id}/github")
+async def proxy_task_push_github(request: Request, task_id: int):
+    """Proxy task → GitHub push via RustAssistant."""
+    return await _proxy_request(request, f"/api/tasks/{task_id}/github")
+
+
+# ---------------------------------------------------------------------------
 # Generic proxy helper
 # ---------------------------------------------------------------------------
 

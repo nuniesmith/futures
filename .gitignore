@@ -13,6 +13,7 @@ dist/
 build/
 *.whl
 .eggs/
+*.mypy_cache/
 
 # --- Virtual environments ---
 .venv/

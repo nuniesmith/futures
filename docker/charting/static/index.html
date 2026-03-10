@@ -44,11 +44,15 @@
 
             <!-- Indicator toggles -->
             <div class="indicator-tabs" role="group" aria-label="Indicators">
-                <button class="ind-btn active" data-ind="ema9"  title="Exponential Moving Average (9)">EMA9</button>
-                <button class="ind-btn active" data-ind="ema21" title="Exponential Moving Average (21)">EMA21</button>
-                <button class="ind-btn"        data-ind="bb"    title="Bollinger Bands (20, 2σ)">BB</button>
-                <button class="ind-btn"        data-ind="vwap"  title="Volume-Weighted Average Price">VWAP</button>
-                <button class="ind-btn"        data-ind="rsi"   title="Relative Strength Index (14) — shown below price">RSI</button>
+                <button class="ind-btn active" data-ind="ema9"         title="Exponential Moving Average (9)">EMA9</button>
+                <button class="ind-btn active" data-ind="ema21"        title="Exponential Moving Average (21)">EMA21</button>
+                <button class="ind-btn"        data-ind="bb"           title="Bollinger Bands (20, 2σ)">BB</button>
+                <button class="ind-btn"        data-ind="vwap"         title="VWAP with ±1σ / ±2σ bands (daily reset)">VWAP</button>
+                <button class="ind-btn"        data-ind="rsi"          title="Relative Strength Index (14) — shown below price">RSI</button>
+                <button class="ind-btn"        data-ind="cvd"          title="Cumulative Volume Delta — shown below price">CVD</button>
+                <button class="ind-btn"        data-ind="vp"           title="Volume Profile — POC / VAH / VAL (100-bar rolling)">VP</button>
+                <button class="ind-btn"        data-ind="avwap_session" title="Anchored VWAP — session open">AVWAP-S</button>
+                <button class="ind-btn"        data-ind="avwap_prevday" title="Anchored VWAP — previous day low">AVWAP-P</button>
             </div>
 
             <!-- Live toggle -->
@@ -81,6 +85,9 @@
 
         <!-- RSI sub-pane — separate ApexCharts instance, shown only when RSI indicator is active -->
         <div id="chart-rsi" class="chart-rsi hidden"></div>
+
+        <!-- CVD sub-pane — separate ApexCharts instance, shown only when CVD indicator is active -->
+        <div id="chart-cvd" class="chart-cvd hidden"></div>
     </main>
 
     <!-- ── Bottom status bar ────────────────────────────────────────────── -->

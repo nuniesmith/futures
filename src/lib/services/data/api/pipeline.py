@@ -289,7 +289,6 @@ async def _run_step_grok(symbol: str, plan: dict) -> str:
 async def _run_step_cross_asset(symbol: str, plan: dict) -> str:
     """Analyze cross-asset correlations."""
     try:
-        from lib.analysis.cross_asset import compute_correlation_matrix
 
         # Try to get bars from cache for correlation computation
         from lib.core.cache import cache_get
@@ -395,7 +394,6 @@ async def _run_step_mtf(symbol: str, plan: dict) -> str:
 async def _run_step_waves(symbol: str, plan: dict) -> str:
     """Detect swing structure and wave count."""
     try:
-        from lib.analysis.wave_analysis import detect_waves
 
         # Would need price data
         return "Wave structure analyzed — live data"
@@ -527,7 +525,7 @@ async def _run_step_bias(symbol: str, plan: dict) -> str:
     plan["bias"] = {
         "direction": "LONG",
         "strength": random.randint(60, 85),
-        "summary": f"Long on dips to demand zones — check economic calendar before entries",
+        "summary": "Long on dips to demand zones — check economic calendar before entries",
     }
     plan["scenarios"] = [
         {
@@ -565,7 +563,7 @@ async def _run_step_fingerprint(symbol: str, plan: dict) -> str:
     plan["fingerprint"] = [
         {"t": "Session Behavior", "v": "Respects VWAP as magnet — mean-reverts from extremes in ranging regimes"},
         {"t": "Open Pattern", "v": "Runs stops within first 15m then reverses — avoid chasing the initial spike"},
-        {"t": "Volatility", "v": f"ATR(14) ≈ 18.5pts. Wide ranges likely on news days, normal ~12pts"},
+        {"t": "Volatility", "v": "ATR(14) ≈ 18.5pts. Wide ranges likely on news days, normal ~12pts"},
         {"t": "Volume Profile", "v": f"High-value area {b:.0f}–{b + 30:.0f}. Thin above PDH, fast-moving"},
         {"t": "Correlation", "v": "90%+ with NQ intraday. Use NQ as leading confirm on entries"},
     ]
@@ -587,7 +585,7 @@ async def _run_step_plan(symbol: str, plan: dict) -> str:
     plan.setdefault(
         "scenarios",
         [
-            {"label": "Scenario A", "prob": 65, "desc": f"Dip to OB zone → bounce to POC"},
+            {"label": "Scenario A", "prob": 65, "desc": "Dip to OB zone → bounce to POC"},
             {"label": "Scenario B", "prob": 25, "desc": "Direct push through PDH"},
             {"label": "Invalidation", "prob": 10, "desc": "Break below support"},
         ],
@@ -850,7 +848,7 @@ async def _pipeline_generator(symbol: str):
                     yield f"data: {json.dumps({'type': 'step_progress', 'step': i, 'id': step_id, 'progress': pct})}\n\n"
                     await asyncio.sleep(random.uniform(0.2, 0.5))
                 result_text = f"{label} — complete"
-        except asyncio.TimeoutError:
+        except TimeoutError:
             result_text = f"{label} — timed out (30s), using defaults"
             error = True
             logger.warning("Pipeline step %s timed out", step_id)
@@ -1238,7 +1236,6 @@ async def save_trading_settings(req: Request):
 async def test_rithmic():
     """Test Rithmic connection with current settings."""
     try:
-        from lib.integrations.rithmic_client import RithmicClient
 
         user = _STATE["settings"].get("rithmic_user", "")
         if not user:

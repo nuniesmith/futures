@@ -44,7 +44,18 @@ const IDX = {
     BB_MID: 5,
     BB_LOWER: 6,
     VWAP: 7,
+    VWAP_U1: 8, // VWAP +1σ
+    VWAP_L1: 9, // VWAP −1σ
+    VWAP_U2: 10, // VWAP +2σ
+    VWAP_L2: 11, // VWAP −2σ
+    POC: 12, // Volume Profile — Point of Control
+    VAH: 13, // Volume Profile — Value Area High
+    VAL: 14, // Volume Profile — Value Area Low
+    AVWAP_S: 15, // Anchored VWAP — session open
+    AVWAP_P: 16, // Anchored VWAP — prev-day H/L
 };
+
+const LS_KEY = "ruby_chart_indicators";
 
 // ── Palette — mirrors CSS custom properties ────────────────────────────────────
 const C = {
@@ -67,6 +78,15 @@ const C = {
     bbMid: "rgba(168,85,247,0.40)",
     bbLower: "rgba(168,85,247,0.70)",
     vwap: "#06b6d4",
+    vwapBand1: "rgba(6,182,212,0.35)", // ±1σ band
+    vwapBand2: "rgba(6,182,212,0.15)", // ±2σ band
+    cvdUp: "rgba(34,197,94,0.70)",
+    cvdDown: "rgba(239,68,68,0.70)",
+    poc: "#f59e0b", // Volume Profile — POC
+    vah: "rgba(99,102,241,0.60)", // VAH
+    val: "rgba(99,102,241,0.60)", // VAL
+    avwapSession: "#fb923c", // Anchored VWAP — session
+    avwapPrevDay: "#e879f9", // Anchored VWAP — prev-day
     rsiLine: "#a78bfa",
     rsiOB: "rgba(239,68,68,0.25)",
     rsiOS: "rgba(34,197,94,0.25)",
@@ -90,12 +110,18 @@ const state = {
         bb: false,
         vwap: false,
         rsi: false,
+        cvd: false,
+        vp: false,
+        avwap_session: false,
+        avwap_prevday: false,
     },
 
     // Primary ApexCharts instance (candlestick + volume + overlays)
     chart: null,
     // RSI sub-pane ApexCharts instance (separate element, shown/hidden)
     chartRsi: null,
+    // CVD sub-pane ApexCharts instance
+    chartCvd: null,
 
     // Live data arrays — candleData & volumeData shared between chart + SSE
     // candleData : [{x: <unix ms>, y: [o, h, l, c]}]
@@ -110,7 +136,17 @@ const state = {
     bbMidData: [],
     bbLowerData: [],
     vwapData: [],
+    vwapU1Data: [], // VWAP +1σ
+    vwapL1Data: [], // VWAP −1σ
+    vwapU2Data: [], // VWAP +2σ
+    vwapL2Data: [], // VWAP −2σ
     rsiData: [],
+    cvdData: [], // [{x: ms, y: delta, fillColor}]
+    pocData: [], // Volume Profile POC [{x,y}]
+    vahData: [], // Volume Profile VAH
+    valData: [], // Volume Profile VAL
+    avwapSessionData: [],
+    avwapPrevDayData: [],
 
     // SSE
     sseSource: null,
@@ -127,6 +163,7 @@ const $ = (id) => document.getElementById(id);
 const dom = {
     chartEl: $("chart"),
     chartRsiEl: $("chart-rsi"),
+    chartCvdEl: $("chart-cvd"),
     overlay: $("chart-overlay"),
     overlayMsg: $("overlay-msg"),
     errorBanner: $("error-banner"),
@@ -376,42 +413,255 @@ function calcBollingerBands(candles, period = 20, mult = 2) {
  * @param {Array} volumes   [{x, y}]
  * @returns {Array} [{x, y}]
  */
+/**
+ * VWAP with Standard-Deviation Bands (±1σ / ±2σ).
+ * Daily reset (midnight-to-midnight).
+ *
+ * Returns { vwap, upper1, lower1, upper2, lower2 } — each an [{x,y}] array.
+ */
 function calcVWAP(candles, volumes) {
-    if (candles.length === 0) return [];
+    if (candles.length === 0)
+        return { vwap: [], upper1: [], lower1: [], upper2: [], lower2: [] };
 
-    // Build a quick lookup: timestamp → volume
+    const volMap = new Map();
+    for (const v of volumes) volMap.set(v.x, v.y);
+
+    const vwap = [],
+        upper1 = [],
+        lower1 = [],
+        upper2 = [],
+        lower2 = [];
+    let cumTPV = 0,
+        cumTypSqV = 0,
+        cumVol = 0,
+        lastDay = null;
+
+    for (const {
+        x,
+        y: [, h, l, c],
+    } of candles) {
+        const day = new Date(x).toDateString();
+        if (day !== lastDay) {
+            cumTPV = 0;
+            cumTypSqV = 0;
+            cumVol = 0;
+            lastDay = day;
+        }
+        const tp = (h + l + c) / 3;
+        const vol = volMap.get(x) ?? 0;
+        cumTPV += tp * vol;
+        cumTypSqV += tp * tp * vol;
+        cumVol += vol;
+
+        const v_ = cumVol > 0 ? cumTPV / cumVol : tp;
+        const variance =
+            cumVol > 0 ? Math.max(0, cumTypSqV / cumVol - v_ * v_) : 0;
+        const sigma = Math.sqrt(variance);
+
+        vwap.push({ x, y: +v_.toFixed(6) });
+        upper1.push({ x, y: +(v_ + sigma).toFixed(6) });
+        lower1.push({ x, y: +(v_ - sigma).toFixed(6) });
+        upper2.push({ x, y: +(v_ + 2 * sigma).toFixed(6) });
+        lower2.push({ x, y: +(v_ - 2 * sigma).toFixed(6) });
+    }
+    return { vwap, upper1, lower1, upper2, lower2 };
+}
+
+/**
+ * Cumulative Volume Delta (bar approximation, daily reset).
+ * delta = volume × (2 × (close − low) / (high − low) − 1)
+ *
+ * Returns [{x, y, fillColor}] for the CVD bar sub-pane.
+ */
+function calcCVD(candles, volumes) {
+    if (candles.length === 0) return [];
     const volMap = new Map();
     for (const v of volumes) volMap.set(v.x, v.y);
 
     const out = [];
-    let cumTPV = 0; // cumulative (typical price × volume)
-    let cumVol = 0; // cumulative volume
+    let cvd = 0;
     let lastDay = null;
 
-    for (let i = 0; i < candles.length; i++) {
-        const {
-            x,
-            y: [o, h, l, c],
-        } = candles[i];
+    for (const {
+        x,
+        y: [, h, l, c],
+    } of candles) {
         const day = new Date(x).toDateString();
-
         if (day !== lastDay) {
-            // Reset accumulators at the start of each new day
-            cumTPV = 0;
-            cumVol = 0;
+            cvd = 0;
             lastDay = day;
         }
 
-        const tp = (h + l + c) / 3;
+        const range = h - l;
         const vol = volMap.get(x) ?? 0;
+        const delta = range > 0 ? vol * ((2 * (c - l)) / range - 1) : 0;
+        cvd += delta;
 
-        cumTPV += tp * vol;
-        cumVol += vol;
-
-        const vwap = cumVol > 0 ? cumTPV / cumVol : tp;
-        out.push({ x, y: +vwap.toFixed(6) });
+        out.push({
+            x,
+            y: Math.round(cvd),
+            fillColor: delta >= 0 ? C.cvdUp : C.cvdDown,
+        });
     }
     return out;
+}
+
+/**
+ * Volume Profile — POC, VAH, VAL over a rolling lookback window.
+ * Returns { poc, vah, val } — each [{x,y}].
+ * Only recomputed on new-candle events to avoid O(n²) cost on ticks.
+ */
+function calcVolumeProfile(candles, volumes, bins = 40, lookback = 100) {
+    if (candles.length === 0) return { poc: [], vah: [], val: [] };
+    const volMap = new Map();
+    for (const v of volumes) volMap.set(v.x, v.y);
+
+    const poc = [],
+        vah = [],
+        val = [];
+
+    for (let i = 0; i < candles.length; i++) {
+        const start = Math.max(0, i - lookback + 1);
+        const slice = candles.slice(start, i + 1);
+        const x = candles[i].x;
+
+        const priceMin = Math.min(...slice.map((c) => c.y[2])); // low
+        const priceMax = Math.max(...slice.map((c) => c.y[1])); // high
+        const range = priceMax - priceMin;
+
+        if (range === 0 || slice.length < 2) {
+            const midY = (priceMin + priceMax) / 2;
+            poc.push({ x, y: +midY.toFixed(6) });
+            vah.push({ x, y: +priceMax.toFixed(6) });
+            val.push({ x, y: +priceMin.toFixed(6) });
+            continue;
+        }
+
+        const binSize = range / bins;
+        const buckets = new Float64Array(bins);
+
+        for (const bar of slice) {
+            const [, bh, bl] = bar.y;
+            const vol = volMap.get(bar.x) ?? 0;
+            const bStart = Math.max(0, Math.floor((bl - priceMin) / binSize));
+            const bEnd = Math.min(
+                bins - 1,
+                Math.floor((bh - priceMin) / binSize),
+            );
+            const span = bEnd - bStart + 1;
+            for (let b = bStart; b <= bEnd; b++) {
+                buckets[b] += vol / span;
+            }
+        }
+
+        // POC = bin with highest volume
+        let pocBin = 0;
+        for (let b = 1; b < bins; b++) {
+            if (buckets[b] > buckets[pocBin]) pocBin = b;
+        }
+        const pocPrice = priceMin + (pocBin + 0.5) * binSize;
+
+        // Value Area: expand from POC until ≥ 70% total volume
+        const totalVol = buckets.reduce((s, v) => s + v, 0);
+        const target = totalVol * 0.7;
+        let lo = pocBin,
+            hi = pocBin,
+            areaVol = buckets[pocBin];
+        while (areaVol < target && (lo > 0 || hi < bins - 1)) {
+            const addLo = lo > 0 ? buckets[lo - 1] : -Infinity;
+            const addHi = hi < bins - 1 ? buckets[hi + 1] : -Infinity;
+            if (addLo >= addHi) {
+                lo--;
+                areaVol += buckets[lo];
+            } else {
+                hi++;
+                areaVol += buckets[hi];
+            }
+        }
+
+        poc.push({ x, y: +pocPrice.toFixed(6) });
+        vah.push({ x, y: +(priceMin + (hi + 1) * binSize).toFixed(6) });
+        val.push({ x, y: +(priceMin + lo * binSize).toFixed(6) });
+    }
+    return { poc, vah, val };
+}
+
+/**
+ * Anchored VWAP — running VWAP starting from anchorIndex.
+ * Bars before the anchor return y: null (hidden by ApexCharts).
+ */
+function calcAnchoredVWAP(candles, volumes, anchorIndex) {
+    if (candles.length === 0 || anchorIndex < 0) return [];
+    const volMap = new Map();
+    for (const v of volumes) volMap.set(v.x, v.y);
+
+    const out = [];
+    let cumTPV = 0,
+        cumVol = 0;
+
+    for (let i = 0; i < candles.length; i++) {
+        if (i < anchorIndex) {
+            out.push({ x: candles[i].x, y: null });
+            continue;
+        }
+        const {
+            x,
+            y: [, h, l, c],
+        } = candles[i];
+        const tp = (h + l + c) / 3;
+        const vol = volMap.get(x) ?? 0;
+        cumTPV += tp * vol;
+        cumVol += vol;
+        out.push({
+            x,
+            y: cumVol > 0 ? +(cumTPV / cumVol).toFixed(6) : +tp.toFixed(6),
+        });
+    }
+    return out;
+}
+
+/** Find the bar index of the first candle in the current calendar day. */
+function findSessionAnchor(candles) {
+    if (candles.length === 0) return 0;
+    const lastDay = new Date(candles[candles.length - 1].x).toDateString();
+    for (let i = candles.length - 1; i >= 0; i--) {
+        if (new Date(candles[i].x).toDateString() !== lastDay) return i + 1;
+    }
+    return 0;
+}
+
+/**
+ * Find the bar index of the lowest-low in the previous calendar day
+ * (used as anchor for prev-day anchored VWAP).
+ */
+function findPrevDayAnchor(candles) {
+    if (candles.length === 0) return 0;
+    const lastDay = new Date(candles[candles.length - 1].x).toDateString();
+    // Find boundary of previous day
+    let prevDayEnd = -1;
+    for (let i = candles.length - 1; i >= 0; i--) {
+        if (new Date(candles[i].x).toDateString() !== lastDay) {
+            prevDayEnd = i;
+            break;
+        }
+    }
+    if (prevDayEnd < 0) return 0;
+    const prevDay = new Date(candles[prevDayEnd].x).toDateString();
+    let prevDayStart = prevDayEnd;
+    for (let i = prevDayEnd; i >= 0; i--) {
+        if (new Date(candles[i].x).toDateString() !== prevDay) break;
+        prevDayStart = i;
+    }
+    // Anchor = index of lowest low in prev day
+    let minLow = Infinity,
+        anchorIdx = prevDayStart;
+    for (let i = prevDayStart; i <= prevDayEnd; i++) {
+        if (candles[i].y[2] < minLow) {
+            minLow = candles[i].y[2];
+            anchorIdx = i;
+        }
+    }
+    return anchorIdx;
 }
 
 /**
@@ -474,8 +724,46 @@ function recalcIndicators() {
     state.bbMidData = bb.mid;
     state.bbLowerData = bb.lower;
 
-    state.vwapData = state.indicators.vwap ? calcVWAP(c, v) : [];
+    if (state.indicators.vwap) {
+        const vr = calcVWAP(c, v);
+        state.vwapData = vr.vwap;
+        state.vwapU1Data = vr.upper1;
+        state.vwapL1Data = vr.lower1;
+        state.vwapU2Data = vr.upper2;
+        state.vwapL2Data = vr.lower2;
+    } else {
+        state.vwapData =
+            state.vwapU1Data =
+            state.vwapL1Data =
+            state.vwapU2Data =
+            state.vwapL2Data =
+                [];
+    }
+
     state.rsiData = state.indicators.rsi ? calcRSI(c, 14) : [];
+
+    state.cvdData = state.indicators.cvd ? calcCVD(c, v) : [];
+
+    if (state.indicators.vp) {
+        const vp = calcVolumeProfile(c, v);
+        state.pocData = vp.poc;
+        state.vahData = vp.vah;
+        state.valData = vp.val;
+    } else {
+        state.pocData = state.vahData = state.valData = [];
+    }
+
+    if (state.indicators.avwap_session) {
+        state.avwapSessionData = calcAnchoredVWAP(c, v, findSessionAnchor(c));
+    } else {
+        state.avwapSessionData = [];
+    }
+
+    if (state.indicators.avwap_prevday) {
+        state.avwapPrevDayData = calcAnchoredVWAP(c, v, findPrevDayAnchor(c));
+    } else {
+        state.avwapPrevDayData = [];
+    }
 }
 
 // ── Timestamp format string for ApexCharts xaxis.labels ───────────────────────
@@ -505,45 +793,79 @@ function xAxisFormat(interval) {
 function buildSeries() {
     const ind = state.indicators;
     return [
+        // [0] candlestick
         {
             name: state.activeName || "Price",
             type: "candlestick",
             data: state.candleData,
         },
-        {
-            name: "Volume",
-            type: "bar",
-            data: state.volumeData,
-        },
-        {
-            name: "EMA 9",
-            type: "line",
-            data: ind.ema9 ? state.ema9Data : [],
-        },
+        // [1] volume bars
+        { name: "Volume", type: "bar", data: state.volumeData },
+        // [2] EMA9
+        { name: "EMA 9", type: "line", data: ind.ema9 ? state.ema9Data : [] },
+        // [3] EMA21
         {
             name: "EMA 21",
             type: "line",
             data: ind.ema21 ? state.ema21Data : [],
         },
+        // [4] BB Upper
         {
             name: "BB Upper",
             type: "line",
             data: ind.bb ? state.bbUpperData : [],
         },
-        {
-            name: "BB Mid",
-            type: "line",
-            data: ind.bb ? state.bbMidData : [],
-        },
+        // [5] BB Mid
+        { name: "BB Mid", type: "line", data: ind.bb ? state.bbMidData : [] },
+        // [6] BB Lower
         {
             name: "BB Lower",
             type: "line",
             data: ind.bb ? state.bbLowerData : [],
         },
+        // [7] VWAP
+        { name: "VWAP", type: "line", data: ind.vwap ? state.vwapData : [] },
+        // [8] VWAP +1σ
         {
-            name: "VWAP",
+            name: "VWAP+1σ",
             type: "line",
-            data: ind.vwap ? state.vwapData : [],
+            data: ind.vwap ? state.vwapU1Data : [],
+        },
+        // [9] VWAP −1σ
+        {
+            name: "VWAP-1σ",
+            type: "line",
+            data: ind.vwap ? state.vwapL1Data : [],
+        },
+        // [10] VWAP +2σ
+        {
+            name: "VWAP+2σ",
+            type: "line",
+            data: ind.vwap ? state.vwapU2Data : [],
+        },
+        // [11] VWAP −2σ
+        {
+            name: "VWAP-2σ",
+            type: "line",
+            data: ind.vwap ? state.vwapL2Data : [],
+        },
+        // [12] VP POC
+        { name: "POC", type: "line", data: ind.vp ? state.pocData : [] },
+        // [13] VP VAH
+        { name: "VAH", type: "line", data: ind.vp ? state.vahData : [] },
+        // [14] VP VAL
+        { name: "VAL", type: "line", data: ind.vp ? state.valData : [] },
+        // [15] Anchored VWAP — session
+        {
+            name: "AVWAP-S",
+            type: "line",
+            data: ind.avwap_session ? state.avwapSessionData : [],
+        },
+        // [16] Anchored VWAP — prev-day
+        {
+            name: "AVWAP-P",
+            type: "line",
+            data: ind.avwap_prevday ? state.avwapPrevDayData : [],
         },
     ];
 }
@@ -577,16 +899,30 @@ function buildOptions(title, interval) {
         // Indicator values at this bar
         const indRows = [];
         const indLookup = (arr, label, colour) => {
+            if (!arr || !arr.length) return;
             const pt =
                 arr[dataPointIndex - (state.candleData.length - arr.length)];
-            if (pt) indRows.push(row(label, fmtPrice(pt.y), colour));
+            if (pt && pt.y != null)
+                indRows.push(row(label, fmtPrice(pt.y), colour));
         };
         if (state.indicators.ema9 && state.ema9Data.length)
             indLookup(state.ema9Data, "EMA9", C.ema9);
         if (state.indicators.ema21 && state.ema21Data.length)
             indLookup(state.ema21Data, "EMA21", C.ema21);
-        if (state.indicators.vwap && state.vwapData.length)
+        if (state.indicators.vwap && state.vwapData.length) {
             indLookup(state.vwapData, "VWAP", C.vwap);
+            indLookup(state.vwapU1Data, "VWAP+1σ", C.vwapBand1);
+            indLookup(state.vwapL1Data, "VWAP-1σ", C.vwapBand1);
+        }
+        if (state.indicators.vp) {
+            indLookup(state.pocData, "POC", C.poc);
+            indLookup(state.vahData, "VAH", C.vah);
+            indLookup(state.valData, "VAL", C.val);
+        }
+        if (state.indicators.avwap_session && state.avwapSessionData.length)
+            indLookup(state.avwapSessionData, "AVWAP-S", C.avwapSession);
+        if (state.indicators.avwap_prevday && state.avwapPrevDayData.length)
+            indLookup(state.avwapPrevDayData, "AVWAP-P", C.avwapPrevDay);
 
         return `
             <div style="
@@ -720,30 +1056,34 @@ function buildOptions(title, interval) {
         dataLabels: { enabled: false },
 
         stroke: {
-            // series: [candlestick, bar, EMA9, EMA21, BBU, BBM, BBL, VWAP]
-            curve: [
-                "smooth",
-                "smooth",
-                "smooth",
-                "smooth",
-                "smooth",
-                "smooth",
-                "smooth",
-                "smooth",
+            // series: [candle, vol, EMA9, EMA21, BBU, BBM, BBL,
+            //          VWAP, VWAP+1σ, VWAP-1σ, VWAP+2σ, VWAP-2σ,
+            //          POC, VAH, VAL, AVWAP-S, AVWAP-P]
+            curve: Array(17).fill("smooth"),
+            width: [
+                1, 1, 1.5, 1.5, 1, 1, 1, 1.5, 1, 1, 1, 1, 1.5, 1, 1, 1.5, 1.5,
             ],
-            width: [1, 1, 1.5, 1.5, 1, 1, 1, 1.5],
-            dashArray: [0, 0, 0, 0, 4, 2, 4, 3],
+            dashArray: [0, 0, 0, 0, 4, 2, 4, 3, 3, 3, 6, 6, 0, 4, 4, 0, 4],
         },
 
         colors: [
-            C.green, // candlestick — overridden by plotOptions.candlestick.colors
-            C.volUp, // volume      — overridden by per-point fillColor
-            C.ema9, // EMA9
-            C.ema21, // EMA21
-            C.bbUpper, // BB Upper
-            C.bbMid, // BB Mid
-            C.bbLower, // BB Lower
-            C.vwap, // VWAP
+            C.green, // [0]  candlestick
+            C.volUp, // [1]  volume
+            C.ema9, // [2]  EMA9
+            C.ema21, // [3]  EMA21
+            C.bbUpper, // [4]  BB Upper
+            C.bbMid, // [5]  BB Mid
+            C.bbLower, // [6]  BB Lower
+            C.vwap, // [7]  VWAP
+            C.vwapBand1, // [8]  VWAP+1σ
+            C.vwapBand1, // [9]  VWAP-1σ
+            C.vwapBand2, // [10] VWAP+2σ
+            C.vwapBand2, // [11] VWAP-2σ
+            C.poc, // [12] POC
+            C.vah, // [13] VAH
+            C.val, // [14] VAL
+            C.avwapSession, // [15] AVWAP-S
+            C.avwapPrevDay, // [16] AVWAP-P
         ],
 
         xaxis: {
@@ -777,6 +1117,15 @@ function buildOptions(title, interval) {
             overlayYaxis, // BB Mid
             overlayYaxis, // BB Lower
             overlayYaxis, // VWAP
+            overlayYaxis, // VWAP+1σ
+            overlayYaxis, // VWAP-1σ
+            overlayYaxis, // VWAP+2σ
+            overlayYaxis, // VWAP-2σ
+            overlayYaxis, // POC
+            overlayYaxis, // VAH
+            overlayYaxis, // VAL
+            overlayYaxis, // AVWAP-S
+            overlayYaxis, // AVWAP-P
         ],
 
         grid: {
@@ -948,6 +1297,89 @@ function buildRsiOptions() {
     };
 }
 
+// ── CVD sub-pane options ───────────────────────────────────────────────────────
+function buildCvdOptions() {
+    return {
+        chart: {
+            id: "cvd-pane",
+            type: "bar",
+            height: "100%",
+            background: C.bg,
+            foreColor: C.textSecond,
+            fontFamily: C.fontMono,
+            animations: { enabled: false },
+            toolbar: { show: false },
+            zoom: { enabled: false },
+            sparkline: { enabled: false },
+        },
+        theme: { mode: "dark" },
+        series: [{ name: "CVD", data: state.cvdData }],
+        plotOptions: {
+            bar: {
+                columnWidth: "90%",
+                distributed: true,
+                borderRadius: 0,
+            },
+        },
+        dataLabels: { enabled: false },
+        stroke: { width: 0 },
+        colors: [C.cvdUp],
+        xaxis: {
+            type: "datetime",
+            labels: { show: false },
+            axisBorder: { color: C.border },
+            axisTicks: { show: false },
+            crosshairs: {
+                show: true,
+                stroke: { color: C.textMuted, width: 1, dashArray: 3 },
+            },
+            tooltip: { enabled: false },
+        },
+        yaxis: {
+            tickAmount: 3,
+            labels: {
+                formatter: (v) => fmtVolume(Math.abs(v)),
+                style: {
+                    colors: C.textMuted,
+                    fontSize: "9px",
+                    fontFamily: C.fontMono,
+                },
+            },
+        },
+        annotations: {
+            yaxis: [
+                {
+                    y: 0,
+                    borderColor: C.textMuted,
+                    borderWidth: 1,
+                    strokeDashArray: 0,
+                    label: { text: "" },
+                },
+            ],
+        },
+        grid: {
+            borderColor: C.borderSubtle,
+            strokeDashArray: 3,
+            padding: { top: 0, right: 16, bottom: 0, left: 4 },
+        },
+        tooltip: {
+            enabled: true,
+            theme: "dark",
+            custom: ({ dataPointIndex }) => {
+                const pt = state.cvdData[dataPointIndex];
+                if (!pt) return "";
+                const sign = pt.y >= 0 ? "+" : "";
+                const col = pt.y >= 0 ? C.green : C.red;
+                return `<div style="padding:6px 10px;font-family:${C.fontMono};font-size:11px;color:${C.textPrimary}">
+                    <span style="color:${C.textMuted}">CVD </span>
+                    <span style="color:${col};font-weight:600">${sign}${pt.y.toLocaleString()}</span>
+                </div>`;
+            },
+        },
+        legend: { show: false },
+    };
+}
+
 // ── Chart lifecycle ────────────────────────────────────────────────────────────
 function destroyChart() {
     if (state.chart) {
@@ -960,6 +1392,13 @@ function destroyRsiChart() {
     if (state.chartRsi) {
         state.chartRsi.destroy();
         state.chartRsi = null;
+    }
+}
+
+function destroyCvdChart() {
+    if (state.chartCvd) {
+        state.chartCvd.destroy();
+        state.chartCvd = null;
     }
 }
 
@@ -979,6 +1418,30 @@ function mountRsiChart() {
 function unmountRsiChart() {
     destroyRsiChart();
     dom.chartRsiEl.classList.add("hidden");
+}
+
+function mountCvdChart() {
+    destroyCvdChart();
+    dom.chartCvdEl.classList.remove("hidden");
+    state.chartCvd = new ApexCharts(dom.chartCvdEl, buildCvdOptions());
+    state.chartCvd.render();
+}
+
+function unmountCvdChart() {
+    destroyCvdChart();
+    dom.chartCvdEl.classList.add("hidden");
+}
+
+function syncCvdPane() {
+    if (!state.indicators.cvd) {
+        unmountCvdChart();
+        return;
+    }
+    if (!state.chartCvd) {
+        mountCvdChart();
+        return;
+    }
+    state.chartCvd.updateSeries([{ name: "CVD", data: state.cvdData }], false);
 }
 
 /**
@@ -1132,12 +1595,13 @@ async function renderBars() {
 
         // Calculate all enabled indicators from fresh data
         recalcIndicators();
-        // Seed incremental EMA/RSI state for live bar updates
+        // Seed incremental EMA/RSI/CVD state for live bar updates
         seedLiveIndState();
 
         const title = `${activeName}  ·  ${activeInterval}`;
         mountChart(title, activeInterval);
         syncRsiPane();
+        syncCvdPane();
         updateStatusBar(candles);
         hideOverlay();
 
@@ -1290,13 +1754,17 @@ function handleSsePayload(payload) {
 const liveInd = {
     emaK9: 2 / (9 + 1),
     emaK21: 2 / (21 + 1),
-    ema9Last: null, // last computed EMA9 value
-    ema21Last: null, // last computed EMA21 value
+    ema9Last: null,
+    ema21Last: null,
 
     // RSI Wilder state
     rsiAvgGain: null,
     rsiAvgLoss: null,
     rsiPeriod: 14,
+
+    // CVD incremental state (daily reset)
+    cvdRunning: 0,
+    cvdLastDay: null,
 };
 
 /**
@@ -1307,6 +1775,13 @@ function seedLiveIndState() {
         liveInd.ema9Last = state.ema9Data[state.ema9Data.length - 1].y;
     if (state.ema21Data.length > 0)
         liveInd.ema21Last = state.ema21Data[state.ema21Data.length - 1].y;
+
+    // Seed CVD running total from last computed CVD point
+    if (state.cvdData.length > 0) {
+        const last = state.cvdData[state.cvdData.length - 1];
+        liveInd.cvdRunning = last.y;
+        liveInd.cvdLastDay = new Date(last.x).toDateString();
+    }
 
     // RSI: seed avgGain/avgLoss by re-running Wilder from the end of the series
     // We just need the final state, so run the last `period` diffs.
@@ -1444,11 +1919,105 @@ function updateIndicatorPoint(isNewCandle, ms, prevClose, close) {
             const rs = newAL === 0 ? Infinity : newAG / newAL;
             const rsi = newAL === 0 ? 100 : 100 - 100 / (1 + rs);
             push_or_replace(state.rsiData, ms, rsi);
-
             if (isNewCandle) {
                 liveInd.rsiAvgGain = newAG;
                 liveInd.rsiAvgLoss = newAL;
             }
+        }
+    }
+
+    // CVD — incremental update (daily reset)
+    if (state.indicators.cvd) {
+        const candles = state.candleData;
+        const bar = candles[candles.length - 1];
+        if (bar) {
+            const [, h, l, c2] = bar.y;
+            const vol = state.volumeData[state.volumeData.length - 1]?.y ?? 0;
+            const range = h - l;
+            const delta = range > 0 ? vol * ((2 * (c2 - l)) / range - 1) : 0;
+            const day = new Date(ms).toDateString();
+            if (day !== liveInd.cvdLastDay) {
+                liveInd.cvdRunning = 0;
+                liveInd.cvdLastDay = day;
+            }
+            liveInd.cvdRunning += delta;
+            const cvdPt = {
+                x: ms,
+                y: Math.round(liveInd.cvdRunning),
+                fillColor: delta >= 0 ? C.cvdUp : C.cvdDown,
+            };
+            if (isNewCandle || state.cvdData.length === 0) {
+                state.cvdData.push(cvdPt);
+                if (state.cvdData.length > MAX_CANDLES)
+                    state.cvdData.splice(0, state.cvdData.length - MAX_CANDLES);
+            } else {
+                state.cvdData[state.cvdData.length - 1] = cvdPt;
+            }
+        }
+    }
+
+    // VWAP σ-bands — extend the 4 extra series in lockstep with VWAP
+    // We reuse the already-updated vwapData last point and recompute sigma
+    // from scratch for the current session (same as the main VWAP live update).
+    if (state.indicators.vwap && state.vwapData.length > 0) {
+        const volMap = new Map();
+        for (const v of state.volumeData) volMap.set(v.x, v.y);
+        const today = new Date(ms).toDateString();
+        let startOfDay = state.candleData.length - 1;
+        while (
+            startOfDay > 0 &&
+            new Date(state.candleData[startOfDay - 1].x).toDateString() ===
+                today
+        ) {
+            startOfDay--;
+        }
+        let cumTPV = 0,
+            cumTypSqV = 0,
+            cumVol2 = 0;
+        for (let j = startOfDay; j < state.candleData.length; j++) {
+            const {
+                x,
+                y: [, hh, ll, cc],
+            } = state.candleData[j];
+            const tp2 = (hh + ll + cc) / 3;
+            const vol2 = volMap.get(x) ?? 0;
+            cumTPV += tp2 * vol2;
+            cumTypSqV += tp2 * tp2 * vol2;
+            cumVol2 += vol2;
+        }
+        const vwapNow = cumVol2 > 0 ? cumTPV / cumVol2 : close;
+        const variance =
+            cumVol2 > 0
+                ? Math.max(0, cumTypSqV / cumVol2 - vwapNow * vwapNow)
+                : 0;
+        const sig = Math.sqrt(variance);
+        push_or_replace(state.vwapU1Data, ms, vwapNow + sig);
+        push_or_replace(state.vwapL1Data, ms, vwapNow - sig);
+        push_or_replace(state.vwapU2Data, ms, vwapNow + 2 * sig);
+        push_or_replace(state.vwapL2Data, ms, vwapNow - 2 * sig);
+    }
+
+    // Anchored VWAP — extend session anchor incrementally
+    if (state.indicators.avwap_session && state.avwapSessionData.length > 0) {
+        const last = state.avwapSessionData[state.avwapSessionData.length - 1];
+        if (last && last.y != null) {
+            const volMap = new Map();
+            for (const v of state.volumeData) volMap.set(v.x, v.y);
+            const anchor = findSessionAnchor(state.candleData);
+            let cumTPV3 = 0,
+                cumVol3 = 0;
+            for (let j = anchor; j < state.candleData.length; j++) {
+                const {
+                    x,
+                    y: [, hh, ll, cc],
+                } = state.candleData[j];
+                const tp3 = (hh + ll + cc) / 3;
+                const v3 = volMap.get(x) ?? 0;
+                cumTPV3 += tp3 * v3;
+                cumVol3 += v3;
+            }
+            const av = cumVol3 > 0 ? cumTPV3 / cumVol3 : close;
+            push_or_replace(state.avwapSessionData, ms, av);
         }
     }
 }
@@ -1520,6 +2089,14 @@ function applyLiveBar(raw) {
     if (state.chartRsi && state.indicators.rsi && state.rsiData.length > 0) {
         state.chartRsi.updateSeries(
             [{ name: "RSI 14", data: state.rsiData }],
+            false,
+        );
+    }
+
+    // ── Push to CVD sub-pane if mounted ──────────────────────────────────────
+    if (state.chartCvd && state.indicators.cvd && state.cvdData.length > 0) {
+        state.chartCvd.updateSeries(
+            [{ name: "CVD", data: state.cvdData }],
             false,
         );
     }
@@ -1610,9 +2187,11 @@ function wireControls() {
             state.indicators[ind] = !state.indicators[ind];
             btn.classList.toggle("active", state.indicators[ind]);
 
+            // Persist to localStorage
+            saveIndicatorPrefs();
+
             if (state.chart) {
                 if (ind === "rsi") {
-                    // RSI lives in a separate pane — recalc and sync the sub-chart
                     if (state.indicators.rsi) {
                         state.rsiData = calcRSI(state.candleData, 14);
                         seedLiveIndState();
@@ -1620,11 +2199,35 @@ function wireControls() {
                         state.rsiData = [];
                     }
                     syncRsiPane();
+                } else if (ind === "cvd") {
+                    if (state.indicators.cvd) {
+                        state.cvdData = calcCVD(
+                            state.candleData,
+                            state.volumeData,
+                        );
+                        seedLiveIndState();
+                    } else {
+                        state.cvdData = [];
+                    }
+                    syncCvdPane();
+                } else if (ind === "vp") {
+                    recalcSingleIndicator("vp");
+                    state.chart.updateSeries(buildSeries(), false);
+                } else if (ind === "avwap_session") {
+                    recalcSingleIndicator("avwap_session");
+                    state.chart.updateSeries(buildSeries(), false);
+                } else if (ind === "avwap_prevday") {
+                    recalcSingleIndicator("avwap_prevday");
+                    state.chart.updateSeries(buildSeries(), false);
+                } else if (ind === "vwap") {
+                    // VWAP toggle: recalc main line + all 4 σ-bands together
+                    recalcSingleIndicator("vwap");
+                    seedLiveIndState();
+                    state.chart.updateSeries(buildSeries(), false);
                 } else {
-                    // Overlay indicator — recalc just the affected series
+                    // Overlay indicator (EMA9, EMA21, BB)
                     recalcSingleIndicator(ind);
                     seedLiveIndState();
-                    // Update primary chart with new series data (no full re-mount)
                     state.chart.updateSeries(buildSeries(), false);
                 }
             }
@@ -1708,19 +2311,84 @@ function recalcSingleIndicator(ind) {
             state.bbLowerData = bb.lower;
             break;
         }
-        case "vwap":
-            state.vwapData = state.indicators.vwap ? calcVWAP(c, v) : [];
+        case "vwap": {
+            if (state.indicators.vwap) {
+                const vr = calcVWAP(c, v);
+                state.vwapData = vr.vwap;
+                state.vwapU1Data = vr.upper1;
+                state.vwapL1Data = vr.lower1;
+                state.vwapU2Data = vr.upper2;
+                state.vwapL2Data = vr.lower2;
+            } else {
+                state.vwapData =
+                    state.vwapU1Data =
+                    state.vwapL1Data =
+                    state.vwapU2Data =
+                    state.vwapL2Data =
+                        [];
+            }
             break;
+        }
         case "rsi":
             state.rsiData = state.indicators.rsi ? calcRSI(c, 14) : [];
             break;
+        case "cvd":
+            state.cvdData = state.indicators.cvd ? calcCVD(c, v) : [];
+            break;
+        case "vp": {
+            if (state.indicators.vp) {
+                const vp = calcVolumeProfile(c, v);
+                state.pocData = vp.poc;
+                state.vahData = vp.vah;
+                state.valData = vp.val;
+            } else {
+                state.pocData = state.vahData = state.valData = [];
+            }
+            break;
+        }
+        case "avwap_session":
+            state.avwapSessionData = state.indicators.avwap_session
+                ? calcAnchoredVWAP(c, v, findSessionAnchor(c))
+                : [];
+            break;
+        case "avwap_prevday":
+            state.avwapPrevDayData = state.indicators.avwap_prevday
+                ? calcAnchoredVWAP(c, v, findPrevDayAnchor(c))
+                : [];
+            break;
     }
+}
+
+// ── localStorage persistence ───────────────────────────────────────────────────
+
+function saveIndicatorPrefs() {
+    try {
+        localStorage.setItem(LS_KEY, JSON.stringify(state.indicators));
+    } catch (_) {}
+}
+
+function loadIndicatorPrefs() {
+    try {
+        const raw = localStorage.getItem(LS_KEY);
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        // Only restore keys that exist in state.indicators (forward-compat)
+        for (const key of Object.keys(state.indicators)) {
+            if (typeof saved[key] === "boolean") {
+                state.indicators[key] = saved[key];
+            }
+        }
+    } catch (_) {}
 }
 
 // ── Boot ───────────────────────────────────────────────────────────────────────
 async function boot() {
     setStatus("connecting", "Connecting…");
     showOverlay("Connecting to data service…");
+
+    // Restore saved indicator preferences before wiring controls so button
+    // active classes reflect the correct initial state.
+    loadIndicatorPrefs();
     wireControls();
 
     state.dataServiceUrl = await resolveDataServiceUrl();

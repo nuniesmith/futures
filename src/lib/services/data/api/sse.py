@@ -688,6 +688,13 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
                             # ignore/close/stop-to-BE) are performed.
                             yield _format_sse(data=data, event="swing-update")
 
+                        elif channel == "dashboard:copy_trade" and not _should_throttle("copy-trade-update"):
+                            # Copy-trade batch result (RITHMIC-F)
+                            # Pushed by CopyTrader after every SEND ALL / execute_order_commands.
+                            # Payload: CopyBatchResult.to_dict() — includes compliance_log,
+                            # per-account results, rate counter, batch_id.
+                            yield _format_sse(data=data, event="copy-trade-update")
+
                 except Exception as exc:
                     pubsub_errors += 1
                     backoff = _PUBSUB_BACKOFF[min(pubsub_errors - 1, len(_PUBSUB_BACKOFF) - 1)]
@@ -911,6 +918,212 @@ async def sse_dashboard(request: Request):
             "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# CHARTS-A: Per-symbol bar SSE stream
+# ---------------------------------------------------------------------------
+
+
+async def _bars_event_generator(request: Request, symbol: str) -> AsyncGenerator[str, None]:
+    """Yield SSE events for 1-minute bar closes for *symbol*.
+
+    Flow:
+    1. On connect, send the most-recent stored bar as a ``bar`` event so the
+       client can prime the chart without waiting for the next bar close.
+    2. Subscribe to Redis pub/sub channel ``engine:bars_1m:{symbol}``.
+       The engine publishes a JSON bar payload to this channel on every 1m
+       bar close: ``{"time": <unix>, "open": …, "high": …, "low": …,
+       "close": …, "volume": …}``.
+    3. If no Redis event arrives within 60 seconds, re-fetch the latest bar
+       from the ``/bars/{symbol}`` store and re-stream it as a keepalive so
+       the chart stays fresh even when the market is slow.
+    4. Emit ``heartbeat`` events every 30 seconds so the browser's
+       ``EventSource`` doesn't time out on idle symbols.
+
+    Event types
+    -----------
+    ``bar``       — ``{"time": <unix_s>, "open":…, "high":…, "low":…,
+                       "close":…, "volume":…}``
+    ``heartbeat`` — ``{"symbol": "<sym>", "ts": "<iso>"}``
+    ``error``     — ``{"detail": "<msg>"}``
+    """
+    yield _format_sse(
+        data=json.dumps({"symbol": symbol, "ts": datetime.now(tz=_EST).isoformat()}),
+        event="connected",
+        retry=3000,
+    )
+
+    # ── Prime: send the latest stored bar immediately ────────────────────────
+    try:
+        import pandas as pd
+
+        from lib.services.data.api.bars import _fetch_stored_bars
+
+        df = _fetch_stored_bars(symbol, interval="1m", days_back=1)
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            ts_val = str(df.index[-1])
+            try:
+                ts_unix = int(pd.Timestamp(ts_val).timestamp())
+            except Exception:
+                ts_unix = int(datetime.now(tz=_EST).timestamp())
+
+            def _safe_float(v: Any) -> float:
+                try:
+                    return round(float(v), 6)
+                except (TypeError, ValueError):
+                    return 0.0
+
+            bar_payload = {
+                "time": ts_unix,
+                "open": _safe_float(last.get("Open", last.get("open", 0))),
+                "high": _safe_float(last.get("High", last.get("high", 0))),
+                "low": _safe_float(last.get("Low", last.get("low", 0))),
+                "close": _safe_float(last.get("Close", last.get("close", 0))),
+                "volume": int(last.get("Volume", last.get("volume", 0)) or 0),
+            }
+            yield _format_sse(data=json.dumps(bar_payload), event="bar")
+    except Exception as exc:
+        logger.debug("bars_sse: prime failed for %s: %s", symbol, exc)
+
+    # ── Live: subscribe to Redis pub/sub ─────────────────────────────────────
+    pubsub = None
+    redis_conn = None
+    channel = f"engine:bars_1m:{symbol}"
+    last_redis_event = time.monotonic()
+    heartbeat_deadline = time.monotonic() + _HEARTBEAT_INTERVAL
+    REDIS_TIMEOUT = 60.0  # seconds without Redis event before fallback
+
+    try:
+        redis_conn = _make_redis_connection()
+        if redis_conn is not None:
+            pubsub = redis_conn.pubsub()
+            pubsub.subscribe(channel)
+    except Exception as exc:
+        logger.debug("bars_sse: Redis subscribe failed for %s: %s", symbol, exc)
+
+    try:
+        while True:
+            if await request.is_disconnected():
+                break
+
+            now = time.monotonic()
+
+            # ── Heartbeat ────────────────────────────────────────────────────
+            if now >= heartbeat_deadline:
+                yield _format_sse(
+                    data=json.dumps({"symbol": symbol, "ts": datetime.now(tz=_EST).isoformat()}),
+                    event="heartbeat",
+                )
+                heartbeat_deadline = now + _HEARTBEAT_INTERVAL
+
+            # ── Redis pub/sub message ─────────────────────────────────────────
+            if pubsub is not None:
+                try:
+                    msg = pubsub.get_message(ignore_subscribe_messages=True, timeout=0.1)
+                    if msg and msg.get("type") == "message":
+                        raw = msg.get("data", b"")
+                        if isinstance(raw, bytes):
+                            raw = raw.decode("utf-8")
+                        try:
+                            bar_data = json.loads(raw)
+                            # Ensure time is unix seconds (engine may publish ms)
+                            if "time" in bar_data:
+                                t = int(bar_data["time"])
+                                bar_data["time"] = t // 1000 if t > 10_000_000_000 else t
+                            yield _format_sse(data=json.dumps(bar_data), event="bar")
+                            last_redis_event = now
+                        except Exception as exc:
+                            logger.debug("bars_sse: bad bar payload for %s: %s", symbol, exc)
+                except Exception as exc:
+                    logger.debug("bars_sse: pubsub error for %s: %s", symbol, exc)
+                    pubsub = None  # fall through to fallback on next iteration
+
+            # ── Fallback: re-fetch latest bar if Redis has been silent ────────
+            if now - last_redis_event > REDIS_TIMEOUT:
+                try:
+                    import pandas as pd
+
+                    from lib.services.data.api.bars import _fetch_stored_bars
+
+                    df = _fetch_stored_bars(symbol, interval="1m", days_back=1)
+                    if df is not None and not df.empty:
+                        last_row = df.iloc[-1]
+                        ts_val = str(df.index[-1])
+                        try:
+                            ts_unix = int(pd.Timestamp(ts_val).timestamp())
+                        except Exception:
+                            ts_unix = int(datetime.now(tz=_EST).timestamp())
+
+                        def _sf(v: Any) -> float:
+                            try:
+                                return round(float(v), 6)
+                            except (TypeError, ValueError):
+                                return 0.0
+
+                        yield _format_sse(
+                            data=json.dumps(
+                                {
+                                    "time": ts_unix,
+                                    "open": _sf(last_row.get("Open", last_row.get("open", 0))),
+                                    "high": _sf(last_row.get("High", last_row.get("high", 0))),
+                                    "low": _sf(last_row.get("Low", last_row.get("low", 0))),
+                                    "close": _sf(last_row.get("Close", last_row.get("close", 0))),
+                                    "volume": int(last_row.get("Volume", last_row.get("volume", 0)) or 0),
+                                }
+                            ),
+                            event="bar",
+                        )
+                except Exception as exc:
+                    logger.debug("bars_sse: fallback fetch failed for %s: %s", symbol, exc)
+                last_redis_event = now  # reset regardless so we don't spam
+
+            await asyncio.sleep(0.2)
+
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logger.debug("bars_sse: generator error for %s: %s", symbol, exc)
+        yield _format_sse(data=json.dumps({"detail": str(exc)}), event="error")
+    finally:
+        _teardown_pubsub(pubsub, redis_conn)
+
+
+@router.get("/sse/bars/{symbol:path}")
+async def sse_bars(symbol: str, request: Request):
+    """Server-Sent Events endpoint for live 1-minute bar closes for a symbol.
+
+    Streams ``bar`` events as each 1-minute candle closes on the engine.
+    The browser chart calls ``candleSeries.update(bar)`` on each event.
+
+    Connect from JavaScript::
+
+        const es = new EventSource('/sse/bars/MGC=F');
+        es.addEventListener('bar', (e) => {
+            const bar = JSON.parse(e.data);
+            candleSeries.update(bar);  // Lightweight Charts
+        });
+        es.addEventListener('heartbeat', (e) => console.log('alive', e.data));
+
+    Bar payload::
+
+        {"time": 1712345660, "open": 2300.1, "high": 2301.5,
+         "low": 2299.8, "close": 2301.0, "volume": 342}
+
+    Fallback: if Redis is not available or the engine is not publishing,
+    the endpoint falls back to polling ``/bars/{symbol}`` every 60 seconds
+    and re-streaming the latest bar so the chart stays reasonably fresh.
+    """
+    return StreamingResponse(
+        _bars_event_generator(request, symbol),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         },
     )
 

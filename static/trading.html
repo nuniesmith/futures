@@ -225,6 +225,34 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--m
 
 /* Textarea */
 #plan-notes{width:100%;background:var(--s3);border:1px solid var(--b1);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12px;padding:10px;resize:vertical;outline:none;min-height:80px}
+
+/* ─── Copy-Trade Panel ─────────────────────────────────── */
+#ct-panel .card-head{border-bottom:1px solid var(--b1)}
+#ct-status-strip{display:flex;align-items:center;gap:6px}
+#ct-form{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px}
+.ct-field{display:flex;flex-direction:column;gap:3px}
+.ct-field label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+.ct-field input,.ct-field select{background:var(--s3);border:1px solid var(--b1);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12px;padding:5px 8px;outline:none;width:100%}
+.ct-field input:focus,.ct-field select:focus{border-color:var(--green)}
+#ct-send-btn{grid-column:1/-1;margin-top:4px;background:var(--green);color:#0a0e17;border:none;border-radius:5px;padding:9px 0;font-weight:700;font-size:13px;cursor:pointer;letter-spacing:.04em;transition:background .15s}
+#ct-send-btn:hover{background:#34d399}
+#ct-send-btn:disabled{background:var(--b1);color:var(--muted);cursor:not-allowed}
+
+/* Copy-trade log rows */
+#ct-log{display:flex;flex-direction:column;gap:3px;margin-bottom:6px}
+.ct-log-row{display:grid;grid-template-columns:56px 40px 1fr auto;gap:6px;align-items:center;font-size:11px;font-family:var(--mono);padding:4px 6px;background:var(--s3);border-radius:3px;border-left:3px solid transparent}
+.ct-log-ok{border-left-color:var(--green)}
+.ct-log-fail{border-left-color:var(--red)}
+
+/* Compliance confirmation modal */
+#ct-modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:1000;align-items:center;justify-content:center}
+#ct-modal-bg.open{display:flex}
+#ct-modal{background:var(--s2);border:1px solid var(--b1);border-radius:8px;padding:24px 28px;max-width:460px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+#ct-modal h3{font-size:14px;font-weight:700;color:var(--green);margin-bottom:14px;letter-spacing:.04em}
+#ct-checklist{list-style:none;padding:0;margin:0 0 14px;display:flex;flex-direction:column;gap:6px}
+#ct-checklist li{font-size:12px;color:var(--text);padding:5px 8px;background:var(--s3);border-radius:4px;border-left:3px solid var(--green)}
+#ct-checklist li.warn{border-left-color:var(--amber);color:var(--amber)}
+.ct-modal-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
 </style>
 </head>
 <body>
@@ -399,11 +427,95 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--m
         </div>
       </div>
 
+      <!-- ═══ SEND ALL — Rithmic Copy-Trade Panel ═══ -->
+      <div class="card" id="ct-panel">
+        <div class="card-head">
+          <div class="card-title">
+            <div class="card-accent" style="background:var(--green)"></div>
+            <span class="card-label">Send All — Copy Trade</span>
+          </div>
+          <div id="ct-status-strip">
+            <div class="conn-dot conn-off" id="ct-conn-dot"></div>
+            <span id="ct-conn-label" style="font-size:10px;color:var(--muted)">Loading…</span>
+          </div>
+        </div>
+        <div class="card-body" style="padding:10px 14px">
+          <div id="ct-form">
+            <div class="ct-field" style="grid-column:1/-1">
+              <label>Ticker (Yahoo) or Contract</label>
+              <input id="ct-ticker" type="text" placeholder="MGC=F or MGCQ6" value="MGC=F">
+            </div>
+            <div class="ct-field">
+              <label>Side</label>
+              <select id="ct-side">
+                <option value="BUY">BUY ▲</option>
+                <option value="SELL">SELL ▼</option>
+              </select>
+            </div>
+            <div class="ct-field">
+              <label>Qty</label>
+              <input id="ct-qty" type="number" min="1" max="20" value="1">
+            </div>
+            <div class="ct-field">
+              <label>Order Type</label>
+              <select id="ct-order-type" onchange="ctToggleLimitPrice()">
+                <option value="MARKET">MARKET</option>
+                <option value="LIMIT">LIMIT</option>
+              </select>
+            </div>
+            <div class="ct-field" id="ct-price-field" style="display:none">
+              <label>Limit Price</label>
+              <input id="ct-price" type="number" step="0.25" placeholder="0.00" value="0">
+            </div>
+            <div class="ct-field">
+              <label>Stop Ticks</label>
+              <input id="ct-stop-ticks" type="number" min="1" max="500" value="20">
+            </div>
+            <div class="ct-field">
+              <label>Target Ticks (opt)</label>
+              <input id="ct-target-ticks" type="number" min="1" max="2000" placeholder="—">
+            </div>
+            <div class="ct-field" style="grid-column:1/-1">
+              <label>Reason / Tag</label>
+              <input id="ct-reason" type="text" maxlength="80" placeholder="e.g. ORB breakout MGC long">
+            </div>
+            <button id="ct-send-btn" onclick="ctOpenComplianceModal()">⚡ SEND ALL</button>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+            <label style="font-size:10px;color:var(--muted);display:flex;align-items:center;gap:5px;cursor:pointer">
+              <input type="checkbox" id="ct-high-impact" onchange="ctToggleHighImpact()" style="accent-color:var(--amber)">
+              High-Impact Day (1–2 s delay)
+            </label>
+            <button class="btn btn-ghost btn-sm" onclick="ctRefreshStatus()">↺</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Copy-trade log -->
       <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 2px">
+        <span style="font-size:10px;letter-spacing:.1em;color:var(--muted);text-transform:uppercase">Copy-Trade Log</span>
+        <button class="btn btn-ghost btn-sm" onclick="ctLoadHistory()">↺</button>
+      </div>
+      <div id="ct-log"></div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 2px;margin-top:6px">
         <span style="font-size:10px;letter-spacing:.1em;color:var(--muted);text-transform:uppercase">Live Signals</span>
         <button class="btn btn-ghost btn-sm" onclick="clearSignals()">Clear</button>
       </div>
       <div id="signal-feed" style="display:flex;flex-direction:column;gap:6px"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ COMPLIANCE CONFIRMATION MODAL ═══ -->
+<div id="ct-modal-bg" onclick="ctCloseModal(event)">
+  <div id="ct-modal">
+    <h3>✅ COMPLIANCE CHECK — SEND ALL</h3>
+    <ul id="ct-checklist"></ul>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:14px" id="ct-order-summary"></div>
+    <div class="ct-modal-btns">
+      <button class="btn btn-ghost btn-sm" onclick="ctCloseModal()">Cancel</button>
+      <button class="btn btn-primary" id="ct-confirm-btn" onclick="ctConfirmSend()">Confirm & Send</button>
     </div>
   </div>
 </div>
@@ -570,6 +682,16 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--m
 
 <script>
 // ─── STATE ──────────────────────────────────────────────────────────────────
+// =========================================================
+// Copy-Trade globals
+// =========================================================
+const CT = {
+  enabled: false,
+  status: null,
+  pendingPayload: null,  // filled by ctOpenComplianceModal
+  sending: false,
+};
+
 const S = {
   page: 'pipeline',
   pipelineDone: false,
@@ -997,6 +1119,267 @@ function initLivePage() {
   initPriceChart();
   initCvdChart();
   startLiveStream();
+  ctRefreshStatus();
+  ctLoadHistory();
+}
+
+// =========================================================
+// Copy-Trade helpers
+// =========================================================
+
+function ctToggleLimitPrice() {
+  const isLimit = document.getElementById('ct-order-type').value === 'LIMIT';
+  document.getElementById('ct-price-field').style.display = isLimit ? '' : 'none';
+}
+
+function ctBuildPayload() {
+  const ticker = document.getElementById('ct-ticker').value.trim();
+  const side = document.getElementById('ct-side').value;
+  const qty = parseInt(document.getElementById('ct-qty').value) || 1;
+  const orderType = document.getElementById('ct-order-type').value;
+  const price = parseFloat(document.getElementById('ct-price').value) || 0;
+  const stopTicks = parseInt(document.getElementById('ct-stop-ticks').value) || 20;
+  const targetTicksEl = document.getElementById('ct-target-ticks').value;
+  const targetTicks = targetTicksEl ? parseInt(targetTicksEl) : null;
+  const reason = document.getElementById('ct-reason').value.trim();
+  return { ticker, side, qty, orderType, price, stopTicks, targetTicks, reason };
+}
+
+function ctOpenComplianceModal() {
+  const p = ctBuildPayload();
+  CT.pendingPayload = p;
+
+  // Build inline compliance checklist
+  const checks = [
+    '✓ Main account = manual button push (WebUI)',
+    '✓ All orders use OrderPlacement.MANUAL flag',
+    CT.enabled
+      ? `✓ Slave copy delay: ${document.getElementById('ct-high-impact').checked ? '1000–2000' : '200–800'} ms`
+      : '⚠ Copy trading disabled — order goes to main only (simulation)',
+    `✓ Server-side hard stop: stop_ticks=${p.stopTicks}`,
+    `✓ Order: ${p.side} ${p.qty}× ${p.ticker}`,
+  ];
+  if (p.stopTicks <= 0) checks.push('⚠ WARNING: stop_ticks=0 — no server-side hard stop!');
+  if (p.targetTicks) checks.push(`✓ Take-profit bracket: target_ticks=${p.targetTicks}`);
+
+  const ul = document.getElementById('ct-checklist');
+  ul.innerHTML = checks.map(c =>
+    `<li class="${c.startsWith('⚠') ? 'warn' : ''}">${c}</li>`
+  ).join('');
+
+  document.getElementById('ct-order-summary').textContent =
+    `${p.side} ${p.qty}× ${p.ticker}  |  stop=${p.stopTicks} ticks` +
+    (p.targetTicks ? `  |  target=${p.targetTicks} ticks` : '') +
+    (p.reason ? `  |  "${p.reason}"` : '');
+
+  document.getElementById('ct-modal-bg').classList.add('open');
+  document.getElementById('ct-confirm-btn').disabled = false;
+}
+
+function ctCloseModal(evt) {
+  if (!evt || evt.target === document.getElementById('ct-modal-bg')) {
+    document.getElementById('ct-modal-bg').classList.remove('open');
+  }
+}
+
+async function ctConfirmSend() {
+  if (CT.sending) return;
+  CT.sending = true;
+  const btn = document.getElementById('ct-confirm-btn');
+  const sendBtn = document.getElementById('ct-send-btn');
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  sendBtn.disabled = true;
+  sendBtn.textContent = '⏳ Sending…';
+
+  document.getElementById('ct-modal-bg').classList.remove('open');
+
+  const p = CT.pendingPayload;
+  if (!p) { CT.sending = false; return; }
+
+  // Determine whether to use ticker endpoint or direct security_code endpoint
+  const isTicker = p.ticker.includes('=') || p.ticker.length <= 4;
+  const endpoint = isTicker ? '/api/copy-trade/send-from-ticker' : '/api/copy-trade/send';
+
+  const body = isTicker
+    ? {
+        ticker: p.ticker,
+        side: p.side,
+        qty: p.qty,
+        order_type: p.orderType,
+        price: p.price,
+        stop_ticks: p.stopTicks,
+        target_ticks: p.targetTicks,
+        tag_prefix: 'WEBUI',
+        reason: p.reason,
+      }
+    : {
+        security_code: p.ticker,
+        exchange: ctGuessExchange(p.ticker),
+        side: p.side,
+        qty: p.qty,
+        order_type: p.orderType,
+        price: p.price,
+        stop_ticks: p.stopTicks,
+        target_ticks: p.targetTicks,
+        tag_prefix: 'WEBUI',
+        reason: p.reason,
+      };
+
+  try {
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    ctAppendLogRow(d, p);
+    if (!d.ok && d.error !== 'forbidden') {
+      // Show error in status strip
+      document.getElementById('ct-conn-label').textContent = `Error: ${d.detail || d.error || 'unknown'}`;
+    }
+  } catch (err) {
+    ctAppendLogRow({ ok: false, error: String(err) }, p);
+  } finally {
+    CT.sending = false;
+    sendBtn.disabled = false;
+    sendBtn.textContent = '⚡ SEND ALL';
+    btn.textContent = 'Confirm & Send';
+  }
+}
+
+function ctGuessExchange(securityCode) {
+  // Best-effort exchange guess from product code prefix
+  const p = securityCode.replace(/[0-9]/g, '').toUpperCase();
+  const cme = ['MES','MNQ','MYM','M2K','MBT','MET','M6E','M6A','M6B','M6J'];
+  const nymex = ['MGC','MCL','SIL','MNG','GC','CL'];
+  if (cme.includes(p)) return 'CME';
+  if (nymex.includes(p)) return 'NYMEX';
+  return 'CME';
+}
+
+function ctAppendLogRow(d, p) {
+  const log = document.getElementById('ct-log');
+  const ok = d.ok === true;
+  const result = d.result || {};
+  const failed = result.failed_count ?? (ok ? 0 : 1);
+  const total = result.total_orders ?? 1;
+  const now = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const cls = ok ? 'ct-log-ok' : 'ct-log-fail';
+  const status = ok ? `${total - failed}/${total} ok` : (d.detail || d.error || '✗');
+  const row = document.createElement('div');
+  row.className = `ct-log-row ${cls}`;
+  row.innerHTML =
+    `<span style="color:var(--muted)">${now}</span>` +
+    `<span style="color:${p.side==='BUY'?'var(--green)':'var(--red)'}">${p.side}</span>` +
+    `<span style="color:#fff;font-weight:600">${p.qty}× ${p.ticker}</span>` +
+    `<span style="color:${ok?'var(--green)':'var(--red)'}">${status}</span>`;
+  log.prepend(row);
+  // Keep log at max 20 rows
+  while (log.children.length > 20) log.removeChild(log.lastChild);
+}
+
+async function ctRefreshStatus() {
+  try {
+    const r = await fetch('/api/copy-trade/status');
+    const d = await r.json();
+    CT.enabled = d.enabled && d.ok;
+    const dot = document.getElementById('ct-conn-dot');
+    const label = document.getElementById('ct-conn-label');
+    const sendBtn = document.getElementById('ct-send-btn');
+
+    if (!d.enabled) {
+      dot.className = 'conn-dot conn-off';
+      label.style.color = 'var(--muted)';
+      label.textContent = 'COPY TRADING DISABLED';
+      sendBtn.textContent = '⚡ SEND (main only — copy disabled)';
+    } else if (!d.ok || !d.status) {
+      dot.className = 'conn-dot conn-warn pulse';
+      label.style.color = 'var(--amber)';
+      label.textContent = 'INITIALISING…';
+    } else {
+      const st = d.status;
+      const main = st.main;
+      const slaveCount = st.enabled_slave_count || 0;
+      const rate = st.rate_limit || {};
+      if (main && main.connected) {
+        dot.className = 'conn-dot conn-ok';
+        label.style.color = 'var(--green)';
+        label.textContent = `LIVE — main + ${slaveCount} slave(s)  |  ${rate.count||0}/${rate.hard_limit||4500} actions`;
+        if (rate.is_hard_limit) {
+          dot.className = 'conn-dot conn-warn pulse';
+          label.style.color = 'var(--red)';
+          label.textContent = `⛔ RATE LIMIT — ${rate.count}/${rate.hard_limit} — ORDERS BLOCKED`;
+          sendBtn.disabled = true;
+        } else if (rate.is_warn) {
+          label.style.color = 'var(--amber)';
+        }
+      } else {
+        dot.className = 'conn-dot conn-warn pulse';
+        label.style.color = 'var(--amber)';
+        label.textContent = main ? 'MAIN DISCONNECTED' : 'NO ACCOUNTS CONFIGURED';
+      }
+    }
+  } catch (err) {
+    document.getElementById('ct-conn-label').textContent = 'Status unavailable';
+  }
+}
+
+async function ctLoadHistory() {
+  try {
+    const r = await fetch('/api/copy-trade/history?limit=15');
+    const d = await r.json();
+    const log = document.getElementById('ct-log');
+    log.innerHTML = '';
+    if (!d.history || d.history.length === 0) {
+      log.innerHTML = '<div style="font-size:10px;color:var(--muted);padding:4px 0">No copy-trade batches yet.</div>';
+      return;
+    }
+    for (const batch of d.history) {
+      const ok = (batch.failed_count === 0) && (batch.total_orders > 0);
+      const ts = (batch.submitted_at || '').slice(11, 19);
+      const status = `${(batch.total_orders||0) - (batch.failed_count||0)}/${batch.total_orders||0} ok`;
+      const cls = ok ? 'ct-log-ok' : 'ct-log-fail';
+      const row = document.createElement('div');
+      row.className = `ct-log-row ${cls}`;
+      row.innerHTML =
+        `<span style="color:var(--muted)">${ts}</span>` +
+        `<span style="color:${batch.side==='BUY'?'var(--green)':'var(--red)'}">${batch.side||'?'}</span>` +
+        `<span style="color:#fff;font-weight:600">${batch.qty||'?'}× ${batch.security_code||'?'}</span>` +
+        `<span style="color:${ok?'var(--green)':'var(--red)'}">${status}</span>`;
+      log.appendChild(row);
+    }
+  } catch (err) {
+    // non-fatal
+  }
+}
+
+async function ctToggleHighImpact() {
+  const enabled = document.getElementById('ct-high-impact').checked;
+  try {
+    await fetch('/api/copy-trade/high-impact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+  } catch (err) { /* non-fatal */ }
+}
+
+// Handle SSE copy-trade-update events
+function handleCopyTradeUpdate(data) {
+  try {
+    const d = typeof data === 'string' ? JSON.parse(data) : data;
+    const result = d.result || d;
+    const side = result.side || '?';
+    const qty = result.qty || '?';
+    const sec = result.security_code || '?';
+    const ok = result.failed_count === 0 && result.total_orders > 0;
+    ctAppendLogRow(
+      { ok, result },
+      { side, qty, ticker: sec }
+    );
+    ctRefreshStatus();
+  } catch (err) { /* non-fatal */ }
 }
 
 function initPriceChart() {
@@ -1067,6 +1450,19 @@ function startLiveStream() {
     if (d.type === 'tick') handleTick(d);
     else if (d.type === 'signal') addSignal(d.signal);
   };
+
+  // Also subscribe to the main dashboard SSE for copy-trade-update events
+  if (!window._ctSSE) {
+    const ctSSE = new EventSource('/sse/dashboard');
+    ctSSE.addEventListener('copy-trade-update', e => {
+      try { handleCopyTradeUpdate(e.data); } catch (err) { /* non-fatal */ }
+    });
+    ctSSE.addEventListener('connected', () => {
+      // Refresh copy-trade status on (re)connect
+      ctRefreshStatus();
+    });
+    window._ctSSE = ctSSE;
+  }
 }
 
 function handleTick(d) {

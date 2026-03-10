@@ -263,174 +263,107 @@
 
 ---
 
-## 🔴 Phase CHARTS — Lightweight Charts UI
+## ✅ Phase CHARTS — Charting Service (ApexCharts, port 8003)
 
-> Replace the placeholder `/charts` page with a full interactive candlestick chart UI
-> using TradingView's [Lightweight Charts](https://tradingview.github.io/lightweight-charts/)
-> JS library directly in the browser.
+> **Completed.** The charting service is a standalone nginx + ApexCharts SPA in
+> `docker/charting/` (port 8003). It is NOT a Lightweight Charts rewrite — it uses
+> ApexCharts (already integrated and battle-tested). The service fetches bars directly
+> from the data service (`/bars/{symbol}`) and receives live forming-candle updates via
+> `/sse/dashboard`. All CHARTS-E volume indicators have been implemented.
 >
-> **Why not `lightweight-charts-python` (PyPI)?** It is a desktop/notebook wrapper that
-> spawns a `pywebview` native OS window. Requires a display, has no HTTP endpoint, cannot
-> run in Docker. We want the underlying JS library, and we already have everything to drive
-> it: `/bars/{symbol}`, `/sse/dashboard`, `/kraken/ohlcv/{pair}`.
->
-> **No new Python dependencies** — Lightweight Charts is a CDN JS include only.
+> **Files changed (Phase CHARTS-E):**
+> - `docker/charting/static/chart.js` — VWAP σ-bands, CVD sub-pane, Volume Profile,
+>   Anchored VWAP (session + prev-day), localStorage persistence
+> - `docker/charting/static/index.html` — CVD / VP / AVWAP-S / AVWAP-P toggle buttons,
+>   `#chart-cvd` sub-pane div
+> - `docker/charting/static/style.css` — `.chart-cvd` pane rules, per-indicator colours
 
-### Phase CHARTS-A: Bars SSE Endpoint
+### ~~Phase CHARTS-A: Bars SSE Endpoint~~ — N/A
 
-- [ ] **`src/lib/services/data/api/sse.py`** — add `GET /sse/bars/{symbol}` endpoint
-  - Subscribe to Redis pub/sub channel `engine:bars_1m:{symbol}`
-  - Stream `text/event-stream` events:
-    `data: {"time": <unix>, "open": …, "high": …, "low": …, "close": …, "volume": …}`
-  - Engine already publishes 1m bars to Redis on each bar close — no engine changes needed
-  - Fallback: if no Redis event within 60s, re-fetch latest bar from `/bars/{symbol}?days_back=1`
-    and stream it
+> The standalone charting service connects directly to `/sse/dashboard` (not a
+> per-symbol SSE endpoint). Live bar updates are received via the existing
+> `bars_update` / `focus` event shapes in `handleSsePayload()`. No new SSE
+> endpoint was needed.
 
-### Phase CHARTS-B: Chart Data Shaping Endpoint
+### ~~Phase CHARTS-B: Chart Data Shaping Endpoint~~ — N/A
 
-- [ ] **`src/lib/services/data/api/charts.py`** — new router, registered at `/api/charts`
-  - `GET /api/charts/bars/{symbol}` — wraps `/bars/{symbol}`, reshapes split-orient DataFrame into
-    `[{"time": <unix_seconds>, "open": …, "high": …, "low": …, "close": …, "volume": …}]`
-    array that Lightweight Charts `candleSeries.setData()` accepts directly
-  - `GET /api/charts/symbols` — returns grouped symbol list (CME micros + Kraken crypto)
-    for the symbol switcher
-  - `GET /api/charts/orb-markers/{symbol}` — returns ORB session open/high/low as marker objects
-    `[{"time": …, "position": "aboveBar", "color": "…", "shape": "circle", "text": "ORB London"}]`
-    sourced from `engine:orb_results` Redis key
+> The charting SPA calls `/bars/{symbol}?interval=X&days_back=Y` directly and
+> reshapes the split-orient response in `splitToApex()` in `chart.js`. No Python
+> shaping layer is needed.
 
-### Phase CHARTS-C: Charts Page Rewrite
+### ~~Phase CHARTS-C: Charts Page Rewrite~~ — N/A
 
-- [ ] **`src/lib/services/data/api/dashboard.py`** — rewrite `charts_page()`
-  - Full-page HTML (not HTMX fragment) with Lightweight Charts from CDN:
-    `unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js`
-  - **Layout**: topbar (symbol switcher + timeframe switcher) + main candle pane + volume
-    histogram subchart
-  - **Symbol switcher**: dropdown from `/api/charts/symbols` — CME micros grouped separately
-    from Kraken crypto
-  - **Timeframe switcher**: `1m | 5m | 15m | 1h | 1D` pills — re-fetches
-    `/api/charts/bars/{symbol}?interval=<tf>`
-  - **Styling**: dark background (`#0c0d0f`), matches existing dashboard palette,
-    Ruby green up-candles / red down-candles
-  - **ORB markers**: fetched from `/api/charts/orb-markers/{symbol}` on symbol load,
-    drawn via `candleSeries.setMarkers()`
-  - **Price lines**: entry / stop / TP1 / TP2 from current focus card data (`/api/focus`)
-    drawn as `candleSeries.createPriceLine()`
-  - **Live updates**: `EventSource('/sse/bars/{symbol}')` → `candleSeries.update(bar)`
-    on each event
-  - **Multi-pane**: volume histogram in a subchart synced to main chart timescale
-    (`createChart` + `chart.timeScale()` sync)
+> `charts_page()` in `dashboard.py` already links to the standalone charting
+> service at port 8003 via an iframe / direct link. The full SPA (topbar, symbol
+> tabs, interval tabs, indicator toggles, live toggle, RSI + CVD sub-panes) lives
+> in `docker/charting/static/`.
 
-### Phase CHARTS-D: Navigation Wire-Up
+### ~~Phase CHARTS-D: Navigation Wire-Up~~ — ✅ Already wired
 
-- [ ] Link `📈 Charts` nav item (already exists in `_build_page_shell`) to `/charts`
-- [ ] Add `charts_page_route` FastAPI GET handler at `/charts`
-  (already scaffolded — just needs the new `charts_page()` wired in)
-- [ ] Web service proxy: ensure `/charts`, `/api/charts/*`, and `/sse/bars/*` are proxied
-  through `:web → :data`
-  (all `/api/*` and `/sse/*` paths are already proxied — no web service changes needed)
+> `📈 Charts` nav link exists in `_SHARED_NAV_LINKS` → `/charts`.
+> `charts_page_route()` is registered at `GET /charts` in `dashboard.py`.
+> The charting service runs on port 8003 and is reachable directly by the browser.
 
-### Phase CHARTS-E: Volume Indicators & UX Polish
+### ✅ Phase CHARTS-E: Volume Indicators & UX Polish
 
-> All work is pure front-end JS. No Python or data service changes needed.
-> Lives in the charting static assets.
+> **Completed.** All items implemented in `docker/charting/static/chart.js`,
+> `index.html`, and `style.css`.
 
-#### VWAP Standard-Deviation Bands (±1σ / ±2σ)
+#### ✅ VWAP Standard-Deviation Bands (±1σ / ±2σ)
 
-Currently VWAP is a single line. Bands require accumulating a running variance term
-alongside `cumTPV` / `cumVol`:
+- `calcVWAP()` now returns `{ vwap, upper1, lower1, upper2, lower2 }` — accumulates
+  `cumTypSqV` alongside `cumTPV`/`cumVol` for running variance.
+- Series slots `IDX.VWAP_U1/L1/U2/L2` (8–11) added to `buildSeries()`.
+- `buildOptions()` extended: `stroke.dashArray` `[3,3,6,6]` for bands; `colors` array
+  uses `C.vwapBand1` (±1σ) and `C.vwapBand2` (±2σ); 4 hidden `overlayYaxis` slots added.
+- `updateIndicatorPoint()` recomputes session σ incrementally on every live tick.
+- Tooltip `indLookup` shows `VWAP+1σ` / `VWAP-1σ` rows when VWAP is active.
+- VWAP toggle handler calls `recalcSingleIndicator("vwap")` which updates all 5 series.
 
-- [ ] **`calcVWAP()`** — extend to accumulate `cumTypicalVolSq += typical * typical * vol`
-  - `variance = (cumTypicalVolSq / cumVol) − vwap²`, then `σ = √max(variance, 0)`
-  - Return `{ vwap, upper1, lower1, upper2, lower2 }` per bar
-- [ ] **4 new series slots** (after VWAP): `VWAP+1σ`, `VWAP−1σ`, `VWAP+2σ`, `VWAP−2σ`
-  - Colors: `+1σ/−1σ` soft cyan dashed, `+2σ/−2σ` faint cyan dotted
-  - All 4 share `overlayYaxis` (hidden, price-scale linked)
-- [ ] **`buildSeries()`** — add the 4 band series; empty array when VWAP toggle is off
-- [ ] **`buildOptions()`** — extend `stroke.width`, `stroke.dashArray`, `colors`, `yaxis`
-  arrays to cover all 12 slots
-- [ ] **Incremental live update** (`updateIndicatorPoint`) — extend `push_or_replace` calls
-  to cover the 4 band series using the same running-variance approach
-- [ ] **Indicator toggle** — VWAP button hides/shows all 5 series (line + 4 bands) together
-- [ ] **Tooltip** — add `VWAP+1σ` / `VWAP−1σ` rows to the OHLC tooltip `indLookup` block
-  when VWAP is active
+#### ✅ CVD — Cumulative Volume Delta
 
-#### CVD — Cumulative Volume Delta
+- `calcCVD(candles, volumes)` — bar approximation, daily reset, returns
+  `[{x, y: Math.round(cvd), fillColor}]`.
+- `state.cvdData`, `liveInd.cvdRunning/cvdLastDay` added.
+- `recalcIndicators()` / `recalcSingleIndicator("cvd")` wired.
+- `buildCvdOptions()`, `mountCvdChart()`, `unmountCvdChart()`, `syncCvdPane()` added —
+  mirrors RSI pane lifecycle exactly.
+- `applyLiveBar()` calls `syncCvdPane()` on every SSE tick.
+- `<div id="chart-cvd" class="chart-cvd hidden">` added to `index.html`.
+- `.chart-cvd` / `.chart-cvd.hidden` added to `style.css` (`flex: 0 0 120px`).
+- `<button data-ind="cvd">CVD</button>` added to indicator-tabs; emerald active colour.
 
-CVD shows net buy/sell pressure (buy volume − sell volume) as a running total.
-Bar approximation (OHLCV only, no tape):
-`delta = volume × (2 × (close − low) / (high − low) − 1)`. Daily reset same as VWAP.
+#### ✅ Volume Profile — POC / VAH / VAL
 
-- [ ] **`calcCVD(candles, volumes)`** — new function
-  - `range = high − low`; guard `range > 0`
-  - `delta = volume × (2 × (close − low) / range − 1)` if range > 0 else `0`
-  - Daily reset: when `new Date(x).toDateString()` changes, reset `cvd = 0`
-  - Returns `[{x, y: Math.round(cvd)}]`
-- [ ] **Add `cvdData` to `state`** and `recalcIndicators()` / `recalcSingleIndicator("cvd")`
-- [ ] **`liveInd`** — track `cvdRunning` and `cvdLastDay` for incremental
-  `updateIndicatorPoint` extension
-- [ ] **CVD sub-pane** — separate ApexCharts instance in `#chart-cvd` div
-  - `buildCvdOptions()` — `type: "bar"`, height `120px`, green/red bars by delta sign
-    (per-point `fillColor`), zero-line annotation (y=0 dashed white)
-  - `mountCvdChart()` / `unmountCvdChart()` / `syncCvdPane()` — mirror RSI pane lifecycle
-  - `state.chartCvd` instance reference
-- [ ] **`index.html`** — add `<div id="chart-cvd" class="chart-cvd hidden"></div>`
-  below `#chart-rsi`
-- [ ] **`style.css`** — add `.chart-cvd` / `.chart-cvd.hidden` rules
-  (same `flex: 0 0 120px` pattern as `.chart-rsi`)
-- [ ] **Toggle button** — `<button class="ind-btn" data-ind="cvd">CVD</button>`;
-  add `cvd: false` to `state.indicators`
-- [ ] **Live update** — call `syncCvdPane()` after `updateIndicatorPoint` on each SSE tick
+- `calcVolumeProfile(candles, volumes, bins=40, lookback=100)` — rolling 100-bar window,
+  proportional bin distribution, 70% value-area expansion. Returns `{poc, vah, val}`.
+- Series slots `IDX.POC/VAH/VAL` (12–14) added; POC=amber solid, VAH/VAL=indigo dashed.
+- `state.pocData/vahData/valData` wired through `recalcIndicators()` and `recalcSingleIndicator("vp")`.
+- VP recalc is skipped on forming-candle ticks (only runs on `isNewCandle`).
+- `<button data-ind="vp">VP</button>` added; amber active colour.
 
-#### Volume Profile — POC / VAH / VAL
+#### ✅ Anchored VWAP
 
-Horizontal overlay lines on the price pane showing the Point of Control (highest-volume
-price), Value Area High, and Value Area Low over a rolling lookback window.
+- `calcAnchoredVWAP(candles, volumes, anchorIndex)` — returns `y: null` before anchor.
+- `findSessionAnchor(candles)` — first bar of current calendar day.
+- `findPrevDayAnchor(candles)` — lowest-low bar of the previous calendar day.
+- Series slots `IDX.AVWAP_S/AVWAP_P` (15–16); session=orange, prev-day=fuchsia.
+- `state.avwapSessionData/avwapPrevDayData` wired; session anchor extended incrementally
+  in `updateIndicatorPoint()`.
+- `AVWAP-S` and `AVWAP-P` toggle buttons added; per-indicator active colours in CSS.
 
-- [ ] **`calcVolumeProfile(candles, volumes, bins=40, lookback=100)`** — new function
-  - Rolling slice of `min(lookback, i+1)` bars per bar `i`
-  - `priceMin = min(slice lows)`, `priceMax = max(slice highs)`,
-    `binSize = (priceMax − priceMin) / bins`
-  - Distribute each bar's volume across the bins it spans (proportional to overlap)
-  - **POC**: bin with highest volume → `priceMin + (pocBin + 0.5) × binSize`
-  - **Value Area**: expand outward from POC bin until cumulative volume ≥ 70% total
-    → `VAH` = top of upper bin, `VAL` = bottom of lower bin
-  - Returns `{ poc: [{x, y}], vah: [{x, y}], val: [{x, y}] }`
-  - Cap `lookback ≤ 100`; only recalc on `isNewCandle === true` to avoid O(n) per tick
-- [ ] **Add `pocData`, `vahData`, `valData` to `state`**; wire into `recalcIndicators()`
-- [ ] **Series slots** (indices 12/13/14): POC line (bright cyan solid),
-  VAH line (muted blue dashed), VAL line (muted blue dashed)
-- [ ] **Toggle button** — `<button class="ind-btn" data-ind="vp">VP</button>`;
-  add `vp: false` to `state.indicators`
-- [ ] **Live update** — skip VP recalc on forming-candle ticks
+#### ✅ UX: Indicator Toggle Persistence
 
-#### Anchored VWAP
+- `LS_KEY = "ruby_chart_indicators"` constant defined.
+- `saveIndicatorPrefs()` — writes `state.indicators` to localStorage on every toggle.
+- `loadIndicatorPrefs()` — restores saved flags (forward-compat: only known keys merged).
+- `boot()` calls `loadIndicatorPrefs()` before `wireControls()` so button `active`
+  classes reflect restored state from the first paint.
 
-VWAP anchored to a specific bar index (session open or previous-day high/low)
-instead of resetting at midnight.
+#### ⬜ Per-indicator configuration *(stretch — deferred)*
 
-- [ ] **`calcAnchoredVWAP(candles, volumes, anchorIndex)`** — new function
-  - Same cumulative `(typicalPrice × vol) / cumVol` formula, starting from `anchorIndex`
-  - Returns `y: null` for bars before the anchor
-- [ ] **Two default anchors** (user-selectable via toggle):
-  - **Session open** — index of first bar of the current day (ORB setups)
-  - **Previous-day high/low** — index of the lowest-low / highest-high bar in previous day
-  - Helper: `findAnchorIndex(candles, mode)` → `number`
-- [ ] **State** additions: `avwapSessionData`, `avwapPrevDayData`;
-  `indicators.avwap_session`, `indicators.avwap_prevday` (both default `false`)
-- [ ] **Series slots** for both anchors; `overlayYaxis` linked;
-  session=orange, prev-day=magenta
-- [ ] **Toggle buttons** — `AVWAP-S` (session) and `AVWAP-P` (prev-day) in indicator-tabs
-- [ ] **Live update** — both anchored VWAPs extend incrementally on each tick
-
-#### UX: Indicator Toggle Persistence
-
-- [ ] **localStorage persistence** — save `state.indicators` to
-  `localStorage` key `ruby_chart_indicators` on every toggle
-  - On `boot()`, read saved preferences and apply before first `renderBars()` call
-  - Sync indicator button `active` classes from restored state in `wireControls()`
-- [ ] **Per-indicator configuration** *(stretch)* — period inputs (EMA period, BB period,
-  VP lookback/bins) via a small settings popover on each indicator button (long-press or
-  right-click); persist to localStorage alongside toggle flags
+- Period inputs (EMA period, BB period, VP lookback/bins) via settings popover.
+- Persist to localStorage alongside toggle flags.
 
 ---
 

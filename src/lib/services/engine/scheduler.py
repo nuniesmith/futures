@@ -168,6 +168,18 @@ class ActionType(StrEnum):
     # manages SwingState per asset, publishes signals + states to Redis.
     CHECK_SWING = "check_swing"
 
+    # News sentiment pipeline — Finnhub + Alpha Vantage + VADER + Grok hybrid.
+    # Runs twice per day:
+    #   07:00 ET (pre-market, inside PRE_MARKET window near its end) — morning
+    #   12:00 ET (midday, first tick of OFF_HOURS) — midday refresh
+    # Results cached in Redis: engine:news_sentiment:<SYMBOL> (2h TTL).
+    CHECK_NEWS_SENTIMENT = "check_news_sentiment"
+
+    # News sentiment midday run sentinel — used so the off-hours scheduler
+    # can fire a second CHECK_NEWS_SENTIMENT without the "ran today" guard
+    # blocking it (we track pre-market and midday separately).
+    CHECK_NEWS_SENTIMENT_MIDDAY = "check_news_sentiment_midday"
+
 
 @dataclass
 class ScheduledAction:
@@ -573,6 +585,20 @@ class ScheduleManager:
                     action=ActionType.GROK_MORNING_BRIEF,
                     priority=1,
                     description="Generate Grok AI morning market briefing",
+                )
+            )
+
+        # News sentiment — morning run at 07:00 ET (once per day, inside PRE_MARKET)
+        # Fires when wall-clock time is ≥07:00 ET and hasn't run today.
+        from datetime import time as _pm_time2
+
+        now_time_news = now.time() if now is not None else datetime.now(tz=_EST).time()
+        if now_time_news >= _pm_time2(7, 0) and not self._ran_today(ActionType.CHECK_NEWS_SENTIMENT, today):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_NEWS_SENTIMENT,
+                    priority=3,
+                    description="Run news sentiment pipeline (morning — Finnhub + AV + Grok)",
                 )
             )
 
@@ -990,12 +1016,22 @@ class ScheduleManager:
                 )
             )
 
+        # News sentiment midday refresh — once per off-hours session (12:00 ET)
+        if not self._ran_this_session(ActionType.CHECK_NEWS_SENTIMENT_MIDDAY, session):
+            actions.append(
+                ScheduledAction(
+                    action=ActionType.CHECK_NEWS_SENTIMENT_MIDDAY,
+                    priority=1,
+                    description="Run news sentiment pipeline (midday refresh — Finnhub + AV + Grok)",
+                )
+            )
+
         # Historical backfill — once per off-hours session
         if not self._ran_this_session(ActionType.HISTORICAL_BACKFILL, session):
             actions.append(
                 ScheduledAction(
                     action=ActionType.HISTORICAL_BACKFILL,
-                    priority=1,
+                    priority=2,
                     description="Backfill historical 1-min bars to Postgres",
                 )
             )

@@ -600,6 +600,18 @@ body {
 .ind-btn.active[data-ind="rsi"] {
     background: #22c55e;
 } /* green     */
+.ind-btn.active[data-ind="cvd"] {
+    background: #10b981;
+} /* emerald   */
+.ind-btn.active[data-ind="vp"] {
+    background: #f59e0b;
+} /* amber     */
+.ind-btn.active[data-ind="avwap_session"] {
+    background: #fb923c;
+} /* orange    */
+.ind-btn.active[data-ind="avwap_prevday"] {
+    background: #e879f9;
+} /* fuchsia   */
 
 /* ── RSI sub-pane ─────────────────────────────────────────────────────────── */
 
@@ -626,6 +638,18 @@ body {
 }
 
 .chart-rsi.hidden {
+    display: none !important;
+}
+
+/* CVD pane — hidden until the CVD indicator is toggled on */
+.chart-cvd {
+    flex: 0 0 120px;
+    position: relative;
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-base);
+}
+
+.chart-cvd.hidden {
     display: none !important;
 }
 

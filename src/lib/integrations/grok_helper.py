@@ -5,9 +5,28 @@ Provides two main functions:
   1. run_morning_briefing()  — comprehensive pre-market game plan
   2. run_live_analysis()     — concise 15-minute update during active trading
 
-Uses the xAI API (OpenAI-compatible) with grok-4-1-fast-reasoning model.
-Cost is extremely low: ~$0.007-0.01 per call, so a full trading day
-(pre-market + ~16 live calls over 4 hours) costs well under $0.20.
+Primary LLM backend: RustAssistant proxy (RA_BASE_URL / RA_API_KEY).
+  - OpenAI-compatible ``/v1/chat/completions`` endpoint.
+  - Optionally injects ``x-repo-id: <RA_REPO_ID>`` header for RAG context.
+  - Falls back transparently to direct xAI / Grok on any error.
+
+Fallback: xAI API (XAI_API_KEY) with grok-4-1-fast-reasoning model.
+  - Used automatically when RA is unreachable, returns an HTTP error,
+    or yields a stream error token.
+
+Environment variables
+---------------------
+  RA_BASE_URL      Base URL of your RustAssistant instance, e.g.
+                   ``http://oryx:3500`` (no trailing slash).
+  RA_API_KEY       API key sent as ``Authorization: Bearer <key>``
+                   (must match RA_PROXY_API_KEYS on the server).
+  RA_REPO_ID       Optional repository/RAG context ID to inject.
+                   E.g. ``futures-bot``.  Sent as ``x-repo-id`` header.
+  XAI_API_KEY      Direct xAI API key — used only as fallback.
+
+Cost when using RA proxy: depends on your RA server routing.
+Cost when falling back to xAI: ~$0.007-0.01 per call, so a full trading
+day (pre-market + ~16 live calls over 4 hours) costs well under $0.20.
 
 Usage:
     from lib.grok_helper import run_live_analysis, run_morning_briefing, format_market_context
@@ -23,12 +42,11 @@ Usage:
 """
 
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
-
-import requests  # type: ignore[import-untyped]
 
 _EST = ZoneInfo("America/New_York")
 logger = logging.getLogger("grok_helper")
@@ -44,6 +62,220 @@ DEFAULT_MAX_TOKENS_LIVE_COMPACT = 350
 DEFAULT_MAX_TOKENS_DAILY_PLAN = 1500
 DEFAULT_TEMPERATURE = 0.3
 
+# ---------------------------------------------------------------------------
+# openai client factories  (RA primary → Grok fallback)
+# ---------------------------------------------------------------------------
+# Both RustAssistant and xAI expose an OpenAI-compatible
+# /v1/chat/completions endpoint, so a single ``openai.OpenAI`` instance
+# pointed at a different ``base_url`` handles both.  We build them lazily
+# so import time is unaffected when the env vars are absent.
+#
+# RA extra headers (x-repo-id for RAG context) are injected via the
+# ``default_headers`` kwarg so every request carries them automatically.
+# ---------------------------------------------------------------------------
+
+
+def _make_ra_client():
+    """Return a configured ``openai.OpenAI`` for RustAssistant, or None."""
+    from openai import OpenAI  # type: ignore[import-untyped]
+
+    base_url = os.environ.get("RA_BASE_URL", "").rstrip("/")
+    api_key = os.environ.get("RA_API_KEY", "")
+    repo_id = os.environ.get("RA_REPO_ID", "")
+
+    if not (base_url and api_key):
+        return None
+
+    extra_headers: dict[str, str] = {}
+    if repo_id:
+        extra_headers["x-repo-id"] = repo_id
+
+    return OpenAI(
+        base_url=f"{base_url}/v1",
+        api_key=api_key,
+        default_headers=extra_headers,
+        timeout=90.0,
+        max_retries=1,
+    )
+
+
+def _make_grok_client(api_key: str):
+    """Return a configured ``openai.OpenAI`` for xAI/Grok direct access."""
+    from openai import OpenAI  # type: ignore[import-untyped]
+
+    return OpenAI(
+        base_url="https://api.x.ai/v1",
+        api_key=api_key,
+        timeout=90.0,
+        max_retries=1,
+    )
+
+
+def _ra_available() -> bool:
+    """True when RA_BASE_URL and RA_API_KEY are both set in the environment."""
+    return bool(os.environ.get("RA_BASE_URL", "").strip() and os.environ.get("RA_API_KEY", "").strip())
+
+
+# ---------------------------------------------------------------------------
+# Unified LLM helpers  (RA primary → Grok fallback)
+# ---------------------------------------------------------------------------
+
+
+def _call_llm(
+    prompt: str,
+    api_key: str,
+    max_tokens: int = 2000,
+    temperature: float = DEFAULT_TEMPERATURE,
+    system_prompt: str | None = None,
+) -> str | None:
+    """Call the best available LLM backend and return the full response text.
+
+    Attempt order:
+        1. RustAssistant proxy  (RA_BASE_URL / RA_API_KEY)
+        2. Direct xAI / Grok   (``api_key`` argument, i.e. XAI_API_KEY)
+
+    Uses ``openai.OpenAI`` for both backends — retries, timeouts, and
+    typed errors are all handled by the library.
+    Returns ``None`` when both backends fail (errors are logged, not raised).
+    """
+    from openai import APIConnectionError, APIStatusError  # type: ignore[import-untyped]
+
+    messages: list[dict[str, str]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    # --- Primary: RustAssistant ---
+    if _ra_available():
+        client = _make_ra_client()
+        if client is not None:
+            try:
+                resp = client.chat.completions.create(
+                    model=GROK_MODEL,
+                    messages=messages,  # type: ignore[arg-type]
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                content = resp.choices[0].message.content
+                logger.debug("_call_llm: RA backend OK (%d chars)", len(content or ""))
+                return content
+            except APIConnectionError as exc:
+                logger.warning("_call_llm: RA connection error (%s) — falling back to Grok", exc)
+            except APIStatusError as exc:
+                logger.warning("_call_llm: RA HTTP %s — falling back to Grok", exc.status_code)
+            except Exception as exc:
+                logger.warning("_call_llm: RA unexpected error (%s) — falling back to Grok", exc)
+
+    # --- Fallback: direct Grok ---
+    return _call_grok(prompt, api_key, max_tokens=max_tokens, temperature=temperature, system_prompt=system_prompt)
+
+
+def _stream_llm(
+    prompt: str,
+    api_key: str,
+    max_tokens: int = 2000,
+    temperature: float = DEFAULT_TEMPERATURE,
+    system_prompt: str | None = None,
+):
+    """Stream from the best available LLM backend, yielding token strings.
+
+    Attempt order:
+        1. RustAssistant proxy — on any connection / HTTP error *before* the
+           first token, falls through transparently to direct Grok.
+        2. Direct xAI / Grok.
+
+    Uses ``openai.OpenAI`` streaming (``stream=True``) for both backends,
+    which handles SSE framing and ``[DONE]`` termination internally.
+    Callers see a single seamless token stream regardless of which backend
+    served the request.
+    """
+    from openai import APIConnectionError, APIStatusError  # type: ignore[import-untyped]
+
+    messages: list[dict[str, str]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    # --- Primary: RustAssistant ---
+    if _ra_available():
+        client = _make_ra_client()
+        if client is not None:
+            try:
+                with client.chat.completions.stream(
+                    model=GROK_MODEL,
+                    messages=messages,  # type: ignore[arg-type]
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ) as stream:
+                    had_token = False
+                    for text in stream.text_stream:
+                        had_token = True
+                        yield text
+                    if had_token:
+                        logger.debug("_stream_llm: RA backend served the stream")
+                        return
+                    # Empty stream — fall through to Grok
+                    logger.warning("_stream_llm: RA returned empty stream — falling back to Grok")
+            except APIConnectionError as exc:
+                logger.warning("_stream_llm: RA connection error (%s) — falling back to Grok", exc)
+            except APIStatusError as exc:
+                logger.warning("_stream_llm: RA HTTP %s — falling back to Grok", exc.status_code)
+            except Exception as exc:
+                logger.warning("_stream_llm: RA error (%s) — falling back to Grok", exc)
+
+    # --- Fallback: direct Grok ---
+    logger.debug("_stream_llm: using direct Grok backend")
+    yield from _stream_grok(
+        prompt, api_key, max_tokens=max_tokens, temperature=temperature, system_prompt=system_prompt
+    )
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible singleton shim
+# ---------------------------------------------------------------------------
+# Some call sites (api/chat.py, api/grok.py) import ``_ra_client`` directly
+# to check ``.available`` or access ``._endpoint`` / ``._headers()``.
+# We provide a lightweight shim so those imports continue to work without
+# change while we migrate them to the openai-client helpers above.
+
+
+class _RaClientShim:
+    """Minimal shim that exposes the subset of RustAssistantClient used externally."""
+
+    @property
+    def available(self) -> bool:
+        return _ra_available()
+
+    @property
+    def base_url(self) -> str:
+        return os.environ.get("RA_BASE_URL", "").rstrip("/")
+
+    @property
+    def api_key(self) -> str:
+        return os.environ.get("RA_API_KEY", "")
+
+    @property
+    def repo_id(self) -> str:
+        return os.environ.get("RA_REPO_ID", "")
+
+    # chat.py accesses _ra_client._endpoint for the raw URL
+    @property
+    def _endpoint(self) -> str:
+        base = self.base_url
+        return f"{base}/v1/chat/completions" if base else ""
+
+    def _headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        if self.repo_id:
+            headers["x-repo-id"] = self.repo_id
+        return headers
+
+
+_ra_client = _RaClientShim()
+
 
 def _call_grok(
     prompt: str,
@@ -52,42 +284,39 @@ def _call_grok(
     temperature: float = DEFAULT_TEMPERATURE,
     system_prompt: str | None = None,
 ) -> str | None:
-    """Call the Grok API and return the response text.
+    """Call the Grok/xAI API directly and return the response text.
 
+    Uses ``openai.OpenAI`` pointed at the xAI base URL.
     Returns None on error (logged, not raised).
     """
+    from openai import APIConnectionError, APIStatusError  # type: ignore[import-untyped]
+
     if not api_key:
         logger.warning("No Grok API key provided")
         return None
 
-    messages = []
+    messages: list[dict[str, str]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
     try:
-        resp = requests.post(
-            GROK_API_URL,
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": GROK_MODEL,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
-            timeout=90,
+        client = _make_grok_client(api_key)
+        resp = client.chat.completions.create(
+            model=GROK_MODEL,
+            messages=messages,  # type: ignore[arg-type]
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-        return content
-    except requests.exceptions.Timeout:
-        logger.error("Grok API timeout after 90s")
+        return resp.choices[0].message.content
+    except APIConnectionError as exc:
+        logger.error("Grok API connection error: %s", exc)
         return None
-    except requests.exceptions.HTTPError as e:
-        logger.error("Grok API HTTP error: %s", e)
+    except APIStatusError as exc:
+        logger.error("Grok API HTTP %s: %s", exc.status_code, exc.message)
         return None
-    except Exception as e:
-        logger.error("Grok API unexpected error: %s", e)
+    except Exception as exc:
+        logger.error("Grok API unexpected error: %s", exc)
         return None
 
 
@@ -98,15 +327,11 @@ def _stream_grok(
     temperature: float = DEFAULT_TEMPERATURE,
     system_prompt: str | None = None,
 ):
-    """Stream the Grok API response using server-sent events (SSE).
+    """Stream the Grok/xAI API response, yielding incremental text tokens.
 
-    Yields incremental text chunks as they arrive from the API.  Each
-    yielded value is a plain string token (may be a word, sub-word, or
-    punctuation fragment).  The caller is responsible for assembling them
-    into a full response if needed.
-
-    On error, yields a single chunk starting with "ERROR: " so the SSE
-    consumer can surface it without raising.
+    Uses ``openai.OpenAI`` streaming so SSE framing and ``[DONE]``
+    termination are handled by the library.  On error, yields a single
+    chunk starting with ``"ERROR: "`` so SSE consumers can surface it.
 
     Args:
         prompt: The user message to send.
@@ -118,71 +343,35 @@ def _stream_grok(
     Yields:
         str — incremental text fragments from the model.
     """
-    import json as _json
+    from openai import APIConnectionError, APIStatusError  # type: ignore[import-untyped]
 
     if not api_key:
         yield "ERROR: No Grok API key configured"
         return
 
-    messages: list[dict] = []
+    messages: list[dict[str, str]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
     try:
-        resp = requests.post(
-            GROK_API_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Accept": "text/event-stream",
-            },
-            json={
-                "model": GROK_MODEL,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "stream": True,
-            },
-            stream=True,
-            timeout=120,
-        )
-        resp.raise_for_status()
-
-        for raw_line in resp.iter_lines():
-            if not raw_line:
-                continue
-
-            line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
-
-            # SSE lines begin with "data: "
-            if not line.startswith("data: "):
-                continue
-
-            data_str = line[len("data: ") :]
-
-            # OpenAI-compatible stream terminator
-            if data_str.strip() == "[DONE]":
-                break
-
-            try:
-                chunk = _json.loads(data_str)
-                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                token = delta.get("content", "")
-                if token:
-                    yield token
-            except (_json.JSONDecodeError, IndexError, KeyError):
-                # Malformed chunk — skip silently
-                continue
-
-    except requests.exceptions.Timeout:
-        logger.error("Grok streaming API timeout after 120s")
-        yield "ERROR: Grok API timeout"
-    except requests.exceptions.HTTPError as e:
-        logger.error("Grok streaming API HTTP error: %s", e)
-        yield f"ERROR: Grok API HTTP {e.response.status_code if e.response else 'unknown'}"
-    except Exception as e:
-        logger.error("Grok streaming API unexpected error: %s", e)
-        yield f"ERROR: {e}"
+        client = _make_grok_client(api_key)
+        with client.chat.completions.stream(
+            model=GROK_MODEL,
+            messages=messages,  # type: ignore[arg-type]
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ) as stream:
+            yield from stream.text_stream
+    except APIConnectionError as exc:
+        logger.error("Grok streaming API connection error: %s", exc)
+        yield "ERROR: Grok API connection error"
+    except APIStatusError as exc:
+        logger.error("Grok streaming API HTTP %s: %s", exc.status_code, exc.message)
+        yield f"ERROR: Grok API HTTP {exc.status_code}"
+    except Exception as exc:
+        logger.error("Grok streaming API unexpected error: %s", exc)
+        yield f"ERROR: {exc}"
 
 
 def stream_morning_briefing(context: dict, api_key: str):
@@ -245,7 +434,7 @@ Give me today's game plan:
 
 Keep it actionable. No fluff. This is my reference card for the trading session."""
 
-    yield from _stream_grok(
+    yield from _stream_llm(
         prompt,
         api_key,
         max_tokens=DEFAULT_MAX_TOKENS_BRIEFING,
@@ -282,7 +471,7 @@ SIGNAL QUALITY: {context.get("fks_sq_text", "N/A")}
 
 What changed? What should I do right now? Keep it to ≤8 lines."""
 
-    yield from _stream_grok(
+    yield from _stream_llm(
         prompt,
         api_key,
         max_tokens=DEFAULT_MAX_TOKENS_LIVE_COMPACT,
@@ -608,7 +797,7 @@ Give me today's game plan:
 
 Keep it actionable. No fluff. This is my reference card for the trading session."""
 
-    result = _call_grok(
+    result = _call_llm(
         prompt,
         api_key,
         max_tokens=DEFAULT_MAX_TOKENS_BRIEFING,
@@ -720,7 +909,7 @@ MNQ 🔴 21450 (-38) | Bias INVALID | Watch 21400
 
 DO NOW: Hold GOLD long, stop to 2700; skip MNQ — bias broken."""
 
-    result = _call_grok(
+    result = _call_llm(
         prompt,
         api_key,
         max_tokens=DEFAULT_MAX_TOKENS_LIVE_COMPACT,
@@ -894,7 +1083,7 @@ Give me a quick update (5-8 bullet points max):
 
 Be extremely concise. This is a quick check-in, not a full analysis."""
 
-    result = _call_grok(
+    result = _call_llm(
         prompt,
         api_key,
         max_tokens=DEFAULT_MAX_TOKENS_LIVE,
