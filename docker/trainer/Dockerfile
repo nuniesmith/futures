@@ -48,8 +48,6 @@ COPY src/lib/__init__.py src/lib/__init__.py
 # Install base deps + [gpu,server] extras:
 #   gpu    → torch, torchvision, torchaudio, tqdm  (CUDA 12.8 wheels)
 #   server → fastapi, uvicorn[standard], python-multipart
-# onnx + onnxruntime are in the base deps (pyproject.toml) so ONNX export
-# works inside the container without any extra flags.
 RUN pip install --no-cache-dir \
     ".[gpu,server]" \
     --extra-index-url https://download.pytorch.org/whl/cu128

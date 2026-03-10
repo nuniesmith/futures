@@ -15,7 +15,6 @@ set -euo pipefail
 #
 # Files synced:
 #   breakout_cnn_best.pt          — PyTorch checkpoint (engine inference)
-#   breakout_cnn_best.onnx        — ONNX export (NinjaTrader inference)
 #   breakout_cnn_best_meta.json   — Model metadata (dashboard display)
 #   feature_contract.json         — Feature/contract mapping
 #
@@ -64,7 +63,6 @@ GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 # All model files to sync
 ALL_FILES=(
     "breakout_cnn_best.pt"
-    "breakout_cnn_best.onnx"
     "breakout_cnn_best_meta.json"
     "feature_contract.json"
 )
@@ -83,19 +81,8 @@ NINJA_CS_FILES=(
     "addons/DataPreloader.cs"
 )
 
-# NinjaTrader DLL files (relative to src/ninja/dll in repo)
-NINJA_DLL_FILES=(
-    "Microsoft.ML.OnnxRuntime.dll"
-    "System.Buffers.dll"
-    "System.Memory.dll"
-    "System.Numerics.Vectors.dll"
-    "System.Runtime.CompilerServices.Unsafe.dll"
-    "onnxruntime.dll"
-    "onnxruntime_providers_shared.dll"
-)
-
 # Minimum size (bytes) for a file to be considered "real" (not an LFS pointer)
-# LFS pointers are ~130-150 bytes.  Any .pt or .onnx under 1KB is suspicious.
+# LFS pointers are ~130-150 bytes.  Any .pt under 1KB is suspicious.
 LFS_POINTER_MAX_SIZE=1024
 
 # ---------------------------------------------------------------------------
@@ -109,7 +96,6 @@ usage() {
     echo "  (no args)     Download all model files from rb repo"
     echo "  --check       Check if local models are current (no download)"
     echo "  --pt-only     Download only the .pt checkpoint"
-    echo "  --onnx-only   Download only the .onnx export"
     echo "  --restart     Download all + restart engine Docker container"
     echo "  --help        Show this help message"
     echo ""
@@ -519,7 +505,6 @@ for arg in "$@"; do
     case "$arg" in
         --check)     ACTION="check" ;;
         --pt-only)   ACTION="pt_only" ;;
-        --onnx-only) ACTION="onnx_only" ;;
         --restart)   ACTION="restart" ;;
         --help|-h)   usage; exit 0 ;;
         *)
@@ -539,9 +524,6 @@ case "$ACTION" in
         ;;
     pt_only)
         cmd_download "breakout_cnn_best.pt" "${META_FILES[@]}"
-        ;;
-    onnx_only)
-        cmd_download "breakout_cnn_best.onnx" "${META_FILES[@]}"
         ;;
     restart)
         cmd_restart

@@ -173,12 +173,11 @@ async def proxy_trainer_api(request: Request, path: str) -> Response:
     """Proxy /trainer/api/* to the trainer service.
 
     Strips the /trainer/api prefix before forwarding so that:
-        GET /trainer/api/status       → trainer GET /status
-        GET /trainer/api/logs         → trainer GET /logs
-        GET /trainer/api/models       → trainer GET /models
-        POST /trainer/api/train       → trainer POST /train
+        GET /trainer/api/status        → trainer GET /status
+        GET /trainer/api/logs          → trainer GET /logs
+        GET /trainer/api/models        → trainer GET /models
+        POST /trainer/api/train        → trainer POST /train
         POST /trainer/api/train/cancel → trainer POST /train/cancel
-        POST /trainer/api/export_onnx  → trainer POST /export_onnx
     """
     trainer_url = _get_trainer_url()
     client = await _get_http_client(trainer_url)
@@ -388,9 +387,6 @@ tr:hover td{background:var(--bg-inner)}
 /* ── Section divider ── */
 .section-sep{border:none;border-top:1px solid var(--border-s);margin:10px 0}
 
-/* ── Onnx status inline tag ── */
-#onnx-tag{font-size:0.72rem;margin-top:5px;min-height:18px}
-
 /* ── Result detail panel ── */
 #results-detail{display:none}
 .result-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-top:8px}
@@ -492,10 +488,8 @@ tr:hover td{background:var(--bg-inner)}
         </div>
         <hr class="section-sep"/>
         <div class="btn-row">
-          <button class="btn btn-neutral btn-sm" id="btn-onnx" onclick="exportOnnx()" disabled>⬇ Export ONNX</button>
           <button class="btn btn-neutral btn-sm" onclick="refreshModels()">📂 Models</button>
         </div>
-        <div id="onnx-tag"></div>
       </div>
 
       <!-- GPU -->
@@ -618,8 +612,6 @@ tr:hover td{background:var(--bg-inner)}
         <div class="card-title" style="margin-bottom:8px">Post-Training Actions</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <div style="display:flex;align-items:center;gap:6px">
-            <input type="checkbox" id="opt-onnx" checked/>
-            <label for="opt-onnx" style="font-size:0.75rem;cursor:pointer">Auto export ONNX after promotion</label>
           </div>
           <div style="display:flex;align-items:center;gap:6px">
             <input type="checkbox" id="opt-contract" checked/>
@@ -894,10 +886,8 @@ function renderChampion(ch) {
   const el = document.getElementById('champion-info');
   if (!ch || !ch.exists) {
     el.innerHTML = '<div style="color:var(--faint);font-size:0.78rem">No champion model on disk</div>';
-    document.getElementById('btn-onnx').disabled = true;
     return;
   }
-  document.getElementById('btn-onnx').disabled = false;
   let html = '<div style="color:#4ade80;font-weight:700;font-size:0.82rem;margin-bottom:6px">✓ breakout_cnn_best.pt</div>';
   if (ch.metrics) {
     const m = ch.metrics;
@@ -948,7 +938,6 @@ function renderResults(r) {
       <div class="result-card-title">🗃 Dataset</div>
       <div>Images: <b>${r.dataset.total_images}</b></div>
       ${r.promoted ? '<div style="color:#4ade80;margin-top:4px">✓ Promoted</div>' : ''}
-      ${r.onnx_exported ? '<div style="color:#4ade80">✓ ONNX exported</div>' : ''}
       ${r.feature_contract_version ? '<div style="color:var(--muted);font-size:0.7rem">contract v' + r.feature_contract_version + '</div>' : ''}
     </div>`;
   }
@@ -1026,9 +1015,8 @@ async function refreshModels() {
     let html = '<table><thead><tr><th>File</th><th>Size</th><th>Modified</th><th>Acc</th></tr></thead><tbody>';
     for (const m of models) {
       const isChamp = m.name === 'breakout_cnn_best.pt';
-      const isOnnx  = m.name.endsWith('.onnx');
-      const color   = isChamp ? '#4ade80' : (isOnnx ? '#fbbf24' : 'var(--text)');
-      const prefix  = isChamp ? '★ ' : (isOnnx ? '⬡ ' : '');
+      const color   = isChamp ? '#4ade80' : 'var(--text)';
+      const prefix  = isChamp ? '★ ' : '';
       html += `<tr>
         <td style="color:${color};font-weight:${isChamp?'700':'400'}" title="${esc(m.path||'')}">
           ${prefix}${esc(m.name)}
@@ -1111,27 +1099,7 @@ async function cancelTrain() {
   pollTrainerStatus();
 }
 
-async function exportOnnx() {
-  if (!_trainerOnline) return;
-  document.getElementById('onnx-tag').innerHTML = '<span class="spin"></span> Exporting…';
-  document.getElementById('btn-onnx').disabled = true;
-  try {
-    const r = await fetch('/trainer/api/export_onnx', {method:'POST'});
-    const d = await r.json();
-    if (r.ok) {
-      document.getElementById('onnx-tag').innerHTML =
-        '<span style="color:#4ade80">✓ ' + esc(d.message || 'ONNX exported') + '</span>';
-      addLog({ts:nowTs(), level:'INFO', name:'onnx', msg:'Export complete: ' + (d.onnx_path||'')});
-      refreshModels();
-    } else {
-      document.getElementById('onnx-tag').innerHTML =
-        '<span style="color:#f87171">✗ ' + esc(d.detail || JSON.stringify(d)) + '</span>';
-    }
-  } catch(e) {
-    document.getElementById('onnx-tag').innerHTML = '<span style="color:#f87171">✗ ' + esc(String(e)) + '</span>';
-  }
-  document.getElementById('btn-onnx').disabled = false;
-}
+
 
 // ═══════════════════════════════════════════════════════
 // Logs

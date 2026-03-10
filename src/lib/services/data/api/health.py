@@ -59,8 +59,6 @@ def _check_model_health() -> dict[str, Any]:
         # When was sync_models.sh last run? (mtime of meta.json sidecar)
         "last_sync_time": None,
         "last_sync_ago": None,
-        # Is the ONNX export present alongside the champion?
-        "onnx_available": False,
     }
 
     # Locate models/ directory — works both in Docker (/app/models) and bare-metal
@@ -81,10 +79,6 @@ def _check_model_health() -> dict[str, Any]:
     # Count all checkpoints
     all_pt = list(model_dir.glob("breakout_cnn_*.pt"))
     result["total_checkpoints"] = len(all_pt)
-
-    # Check for the ONNX export
-    onnx_path = model_dir / "breakout_cnn_best.onnx"
-    result["onnx_available"] = onnx_path.is_file()
 
     # Check for the champion model
     champion = model_dir / "breakout_cnn_best.pt"
@@ -509,11 +503,7 @@ def _cnn_model_on_disk() -> bool:
     root = os.path.normpath(os.path.join(here, "..", "..", "..", "..", ".."))
 
     pt_path = os.path.join(root, "models", "breakout_cnn_best.pt")
-    if os.path.isfile(pt_path):
-        return True
-
-    onnx_path = os.path.join(root, "models", "breakout_cnn_best.onnx")
-    return os.path.isfile(onnx_path)
+    return os.path.isfile(pt_path)
 
 
 def _compute_system_health() -> dict[str, Any]:

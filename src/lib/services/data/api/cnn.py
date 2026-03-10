@@ -50,7 +50,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[5]  # futures/
 MODEL_DIR = PROJECT_ROOT / "models"
 CHAMPION_PATH = MODEL_DIR / "breakout_cnn_best.pt"
 META_PATH = MODEL_DIR / "breakout_cnn_best_meta.json"
-ONNX_PATH = MODEL_DIR / "breakout_cnn_best.onnx"
+
 SYNC_SCRIPT = PROJECT_ROOT / "scripts" / "sync_models.sh"
 
 # Docker paths (when running inside the engine container)
@@ -139,7 +139,6 @@ def _get_sync_status() -> dict[str, Any]:
     """Compute sync / staleness status from the model + meta files."""
     result: dict[str, Any] = {
         "meta_available": False,
-        "onnx_available": ONNX_PATH.is_file(),
         "stale": False,
         "val_accuracy": None,
         "precision": None,
@@ -243,7 +242,6 @@ def cnn_status():
         "model": model,
         "meta": meta,
         "sync": {
-            "onnx_available": sync["onnx_available"],
             "stale": sync["stale"],
             "meta_available": sync["meta_available"],
         },
@@ -272,7 +270,7 @@ def _find_sync_script() -> Path | None:
     return None
 
 
-def _run_sync(pt_only: bool = False) -> dict[str, Any]:
+def _run_sync() -> dict[str, Any]:
     """Execute sync_models.sh synchronously and return the result.
 
     Called from a background task so it doesn't block the event loop.
@@ -298,8 +296,6 @@ def _run_sync(pt_only: bool = False) -> dict[str, Any]:
         return result
 
     cmd = ["bash", str(script)]
-    if pt_only:
-        cmd.append("--pt-only")
 
     logger.info("🔄 Starting model sync: %s", " ".join(cmd))
     _sync_status["running"] = True
@@ -387,10 +383,7 @@ def _run_sync(pt_only: bool = False) -> dict[str, Any]:
 
 
 @router.post("/cnn/sync")
-async def cnn_sync(
-    background_tasks: BackgroundTasks,
-    pt_only: bool = Query(False, description="Only sync the .pt checkpoint (skip ONNX/meta)"),
-):
+async def cnn_sync(background_tasks: BackgroundTasks):
     """Trigger a model sync from the orb GitHub repo.
 
     Runs ``scripts/sync_models.sh`` in a background task.  The script
@@ -418,7 +411,7 @@ async def cnn_sync(
     _sync_status["running"] = True
 
     def _bg_sync():
-        _run_sync(pt_only=pt_only)
+        _run_sync()
 
     background_tasks.add_task(_bg_sync)
 
@@ -426,7 +419,6 @@ async def cnn_sync(
         "status": "started",
         "message": "Model sync started in background. Check /cnn/sync/status for progress.",
         "script": str(script),
-        "pt_only": pt_only,
         "timestamp": _now_et().isoformat(),
     }
 
@@ -822,17 +814,10 @@ def cnn_status_html():
             f'<span class="t-text-muted">Run:</span> <span class="font-mono t-text-faint">{str(version)[:16]}</span>'
         )
 
-    onnx_badge = (
-        '<span style="font-size:9px;color:#22d3ee;background:rgba(8,51,68,0.3);border:1px solid rgba(6,95,70,0.4);border-radius:3px;padding:0 4px">ONNX ✓</span>'
-        if sync["onnx_available"]
-        else '<span style="font-size:9px;color:#52525b;border:1px solid #27272a;border-radius:3px;padding:0 4px">ONNX —</span>'
-    )
-
     if sync_parts:
         sync_html = f"""
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;font-size:10px;flex-wrap:wrap;gap:2px 8px">
+            <div style="margin-top:6px;font-size:10px">
                 <div>{" · ".join(sync_parts)}</div>
-                {onnx_badge}
             </div>
         """
     elif model["available"] and not sync["meta_available"]:

@@ -116,7 +116,6 @@ TradingView  →  Reference overlay only (no position sendback)
 
 ### Week 3 — Validate + go live on demo
 - [ ] Phase v8-G: smoke test on 10 live breakouts — verify inference probabilities are sane
-- [ ] ONNX export — `export_onnx_model()` with updated tabular + embedding inputs
 - [ ] Deploy to Ubuntu Server via `sync_models.sh` → engine hot-reload via `ModelWatcher`
 - [ ] Update `_normalise_tabular_for_inference()` — add v8 backward-compat padding (28→37)
 - [ ] Manual trading via Tradovate, dashboard tiled alongside TradingView

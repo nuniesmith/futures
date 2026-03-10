@@ -531,12 +531,6 @@ def run_smoke_test(args: argparse.Namespace) -> int:
                 reason = result.get("reason", "unknown")
                 _warn(f"Not promoted: {reason}")
 
-            # ONNX
-            if result.get("onnx_exported"):
-                _ok("ONNX export succeeded")
-            elif "onnx_error" in result:
-                _warn(f"ONNX export failed: {result['onnx_error']}")
-
             print()
 
             # Verify model file exists

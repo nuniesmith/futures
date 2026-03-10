@@ -23,7 +23,6 @@ Endpoints:
     GET  /metrics/prometheus   — Prometheus text-format metrics endpoint
     POST /train                — Kick off a training run (async background task)
     POST /train/cancel         — Request cancellation of the current run
-    POST /export_onnx          — Re-export the champion .pt to ONNX (best-effort)
     GET  /models               — List all model files in models/ + archive/
     GET  /models/archive       — List archived model checkpoints
 
@@ -591,8 +590,7 @@ def _run_training_pipeline(params: TrainRequest) -> None:
 
         # ----- Step 5: feature_contract.json export (best-effort) -----
         # Always regenerate and write the contract after promotion so the
-        # models/ directory has an up-to-date v6 contract that consumers
-        # (engine, NT8) can pull alongside the .pt / .onnx files.
+        # models/ directory has an up-to-date contract that the engine can load.
         try:
             from lib.analysis.breakout_cnn import generate_feature_contract
 
@@ -609,29 +607,6 @@ def _run_training_pipeline(params: TrainRequest) -> None:
         except Exception as fc_err:
             logger.warning("feature_contract.json export failed (non-fatal)", error=str(fc_err))
             result["feature_contract_version"] = None
-
-        # ----- Step 6: ONNX export (best-effort) -----
-        try:
-            import importlib
-
-            _breakout_cnn = importlib.import_module("lib.analysis.breakout_cnn")
-            _export_fn = getattr(_breakout_cnn, "export_onnx_model", None)
-
-            if _export_fn is not None:
-                onnx_path = MODELS_DIR / "breakout_cnn_best.onnx"
-                _export_fn(
-                    pt_path=str(CHAMPION_PT),
-                    onnx_path=str(onnx_path),
-                )
-                result["onnx_exported"] = True
-                logger.info("ONNX export complete", path=str(onnx_path))
-            else:
-                result["onnx_exported"] = False
-                logger.info("ONNX export skipped — export_onnx_model not yet implemented")
-        except Exception as onnx_err:
-            logger.warning("ONNX export failed (non-fatal)", error=str(onnx_err))
-            result["onnx_exported"] = False
-            result["onnx_error"] = str(onnx_err)
 
         _state.finish(result=result)
 
@@ -912,7 +887,7 @@ async def list_models() -> JSONResponse:
         if not directory.is_dir():
             return
         for f in directory.iterdir():
-            if f.suffix not in (".pt", ".onnx", ".json"):
+            if f.suffix not in (".pt", ".json"):
                 continue
             if f.name.endswith("_meta.json"):
                 continue  # skip sidecar meta files from the file list
@@ -968,45 +943,6 @@ async def list_models() -> JSONResponse:
     )
 
     return JSONResponse({"models": result, "models_dir": str(MODELS_DIR)})
-
-
-@app.post("/export_onnx", dependencies=[Depends(verify_api_key)])
-async def export_onnx() -> JSONResponse:
-    """Re-export the current champion .pt model to ONNX.
-
-    This is a synchronous operation (runs inline, not in a thread) because
-    ONNX export is fast (~10s) and we want an immediate result.  It will
-    return 409 if a training run is currently in progress to avoid
-    racing with a promotion step.
-    """
-    if _state.is_busy():
-        return JSONResponse(
-            status_code=409,
-            content={"error": "Training in progress — please wait before exporting"},
-        )
-
-    if not CHAMPION_PT.exists():
-        raise HTTPException(status_code=404, detail="No champion model found at " + str(CHAMPION_PT))
-
-    try:
-        from lib.analysis.breakout_cnn import export_onnx_model
-
-        onnx_path = MODELS_DIR / "breakout_cnn_best.onnx"
-        out = export_onnx_model(pt_path=str(CHAMPION_PT), onnx_path=str(onnx_path))
-
-        size_mb = round(Path(out).stat().st_size / (1024 * 1024), 2)
-        logger.info("ONNX export via /export_onnx", path=out, size_mb=size_mb)
-
-        return JSONResponse(
-            {
-                "message": f"ONNX export complete — {onnx_path.name} ({size_mb} MB)",
-                "onnx_path": out,
-                "size_mb": size_mb,
-            }
-        )
-    except Exception as exc:
-        logger.error("ONNX export failed", error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

@@ -340,7 +340,7 @@ check_models() {
     fi
     ok "Models directory exists"
 
-    local files=("breakout_cnn_best.pt" "breakout_cnn_best.onnx" "breakout_cnn_best_meta.json" "feature_contract.json")
+    local files=("breakout_cnn_best.pt" "breakout_cnn_best_meta.json" "feature_contract.json")
     for f in "${files[@]}"; do
         local path="${model_dir}/${f}"
         if [ -f "$path" ]; then

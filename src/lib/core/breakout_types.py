@@ -31,7 +31,7 @@ Design
 - ``BreakoutType`` is an ``IntEnum`` so values survive JSON round-trips and
   map directly to the C# ``BreakoutType`` enum in ``BreakoutStrategy.cs``.
 - **Do not reorder** existing values after training begins — they are embedded
-  in saved CSV datasets and ONNX models.  New types are appended at the end.
+  in saved CSV datasets.  New types are appended at the end.
 - ``RangeConfig`` captures everything that varies per type: OR duration,
   look-back windows, box-style constants, TP/SL parameters including TP3
   and EMA9 trailing, and the ordinal used as a CNN tabular feature
@@ -75,7 +75,7 @@ class BreakoutType(IntEnum):
     """Range breakout variant.
 
     Values are stable integer ordinals — **do not reorder** after training
-    begins, as they are embedded in saved CSV datasets and ONNX models.
+    begins, as they are embedded in saved CSV datasets.
 
     These mirror the C# ``BreakoutType`` enum in ``BreakoutStrategy.cs``:
         public enum BreakoutType {
@@ -835,7 +835,7 @@ def get_range_config(breakout_type: BreakoutType) -> RangeConfig:
     """Return the canonical ``RangeConfig`` for *breakout_type*.
 
     This is the single authoritative lookup used by the dataset generator,
-    CNN training loop, ONNX export, and C# NinjaTrader consumer.
+    CNN training loop, and C# NinjaTrader consumer.
 
     Args:
         breakout_type: A ``BreakoutType`` enum member.
@@ -978,7 +978,7 @@ def types_with_tp3() -> list[BreakoutType]:
 
 
 # ---------------------------------------------------------------------------
-# Serialisation helpers (for feature_contract.json and ONNX metadata)
+# Serialisation helpers (for feature_contract.json)
 # ---------------------------------------------------------------------------
 
 

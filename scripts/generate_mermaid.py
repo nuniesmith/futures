@@ -94,7 +94,7 @@ MERMAID = """flowchart TD
     subgraph Weekend["🧠 Weekend 48h Training"]
         MM[Full dataset regen\n180 days + WSB + Conviction features]
         MM --> NN[Long CNN retrain + deep Optuna]
-        NN --> OO[Export ONNX + feature_contract vX\nsync_models → engine hot-reload]
+        NN --> OO[feature_contract vX\nsync_models → engine hot-reload]
     end
 
     %% ==================== CONNECTIONS ====================

@@ -78,7 +78,7 @@ Ubuntu Server (100.122.184.58)                          Home Laptop (100.113.72.
 | `:data`   | All REST/SSE endpoints, bar cache (Postgres + Redis), Kraken WS feed, Reddit sentiment polling, `/bars/{symbol}` auto-fill, `/api/charts/*`, Rithmic account manager (EOD close endpoint) |
 | `:engine` | `DashboardEngine`, `ScheduleManager`, `RiskManager`, `PositionManager`, breakout detection, CNN inference, Grok briefs, Redis publish, EOD safety scheduler (15:45 warning + 16:00 hard-close). Writes `/tmp/engine_health.json` as heartbeat — no HTTP port |
 | `:web`    | Stateless reverse-proxy; proxies all `/api/*` and `/sse/*` to `:data` |
-| `:trainer`| Dataset generation, CNN training, gate check, model promotion, ONNX export |
+| `:trainer`| Dataset generation, CNN training, gate check, model promotion|
 
 **Port map:**
 
