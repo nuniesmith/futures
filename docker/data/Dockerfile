@@ -12,6 +12,7 @@ WORKDIR /app
 # Copy only dependency metadata first (cache-friendly layer).
 # Hatchling needs the package dir to exist for the build to succeed.
 COPY pyproject.toml .
+COPY README.md .
 COPY src/lib/__init__.py src/lib/__init__.py
 
 RUN pip install --no-cache-dir .

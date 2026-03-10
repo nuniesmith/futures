@@ -42,7 +42,8 @@ WORKDIR /app
 
 # Copy dependency metadata + minimal package stub so hatchling can resolve
 COPY pyproject.toml .
-RUN mkdir -p src/lib && touch src/lib/__init__.py
+COPY README.md .
+COPY src/lib/__init__.py src/lib/__init__.py
 
 # Install base deps + [gpu,server] extras:
 #   gpu    → torch, torchvision, torchaudio, tqdm  (CUDA 12.8 wheels)

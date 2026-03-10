@@ -9,6 +9,7 @@ WORKDIR /app
 
 # Copy dependency metadata + minimal package stub so hatchling can resolve
 COPY pyproject.toml .
+COPY README.md .
 RUN mkdir -p src/lib && touch src/lib/__init__.py
 
 # Install only the base deps (no gpu extras needed for the web frontend).
