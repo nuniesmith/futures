@@ -404,11 +404,10 @@ async def _stream_chat_async(
             async with ra.chat.completions.stream(**kwargs) as stream:
                 yield "", "ra"  # backend announcement
                 had_token = False
-                async for chunk in stream:
-                    text = chunk.choices[0].delta.content if chunk.choices else None
-                    if text:
+                async for event in stream:
+                    if event.type == "content.delta":
                         had_token = True
-                        yield text, "ra"
+                        yield event.delta, "ra"  # type: ignore[attr-defined]
                 if had_token:
                     return
                 logger.warning("chat stream: RA returned empty stream — falling back to Grok")
@@ -434,10 +433,9 @@ async def _stream_chat_async(
             # RA was never attempted — emit the initial backend sentinel now
             yield "", "grok"
         async with grok.chat.completions.stream(**kwargs) as stream:
-            async for chunk in stream:
-                text = chunk.choices[0].delta.content if chunk.choices else None
-                if text:
-                    yield text, "grok"
+            async for event in stream:
+                if event.type == "content.delta":
+                    yield event.delta, "grok"  # type: ignore[attr-defined]
     except APIConnectionError as exc:
         logger.error("chat stream: Grok connection error: %s", exc)
         yield f"ERROR: Grok connection error — {exc}", "grok"

@@ -208,9 +208,10 @@ def _stream_llm(
                     max_tokens=max_tokens,
                 ) as stream:
                     had_token = False
-                    for text in stream.text_stream:
-                        had_token = True
-                        yield text
+                    for event in stream:
+                        if event.type == "content.delta":
+                            had_token = True
+                            yield event.delta  # type: ignore[attr-defined]
                     if had_token:
                         logger.debug("_stream_llm: RA backend served the stream")
                         return
@@ -362,7 +363,9 @@ def _stream_grok(
             temperature=temperature,
             max_tokens=max_tokens,
         ) as stream:
-            yield from stream.text_stream
+            for event in stream:
+                if event.type == "content.delta":
+                    yield event.delta  # type: ignore[attr-defined]
     except APIConnectionError as exc:
         logger.error("Grok streaming API connection error: %s", exc)
         yield "ERROR: Grok API connection error"

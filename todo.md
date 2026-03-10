@@ -1,6 +1,6 @@
 # futures — TODO
 
-> **Last updated**: `todo/` directory consolidated — all prototypes extracted into actionable phases
+> **Last updated**: Phase RA-CHAT — RustAssistant chat window, task capture, openai SDK standardisation
 
 > **Repo**: `github.com/nuniesmith/futures`
 > **Docker Hub**: `nuniesmith/futures` — `:data` · `:engine` · `:web` · `:trainer`
@@ -57,6 +57,9 @@ TradingView  →  Reference overlay only (no position sendback)
 | Dataset smoke test | ✅ `scripts/smoke_test_dataset.py` — validates engine connectivity, bar loading, rendering before full run |
 | Charts service | ✅ VWAP ±σ bands, CVD sub-pane, Volume Profile (POC/VAH/VAL), Anchored VWAP, localStorage persistence |
 | News sentiment | ✅ `news_client.py` + `news_sentiment.py` + API router + scheduler wired (07:00 + 12:00 ET) |
+| RustAssistant LLM integration | ✅ `openai` SDK — RA primary + Grok fallback — `grok_helper.py`, `chat.py`, `tasks.py` |
+| Chat window API | ✅ `POST /api/chat`, `GET /sse/chat`, history, status — multi-turn, market context injected |
+| Task/issue capture API | ✅ `POST /api/tasks` — bug/task/note with GitHub push via RA, HTMX feed, Redis pub/sub |
 | v8 dataset | ❌ not yet generated |
 
 ---
@@ -165,6 +168,137 @@ src/lib/services/data/main.py               — pipeline_router registered
 src/lib/services/web/main.py                — pipeline/trading proxy routes + SSE proxy helper
 static/trading.html                         — NEW: full trading workflow SPA
 ```
+
+---
+
+## ✅ Phase RA-CHAT — RustAssistant Chat Window & Task Capture
+
+> **Completed.** Multi-turn streaming chat backed by RustAssistant (Ollama + RAG + Redis) with
+> automatic fallback to direct xAI/Grok. Standardised on the `openai` SDK for both backends.
+> Quick-capture task/bug/note system wired to RustAssistant GitHub integration.
+
+### What was built
+
+#### RA-CHAT-A: openai SDK standardisation (`grok_helper.py`)
+- Replaced hand-rolled `RustAssistantClient` (~200 lines of manual `requests` + SSE parsing) with two
+  lazy factory functions: `_make_ra_client()` and `_make_grok_client()` using `openai.OpenAI`
+- Both RA and xAI/Grok now use `client.chat.completions.create()` / `client.chat.completions.stream()`
+- Stream events use `event.type == "content.delta"` / `event.delta` (openai 2.x API)
+- `_RaClientShim` preserves backward-compat `.available` / `._endpoint` / `._headers()` interface
+- Removed `import requests` from `grok_helper.py` entirely — httpx connection pool via openai SDK
+- Built-in retries (`max_retries=1`), typed errors (`APIConnectionError`, `APIStatusError`), timeout control
+- `_call_llm` / `_stream_llm`: RA primary → Grok fallback, seamless token stream to callers
+- All prompt entry points (`run_morning_briefing`, `_run_live_compact`, `_run_live_verbose`, `run_daily_plan_grok_analysis`) now route through `_call_llm` / `_stream_llm`
+
+#### RA-CHAT-B: Chat API router (`src/lib/services/data/api/chat.py`)
+- `POST /api/chat` — non-streaming single-turn with multi-turn Redis history (`AsyncOpenAI`, no thread pool)
+- `GET /sse/chat` — streaming SSE chat; native `async for event in stream` replaces `asyncio.Queue` + thread pool
+- `GET /api/chat/history` / `DELETE /api/chat/history` — per-session history (Redis, 6h TTL, 20-pair window)
+- `GET /api/chat/status` — live RA reachability probe + backend config (httpx async, no blocking)
+- Market context auto-injected from Redis: scanner, ICT, CVD, AI analysis, open positions
+- SSE protocol: `chat-start` → `chat-token` → `chat-heartbeat` → `chat-error` → `chat-done`
+- Session ID auto-generated (UUID) if not supplied; `inject_context` and `clear_history` flags
+
+#### RA-CHAT-C: Task / issue capture (`src/lib/services/data/api/tasks.py`)
+- `POST /api/tasks` — create bug / task / note; optional market snapshot auto-captured from Redis
+- `GET /api/tasks` / `GET /api/tasks/html` — list with status/type filters; HTMX-swappable panel
+- `PUT /api/tasks/{id}` / `DELETE /api/tasks/{id}` — update status, priority, tags
+- `POST /api/tasks/{id}/github` — push to GitHub via `POST {RA_BASE_URL}/api/github/issue`
+- Background task: on `push_to_github=true`, RA creates GitHub issue + updates row with URL + number
+- `tasks` table created idempotently in existing SQLite/Postgres DB (no models.py change needed)
+- Redis pub/sub: publishes `dashboard:tasks` events on create/update/delete/github_linked
+- HTML renderer: dark-theme cards with inline status select, priority badge, GitHub link, delete button
+
+#### RA-CHAT-D: Service wiring
+- `src/lib/services/data/main.py` — `chat_router` + `tasks_router` registered; `chat_set_engine()` called in lifespan
+- `src/lib/services/web/main.py` — proxy routes for all chat + tasks endpoints including SSE via `_proxy_sse_request`
+- `pyproject.toml` — `openai>=1.78.0` added to base dependencies
+
+### Environment variables added
+```
+RA_BASE_URL      # RustAssistant base URL e.g. http://oryx:3500
+RA_API_KEY       # Proxy key (must match RA_PROXY_API_KEYS on server)
+RA_REPO_ID       # Optional RAG repo context e.g. futures-bot (sent as x-repo-id header)
+GITHUB_REPO      # GitHub repo slug for task push e.g. jordan/futures
+XAI_API_KEY      # xAI/Grok direct key — fallback only
+CHAT_MAX_HISTORY # Rolling history window in pairs (default 20)
+CHAT_MAX_TOKENS  # Max tokens per chat response (default 1024)
+CHAT_HISTORY_TTL # Redis TTL for session history in seconds (default 21600 = 6h)
+```
+
+### New API surface
+```
+POST   /api/chat                   — Non-streaming chat
+GET    /sse/chat                   — Streaming SSE chat
+GET    /api/chat/history           — Fetch session history
+DELETE /api/chat/history           — Clear session history
+GET    /api/chat/status            — Backend health check
+
+POST   /api/tasks                  — Create task/bug/note
+GET    /api/tasks                  — List tasks (filterable)
+GET    /api/tasks/html             — HTMX task feed panel
+GET    /api/tasks/status           — Tasks subsystem status
+GET    /api/tasks/{id}             — Single task JSON
+GET    /api/tasks/{id}/html        — Single task card fragment
+PUT    /api/tasks/{id}             — Update task
+DELETE /api/tasks/{id}             — Delete task
+POST   /api/tasks/{id}/github      — Push to GitHub via RA
+```
+
+### Linting results (pre-push)
+- `ruff format --check`: 170 files already formatted ✅
+- `ruff check` on changed files: all checks passed ✅ (19 pre-existing issues auto-fixed in unrelated files)
+- `mypy` on changed files: 0 errors, 0 warnings ✅ (notes only — unannotated bodies per `mypy.ini` config)
+- `openai 2.26.0` installed in `.venv` ✅
+
+### Files changed
+```
+pyproject.toml                                      — openai>=1.78.0 added to dependencies
+src/lib/integrations/grok_helper.py                 — RustAssistantClient replaced with openai.OpenAI factories;
+                                                      _RaClientShim for backward compat; _call_llm/_stream_llm updated
+src/lib/services/data/api/chat.py                   — NEW: multi-turn SSE chat router (AsyncOpenAI, no thread pools)
+src/lib/services/data/api/tasks.py                  — NEW: task/bug/note capture with GitHub push via RA
+src/lib/services/data/main.py                       — chat_router + tasks_router registered; chat_set_engine wired
+src/lib/services/web/main.py                        — proxy routes for /api/chat/*, /sse/chat, /api/tasks/*
+```
+
+---
+
+## 🔴 Phase RA-CHAT — Next Up
+
+### RA-CHAT-E: Chat page HTML (`/chat`)
+- [ ] Build `src/lib/services/data/api/chat_page.py` — serve full-page chat UI at `GET /chat`
+- [ ] Dark theme matching `trading.html` design system (JetBrains Mono, same CSS variables)
+- [ ] Left sidebar: session history list (click to restore), new chat button, backend indicator (RA/Grok pill)
+- [ ] Main area: message bubbles (user right, assistant left), streaming token display, markdown rendering
+- [ ] Input bar: textarea (Shift+Enter newline, Enter send), inject_context toggle, clear history button
+- [ ] Quick-capture bar: 🐛 Bug / ✅ Task / 📝 Note buttons — pre-fill task modal with current page context
+- [ ] Task capture modal: title, description, priority, repo, push-to-GitHub checkbox
+- [ ] Task feed panel (right sidebar or bottom drawer): live HTMX-polled `/api/tasks/html`
+- [ ] JS: `EventSource('/sse/chat?message=...')` consumer — assembles token stream, renders markdown
+- [ ] JS: `updateTaskStatus(id, status)` / `deleteTask(id)` / `pushTaskToGitHub(id)` helpers
+- [ ] Register `GET /chat` route in data service + web service proxy
+
+### RA-CHAT-F: Dashboard integration
+- [ ] Add "💬 Chat" nav button to main dashboard header (`api/dashboard.py`) — opens `/chat` in new tab or slide-over panel
+- [ ] Add "⚡ Tasks" panel to dashboard sidebar — HTMX fragment polling `/api/tasks/html?status=open&limit=10`
+- [ ] Quick-capture floating button on all pages — one click opens task modal pre-filled with current page/asset context
+- [ ] Grok briefing panel "Ask about this" button — pre-fills chat with current briefing text as context
+- [ ] Wire `source=chat` tasks: when assistant response contains `[TASK]`, `[BUG]`, or `[NOTE]` markers, auto-call `POST /api/tasks`
+
+### RA-CHAT-G: Intent detection in chat
+- [ ] Server-side intent parser in `chat.py`: scan assistant response for structured markers
+  - `[BUG: <title>]`, `[TASK: <title>]`, `[NOTE: <title>]` → auto-create task row
+  - `[PLAN: <content>]` → append to daily plan notes
+- [ ] Return `tasks_created` list in `chat-done` SSE event so UI can refresh the task feed
+- [ ] System prompt addition: teach assistant when/how to emit task markers
+
+### RA-CHAT-H: RustAssistant GitHub actions (requires RA server config)
+- [ ] Confirm RA server exposes `POST /api/github/issue` — test with `curl`
+- [ ] Confirm RA server exposes `POST /api/github/pr` — for future code-change requests from chat
+- [ ] Add `GET /api/tasks/{id}/github/status` — poll GitHub issue state (open/closed/merged)
+- [ ] Add `POST /api/chat` intent: "create a PR for this" → RA generates diff + opens draft PR
+- [ ] Set `GITHUB_REPO` env var in `docker-compose.yml` for the futures repo
 
 ---
 

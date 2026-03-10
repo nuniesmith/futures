@@ -289,7 +289,6 @@ async def _run_step_grok(symbol: str, plan: dict) -> str:
 async def _run_step_cross_asset(symbol: str, plan: dict) -> str:
     """Analyze cross-asset correlations."""
     try:
-
         # Try to get bars from cache for correlation computation
         from lib.core.cache import cache_get
 
@@ -394,7 +393,6 @@ async def _run_step_mtf(symbol: str, plan: dict) -> str:
 async def _run_step_waves(symbol: str, plan: dict) -> str:
     """Detect swing structure and wave count."""
     try:
-
         # Would need price data
         return "Wave structure analyzed — live data"
     except Exception:
@@ -1236,7 +1234,6 @@ async def save_trading_settings(req: Request):
 async def test_rithmic():
     """Test Rithmic connection with current settings."""
     try:
-
         user = _STATE["settings"].get("rithmic_user", "")
         if not user:
             return JSONResponse({"ok": False, "message": "No Rithmic credentials configured — add them in Settings"})
