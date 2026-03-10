@@ -485,18 +485,18 @@ class TestAccountManagement:
         """Gracefully handles missing async-rithmic package."""
         config = _FakeConfig(key="acc1")
 
-        with patch.dict("sys.modules", {"async_rithmic": None}):
-            # Force ImportError
-            with patch(
+        with (
+            patch.dict("sys.modules", {"async_rithmic": None}),
+            patch(
                 "lib.services.engine.copy_trader.CopyTrader.add_account",
                 new=ct.add_account,
-            ):
-                # Just test that the code path works with our fake
-                pass
+            ),
+        ):
+            # Just test that the code path works with our fake
+            pass
 
         # The real test: call add_account when RithmicClient import fails
         # We mock the import inside the method
-        original_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
 
         async def _add_with_import_error() -> dict[str, Any]:
             """Simulate ImportError for async_rithmic."""
@@ -627,127 +627,132 @@ class TestSendOrderAndCopy:
     @pytest.mark.asyncio()
     async def test_basic_order_and_copy(self, ct_wired: CopyTrader) -> None:
         """Main + 2 slaves → 3 total orders, all with MANUAL flag."""
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                # Mock submit to capture kwargs
-                with patch(
-                    "lib.services.engine.copy_trader.CopyTrader._submit_single_order",
-                    new_callable=AsyncMock,
-                ) as mock_submit:
-                    mock_submit.return_value = CopyOrderResult(
-                        account_key="x",
-                        account_label="X",
-                        is_main=False,
-                        order_id="O",
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        order_type="MARKET",
-                        price=0,
-                        stop_ticks=20,
-                        target_ticks=None,
-                        status=CopyOrderStatus.SUBMITTED,
-                    )
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+            patch(
+                "lib.services.engine.copy_trader.CopyTrader._submit_single_order",
+                new_callable=AsyncMock,
+            ) as mock_submit,
+        ):
+            mock_submit.return_value = CopyOrderResult(
+                account_key="x",
+                account_label="X",
+                is_main=False,
+                order_id="O",
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                order_type="MARKET",
+                price=0,
+                stop_ticks=20,
+                target_ticks=None,
+                status=CopyOrderStatus.SUBMITTED,
+            )
 
-                    result = await ct_wired.send_order_and_copy(
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        stop_ticks=20,
-                    )
+            await ct_wired.send_order_and_copy(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                stop_ticks=20,
+            )
 
-                    # 1 main + 2 slaves = 3 calls
-                    assert mock_submit.call_count == 3
+            # 1 main + 2 slaves = 3 calls
+            assert mock_submit.call_count == 3
 
-                    # Verify tags: first call is main, rest are copies
-                    calls = mock_submit.call_args_list
-                    assert calls[0].kwargs["tag"] == "RUBY_MANUAL_WEBUI"
-                    assert calls[0].kwargs["is_main"] is True
-                    assert calls[1].kwargs["tag"] == "COPY_FROM_MAIN_HUMAN_150K"
-                    assert calls[1].kwargs["is_main"] is False
-                    assert calls[2].kwargs["tag"] == "COPY_FROM_MAIN_HUMAN_150K"
+            # Verify tags: first call is main, rest are copies
+            calls = mock_submit.call_args_list
+            assert calls[0].kwargs["tag"] == "RUBY_MANUAL_WEBUI"
+            assert calls[0].kwargs["is_main"] is True
+            assert calls[1].kwargs["tag"] == "COPY_FROM_MAIN_HUMAN_150K"
+            assert calls[1].kwargs["is_main"] is False
+            assert calls[2].kwargs["tag"] == "COPY_FROM_MAIN_HUMAN_150K"
 
     @pytest.mark.asyncio()
     async def test_main_failure_aborts_copies(self, ct_wired: CopyTrader) -> None:
         """If main order fails, no slave copies should be attempted."""
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                call_count = 0
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+        ):
+            call_count = 0
 
-                async def _mock_submit(**kwargs: Any) -> CopyOrderResult:
-                    nonlocal call_count
-                    call_count += 1
-                    return CopyOrderResult(
-                        account_key="x",
-                        account_label="X",
-                        is_main=kwargs.get("is_main", False),
-                        order_id="O",
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        order_type="MARKET",
-                        price=0,
-                        stop_ticks=20,
-                        target_ticks=None,
-                        status=CopyOrderStatus.ERROR,
-                        error="connection refused",
-                    )
-
-                ct_wired._submit_single_order = _mock_submit  # type: ignore[assignment]
-
-                result = await ct_wired.send_order_and_copy(
+            async def _mock_submit(**kwargs: Any) -> CopyOrderResult:
+                nonlocal call_count
+                call_count += 1
+                return CopyOrderResult(
+                    account_key="x",
+                    account_label="X",
+                    is_main=kwargs.get("is_main", False),
+                    order_id="O",
                     security_code="MGCQ6",
                     exchange="NYMEX",
                     side="BUY",
                     qty=1,
+                    order_type="MARKET",
+                    price=0,
                     stop_ticks=20,
+                    target_ticks=None,
+                    status=CopyOrderStatus.ERROR,
+                    error="connection refused",
                 )
 
-                # Only 1 call (main) — slaves were never attempted
-                assert call_count == 1
-                assert result.main_result is not None
-                assert result.main_result.status == CopyOrderStatus.ERROR
-                assert len(result.slave_results) == 0
+            ct_wired._submit_single_order = _mock_submit  # type: ignore[assignment]
+
+            result = await ct_wired.send_order_and_copy(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                stop_ticks=20,
+            )
+
+            # Only 1 call (main) — slaves were never attempted
+            assert call_count == 1
+            assert result.main_result is not None
+            assert result.main_result.status == CopyOrderStatus.ERROR
+            assert len(result.slave_results) == 0
 
     @pytest.mark.asyncio()
     async def test_compliance_log_populated(self, ct_wired: CopyTrader) -> None:
         """Every batch has a compliance checklist."""
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                with patch(
-                    "lib.services.engine.copy_trader.CopyTrader._submit_single_order",
-                    new_callable=AsyncMock,
-                ) as mock_submit:
-                    mock_submit.return_value = CopyOrderResult(
-                        account_key="x",
-                        account_label="X",
-                        is_main=False,
-                        order_id="O",
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        order_type="MARKET",
-                        price=0,
-                        stop_ticks=20,
-                        target_ticks=None,
-                        status=CopyOrderStatus.SUBMITTED,
-                    )
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+            patch(
+                "lib.services.engine.copy_trader.CopyTrader._submit_single_order",
+                new_callable=AsyncMock,
+            ) as mock_submit,
+        ):
+            mock_submit.return_value = CopyOrderResult(
+                account_key="x",
+                account_label="X",
+                is_main=False,
+                order_id="O",
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                order_type="MARKET",
+                price=0,
+                stop_ticks=20,
+                target_ticks=None,
+                status=CopyOrderStatus.SUBMITTED,
+            )
 
-                    result = await ct_wired.send_order_and_copy(
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        stop_ticks=20,
-                    )
+            result = await ct_wired.send_order_and_copy(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                stop_ticks=20,
+            )
 
-                    assert len(result.compliance_log) >= 4
-                    assert any("MANUAL" in c for c in result.compliance_log)
-                    assert any("stop_ticks" in c for c in result.compliance_log)
+            assert len(result.compliance_log) >= 4
+            assert any("MANUAL" in c for c in result.compliance_log)
+            assert any("stop_ticks" in c for c in result.compliance_log)
 
     @pytest.mark.asyncio()
     async def test_rate_limit_blocks_order(self, ct_wired: CopyTrader) -> None:
@@ -771,173 +776,183 @@ class TestSendOrderAndCopy:
     @pytest.mark.asyncio()
     async def test_stop_ticks_passed_through(self, ct_wired: CopyTrader) -> None:
         """Server-side brackets (stop_ticks, target_ticks) are forwarded."""
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                captured_kwargs: list[dict[str, Any]] = []
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+        ):
+            captured_kwargs: list[dict[str, Any]] = []
 
-                async def _capture_submit(**kwargs: Any) -> CopyOrderResult:
-                    captured_kwargs.append(kwargs)
-                    return CopyOrderResult(
-                        account_key="x",
-                        account_label="X",
-                        is_main=kwargs.get("is_main", False),
-                        order_id="O",
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        order_type="MARKET",
-                        price=0,
-                        stop_ticks=kwargs.get("stop_ticks", 0),
-                        target_ticks=kwargs.get("target_ticks"),
-                        status=CopyOrderStatus.SUBMITTED,
-                    )
-
-                ct_wired._submit_single_order = _capture_submit  # type: ignore[assignment]
-
-                await ct_wired.send_order_and_copy(
+            async def _capture_submit(**kwargs: Any) -> CopyOrderResult:
+                captured_kwargs.append(kwargs)
+                return CopyOrderResult(
+                    account_key="x",
+                    account_label="X",
+                    is_main=kwargs.get("is_main", False),
+                    order_id="O",
                     security_code="MGCQ6",
                     exchange="NYMEX",
                     side="BUY",
                     qty=1,
-                    stop_ticks=25,
-                    target_ticks=50,
+                    order_type="MARKET",
+                    price=0,
+                    stop_ticks=kwargs.get("stop_ticks", 0),
+                    target_ticks=kwargs.get("target_ticks"),
+                    status=CopyOrderStatus.SUBMITTED,
                 )
 
-                # All 3 orders (main + 2 slaves) should have same brackets
-                assert len(captured_kwargs) == 3
-                for kw in captured_kwargs:
-                    assert kw["stop_ticks"] == 25
-                    assert kw["target_ticks"] == 50
+            ct_wired._submit_single_order = _capture_submit  # type: ignore[assignment]
+
+            await ct_wired.send_order_and_copy(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                stop_ticks=25,
+                target_ticks=50,
+            )
+
+            # All 3 orders (main + 2 slaves) should have same brackets
+            assert len(captured_kwargs) == 3
+            for kw in captured_kwargs:
+                assert kw["stop_ticks"] == 25
+                assert kw["target_ticks"] == 50
 
     @pytest.mark.asyncio()
     async def test_no_main_returns_error(self, ct: CopyTrader) -> None:
         """Sending without a main account connected results in error."""
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                result = await ct.send_order_and_copy(
-                    security_code="MGCQ6",
-                    exchange="NYMEX",
-                    side="BUY",
-                    qty=1,
-                    stop_ticks=20,
-                )
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+        ):
+            result = await ct.send_order_and_copy(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                stop_ticks=20,
+            )
 
-                # Main result should be an error (no account connected)
-                assert result.main_result is not None
-                assert result.main_result.status == CopyOrderStatus.ERROR
+            # Main result should be an error (no account connected)
+            assert result.main_result is not None
+            assert result.main_result.status == CopyOrderStatus.ERROR
 
     @pytest.mark.asyncio()
     async def test_no_slaves_main_only(self, ct: CopyTrader) -> None:
         """With no slaves, only main order is placed."""
         ct._main = _make_fake_account("main", "Main", is_main=True)
 
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                with patch(
-                    "lib.services.engine.copy_trader.CopyTrader._submit_single_order",
-                    new_callable=AsyncMock,
-                ) as mock_submit:
-                    mock_submit.return_value = CopyOrderResult(
-                        account_key="main",
-                        account_label="Main",
-                        is_main=True,
-                        order_id="O",
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        order_type="MARKET",
-                        price=0,
-                        stop_ticks=20,
-                        target_ticks=None,
-                        status=CopyOrderStatus.SUBMITTED,
-                    )
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+            patch(
+                "lib.services.engine.copy_trader.CopyTrader._submit_single_order",
+                new_callable=AsyncMock,
+            ) as mock_submit,
+        ):
+            mock_submit.return_value = CopyOrderResult(
+                account_key="main",
+                account_label="Main",
+                is_main=True,
+                order_id="O",
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                order_type="MARKET",
+                price=0,
+                stop_ticks=20,
+                target_ticks=None,
+                status=CopyOrderStatus.SUBMITTED,
+            )
 
-                    result = await ct.send_order_and_copy(
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        stop_ticks=20,
-                    )
+            result = await ct.send_order_and_copy(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                stop_ticks=20,
+            )
 
-                    assert mock_submit.call_count == 1  # main only
-                    assert len(result.slave_results) == 0
+            assert mock_submit.call_count == 1  # main only
+            assert len(result.slave_results) == 0
 
     @pytest.mark.asyncio()
     async def test_disabled_slaves_skipped(self, ct_wired: CopyTrader) -> None:
         """Disabled slaves are not copied to."""
         ct_wired.disable_slave("slave2")
 
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                with patch(
-                    "lib.services.engine.copy_trader.CopyTrader._submit_single_order",
-                    new_callable=AsyncMock,
-                ) as mock_submit:
-                    mock_submit.return_value = CopyOrderResult(
-                        account_key="x",
-                        account_label="X",
-                        is_main=False,
-                        order_id="O",
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        order_type="MARKET",
-                        price=0,
-                        stop_ticks=20,
-                        target_ticks=None,
-                        status=CopyOrderStatus.SUBMITTED,
-                    )
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+            patch(
+                "lib.services.engine.copy_trader.CopyTrader._submit_single_order",
+                new_callable=AsyncMock,
+            ) as mock_submit,
+        ):
+            mock_submit.return_value = CopyOrderResult(
+                account_key="x",
+                account_label="X",
+                is_main=False,
+                order_id="O",
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                order_type="MARKET",
+                price=0,
+                stop_ticks=20,
+                target_ticks=None,
+                status=CopyOrderStatus.SUBMITTED,
+            )
 
-                    result = await ct_wired.send_order_and_copy(
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        stop_ticks=20,
-                    )
+            await ct_wired.send_order_and_copy(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                stop_ticks=20,
+            )
 
-                    # 1 main + 1 enabled slave = 2 calls
-                    assert mock_submit.call_count == 2
+            # 1 main + 1 enabled slave = 2 calls
+            assert mock_submit.call_count == 2
 
     @pytest.mark.asyncio()
     async def test_reason_in_batch_id(self, ct_wired: CopyTrader) -> None:
         """The reason string is included in batch_id."""
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                with patch(
-                    "lib.services.engine.copy_trader.CopyTrader._submit_single_order",
-                    new_callable=AsyncMock,
-                ) as mock_submit:
-                    mock_submit.return_value = CopyOrderResult(
-                        account_key="x",
-                        account_label="X",
-                        is_main=False,
-                        order_id="O",
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        order_type="MARKET",
-                        price=0,
-                        stop_ticks=20,
-                        target_ticks=None,
-                        status=CopyOrderStatus.SUBMITTED,
-                    )
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+            patch(
+                "lib.services.engine.copy_trader.CopyTrader._submit_single_order",
+                new_callable=AsyncMock,
+            ) as mock_submit,
+        ):
+            mock_submit.return_value = CopyOrderResult(
+                account_key="x",
+                account_label="X",
+                is_main=False,
+                order_id="O",
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                order_type="MARKET",
+                price=0,
+                stop_ticks=20,
+                target_ticks=None,
+                status=CopyOrderStatus.SUBMITTED,
+            )
 
-                    result = await ct_wired.send_order_and_copy(
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        stop_ticks=20,
-                        reason="ORB breakout",
-                    )
+            result = await ct_wired.send_order_and_copy(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                stop_ticks=20,
+                reason="ORB breakout",
+            )
 
-                    assert "ORB breakout" in result.batch_id
+            assert "ORB breakout" in result.batch_id
 
 
 # ===================================================================
@@ -968,37 +983,39 @@ class TestSendOrderFromTicker:
     @pytest.mark.asyncio()
     async def test_successful_ticker_resolution(self, ct_wired: CopyTrader) -> None:
         """Resolves ticker → security_code → sends order."""
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                with patch(
-                    "lib.services.engine.copy_trader.CopyTrader._submit_single_order",
-                    new_callable=AsyncMock,
-                ) as mock_submit:
-                    mock_submit.return_value = CopyOrderResult(
-                        account_key="x",
-                        account_label="X",
-                        is_main=False,
-                        order_id="O",
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        order_type="MARKET",
-                        price=0,
-                        stop_ticks=20,
-                        target_ticks=None,
-                        status=CopyOrderStatus.SUBMITTED,
-                    )
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+            patch(
+                "lib.services.engine.copy_trader.CopyTrader._submit_single_order",
+                new_callable=AsyncMock,
+            ) as mock_submit,
+        ):
+            mock_submit.return_value = CopyOrderResult(
+                account_key="x",
+                account_label="X",
+                is_main=False,
+                order_id="O",
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                order_type="MARKET",
+                price=0,
+                stop_ticks=20,
+                target_ticks=None,
+                status=CopyOrderStatus.SUBMITTED,
+            )
 
-                    result = await ct_wired.send_order_from_ticker(
-                        ticker="MGC=F",
-                        side="BUY",
-                        qty=1,
-                        stop_ticks=20,
-                    )
+            result = await ct_wired.send_order_from_ticker(
+                ticker="MGC=F",
+                side="BUY",
+                qty=1,
+                stop_ticks=20,
+            )
 
-                    assert result.security_code == "MGCQ6"
-                    assert mock_submit.call_count == 3  # main + 2 slaves
+            assert result.security_code == "MGCQ6"
+            assert mock_submit.call_count == 3  # main + 2 slaves
 
 
 # ===================================================================
@@ -1160,7 +1177,6 @@ class TestHumanisedDelay:
     @pytest.mark.asyncio()
     async def test_normal_delay_range(self, ct_wired: CopyTrader) -> None:
         """Slave copies should have delay_ms in the 200–800 ms range."""
-        delays: list[int] = []
 
         async def _mock_submit(**kwargs: Any) -> CopyOrderResult:
             return CopyOrderResult(
@@ -1183,7 +1199,6 @@ class TestHumanisedDelay:
             )
 
         # Patch sleep to capture delay values without actually sleeping
-        original_sleep = asyncio.sleep
         sleep_values: list[float] = []
 
         async def _mock_sleep(seconds: float) -> None:
@@ -1191,16 +1206,18 @@ class TestHumanisedDelay:
 
         ct_wired._submit_single_order = _mock_submit  # type: ignore[assignment]
 
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                with patch("asyncio.sleep", side_effect=_mock_sleep):
-                    await ct_wired.send_order_and_copy(
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        stop_ticks=20,
-                    )
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+            patch("asyncio.sleep", side_effect=_mock_sleep),
+        ):
+            await ct_wired.send_order_and_copy(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                stop_ticks=20,
+            )
 
         # 2 slaves = 2 delays
         assert len(sleep_values) == 2
@@ -1238,16 +1255,18 @@ class TestHumanisedDelay:
 
         ct_wired._submit_single_order = _mock_submit  # type: ignore[assignment]
 
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                with patch("asyncio.sleep", side_effect=_mock_sleep):
-                    await ct_wired.send_order_and_copy(
-                        security_code="MGCQ6",
-                        exchange="NYMEX",
-                        side="BUY",
-                        qty=1,
-                        stop_ticks=20,
-                    )
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+            patch("asyncio.sleep", side_effect=_mock_sleep),
+        ):
+            await ct_wired.send_order_and_copy(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                side="BUY",
+                qty=1,
+                stop_ticks=20,
+            )
 
         assert len(sleep_values) == 2
         for delay in sleep_values:
@@ -1283,9 +1302,9 @@ class TestExecuteOrderCommands:
         with patch.object(ct_wired, "send_order_from_ticker", new_callable=AsyncMock) as mock_send:
             mock_send.return_value = CopyBatchResult(batch_id="PM_MGC=F", security_code="MGCQ6", side="BUY", qty=1)
 
-            results = await ct_wired.execute_order_commands([cmd])
+            await ct_wired.execute_order_commands([cmd])
 
-        assert len(results) == 1
+        assert mock_send.call_count == 1
         mock_send.assert_called_once()
         call_kwargs = mock_send.call_args.kwargs
         assert call_kwargs["ticker"] == "MGC=F"
@@ -1299,7 +1318,7 @@ class TestExecuteOrderCommands:
         with patch.object(ct_wired, "send_order_from_ticker", new_callable=AsyncMock) as mock_send:
             mock_send.return_value = CopyBatchResult(batch_id="PM_MGC=F", security_code="MGCQ6", side="SELL", qty=1)
 
-            results = await ct_wired.execute_order_commands([cmd])
+            await ct_wired.execute_order_commands([cmd])
 
         call_kwargs = mock_send.call_args.kwargs
         assert call_kwargs["side"] == "SELL"
@@ -1309,8 +1328,9 @@ class TestExecuteOrderCommands:
         """MODIFY_STOP is now forwarded to modify_stop_on_all() and returns a dict result."""
         cmd = self._FakeOrderCommand(action="MODIFY_STOP", stop_price=2600.0)
 
-        with patch.object(ct_wired, "send_order_from_ticker", new_callable=AsyncMock) as mock_send:
-            with patch.object(
+        with (
+            patch.object(ct_wired, "send_order_from_ticker", new_callable=AsyncMock) as mock_send,
+            patch.object(
                 ct_wired,
                 "modify_stop_on_all",
                 new_callable=AsyncMock,
@@ -1321,8 +1341,9 @@ class TestExecuteOrderCommands:
                     "stop_ticks": 20,
                     "reason": "",
                 },
-            ):
-                results = await ct_wired.execute_order_commands([cmd])
+            ),
+        ):
+            results = await ct_wired.execute_order_commands([cmd])
 
         # Now produces 1 dict result (either resolution error or modify result)
         assert len(results) == 1
@@ -1333,14 +1354,16 @@ class TestExecuteOrderCommands:
         """CANCEL is now forwarded to cancel_on_all() and returns a dict result."""
         cmd = self._FakeOrderCommand(action="CANCEL")
 
-        with patch.object(ct_wired, "send_order_from_ticker", new_callable=AsyncMock) as mock_send:
-            with patch.object(
+        with (
+            patch.object(ct_wired, "send_order_from_ticker", new_callable=AsyncMock) as mock_send,
+            patch.object(
                 ct_wired,
                 "cancel_on_all",
                 new_callable=AsyncMock,
                 return_value={"ok": True, "accounts_cancelled": ["main"], "accounts_failed": [], "reason": ""},
-            ):
-                results = await ct_wired.execute_order_commands([cmd])
+            ),
+        ):
+            results = await ct_wired.execute_order_commands([cmd])
 
         assert len(results) == 1
         mock_send.assert_not_called()
@@ -1610,15 +1633,17 @@ class TestModifyStopOnAll:
         fake_async_rithmic = MagicMock()
         fake_async_rithmic.OrderPlacement = fake_op
 
-        with patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for):
-            with patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}):
-                result = await ct_wired.modify_stop_on_all(
-                    security_code="MGCQ6",
-                    exchange="NYMEX",
-                    new_stop_price=1990.0,  # 10 ticks below 2000 for MGC (tick=0.10)
-                    product_code="MGC",
-                    entry_price=2000.0,
-                )
+        with (
+            patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for),
+            patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}),
+        ):
+            result = await ct_wired.modify_stop_on_all(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                new_stop_price=1990.0,  # 10 ticks below 2000 for MGC (tick=0.10)
+                product_code="MGC",
+                entry_price=2000.0,
+            )
 
         assert len(captured_kwargs) >= 1
         assert captured_kwargs[0]["stop_ticks"] == 100  # dist=10.0 / 0.10 = 100 ticks
@@ -1652,15 +1677,17 @@ class TestModifyStopOnAll:
         fake_async_rithmic = MagicMock()
         fake_async_rithmic.OrderPlacement = fake_op
 
-        with patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for):
-            with patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}):
-                result = await ct_wired.modify_stop_on_all(
-                    security_code="MGCQ6",
-                    exchange="NYMEX",
-                    new_stop_price=1990.0,
-                    product_code="MGC",
-                    entry_price=2000.0,
-                )
+        with (
+            patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for),
+            patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}),
+        ):
+            result = await ct_wired.modify_stop_on_all(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                new_stop_price=1990.0,
+                product_code="MGC",
+                entry_price=2000.0,
+            )
 
         assert ct_wired._main.key in result["accounts_failed"]  # type: ignore[operator]
         assert result["ok"] is False
@@ -1682,15 +1709,17 @@ class TestModifyStopOnAll:
         fake_async_rithmic = MagicMock()
         fake_async_rithmic.OrderPlacement = fake_op
 
-        with patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for):
-            with patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}):
-                await ct_wired.modify_stop_on_all(
-                    security_code="MGCQ6",
-                    exchange="NYMEX",
-                    new_stop_price=1990.0,
-                    product_code="MGC",
-                    entry_price=2000.0,
-                )
+        with (
+            patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for),
+            patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}),
+        ):
+            await ct_wired.modify_stop_on_all(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                new_stop_price=1990.0,
+                product_code="MGC",
+                entry_price=2000.0,
+            )
 
         # ct_wired has main + 2 enabled slaves → 3 accounts each get 1 record
         assert ct_wired._rate_counter.count == before + 3
@@ -1710,17 +1739,19 @@ class TestModifyStopOnAll:
         fake_async_rithmic = MagicMock()
         fake_async_rithmic.OrderPlacement = fake_op
 
-        with patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for):
-            with patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}):
-                result = await ct_wired.modify_stop_on_all(
-                    security_code="MGCQ6",
-                    exchange="NYMEX",
-                    new_stop_price=1990.0,
-                    product_code="MGC",
-                    entry_price=2000.0,
-                    position_id="POS-001",
-                    reason="TP1 hit — moving to breakeven",
-                )
+        with (
+            patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for),
+            patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}),
+        ):
+            result = await ct_wired.modify_stop_on_all(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                new_stop_price=1990.0,
+                product_code="MGC",
+                entry_price=2000.0,
+                position_id="POS-001",
+                reason="TP1 hit — moving to breakeven",
+            )
 
         assert result["position_id"] == "POS-001"
         assert result["reason"] == "TP1 hit — moving to breakeven"
@@ -1759,13 +1790,15 @@ class TestCancelOnAll:
         fake_async_rithmic = MagicMock()
         fake_async_rithmic.OrderPlacement = fake_op
 
-        with patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for):
-            with patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}):
-                result = await ct_wired.cancel_on_all(
-                    security_code="MGCQ6",
-                    exchange="NYMEX",
-                    reason="position reversed",
-                )
+        with (
+            patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for),
+            patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}),
+        ):
+            result = await ct_wired.cancel_on_all(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                reason="position reversed",
+            )
 
         assert len(captured) == 1
         assert captured[0].get("security_code") == "MGCQ6"
@@ -1789,9 +1822,11 @@ class TestCancelOnAll:
         fake_async_rithmic = MagicMock()
         fake_async_rithmic.OrderPlacement = fake_op
 
-        with patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for):
-            with patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}):
-                result = await ct_wired.cancel_on_all()
+        with (
+            patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for),
+            patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}),
+        ):
+            result = await ct_wired.cancel_on_all()
 
         assert "security_code" not in captured[0]
         assert result["ok"] is True
@@ -1808,9 +1843,11 @@ class TestCancelOnAll:
         fake_async_rithmic = MagicMock()
         fake_async_rithmic.OrderPlacement = fake_op
 
-        with patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for):
-            with patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}):
-                result = await ct_wired.cancel_on_all(security_code="MGCQ6", exchange="NYMEX")
+        with (
+            patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for),
+            patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}),
+        ):
+            result = await ct_wired.cancel_on_all(security_code="MGCQ6", exchange="NYMEX")
 
         assert result["ok"] is False
         assert ct_wired._main.key in result["accounts_failed"]  # type: ignore[operator]
@@ -1832,9 +1869,11 @@ class TestCancelOnAll:
         fake_async_rithmic = MagicMock()
         fake_async_rithmic.OrderPlacement = fake_op
 
-        with patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for):
-            with patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}):
-                await ct_wired.cancel_on_all(security_code="MGCQ6")
+        with (
+            patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for),
+            patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}),
+        ):
+            await ct_wired.cancel_on_all(security_code="MGCQ6")
 
         # ct_wired has main + 2 enabled slaves → 3 accounts each get 1 record
         assert ct_wired._rate_counter.count == before + 3
@@ -1854,14 +1893,16 @@ class TestCancelOnAll:
         fake_async_rithmic = MagicMock()
         fake_async_rithmic.OrderPlacement = fake_op
 
-        with patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for):
-            with patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}):
-                result = await ct_wired.cancel_on_all(
-                    security_code="MGCQ6",
-                    exchange="NYMEX",
-                    position_id="POS-42",
-                    reason="session end cancel",
-                )
+        with (
+            patch("lib.services.engine.copy_trader.asyncio.wait_for", side_effect=_direct_wait_for),
+            patch.dict("sys.modules", {"async_rithmic": fake_async_rithmic}),
+        ):
+            result = await ct_wired.cancel_on_all(
+                security_code="MGCQ6",
+                exchange="NYMEX",
+                position_id="POS-42",
+                reason="session end cancel",
+            )
 
         assert result["position_id"] == "POS-42"
         assert result["reason"] == "session end cancel"
@@ -1912,10 +1953,12 @@ class TestExecuteOrderCommandsRouting:
             price=2000.0,
         )
 
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                # Process STOP first, then entry
-                results = await ct_wired.execute_order_commands([stop_cmd, entry_cmd])
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+        ):
+            # Process STOP first, then entry
+            results = await ct_wired.execute_order_commands([stop_cmd, entry_cmd])
 
         # stop_companion produces no result; entry produces one batch
         assert len(results) == 1
@@ -2041,9 +2084,11 @@ class TestExecuteOrderCommandsRouting:
             self._Cmd(symbol="MGC=F", action="MODIFY_STOP", order_type="STOP", stop_price=2000.0),  # breakeven
         ]
 
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                results = await ct_wired.execute_order_commands(cmds)
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+        ):
+            results = await ct_wired.execute_order_commands(cmds)
 
         # 1 entry batch result + 1 modify result
         assert len(results) == 2
@@ -2133,26 +2178,28 @@ class TestEdgeCases:
 
         ct_wired._submit_single_order = _mock_submit  # type: ignore[assignment]
 
-        with patch("lib.services.engine.copy_trader._log_compliance"):
-            with patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"):
-                r1, r2 = await asyncio.gather(
-                    ct_wired.send_order_and_copy(
-                        security_code="A",
-                        exchange="CME",
-                        side="BUY",
-                        qty=1,
-                        stop_ticks=20,
-                        tag_prefix="T1",
-                    ),
-                    ct_wired.send_order_and_copy(
-                        security_code="B",
-                        exchange="CME",
-                        side="SELL",
-                        qty=1,
-                        stop_ticks=20,
-                        tag_prefix="T2",
-                    ),
-                )
+        with (
+            patch("lib.services.engine.copy_trader._log_compliance"),
+            patch("lib.services.engine.copy_trader.CopyTrader._persist_batch_result"),
+        ):
+            r1, r2 = await asyncio.gather(
+                ct_wired.send_order_and_copy(
+                    security_code="A",
+                    exchange="CME",
+                    side="BUY",
+                    qty=1,
+                    stop_ticks=20,
+                    tag_prefix="T1",
+                ),
+                ct_wired.send_order_and_copy(
+                    security_code="B",
+                    exchange="CME",
+                    side="SELL",
+                    qty=1,
+                    stop_ticks=20,
+                    tag_prefix="T2",
+                ),
+            )
 
         # Both completed
         assert r1.main_result is not None

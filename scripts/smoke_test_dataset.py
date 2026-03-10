@@ -587,7 +587,7 @@ def test_model_importable() -> None:
     header("Model Import Check")
 
     try:
-        from lib.analysis.breakout_cnn import HybridBreakoutCNN
+        from lib.analysis.breakout_cnn import HybridBreakoutCNN  # noqa: F401
 
         ok("HybridBreakoutCNN importable")
     except ImportError as exc:
@@ -604,7 +604,7 @@ def test_model_importable() -> None:
         fail(f"Cannot import train_model: {exc}")
 
     try:
-        from lib.services.training.dataset_generator import split_dataset
+        from lib.services.training.dataset_generator import split_dataset  # noqa: F401
 
         ok("split_dataset importable")
     except ImportError as exc:

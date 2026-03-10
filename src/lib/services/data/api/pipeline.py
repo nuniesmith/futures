@@ -162,7 +162,7 @@ async def _run_step_overnight(symbol: str, plan: dict) -> str:
 
         api_key = _STATE.get("settings", {}).get("massive_api_key", "")
         if api_key:
-            client = MassiveClient(api_key=api_key)
+            MassiveClient(api_key=api_key)
             # Attempt real data fetch — non-blocking
             return f"Overnight session data fetched for {symbol} via Massive"
     except Exception:
@@ -370,7 +370,7 @@ async def _run_step_mtf(symbol: str, plan: dict) -> str:
     try:
         from lib.analysis.mtf_analyzer import MTFAnalyzer
 
-        analyzer = MTFAnalyzer()
+        MTFAnalyzer()
         # Would need bars at multiple timeframes — check cache
         from lib.core.cache import cache_get
 
@@ -487,7 +487,7 @@ async def _run_step_confluence(symbol: str, plan: dict) -> str:
     try:
         from lib.analysis.confluence import ConfluenceScorer
 
-        scorer = ConfluenceScorer()
+        ConfluenceScorer()
         # Would need levels from ICT + volume + ORB steps
         pass
     except Exception:
@@ -1259,7 +1259,7 @@ async def test_massive():
 
         from lib.integrations.massive_client import MassiveClient
 
-        client = MassiveClient(api_key=key)
+        MassiveClient(api_key=key)
         return JSONResponse({"ok": True, "message": "Massive Futures connected — beta access confirmed"})
     except Exception as exc:
         return JSONResponse({"ok": False, "message": f"Massive test error: {exc}"})

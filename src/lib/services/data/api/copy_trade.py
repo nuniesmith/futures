@@ -62,6 +62,7 @@ Environment Variables
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -221,10 +222,8 @@ def _get_compliance_log(limit: int = 20) -> list[dict[str, Any]]:
         if REDIS_AVAILABLE and _r is not None:
             raw_list = _r.lrange(_COMPLIANCE_KEY, 0, limit - 1)
             for raw in raw_list:
-                try:
+                with contextlib.suppress(Exception):
                     entries.append(json.loads(raw.decode() if isinstance(raw, bytes) else raw))
-                except Exception:
-                    pass
     except Exception as exc:
         logger.debug("compliance log read error: %s", exc)
     return entries
@@ -420,10 +419,8 @@ async def get_history(limit: int = 50) -> JSONResponse:
             if REDIS_AVAILABLE and _r is not None:
                 raw_list = _r.lrange("engine:copy_trader:order_log", 0, limit - 1)
                 for raw in raw_list:
-                    try:
+                    with contextlib.suppress(Exception):
                         history.append(json.loads(raw.decode() if isinstance(raw, bytes) else raw))
-                    except Exception:
-                        pass
         except Exception:
             pass
         return JSONResponse(content={"ok": True, "history": history, "source": "redis"})
