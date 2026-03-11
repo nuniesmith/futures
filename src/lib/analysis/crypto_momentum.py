@@ -55,6 +55,8 @@ from __future__ import annotations
 import contextlib
 import logging
 import math
+import threading
+import time as _time_mod
 from dataclasses import dataclass, field
 from datetime import datetime
 from datetime import time as dt_time
@@ -67,6 +69,25 @@ import pandas as pd
 logger = logging.getLogger("analysis.crypto_momentum")
 
 _EST = ZoneInfo("America/New_York")
+
+# ---------------------------------------------------------------------------
+# Process-level TTL cache for crypto momentum results
+# ---------------------------------------------------------------------------
+# Prevents repeated Kraken REST calls when compute_crypto_momentum() is
+# invoked on every CNN inference, breakout check, or pipeline step.
+# The cache stores the last computed result and its timestamp; any call
+# within _CACHE_TTL_SECONDS of the last compute returns the cached value
+# instead of hitting Kraken again.
+#
+# Two separate caches:
+#   _signal_cache  — keyed by futures_symbol, for compute_crypto_momentum()
+#   _all_cache     — single entry for compute_all_crypto_momentum()
+
+_CACHE_TTL_SECONDS: float = 300.0  # 5 minutes — Kraken 1-min bars don't change faster
+
+_signal_cache: dict[str, tuple[float, Any]] = {}  # symbol → (timestamp, CryptoMomentumSignal)
+_all_cache: tuple[float, list[Any]] | None = None  # (timestamp, [CryptoMomentumSignal, ...])
+_cache_lock = threading.Lock()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1098,26 +1119,71 @@ def compute_crypto_momentum(
     """One-shot convenience: compute crypto momentum signal for a single futures symbol.
 
     Uses live Kraken data if available, otherwise returns an empty signal.
+
+    Results are cached for ``_CACHE_TTL_SECONDS`` (default 5 min) to prevent
+    repeated Kraken REST calls when this function is invoked on every CNN
+    inference or breakout check in the engine.
     """
+    global _signal_cache
+
+    _now_ts = _time_mod.monotonic()
+
+    # Fast path: return cached result if still fresh
+    with _cache_lock:
+        cached = _signal_cache.get(futures_symbol)
+        if cached is not None:
+            cached_ts, cached_signal = cached
+            if _now_ts - cached_ts < _CACHE_TTL_SECONDS:
+                return cached_signal
+
+    # Slow path: compute and cache
     scorer = CryptoMomentumScorer(
         targets={futures_symbol: FUTURES_TARGETS.get(futures_symbol, {"base_correlation": 0.3})}
     )
     signals = scorer.score_all(now=now)
-    if signals:
-        return signals[0]
-    return CryptoMomentumSignal(
-        futures_symbol=futures_symbol,
-        error="Failed to compute",
-        computed_at=datetime.now(tz=_EST).isoformat(),
+    result = (
+        signals[0]
+        if signals
+        else CryptoMomentumSignal(
+            futures_symbol=futures_symbol,
+            error="Failed to compute",
+            computed_at=datetime.now(tz=_EST).isoformat(),
+        )
     )
+
+    with _cache_lock:
+        _signal_cache[futures_symbol] = (_time_mod.monotonic(), result)
+
+    return result
 
 
 def compute_all_crypto_momentum(
     now: datetime | None = None,
 ) -> list[CryptoMomentumSignal]:
-    """Compute crypto momentum signals for all tracked futures instruments."""
+    """Compute crypto momentum signals for all tracked futures instruments.
+
+    Results are cached for ``_CACHE_TTL_SECONDS`` (default 5 min) to prevent
+    repeated Kraken REST calls when called from multiple engine subsystems.
+    """
+    global _all_cache
+
+    _now_ts = _time_mod.monotonic()
+
+    # Fast path: return cached result if still fresh
+    with _cache_lock:
+        if _all_cache is not None:
+            cached_ts, cached_signals = _all_cache
+            if _now_ts - cached_ts < _CACHE_TTL_SECONDS:
+                return cached_signals
+
+    # Slow path: compute and cache
     scorer = CryptoMomentumScorer()
-    return scorer.score_all(now=now)
+    signals = scorer.score_all(now=now)
+
+    with _cache_lock:
+        _all_cache = (_time_mod.monotonic(), signals)
+
+    return signals
 
 
 def crypto_momentum_to_tabular(
