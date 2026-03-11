@@ -39,18 +39,14 @@ These tests enforce:
 
 from __future__ import annotations
 
-import importlib
-import json
+import contextlib
 import os
 import sys
 import tempfile
-from collections import defaultdict
-from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
-import pytest
 
 # ---------------------------------------------------------------------------
 # Ensure the src/ tree is importable
@@ -724,15 +720,13 @@ class TestFullPipelineNoLocalClients:
                     side_effect=Exception("Blocked: no Kraken on trainer"),
                 ),
             ):
-                try:
-                    stats = generate_dataset(
+                with contextlib.suppress(Exception):
+                    generate_dataset(
                         symbols=["MGC"],
                         days_back=30,
                         config=config,
                         bars_override=bars_override,
                     )
-                except Exception:
-                    pass  # rendering may fail without PIL — fine
 
         # The important assertions:
         assert not yf_calls, (
@@ -872,7 +866,7 @@ class TestProviderSymbolMaps:
                 missing.append((symbol, ticker))
 
         assert not missing, (
-            f"These tickers have no Massive product mapping on the engine:\n"
+            "These tickers have no Massive product mapping on the engine:\n"
             + "\n".join(f"  {s} → {t}" for s, t in missing)
             + "\nThe engine won't be able to backfill these from Massive, "
             "so the trainer will get 0 bars."
