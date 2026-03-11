@@ -519,9 +519,12 @@ def check_kraken_crypto_momentum(days: int = 2) -> bool:
     _section("CHECK 3b — crypto_momentum feature not silently empty")
 
     try:
-        from lib.analysis.crypto_momentum import get_crypto_momentum_features
+        from lib.analysis.crypto_momentum import (
+            compute_all_crypto_momentum,
+            crypto_momentum_to_tabular,
+        )
 
-        features = get_crypto_momentum_features()
+        features = crypto_momentum_to_tabular(compute_all_crypto_momentum())
 
         # The function should return a dict with numeric values
         if not isinstance(features, dict) or not features:
@@ -598,7 +601,7 @@ def check_engine_data_url(symbol: str = "MGC", days: int = 5) -> bool:
         try:
             r = requests.get(
                 f"{engine_url}/bars/{symbol}",
-                params={"interval": "1m", "days_back": days, "auto_fill": "true"},
+                params={"interval": "1m", "days_back": str(days), "auto_fill": "true"},
                 timeout=30,
             )
             if r.status_code == 404:
@@ -726,7 +729,7 @@ def check_data_resolver(symbol: str = "MGC", days: int = 5) -> bool:
 
         r = requests.get(
             f"{engine_url}/bars/{symbol}",
-            params={"interval": "1m", "days_back": days},
+            params={"interval": "1m", "days_back": str(days)},
             timeout=15,
         )
         if r.status_code == 200:
