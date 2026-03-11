@@ -1,31 +1,30 @@
 """
 Signal Quality Score.
 
-This module computes the multi-factor signal quality score exactly as
-implemented in your Pine Script indicators. The score combines 5 weighted
-factors to produce a 0–1 quality metric that gates trade entries:
+Computes a multi-factor signal quality score from OHLCV bar data.  The score
+combines 5 weighted factors to produce a 0–1 quality metric that gates trade
+entries.  Works for any tradeable instrument — futures, equities, crypto, forex.
 
   Factor 1 (37.5%): Volatility sweet-spot — percentile between 0.2 and 0.7
   Factor 2 (25.0%): Normalized velocity — momentum aligned with trend
   Factor 3 (12.5%): Price acceleration / trend speed factor
   Factor 4 (12.5%): Candle pattern confirmation (bullish/bearish)
-  Factor 5 (12.5%): HTF bias alignment (S/R or higher-timeframe)
+  Factor 5 (12.5%): HTF bias alignment (higher-timeframe or S/R bias)
 
 The score adapts based on detected market phase:
-  - UPTREND: rewards positive velocity, bullish candles, long bias
+  - UPTREND:   rewards positive velocity, bullish candles, long bias
   - DOWNTREND: rewards negative velocity, bearish candles, short bias
-  - RANGING: rewards low volatility, near-zero velocity, any pattern
+  - RANGING:   rewards low volatility, near-zero velocity, any pattern
 
 Design decisions:
-  - Stateless: operates on DataFrame + pre-computed analysis dicts
-  - Reuses existing wave_analysis.py and volatility.py outputs (no redundant compute)
-  - Candle pattern detection ported directly from fks.pine's
-    f_detect_bullish_candle_pattern / f_detect_bearish_candle_pattern
+  - Stateless: operates on a DataFrame plus optional pre-computed analysis dicts
+  - Accepts pre-computed wave_result / vol_result to avoid redundant calculation
+  - Candle pattern detection covers hammer, engulfing, and pin-bar patterns
   - Can be called on every 1m bar (via WebSocket) or per 5m refresh
   - Result includes individual factor scores for debugging/dashboard
 
 Usage:
-    from lib.signal_quality import compute_signal_quality
+    from lib.analysis.signal_quality import compute_signal_quality
 
     result = compute_signal_quality(
         df,
@@ -58,7 +57,7 @@ logger = logging.getLogger("signal_quality")
 
 
 # ---------------------------------------------------------------------------
-# Candle pattern detection (exact port from fks.pine)
+# Candle pattern detection
 # ---------------------------------------------------------------------------
 
 
@@ -71,7 +70,7 @@ def _detect_bullish_candle(
 ) -> bool:
     """Detect bullish candlestick patterns at the given bar index.
 
-    Port of fks.pine f_detect_bullish_candle_pattern():
+    Patterns checked:
       - Hammer: small body, long lower wick (>2× body), short upper wick
       - Bullish engulfing: green bar engulfs prior red bar
       - Pin bar: lower wick > 60% of range, small body, small upper wick
@@ -115,7 +114,7 @@ def _detect_bearish_candle(
 ) -> bool:
     """Detect bearish candlestick patterns at the given bar index.
 
-    Port of fks.pine f_detect_bearish_candle_pattern():
+    Patterns checked:
       - Shooting star: small body, long upper wick (>2× body), short lower wick
       - Bearish engulfing: red bar engulfs prior green bar
       - Pin bar: upper wick > 60% of range, small body, small lower wick
@@ -151,7 +150,7 @@ def _detect_bearish_candle(
 
 
 # ---------------------------------------------------------------------------
-# Normalized velocity (ported from fks.pine)
+# Normalized velocity
 # ---------------------------------------------------------------------------
 
 
@@ -162,10 +161,8 @@ def _compute_normalized_velocity(
 ) -> float:
     """Compute normalized price velocity.
 
-    Port of fks.pine:
-      price_velocity = change(close, momentum_lookback) / close[momentum_lookback]
-      stdev_velocity = stdev(price_velocity, 100)
-      normalized_velocity = price_velocity / stdev_velocity
+    velocity = change(close, momentum_lookback) / close[momentum_lookback]
+    normalized  = velocity / stdev(velocity, stdev_lookback)
     """
     n = len(close)
     if n < momentum_lookback + 2:
@@ -190,7 +187,7 @@ def _compute_normalized_velocity(
 
 
 # ---------------------------------------------------------------------------
-# Price acceleration (ported from fks.pine)
+# Price acceleration
 # ---------------------------------------------------------------------------
 
 
@@ -201,10 +198,9 @@ def _compute_price_acceleration(
 ) -> float:
     """Compute normalized price acceleration (change of velocity).
 
-    Port of fks.pine:
-      price_velocity_raw = change(close, momentum_lookback) / close[momentum_lookback]
-      price_acceleration_raw = change(price_velocity_raw, momentum_lookback)
-      Normalize by stdev of velocity
+    velocity    = change(close, momentum_lookback) / close[momentum_lookback]
+    acceleration = change(velocity, momentum_lookback)
+    normalized   = acceleration / stdev(velocity, stdev_lookback)
     """
     n = len(close)
     if n < momentum_lookback * 2 + 2:
@@ -234,7 +230,7 @@ def _compute_price_acceleration(
 
 
 # ---------------------------------------------------------------------------
-# Trend speed factor (ported from fks.pine)
+# Trend speed factor
 # ---------------------------------------------------------------------------
 
 
@@ -244,11 +240,10 @@ def _compute_trend_speed_factor(
 ) -> float:
     """Compute trend speed quality factor based on wave ratio.
 
-    Port of fks.pine:
-      if abs(current_ratio) > min_wave_ratio → 1.0
-      if abs(current_ratio) > min_wave_ratio * 0.7 → 0.7
-      if abs(current_ratio) > min_wave_ratio * 0.5 → 0.4
-      else → 0.0
+    abs(ratio) > min_wave_ratio       → 1.0
+    abs(ratio) > min_wave_ratio × 0.7 → 0.7
+    abs(ratio) > min_wave_ratio × 0.5 → 0.4
+    else                               → 0.0
     """
     abs_ratio = abs(current_ratio)
     if abs_ratio > min_wave_ratio:
@@ -261,7 +256,7 @@ def _compute_trend_speed_factor(
 
 
 # ---------------------------------------------------------------------------
-# Market trend detection (ported from fks.pine / fks_info.pine)
+# Market trend detection
 # ---------------------------------------------------------------------------
 
 
@@ -272,11 +267,12 @@ def _determine_trend_context(
 ) -> str:
     """Determine if we're in an uptrend, downtrend, or ranging context.
 
-    Port of fks.pine:
-      in_uptrend = market_phase == "UPTREND" or
-                   (market_phase == "ACCUMULATION" and AO > 0 and RSI > 50)
-      in_downtrend = market_phase == "DOWNTREND" or
-                     (market_phase == "DISTRIBUTION" and AO < 0 and RSI < 50)
+    Rules:
+      UPTREND   if market_phase == "UPTREND"
+      UPTREND   if market_phase == "ACCUMULATION" and AO > 0 and RSI > 50
+      DOWNTREND if market_phase == "DOWNTREND"
+      DOWNTREND if market_phase == "DISTRIBUTION" and AO < 0 and RSI < 50
+      RANGING   otherwise
     """
     if market_phase == "UPTREND":
         return "UPTREND"
@@ -348,33 +344,32 @@ def compute_signal_quality(
     min_wave_ratio: float = 1.5,
     momentum_lookback: int = 3,
 ) -> dict[str, Any]:
-    """Compute the Ruby multi-factor signal quality score.
-
-    This is the exact port of the signal_quality_score calculation from
-    fks.pine (lines ~960–1010) and fks_info.pine (lines ~610–650).
+    """Compute the multi-factor signal quality score for any instrument.
 
     The 5-factor weighted score adapts to market context:
 
     UPTREND context:
       (vol in sweet spot ? 1.5 : 0.5)        → 37.5% weight
       (velocity > 0 ? 1.0 : 0.0)             → 25.0% weight
-      (acceleration > 0 ? 0.5 : 0.0)         → 12.5% weight  [fks.pine]
-      OR (trend_speed_factor * 0.5)           → 12.5% weight  [fks.pine alt]
-      (bullish candle ? 0.5 : 0.0)           → 12.5% weight
-      (long bias ? 0.5 : 0.0)               → 12.5% weight
+      (acceleration > 0 ? 0.5 : 0.0)         → 12.5% weight
+      OR (trend_speed_factor × 0.5)           → 12.5% weight (whichever is larger)
+      (bullish candle ? 0.5 : 0.0)            → 12.5% weight
+      (long bias ? 0.5 : 0.0)                → 12.5% weight
 
-    DOWNTREND: mirrors with negative velocity, bearish candle, short bias
-    RANGING: low vol, near-zero velocity, near-zero acceleration
+    DOWNTREND: mirrors with negative velocity, bearish candle, short bias.
+    RANGING:   rewards low volatility, near-zero velocity, near-zero acceleration.
 
-    All divided by 4.0 to normalize to [0, 1].
+    All components summed and divided by 4.0 to normalize to [0, 1].
 
     Args:
-        df: OHLCV DataFrame with Open, High, Low, Close, Volume
-        wave_result: Pre-computed result from calculate_wave_analysis()
-        vol_result: Pre-computed result from kmeans_volatility_clusters()
-        quality_threshold: Score threshold for "high quality" flag (default 0.6)
-        min_wave_ratio: Minimum wave ratio for trend speed factor (default 1.5)
-        momentum_lookback: Bars for velocity/acceleration calc (default 3)
+        df: OHLCV DataFrame with Open, High, Low, Close, Volume columns.
+        wave_result: Optional pre-computed dict from calculate_wave_analysis()
+                     (keys: current_ratio, market_phase, trend_speed, bias).
+        vol_result: Optional pre-computed dict from kmeans_volatility_clusters()
+                    (key: percentile — float in [0, 1]).
+        quality_threshold: Score threshold for the "high_quality" flag (default 0.6).
+        min_wave_ratio: Minimum wave ratio for the trend speed factor (default 1.5).
+        momentum_lookback: Number of bars for velocity/acceleration calculation (default 3).
 
     Returns:
         Dict with score, quality_pct, high_quality flag, factor breakdown,
@@ -414,10 +409,10 @@ def compute_signal_quality(
 
     # --- Gather inputs from pre-computed results or compute fresh ---
 
-    # Volatility percentile
+    # Volatility percentile (0 = very low, 1 = very high)
     vol_percentile = vol_result.get("percentile", 0.5) if vol_result else 0.5
 
-    # Wave analysis
+    # Wave analysis inputs
     if wave_result:
         current_ratio = wave_result.get("current_ratio", 0.0)
         market_phase = wave_result.get("market_phase", "ACCUMULATION")
@@ -433,7 +428,7 @@ def compute_signal_quality(
     rsi_value = _compute_rsi(close)
     ao_value = _compute_ao(high, low)
 
-    # Determine market context
+    # Determine market context from wave phase + momentum oscillators
     market_context = _determine_trend_context(market_phase, ao_value, rsi_value)
 
     # Compute normalized velocity and acceleration
@@ -443,13 +438,12 @@ def compute_signal_quality(
     # Trend speed factor from wave ratio
     tsf = _compute_trend_speed_factor(current_ratio, min_wave_ratio)
 
-    # Candle pattern detection on last confirmed bar
+    # Candle pattern detection on the most recent bar
     bullish_candle = _detect_bullish_candle(open_, high, low, close, idx=-1)
     bearish_candle = _detect_bearish_candle(open_, high, low, close, idx=-1)
 
-    # HTF bias factor — use wave bias as proxy for S/R bias
-    # (In Pine this uses long_bias_1m/5m from S/R levels; here we approximate
-    #  with the wave dominance bias which captures the same directional info)
+    # HTF bias factor — uses the wave dominance bias as a higher-timeframe
+    # directional proxy (equivalent to an S/R or trend-following HTF signal)
     htf_bias_factor = 0.0
     if market_context == "UPTREND" and bias == "BULLISH":
         htf_bias_factor = 1.0
@@ -464,7 +458,6 @@ def compute_signal_quality(
         htf_bias_factor = 1.0 if bias != "NEUTRAL" else 0.5
 
     # --- Multi-factor signal quality calculation ---
-    # Exact port of fks.pine lines ~960-1010
 
     score = 0.0
     factors: dict[str, float] = {}
@@ -577,17 +570,16 @@ def is_premium_setup(
     vol_result: dict[str, Any] | None = None,
     wave_result: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
-    """Check if current conditions qualify as a premium setup.
+    """Check if current conditions qualify as a premium (high-conviction) setup.
 
-    Port of fks.pine:
-      premium_buy_setup = final_buy_signal and signal_quality_score > 0.8 and
-                          volatility_percentile > 0.2 and volatility_percentile < 0.8
-                          and long_bias_5m
-      premium_sell_setup = final_sell_signal and signal_quality_score > 0.8 and
-                          volatility_percentile > 0.2 and volatility_percentile < 0.8
-                          and short_bias_5m
+    Requires all three of:
+      - signal quality score > 0.8
+      - volatility percentile in the sweet spot (0.2–0.8)
+      - wave bias aligned with market context (UPTREND+BULLISH or DOWNTREND+BEARISH)
 
-    Returns (is_premium, direction) where direction is "LONG", "SHORT", or "NONE".
+    Returns:
+        Tuple of (is_premium: bool, direction: str) where direction is
+        "LONG", "SHORT", or "NONE".
     """
     score = quality_result.get("score", 0.0)
     context = quality_result.get("market_context", "RANGING")
@@ -612,12 +604,12 @@ def is_premium_setup(
 
 
 # ---------------------------------------------------------------------------
-# Summary text for Grok / dashboard
+# Summary text for dashboard / LLM prompts
 # ---------------------------------------------------------------------------
 
 
 def signal_quality_summary(result: dict[str, Any]) -> str:
-    """One-line summary suitable for Grok prompts or dashboard captions."""
+    """One-line summary suitable for LLM prompts or dashboard captions."""
     _score = result.get("score", 0)
     pct = result.get("quality_pct", 0)
     ctx = result.get("market_context", "?")

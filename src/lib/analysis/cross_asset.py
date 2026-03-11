@@ -1,5 +1,5 @@
 """
-Cross-Asset Correlation Features — Phase 7B
+Cross-Asset Correlation Features
 ============================================
 Computes real-time cross-asset correlation signals for the CNN tabular
 feature vector.  These features let the model see regime shifts that are

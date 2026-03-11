@@ -154,14 +154,13 @@ class DatasetConfig:
     csv_bars_dir: str = "data/bars"  # only used if bars_source == "csv"
 
     # Renderer selection
-    # "mplfinance" — original Ruby-style chart renderer (chart_renderer.py)
+    # "mplfinance" — original chart renderer (chart_renderer.py)
     #                Rich styling with anti-aliased candles, badges, legends.
-    #                WARNING: produces distribution shift vs C# OrbChartRenderer
-    #                at inference time — use "parity" for CNN training.
-    # "parity"     — pixel-matched Pillow renderer (chart_renderer_parity.py)
-    #                Replicates the C# OrbChartRenderer layout and color constants
-    #                so training images are visually identical to inference snapshots.
-    #                RECOMMENDED for CNN training to eliminate distribution shift.
+    #                Produces visually different images than the Pillow renderer —
+    #                use "parity" for CNN training to keep train/inference consistent.
+    # "parity"     — Pillow renderer (chart_renderer_parity.py)
+    #                Pixel-precise integer coordinate math, dark theme, 224×224.
+    #                RECOMMENDED for CNN training to keep images consistent.
     use_parity_renderer: bool = True
 
     # Breakout type(s) to simulate.
@@ -1631,10 +1630,10 @@ def generate_dataset_for_symbol(
 
             _can_render_parity = True
             _can_render = True
-            logger.info("Using PARITY renderer (chart_renderer_parity.py) for CNN training images")
+            logger.info("Using Pillow renderer (chart_renderer_parity.py) for CNN training images")
         except ImportError:
             logger.warning(
-                "Parity renderer requested but chart_renderer_parity.py not found — falling back to mplfinance renderer"
+                "Pillow renderer requested but chart_renderer_parity.py not found — falling back to mplfinance renderer"
             )
             _use_parity = False
 
@@ -2784,15 +2783,15 @@ def _cli():
         "--parity-renderer",
         action="store_true",
         default=True,
-        help="Use the pixel-parity Pillow renderer (chart_renderer_parity.py) — DEFAULT. "
-        "Produces images pixel-matched to C# OrbChartRenderer, eliminating distribution shift.",
+        help="Use the Pillow renderer (chart_renderer_parity.py) — DEFAULT. "
+        "Produces consistent 224×224 images for CNN training and inference.",
     )
     gen_parser.add_argument(
         "--no-parity-renderer",
         dest="parity_renderer",
         action="store_false",
-        help="Use the original mplfinance renderer instead of the parity renderer. "
-        "Not recommended for CNN training (causes distribution shift).",
+        help="Use the original mplfinance renderer instead of the Pillow renderer. "
+        "Not recommended for CNN training (produces visually different images).",
     )
     gen_parser.add_argument(
         "--breakout-type",

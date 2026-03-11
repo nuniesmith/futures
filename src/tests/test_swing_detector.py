@@ -670,7 +670,6 @@ class TestSwingExitReasonEnum:
 # Pullback Entry Tests
 # ═══════════════════════════════════════════════════════════════════════════
 
-
 class TestPullbackEntry:
     def test_returns_none_on_neutral_bias(self):
         bars = _make_intraday_bars()
@@ -692,12 +691,12 @@ class TestPullbackEntry:
 
     def test_returns_none_with_none_bars(self):
         bias = _make_bias()
-        result = detect_pullback_entry(None, bias, 2710.0, 10.0)
+        result = detect_pullback_entry(pd.DataFrame(), bias, 2710.0, 10.0)  # type: ignore[arg-type]
         assert result is None
 
     def test_returns_none_no_key_levels(self):
         bias = _make_bias()
-        bias.key_levels = None
+        object.__setattr__(bias, "key_levels", None)  # type: ignore[arg-type]
         bars = _make_intraday_bars()
         result = detect_pullback_entry(bars, bias, 2710.0, 10.0)
         assert result is None
@@ -884,11 +883,9 @@ class TestPullbackEntry:
             assert "Pullback" in result.reasoning or "pullback" in result.reasoning.lower()
             assert result.key_level_used != ""
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Breakout Entry Tests
 # ═══════════════════════════════════════════════════════════════════════════
-
 
 class TestBreakoutEntry:
     def test_returns_none_on_neutral_bias(self):
@@ -912,7 +909,7 @@ class TestBreakoutEntry:
     def test_returns_none_no_key_levels(self):
         bars = _make_intraday_bars()
         bias = _make_bias()
-        bias.key_levels = None
+        object.__setattr__(bias, "key_levels", None)  # type: ignore[arg-type]
         result = detect_breakout_entry(bars, bias, 2760.0, 10.0)
         assert result is None
 
@@ -1091,7 +1088,7 @@ class TestGapContinuation:
     def test_returns_none_no_key_levels(self):
         bars = _make_gap_bars()
         bias = _make_bias()
-        bias.key_levels = None
+        object.__setattr__(bias, "key_levels", None)  # type: ignore[arg-type]
         result = detect_gap_continuation(bars, bias, 2715.0, 10.0)
         assert result is None
 
@@ -1277,7 +1274,7 @@ class TestDetectSwingEntries:
 
     def test_none_bars_returns_empty(self):
         bias = _make_bias()
-        result = detect_swing_entries(None, bias, 2710.0, 10.0, "Gold")
+        result = detect_swing_entries(pd.DataFrame(), bias, 2710.0, 10.0, "Gold")
         assert result == []
 
     @patch("lib.trading.strategies.daily.swing_detector._is_time_stop_due", return_value=True)

@@ -1,13 +1,12 @@
 """
-Chart Renderer — Ruby-Style ORB Snapshot Generator
-====================================================
-Generates chart images that replicate the Ruby NinjaTrader indicator's
-visual language: dark theme, colored candlesticks, ORB shaded box, VWAP
-line, EMA9 overlay, volume panel, and quality badge.
+Chart Renderer — ORB Snapshot Generator
+========================================
+Generates chart images with a dark theme: colored candlesticks, ORB shaded
+box, VWAP line, EMA9 overlay, volume panel, and quality badge.
 
 These images serve two purposes:
-  1. **CNN Training** — the breakout_cnn model learns from charts that look
-     exactly like what a human trader sees on their NT8 screen.
+  1. **CNN Training** — the breakout_cnn model learns from labeled chart
+     snapshots of ORB setups.
   2. **Visual Validation** — the dashboard can display the snapshot the CNN
      scored, so you can eyeball whether the model is sane.
 
@@ -79,7 +78,7 @@ except ImportError:
 
 @dataclass
 class RenderConfig:
-    """Rendering configuration — matches Ruby NT8 indicator colors."""
+    """Rendering configuration — dark theme color palette."""
 
     # Canvas
     figsize: tuple[float, float] = (14, 9)
@@ -87,7 +86,7 @@ class RenderConfig:
     background_color: str = "#0F0F1A"
     panel_ratios: tuple[int, int] = (4, 1)
 
-    # Candlestick colors (Ruby palette)
+    # Candlestick colors
     candle_up: str = "#00FFAA"  # green-cyan for bullish
     candle_down: str = "#FF3366"  # hot pink for bearish
     candle_edge: str = "#FFFFFF"

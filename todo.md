@@ -709,3 +709,234 @@ Full specs for all of the above: [`docs/backlog.md`](docs/backlog.md)
 3. `python scripts/smoke_test_dataset.py` on trainer — confirm bars load from engine over Tailscale
 4. Use web UI on cloud server (`http://<server>:8180/trading`) to trigger dataset generation + training
 5. Or trigger directly: `curl -X POST http://<trainer>:8200/train -H "Content-Type: application/json" -d '{"days_back": 120, "epochs": 80, "patience": 15}'`
+
+---
+
+## 🔴 Phase INDICATORS — Codebase Reorganization & Indicator Library Integration
+
+> **Created**: Audit of `src/lib/analysis/` vs `reference/indicators/` — full code review completed.
+> **Goal**: Copy the reference indicators library into the project, separate pure math/indicator logic from higher-level analysis/orchestration, eliminate duplication, and establish a clean architecture.
+
+### Context & Audit Findings
+
+The `reference/indicators/` directory has been copied into `src/lib/indicators/`. This is a well-structured indicator library with:
+- **Base class** (`base.py`) — abstract `Indicator` with `calculate()` / `__call__()` / `get_value()` / `get_series()` / `reset()`
+- **Registry** (`registry.py`) — singleton `IndicatorRegistry` with `@register_indicator` decorator
+- **Factory** (`factory.py`) — static `IndicatorFactory` for creating indicators by name or config
+- **Manager** (`manager.py`) — `IndicatorManager` for grouping, batch calculation, serialization
+- **Categorized indicators**: `trend/`, `momentum/`, `volatility/`, `volume/`, `other/`
+- **Pattern detection**: `candle_patterns.py`, `areas_of_interest.py`, `patterns.py`
+- **Crypto-optimized**: `indicators.py` (BTC-tuned thresholds, Wyckoff/Stop-Hunt patterns)
+- **Market timing**: `market_timing.py` (session analysis, should-trade-now logic)
+
+**Key problems found:**
+1. **Two indicator architectures coexist** — registry-based (`Indicator` ABC with lowercase columns) vs standalone classes (`update()`/`apply()` with capitalized `Close`/`High` columns)
+2. **Duplicate files** — `market_cycle.py` and `parabolic_sar.py` each exist at top-level AND inside `other/`
+3. **Column naming inconsistency** — registry indicators use `close`, standalone use `Close`
+4. **`indicators.py` is a crypto fork** of `candle_patterns.py` + `areas_of_interest.py` with overlapping functions
+5. **`src/lib/analysis/` mixes concerns** — pure math (volatility, wave, CVD, ICT, signal_quality) lives alongside orchestration (news_sentiment, reddit_sentiment, scorer, chart renderers)
+6. **Inline indicator math in analysis files** — `confluence.py`, `breakout_filters.py`, `crypto_momentum.py`, `mtf_analyzer.py` all have their own `_ema()`, `_rsi()`, `_atr()` helper functions instead of using a shared indicator library
+7. **`strategy_defs.py` also has inline indicators** — `_ema`, `_sma`, `_atr`, `_rsi`, `_macd_line`, `_macd_signal`, `_macd_histogram` duplicated there too
+8. **Broken import paths** — indicators reference `core.component.base.Component`, `core.registry.base.Registry`, `core.validation.validation.validate_dataframe`, `app.trading.indicators.Indicator` — none of which exist in this project
+
+---
+
+### INDICATORS-A: Fix Import Paths & Establish Base Classes *(blocking — do first)*
+
+The copied indicators have import paths from the old project (`core.component.base`, `core.registry.base`, `core.validation.validation`, `app.trading.indicators`). These must be adapted to work in this project.
+
+- [ ] **A1**: Create `src/lib/indicators/compat.py` — minimal shims for `Component` (no-op base), `Registry` (dict wrapper), and `validate_dataframe` (basic pandas checks)
+- [ ] **A2**: Update `base.py` imports to use local compat module instead of `core.component.base.Component` and `core.validation.validation`
+- [ ] **A3**: Update `registry.py` imports to use local compat module instead of `core.registry.base.Registry` and `app.trading.indicators.Indicator`
+- [ ] **A4**: Update `factory.py` imports to use local registry instead of `app.trading.indicators.Indicator`
+- [ ] **A5**: Update `candle_patterns.py` and `areas_of_interest.py` — replace `utils.datetime_utils` and `utils.config_utils` with either inline defaults or project-local equivalents
+- [ ] **A6**: Update `market_timing.py` — replace `utils.datetime_utils` and `utils.config_utils` imports
+- [ ] **A7**: Verify `src/lib/indicators/__init__.py` loads cleanly — run `python -c "from lib.indicators import *"` and fix any remaining import errors
+- [ ] **A8**: Write a basic smoke test: `tests/test_indicators_smoke.py` — import every indicator class, instantiate with defaults, call `calculate()` on a small synthetic DataFrame
+
+**Acceptance**: `python -m pytest tests/test_indicators_smoke.py` passes green.
+
+---
+
+### INDICATORS-B: Resolve Duplicates & Column Inconsistencies
+
+- [ ] **B1**: Remove duplicate `indicators/market_cycle.py` (top-level) — keep only `indicators/other/market_cycle.py`
+- [ ] **B2**: Remove duplicate `indicators/parabolic_sar.py` (top-level) — keep only `indicators/other/parabolic_sar.py`
+- [ ] **B3**: Unify column naming — decide on **lowercase** (`close`, `high`, `low`, `volume`) as the project standard (matches `src/lib/analysis/` and data pipeline). Update standalone indicators in `other/`, `trend/exponential_moving_average.py`, `trend/accumulation_distribution_line.py`, `volume/volume_zone_oscillator.py`, `volume/vwap.py` to use lowercase columns
+- [ ] **B4**: Make all standalone indicator classes extend the base `Indicator` ABC or at minimum implement the same `calculate(data, price_column)` interface — consider an adapter wrapper class `StandaloneIndicatorAdapter` if full refactor is too invasive
+- [ ] **B5**: Update `indicators/__init__.py` to remove references to deleted top-level duplicates and ensure all re-exports still work
+- [ ] **B6**: Consolidate `indicators/indicators.py` (crypto fork) — extract the unique crypto-specific functions (`identify_bitcoin_specific_levels`, `identify_session_levels`, `identify_key_levels` with BTC scaling, Wyckoff/Stop-Hunt patterns) into a new `indicators/crypto/` subdirectory. Remove the duplicated generic functions that overlap with `candle_patterns.py` and `areas_of_interest.py`
+
+**Acceptance**: No duplicate indicator class names. All indicators instantiable through the registry. `python -c "from lib.indicators import indicator_categories; print(indicator_categories)"` returns clean categories.
+
+---
+
+### INDICATORS-C: Extract Pure Math from Analysis into Indicators
+
+Several `src/lib/analysis/` modules contain inline indicator helper functions that should be replaced with calls to the indicator library.
+
+- [ ] **C1**: Create `src/lib/indicators/helpers.py` — thin functional wrappers around indicator classes for one-liner use:
+  ```
+  def ema(series, period) -> pd.Series
+  def sma(series, period) -> pd.Series
+  def rsi(data, period) -> pd.Series
+  def atr(data, period) -> pd.Series
+  def macd(data, fast, slow, signal) -> dict[str, pd.Series]
+  def bollinger(data, period, std_dev) -> dict[str, pd.Series]
+  def vwap(data) -> pd.Series
+  ```
+- [ ] **C2**: Replace inline `_ema()` in `analysis/confluence.py` → use `indicators.helpers.ema`
+- [ ] **C3**: Replace inline `_rsi()` in `analysis/confluence.py` → use `indicators.helpers.rsi`
+- [ ] **C4**: Replace inline `_atr()` in `analysis/confluence.py` → use `indicators.helpers.atr`
+- [ ] **C5**: Replace inline `_ema()` in `analysis/breakout_filters.py` → use `indicators.helpers.ema`
+- [ ] **C6**: Replace inline `compute_ema()`, `compute_rsi()`, `compute_atr()` in `analysis/crypto_momentum.py` → use `indicators.helpers.*`
+- [ ] **C7**: Replace inline `_ema_series()`, `_macd()` in `analysis/mtf_analyzer.py` → use `indicators.helpers.*`
+- [ ] **C8**: Replace inline `_compute_atr()` in `analysis/volatility.py` → use `indicators.helpers.atr`
+- [ ] **C9**: Replace inline `_compute_rsi()`, `_compute_ao()` in `analysis/signal_quality.py` → use indicator helpers
+- [ ] **C10**: Replace inline `_compute_ema()`, `_compute_vwap()` in `analysis/chart_renderer.py` → use `indicators.helpers.*`
+- [ ] **C11**: Replace inline `_ema`, `_sma`, `_atr`, `_rsi`, `_macd_line`, `_macd_signal`, `_macd_histogram` in `trading/strategies/strategy_defs.py` → use `indicators.helpers.*`
+- [ ] **C12**: Replace inline `compute_atr` in `trading/strategies/rb/range_builders.py` → use `indicators.helpers.atr`
+- [ ] **C13**: Run full test suite after each replacement to catch regressions — indicator math must produce identical results (write comparison tests if needed)
+
+**Acceptance**: `grep -rn "def _ema\|def _rsi\|def _atr\|def _sma\|def compute_ema\|def compute_rsi\|def compute_atr" src/lib/analysis/ src/lib/trading/` returns zero hits. All tests pass.
+
+---
+
+### INDICATORS-D: Reorganize `src/lib/analysis/` — Separate Concerns
+
+Split the analysis directory into clear layers: pure computation vs orchestration vs rendering.
+
+#### Current `analysis/` files → proposed new homes:
+
+| File | Category | Proposed Location |
+|------|----------|-------------------|
+| `volatility.py` | Pure math (K-Means vol clusters) | **Stay** in `analysis/` — it's analysis-level (uses indicators as inputs) |
+| `wave_analysis.py` | Pure math (wave dominance) | **Stay** in `analysis/` — asset-specific analysis |
+| `cvd.py` | Pure math (CVD + divergence) | **Stay** in `analysis/` — composite analysis built on volume delta |
+| `ict.py` | Pure math (ICT/SMC structures) | **Stay** in `analysis/` — structural analysis |
+| `signal_quality.py` | Pure math (multi-factor scoring) | **Stay** in `analysis/` — scoring layer |
+| `regime.py` | Pure math (HMM regime detection) | **Stay** in `analysis/` — regime classification |
+| `confluence.py` | Pure math (MTF confluence) | **Stay** in `analysis/` — multi-indicator scoring |
+| `mtf_analyzer.py` | Pure math (MTF EMA/MACD) | **Stay** in `analysis/` — multi-indicator scoring |
+| `breakout_filters.py` | Pure math (quality gates) | **Stay** in `analysis/` — filter logic |
+| `cross_asset.py` | Pure math (correlations) | **Stay** in `analysis/` — cross-asset analysis |
+| `asset_fingerprint.py` | Pure math (asset profiling) | **Stay** in `analysis/` — profiling |
+| `volume_profile.py` | Pure math + backtest strategy | **Stay** in `analysis/` — the strategy class could later be extracted |
+| `crypto_momentum.py` | Hybrid (math + data fetching) | **Split** — math helpers → use `indicators/helpers.py`, orchestrator stays |
+| `breakout_cnn.py` | ML model (training + inference) | Move to `analysis/ml/` or `analysis/cnn/` — it's large enough for its own subpackage |
+| `chart_renderer.py` | Rendering (mplfinance PNGs) | Move to `analysis/rendering/` |
+| `chart_renderer_parity.py` | Rendering (Pillow PNGs) | Move to `analysis/rendering/` |
+| `news_sentiment.py` | Orchestration (API + Redis + NLP) | Move to `analysis/sentiment/` |
+| `reddit_sentiment.py` | Orchestration (Redis aggregation) | Move to `analysis/sentiment/` |
+| `scorer.py` | Orchestration (pre-market ranking) | **Stay** in `analysis/` — it's a scoring orchestrator |
+
+- [ ] **D1**: Create `src/lib/analysis/rendering/` subdirectory with `__init__.py`
+- [ ] **D2**: Move `chart_renderer.py` → `analysis/rendering/chart_renderer.py`
+- [ ] **D3**: Move `chart_renderer_parity.py` → `analysis/rendering/chart_renderer_parity.py`
+- [ ] **D4**: Update `analysis/rendering/__init__.py` to re-export the public API (`render_ruby_snapshot`, `render_batch_snapshots`, `render_snapshot_for_inference`, `render_parity_snapshot`, etc.)
+- [ ] **D5**: Create `src/lib/analysis/sentiment/` subdirectory with `__init__.py`
+- [ ] **D6**: Move `news_sentiment.py` → `analysis/sentiment/news_sentiment.py`
+- [ ] **D7**: Move `reddit_sentiment.py` → `analysis/sentiment/reddit_sentiment.py`
+- [ ] **D8**: Update `analysis/sentiment/__init__.py` to re-export the public API
+- [ ] **D9**: Create `src/lib/analysis/ml/` subdirectory with `__init__.py`
+- [ ] **D10**: Move `breakout_cnn.py` → `analysis/ml/breakout_cnn.py`
+- [ ] **D11**: Update `analysis/ml/__init__.py` to re-export the public API (`HybridBreakoutCNN`, `predict_breakout`, `predict_breakout_batch`, `train_model`, `BreakoutDataset`, etc.)
+- [ ] **D12**: Update `analysis/__init__.py` to import from new sub-package paths — maintain backward compatibility so existing `from lib.analysis import render_ruby_snapshot` still works
+- [ ] **D13**: Grep the entire `src/` tree for imports from the moved modules and update them: `grep -rn "from.*analysis.*import.*chart_renderer\|from.*analysis.*import.*news_sentiment\|from.*analysis.*import.*reddit_sentiment\|from.*analysis.*import.*breakout_cnn" src/`
+- [ ] **D14**: Run full test suite and verify all services start cleanly
+
+**Acceptance**: `src/lib/analysis/` directory has clear sub-packages. `analysis/__init__.py` still exports everything for backward compatibility. All imports across the project resolve.
+
+---
+
+### INDICATORS-E: Wire Indicators into the Analysis Pipeline
+
+Once the indicator library is clean and analysis is reorganized, wire them together.
+
+- [ ] **E1**: Add `indicators` to the `lib/__init__.py` docstring and re-exports
+- [ ] **E2**: Update `analysis/confluence.py` to accept an optional `IndicatorManager` instance for pre-computed indicator values
+- [ ] **E3**: Update `analysis/mtf_analyzer.py` to accept pre-computed EMA/MACD from indicator library
+- [ ] **E4**: Add indicator-based methods to `analysis/breakout_filters.py` — e.g., `check_bollinger_squeeze` using `BollingerBands` indicator class
+- [ ] **E5**: Create `src/lib/indicators/presets.py` — pre-configured indicator groups for common use cases:
+  - `SCALP_PRESET` — EMA(9), EMA(21), RSI(14), ATR(14), VWAP
+  - `SWING_PRESET` — EMA(21), EMA(50), EMA(200), MACD, RSI(14), ATR(14), BollingerBands
+  - `REGIME_PRESET` — ATR(14), BollingerBands, ChoppinessIndex
+- [ ] **E6**: Write integration tests: `tests/test_indicator_analysis_integration.py` — verify that `analysis/confluence.py` produces identical results when using indicator library vs its old inline math
+
+**Acceptance**: Analysis modules can optionally consume pre-computed indicators from the library. Presets make it easy to spin up common indicator sets. Integration tests confirm no regression.
+
+---
+
+### INDICATORS-F: Reference Code — Evaluate & Decide
+
+The `reference/` directory (now deleted) contained additional code beyond indicators. Here's the triage of what was useful vs not needed:
+
+#### ✅ Already integrated (copied):
+- `reference/indicators/` → copied to `src/lib/indicators/`
+
+#### 🟡 Potentially useful — evaluate later:
+| Reference Module | What It Does | Project Equivalent | Recommendation |
+|---|---|---|---|
+| `reference/strategy/performance/tracker.py` | `PerformanceTracker` — equity curve, Sharpe, drawdown | Partial overlap with `services/engine/risk.py` | **Evaluate** — could enhance the existing risk module |
+| `reference/strategy/positions/manager.py` | Signal-driven position manager with risk-based sizing | Already have `services/engine/position_manager.py` | **Skip** — existing is more mature (bracket phases, TP1-3, EMA trail) |
+| `reference/strategy/optimization/parameter.py` | Optuna optimizer with Pine Script export | Already have `trading/engine.py` `run_optimization` | **Skip** — existing Optuna integration is sufficient |
+| `reference/strategy/walk_forward/tester.py` | Walk-forward analysis with robust params | No direct equivalent | **Future** — valuable for v9+ CNN training validation |
+| `reference/strategy/models/ensemble.py` | Weighted voting ensemble of multiple strategies | No direct equivalent | **Future** — useful when running multiple strategy variants |
+| `reference/strategy/selector.py` | Dynamic strategy selection (ADX + vol) | Partial overlap with `analysis/regime.py` | **Skip** — regime detector serves this purpose |
+| `reference/strategy/signals/generator.py` | Configurable signal generator wrapper | No direct equivalent | **Low priority** — simple wrapper, easy to build when needed |
+| `reference/helpers/interpolation.py` | Gap-filling strategies (linear/quadratic/polynomial) | No equivalent | **Future** — useful for data quality pipeline |
+| `reference/helpers/retry.py` | Async retry with exponential backoff | No equivalent | **Future** — useful for integration clients |
+| `reference/helpers/validate_config.py` | YAML/JSON config validation against schemas | No equivalent | **Future** — nice-to-have for config safety |
+| `reference/strategy/backtest/` | Full backtesting framework (broker, portfolio, engine) | Already have `trading/strategies/backtesting.py` + `backtesting.py` lib | **Skip** — existing framework is simpler and working |
+| `reference/strategy/analyzers/` | Backtrader-style post-backtest analyzers | No direct equivalent | **Low priority** — would need Backtrader integration |
+| `reference/strategy/confirmations/` | Signal confirmation logic (pullbacks, scoring) | Partial overlap with `analysis/signal_quality.py` | **Skip** — existing scorer is more comprehensive |
+| `reference/strategy/core/` | Base strategy + enums + risk + execution | Covered by `trading/strategies/` | **Skip** — different architecture |
+| `reference/strategy/trainer.py` | LogReg + XGBoost model training | Already have CNN pipeline in `breakout_cnn.py` | **Skip** — different ML approach |
+| `reference/core/` | Full app infrastructure (lifecycle, middleware, websocket, telemetry) | Already have `services/` architecture | **Skip** — completely different framework |
+| `reference/helpers/cache.py`, `staging.py`, `chunk.py` etc. | Data pipeline helpers for the old project | Already have `services/data/resolver.py` + `cache.py` | **Skip** — old project's data pipeline |
+
+#### ❌ Not needed:
+- `reference/core/` — entire old app infrastructure (lifecycle, middleware, websocket, telemetry, security, etc.) — incompatible architecture
+- `reference/strategy/backtest/` — full Backtrader-style engine — we use the `backtesting.py` library instead
+- `reference/strategy/assets/` — asset classification/aliasing — we have `core/asset_registry.py` which is more complete
+- `reference/helpers/fetch_stage.py`, `process_data.py`, `staging.py` — old data pipeline, we have `services/data/resolver.py`
+
+---
+
+### INDICATORS-G: Cleanup & Documentation
+
+- [ ] **G1**: Add docstring to `src/lib/indicators/__init__.py` explaining the package structure, how to use indicators (registry, factory, manager, direct import), and the category system
+- [ ] **G2**: Add `src/lib/indicators/README.md` with usage examples:
+  - Single indicator: `rsi = RSI(period=14); result = rsi(df)`
+  - Factory: `ind = IndicatorFactory.create("rsi", period=14)`
+  - Manager: `mgr = IndicatorManager(); mgr.add_indicator(...); mgr.calculate_all(df)`
+  - Helpers: `from lib.indicators.helpers import ema, rsi, atr`
+- [ ] **G3**: Verify the `reference/` directory has been deleted
+- [ ] **G4**: Update `docs/architecture.md` to document the new `src/lib/indicators/` package and the analysis sub-package reorganization
+- [ ] **G5**: Run full lint (`ruff check src/lib/indicators/`) and fix any issues
+- [ ] **G6**: Ensure all `__init__.py` files have proper `__all__` exports
+
+**Acceptance**: Clean lint, complete docs, no dangling references to `reference/`.
+
+---
+
+### Task Execution Order
+
+```
+INDICATORS-A (fix imports)      ← BLOCKING, do first
+    ↓
+INDICATORS-B (deduplicate)      ← depends on A
+    ↓
+INDICATORS-C (extract math)     ← depends on B (need clean indicator lib)
+    ↓
+INDICATORS-D (reorg analysis)   ← independent of C, can parallel
+    ↓
+INDICATORS-E (wire together)    ← depends on C + D
+    ↓
+INDICATORS-F (evaluate ref)     ← independent, advisory only
+    ↓
+INDICATORS-G (cleanup + docs)   ← do last
+```
+
+**Estimated effort**: ~3-4 days of focused AI-assisted work.
+**Risk**: Import path changes (A) and math replacement (C) are the highest-risk tasks — must have comparison tests to verify numerical equivalence.
