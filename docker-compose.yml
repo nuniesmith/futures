@@ -3,6 +3,7 @@
 # =============================================================================
 #
 # Services:
+#   base       — shared Python deps image (data/engine/web inherit from this)
 #   postgres   — durable storage (journal, historical opts, alerts)
 #   redis      — hot cache (latest Ruby metrics, live positions, 1m bars)
 #   data       — FastAPI REST + SSE API (port 8050); bar cache, Kraken feed,
@@ -14,6 +15,7 @@
 #   grafana    — dashboards & visualization
 #
 # Docker Hub repo (built by CI/CD):
+#   nuniesmith/futures:base       — shared Python deps (arm64 + amd64)
 #   nuniesmith/futures:data       — data API service (arm64 + amd64)
 #   nuniesmith/futures:engine     — background engine worker (arm64 + amd64)
 #   nuniesmith/futures:web        — HTMX dashboard (arm64 + amd64)
@@ -22,8 +24,12 @@
 #   nuniesmith/futures:grafana    — Grafana with baked-in dashboards (arm64 + amd64)
 #   nuniesmith/futures:latest     — alias for :data (default pull)
 #
+# Build order (handled automatically by depends_on + profiles):
+#   1. docker compose build base          ← slow once; cached until pyproject.toml changes
+#   2. docker compose build data engine web  ← fast; only copies src/
+#
 # Usage:
-#   docker compose up -d --build                            # Pi services
+#   docker compose up -d --build                            # all CPU services
 #   docker compose --profile training up -d --build         # + trainer (GPU rig)
 #   docker compose logs -f data
 #   docker compose logs -f engine
@@ -33,6 +39,33 @@
 # =============================================================================
 
 services:
+    # -------------------------------------------------------------------------
+    # Base — shared Python runtime image
+    #
+    # Installs the full pyproject.toml dependency set ONCE into a named image
+    # (nuniesmith/futures:base).  The data, engine, and web service Dockerfiles
+    # all use FROM nuniesmith/futures:base so they skip pip install entirely.
+    #
+    # This service has no running container — it exists purely as a build
+    # target.  The image: tag makes it referenceable by child services and
+    # by the CI/CD push pipeline.
+    #
+    # Rebuild this when pyproject.toml changes:
+    #   docker compose build base
+    # All other rebuilds (src/ changes) skip this and reuse the cached layer.
+    # -------------------------------------------------------------------------
+    base:
+        image: nuniesmith/futures:base
+        build:
+            context: .
+            dockerfile: docker/base/Dockerfile
+        # No ports, volumes, env, or restart policy — build-only target.
+        # The `profiles` trick keeps it out of `docker compose up` so it
+        # never spawns a running container, but `docker compose build base`
+        # and explicit `docker compose build` still work.
+        profiles:
+            - base
+
     # -------------------------------------------------------------------------
     # PostgreSQL — durable storage
     # -------------------------------------------------------------------------
@@ -102,6 +135,11 @@ services:
         build:
             context: .
             dockerfile: docker/data/Dockerfile
+            # Ensure the base image is built before this service.
+            # Docker Compose resolves this as a build-time dependency so
+            # `docker compose build` always builds base first.
+            additional_contexts:
+                base: docker-image://nuniesmith/futures:base
         restart: unless-stopped
         ports:
             - "8050:8000"
@@ -168,6 +206,8 @@ services:
         build:
             context: .
             dockerfile: docker/engine/Dockerfile
+            additional_contexts:
+                base: docker-image://nuniesmith/futures:base
         restart: unless-stopped
         shm_size: 2gb
         env_file:
@@ -221,6 +261,8 @@ services:
         build:
             context: .
             dockerfile: docker/web/Dockerfile
+            additional_contexts:
+                base: docker-image://nuniesmith/futures:base
         restart: unless-stopped
         ports:
             - "8180:8080"
@@ -488,3 +530,25 @@ volumes:
     app_data:
     prometheus_data:
     grafana_data:
+
+# =============================================================================
+# Build notes
+# =============================================================================
+#
+# Normal workflow (source-only change — base cache reused):
+#   docker compose build data engine web
+#   docker compose up -d
+#
+# After changing pyproject.toml (new/updated dependency):
+#   docker compose build base          # reinstalls all deps (~2–5 min once)
+#   docker compose build data engine web  # copies new site-packages (~10s each)
+#   docker compose up -d
+#
+# Full clean rebuild from scratch:
+#   docker compose build --no-cache base
+#   docker compose build data engine web
+#
+# The trainer image is independent (CUDA base + [gpu] extras) and is built
+# separately:
+#   docker compose --profile training build trainer
+# =============================================================================

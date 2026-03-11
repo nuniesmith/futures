@@ -1,66 +1,53 @@
-# Dockerfile.data — Data Service (FastAPI)
-# Thin API layer: REST + SSE endpoints, bar cache management, Redis reads.
-# Delegates to lib.services.data.main via entrypoints/data/main.py.
+# =============================================================================
+# Ruby Futures — Data Service
+# =============================================================================
+#
+# Inherits ALL Python dependencies from the shared base image.
+# The base image installs the full pyproject.toml dependency set once;
+# this Dockerfile only copies in the application source and config.
+#
+# Rebuild triggers:
+#   pyproject.toml changed  →  rebuild base first, then this
+#   src/ or static/ changed →  rebuild this only (base cache is reused)
+#
+# Build:
+#   docker compose build base   # if deps changed
+#   docker compose build data
+# =============================================================================
 
-# ---------------------------------------------------------------------------
-# Stage 1: Install dependencies
-# ---------------------------------------------------------------------------
-FROM python:3.13-slim AS deps
+FROM nuniesmith/futures:base
 
-WORKDIR /app
-
-# Copy only dependency metadata first (cache-friendly layer).
-# Hatchling needs the package dir to exist for the build to succeed.
-COPY pyproject.toml .
-COPY README.md .
-COPY src/lib/__init__.py src/lib/__init__.py
-
-RUN pip install --no-cache-dir .
-
-# ---------------------------------------------------------------------------
-# Stage 2: Runtime image
-# ---------------------------------------------------------------------------
-FROM python:3.13-slim AS runtime
-
-# libpq5   — psycopg binary needs the Postgres client lib at runtime
-# libgomp1 — needed by numpy/scipy compiled extensions
+# Runtime-only apt packages not already in the base image.
+# bash is needed by entrypoint.sh (uses bash-specific syntax).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libpq5 \
-        libgomp1 \
+        bash \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy installed packages + console scripts from the deps stage
-COPY --from=deps /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
-COPY --from=deps /usr/local/bin /usr/local/bin
-
-# Copy the full src/ tree (services + shared modules)
+# Application source — the only layer that changes on normal dev cycles.
 COPY src/ ./src/
 
-# Copy static assets (trading dashboard HTML, etc.)
+# Static assets (trading dashboard HTML, JS, CSS)
 COPY static/ ./static/
 
-# Copy the entrypoint shell script
+# Service entrypoint
 COPY docker/data/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Create data directory for SQLite journal / any local cache
+# Runtime data directory (SQLite journal, local bar cache)
 RUN mkdir -p /app/data
 
-# PYTHONPATH: bare imports resolve from /app/src
-ENV PYTHONPATH="/app/src"
-
-# Environment defaults (override via compose or docker run -e)
+# Service-specific environment defaults (all overridable via compose)
 ENV DATA_SERVICE_HOST=0.0.0.0
 ENV DATA_SERVICE_PORT=8000
-ENV LOG_LEVEL=info
-ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${DATA_SERVICE_PORT:-8000}/health')" || exit 1
+    CMD python -c \
+        "import urllib.request; urllib.request.urlopen('http://localhost:${DATA_SERVICE_PORT:-8000}/health')" \
+    || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]

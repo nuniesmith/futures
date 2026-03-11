@@ -1,66 +1,42 @@
-# Dockerfile.engine — Engine Worker
-# Runs the DashboardEngine: Ruby modules, optimization, backtesting,
-# daily focus computation, session-aware scheduling, and live risk publishing.
+# =============================================================================
+# Ruby Futures — Engine Worker
+# =============================================================================
 #
-# The Data Service (FastAPI REST + SSE) now runs in its own container built
-# from docker/data/Dockerfile. The engine publishes computed state to Redis
-# for the data service to serve.
+# Inherits ALL Python dependencies from the shared base image.
+# The base image installs the full pyproject.toml dependency set once;
+# this Dockerfile only copies in the application source and scripts.
 #
-# CPU-only image — no CUDA/PyTorch. CNN inference uses the cpu-fallback path.
-# Pull the latest trained model with:  bash scripts/sync_models.sh
+# Rebuild triggers:
+#   pyproject.toml changed  →  rebuild base first, then this
+#   src/ or scripts/ changed →  rebuild this only (base cache is reused)
+#
+# Build:
+#   docker compose build base   # if deps changed
+#   docker compose build engine
+# =============================================================================
 
-# ---------------------------------------------------------------------------
-# Stage 1: Install dependencies
-# ---------------------------------------------------------------------------
-FROM python:3.13-slim AS deps
+FROM nuniesmith/futures:base
 
-WORKDIR /app
-
-# Copy only dependency metadata first (cache-friendly layer).
-# Hatchling needs the package dir to exist for the build to succeed.
-COPY pyproject.toml .
-COPY README.md .
-COPY src/lib/__init__.py src/lib/__init__.py
-
-RUN pip install --no-cache-dir .
-
-# ---------------------------------------------------------------------------
-# Stage 2: Runtime image
-# ---------------------------------------------------------------------------
-FROM python:3.13-slim AS runtime
-
-# libpq5   — psycopg binary needs the Postgres client lib at runtime
-# libgomp1 — needed by numpy/scipy compiled extensions
-# bash     — entrypoint.sh uses #!/bin/bash
+# bash is needed by entrypoint.sh
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libpq5 \
-        libgomp1 \
         bash \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy installed packages + console scripts from the deps stage
-COPY --from=deps /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
-COPY --from=deps /usr/local/bin /usr/local/bin
-
-# Copy the full src/ tree (engine + shared modules)
+# Application source — the only layer that changes on normal dev cycles.
 COPY src/ ./src/
 
-# Copy the entrypoint
+# Entrypoint
 COPY docker/engine/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Copy scripts/ tree (sync_models, monitoring helpers, etc.)
+# Scripts (sync_models, monitoring helpers, etc.)
 COPY scripts/ ./scripts/
 
 # Persistent data directory (journal, model cache)
 RUN mkdir -p /app/data
-
-ENV PYTHONPATH="/app/src"
-ENV PYTHONUNBUFFERED=1
-ENV LOG_LEVEL=info
 
 # Health check — the engine worker writes a heartbeat file every cycle.
 # No HTTP port is exposed; the data service owns port 8000.
