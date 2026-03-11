@@ -295,16 +295,17 @@ class MassiveDataProvider:
 
         # --- Tier 1: Strict active contracts on today's date (original) ---
         try:
-            contracts = list(
-                client.list_futures_contracts(
-                    product_code=product_code,
-                    active=True,
-                    type="single",
-                    date=today_str,
-                    limit=10,
-                    sort="date",
+            with self._lock:
+                contracts = list(
+                    client.list_futures_contracts(
+                        product_code=product_code,
+                        active=True,
+                        type="single",
+                        date=today_str,
+                        limit=10,
+                        sort="date",
+                    )
                 )
-            )
             active = [c for c in contracts if getattr(c, "active", True) and _is_outright(c)]
             if active:
                 active.sort(key=_sort_by_expiry)
@@ -324,14 +325,15 @@ class MassiveDataProvider:
 
         # --- Tier 2: All contracts, filter to future expiration ---
         try:
-            contracts = list(
-                client.list_futures_contracts(
-                    product_code=product_code,
-                    type="single",
-                    limit=20,
-                    sort="date",
+            with self._lock:
+                contracts = list(
+                    client.list_futures_contracts(
+                        product_code=product_code,
+                        type="single",
+                        limit=20,
+                        sort="date",
+                    )
                 )
-            )
             # Keep only outrights whose last_trade_date is in the future
             future_contracts = [
                 c
@@ -446,16 +448,17 @@ class MassiveDataProvider:
 
         try:
             client = self._client  # already checked not None above
-            aggs = list(
-                client.list_futures_aggregates(
-                    ticker=massive_ticker,
-                    resolution=resolution,
-                    window_start_gte=start_str,
-                    window_start_lte=end_str,
-                    limit=50000,
-                    sort="asc",
+            with self._lock:
+                aggs = list(
+                    client.list_futures_aggregates(
+                        ticker=massive_ticker,
+                        resolution=resolution,
+                        window_start_gte=start_str,
+                        window_start_lte=end_str,
+                        limit=50000,
+                        sort="asc",
+                    )
                 )
-            )
 
             if not aggs:
                 logger.warning(
@@ -553,12 +556,13 @@ class MassiveDataProvider:
 
         try:
             client = self._client  # already checked not None above
-            snapshots = list(
-                client.get_futures_snapshot(
-                    product_code=product_code,
-                    limit=5,
+            with self._lock:
+                snapshots = list(
+                    client.get_futures_snapshot(
+                        product_code=product_code,
+                        limit=5,
+                    )
                 )
-            )
 
             if not snapshots:
                 return None
@@ -640,12 +644,13 @@ class MassiveDataProvider:
         try:
             client = self._client  # already checked not None above
             codes_str = ",".join(sorted(product_codes))
-            snapshots = list(
-                client.get_futures_snapshot(
-                    product_code_any_of=codes_str,
-                    limit=50,
+            with self._lock:
+                snapshots = list(
+                    client.get_futures_snapshot(
+                        product_code_any_of=codes_str,
+                        limit=50,
+                    )
                 )
-            )
 
             # Index by product code
             snap_by_code: dict[str, dict] = {}
@@ -721,14 +726,15 @@ class MassiveDataProvider:
 
         try:
             client = self._client  # already checked not None above
-            trades = list(
-                client.list_futures_trades(
-                    ticker=massive_ticker,
-                    timestamp_gte=start_str,
-                    limit=limit,
-                    sort="asc",
+            with self._lock:
+                trades = list(
+                    client.list_futures_trades(
+                        ticker=massive_ticker,
+                        timestamp_gte=start_str,
+                        limit=limit,
+                        sort="asc",
+                    )
                 )
-            )
 
             if not trades:
                 return pd.DataFrame()
@@ -764,15 +770,16 @@ class MassiveDataProvider:
         try:
             client = self._client  # already checked not None above
             today_str = datetime.now(tz=_EST).strftime("%Y-%m-%d")
-            contracts = list(
-                client.list_futures_contracts(
-                    product_code=product_code,
-                    active=True,
-                    date=today_str,
-                    limit=limit,
-                    sort="date",
+            with self._lock:
+                contracts = list(
+                    client.list_futures_contracts(
+                        product_code=product_code,
+                        active=True,
+                        date=today_str,
+                        limit=limit,
+                        sort="date",
+                    )
                 )
-            )
 
             result = []
             for c in contracts:
@@ -823,12 +830,13 @@ class MassiveDataProvider:
 
         try:
             client = self._client
-            contracts = list(
-                client.list_futures_contracts(
-                    ticker=ticker,
-                    limit=1,
+            with self._lock:
+                contracts = list(
+                    client.list_futures_contracts(
+                        ticker=ticker,
+                        limit=1,
+                    )
                 )
-            )
 
             if not contracts:
                 return None
@@ -899,7 +907,8 @@ class MassiveDataProvider:
             if asset_sub_class:
                 kwargs["asset_sub_class"] = asset_sub_class
 
-            products = list(client.list_futures_products(**kwargs))
+            with self._lock:
+                products = list(client.list_futures_products(**kwargs))
 
             result = []
             for p in products:
@@ -983,7 +992,8 @@ class MassiveDataProvider:
             if trading_venue:
                 kwargs["trading_venue"] = trading_venue
 
-            schedules = list(client.list_futures_schedules(**kwargs))
+            with self._lock:
+                schedules = list(client.list_futures_schedules(**kwargs))
 
             result = []
             for s in schedules:
@@ -1049,14 +1059,15 @@ class MassiveDataProvider:
 
         try:
             client = self._client
-            quotes = list(
-                client.list_futures_quotes(
-                    ticker=massive_ticker,
-                    timestamp_gte=start_str,
-                    limit=limit,
-                    sort="asc",
+            with self._lock:
+                quotes = list(
+                    client.list_futures_quotes(
+                        ticker=massive_ticker,
+                        timestamp_gte=start_str,
+                        limit=limit,
+                        sort="asc",
+                    )
                 )
-            )
 
             if not quotes:
                 return pd.DataFrame()
@@ -1119,7 +1130,8 @@ class MassiveDataProvider:
             if product_code:
                 kwargs["product_code"] = product_code
 
-            statuses = list(client.list_futures_market_statuses(**kwargs))
+            with self._lock:
+                statuses = list(client.list_futures_market_statuses(**kwargs))
 
             result = []
             for ms in statuses:
@@ -1154,7 +1166,8 @@ class MassiveDataProvider:
 
         try:
             client = self._client
-            exchanges = list(client.list_futures_exchanges(limit=100))
+            with self._lock:
+                exchanges = list(client.list_futures_exchanges(limit=100))
 
             result = []
             for ex in exchanges:

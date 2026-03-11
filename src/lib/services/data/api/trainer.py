@@ -19,6 +19,8 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 from typing import Any
@@ -45,6 +47,9 @@ _TRAINER_API_KEY: str = os.getenv("TRAINER_API_KEY", "").strip()
 
 # Module-level httpx client — reused across requests
 _trainer_http_client: httpx.AsyncClient | None = None
+
+# Lock to prevent concurrent recreation of the shared client
+_trainer_http_client_lock: asyncio.Lock | None = None
 
 
 def _trainer_auth_headers() -> dict[str, str]:
@@ -78,23 +83,54 @@ def _set_trainer_url(url: str) -> None:
         logger.warning("Could not persist trainer URL to Redis: %s", exc)
 
 
+def _make_http_client(base_url: str) -> httpx.AsyncClient:
+    """Create a fresh async httpx client for the trainer service."""
+    return httpx.AsyncClient(
+        base_url=base_url,
+        timeout=httpx.Timeout(120.0, connect=5.0),
+        follow_redirects=True,
+        limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+    )
+
+
 async def _get_http_client(base_url: str) -> httpx.AsyncClient:
-    """Return a reusable async httpx client for the given base URL."""
-    global _trainer_http_client
-    if (
-        _trainer_http_client is None
-        or _trainer_http_client.is_closed
-        or str(_trainer_http_client.base_url).rstrip("/") != base_url.rstrip("/")
-    ):
-        if _trainer_http_client and not _trainer_http_client.is_closed:
-            await _trainer_http_client.aclose()
-        _trainer_http_client = httpx.AsyncClient(
-            base_url=base_url,
-            timeout=httpx.Timeout(120.0, connect=5.0),
-            follow_redirects=True,
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-        )
+    """Return a reusable async httpx client for the given base URL.
+
+    Thread-safe: uses an asyncio lock to prevent concurrent recreation.
+    """
+    global _trainer_http_client, _trainer_http_client_lock
+
+    # Lazily create the lock (must happen inside a running event loop)
+    if _trainer_http_client_lock is None:
+        _trainer_http_client_lock = asyncio.Lock()
+
+    async with _trainer_http_client_lock:
+        if (
+            _trainer_http_client is None
+            or _trainer_http_client.is_closed
+            or str(_trainer_http_client.base_url).rstrip("/") != base_url.rstrip("/")
+        ):
+            if _trainer_http_client and not _trainer_http_client.is_closed:
+                await _trainer_http_client.aclose()
+            _trainer_http_client = _make_http_client(base_url)
     return _trainer_http_client
+
+
+async def _invalidate_http_client() -> None:
+    """Close and discard the shared client so the next call gets a fresh one.
+
+    Called after a ReadError to avoid reusing a stale keepalive connection.
+    """
+    global _trainer_http_client, _trainer_http_client_lock
+
+    if _trainer_http_client_lock is None:
+        _trainer_http_client_lock = asyncio.Lock()
+
+    async with _trainer_http_client_lock:
+        if _trainer_http_client is not None and not _trainer_http_client.is_closed:
+            with contextlib.suppress(Exception):
+                await _trainer_http_client.aclose()
+        _trainer_http_client = None
 
 
 async def _probe_trainer(url: str) -> dict[str, Any]:
@@ -186,57 +222,84 @@ async def proxy_trainer_api(request: Request, path: str) -> Response:
     if request.url.query:
         upstream_path = f"{upstream_path}?{request.url.query}"
 
-    try:
-        body = await request.body()
-        # Forward the request — strip hop-by-hop headers and any
-        # Authorization the browser may have sent so we always use the
-        # server-side TRAINER_API_KEY instead.
-        skip = {
-            "host",
-            "connection",
-            "keep-alive",
-            "transfer-encoding",
-            "te",
-            "trailer",
-            "upgrade",
-            "content-length",
-            "authorization",
-        }
-        fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
-        # Inject the server-side Bearer token so the trainer authenticates us.
-        fwd_headers.update(_trainer_auth_headers())
+    body = await request.body()
+    # Forward the request — strip hop-by-hop headers and any
+    # Authorization the browser may have sent so we always use the
+    # server-side TRAINER_API_KEY instead.
+    skip = {
+        "host",
+        "connection",
+        "keep-alive",
+        "transfer-encoding",
+        "te",
+        "trailer",
+        "upgrade",
+        "content-length",
+        "authorization",
+    }
+    fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
+    # Inject the server-side Bearer token so the trainer authenticates us.
+    fwd_headers.update(_trainer_auth_headers())
 
-        resp = await client.request(
-            method=request.method,
-            url=upstream_path,
-            headers=fwd_headers,
-            content=body or None,
-        )
+    # Retry once on ReadError — the shared keepalive connection may have
+    # gone stale (trainer restarted, server-side close mid-stream, etc.).
+    # On the first ReadError we discard the pooled client and retry with a
+    # brand-new connection before giving up.
+    for attempt in range(2):
+        try:
+            resp = await client.request(
+                method=request.method,
+                url=upstream_path,
+                headers=fwd_headers,
+                content=body or None,
+            )
 
-        excluded_resp = {"transfer-encoding", "content-encoding", "content-length"}
-        resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded_resp}
+            excluded_resp = {"transfer-encoding", "content-encoding", "content-length"}
+            resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded_resp}
 
-        return Response(
-            content=resp.content,
-            status_code=resp.status_code,
-            headers=resp_headers,
-            media_type=resp.headers.get("content-type", "application/json"),
-        )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=resp_headers,
+                media_type=resp.headers.get("content-type", "application/json"),
+            )
 
-    except httpx.ConnectError:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "error": "Trainer service unavailable",
-                "trainer_url": trainer_url,
-                "hint": "docker compose --profile training up -d trainer",
-            },
-        )
-    except httpx.TimeoutException:
-        return JSONResponse(status_code=504, content={"error": "Trainer service timed out"})
-    except Exception as exc:
-        logger.error("Trainer proxy error for %s: %s", upstream_path, exc, exc_info=True)
-        return JSONResponse(status_code=500, content={"error": str(exc)})
+        except httpx.ReadError as exc:
+            # Stale keepalive — discard the pooled client and retry once.
+            await _invalidate_http_client()
+            if attempt == 0:
+                logger.debug(
+                    "Trainer proxy ReadError for %s (attempt %d) — retrying with fresh connection: %s",
+                    upstream_path,
+                    attempt + 1,
+                    exc,
+                )
+                client = await _get_http_client(trainer_url)
+                continue
+            # Second attempt also failed — surface as 502
+            logger.warning("Trainer proxy ReadError for %s after retry: %s", upstream_path, exc)
+            return JSONResponse(
+                status_code=502,
+                content={"error": "Trainer connection reset — please retry", "detail": str(exc)},
+            )
+
+        except httpx.ConnectError:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "Trainer service unavailable",
+                    "trainer_url": trainer_url,
+                    "hint": "docker compose --profile training up -d trainer",
+                },
+            )
+        except httpx.TimeoutException:
+            return JSONResponse(status_code=504, content={"error": "Trainer service timed out"})
+        except Exception as exc:
+            logger.error("Trainer proxy error for %s: %s", upstream_path, exc, exc_info=True)
+            return JSONResponse(status_code=500, content={"error": str(exc)})
+
+    # Unreachable — loop always returns, but satisfies type checker
+    return JSONResponse(status_code=500, content={"error": "Unexpected proxy loop exit"})
 
 
 # ---------------------------------------------------------------------------
