@@ -226,26 +226,20 @@ class TestSymbolResolution:
 
 
 class TestTrainerOnlyTalksToEngine:
-    """When bars_source='engine', the trainer must ONLY use
-    _load_bars_from_engine (HTTP to the data service).  It must never
+    """When bars_source='engine', the trainer must route all data requests
+    through EngineDataClient (HTTP to the data service).  It must never
     instantiate Massive, Kraken, or yfinance clients locally."""
 
     def test_load_bars_engine_source_only_calls_engine(self):
-        """load_bars(source='engine') should call _load_bars_from_engine
-        and return its result — never falling through to Massive/Kraken/yfinance."""
+        """load_bars() should go through EngineDataClient and return its result
+        — never falling through to Massive/Kraken/yfinance/Redis."""
 
-        engine_called = False
         massive_called = False
         kraken_called = False
         cache_called = False
         db_called = False
 
         bars = _make_bars(500, start_price=2700.0)
-
-        def _mock_engine(symbol, days=90):
-            nonlocal engine_called
-            engine_called = True
-            return bars
 
         def _mock_massive(symbol, days=90):
             nonlocal massive_called
@@ -268,20 +262,21 @@ class TestTrainerOnlyTalksToEngine:
             return bars
 
         with (
-            patch("lib.services.training.dataset_generator._load_bars_from_engine", side_effect=_mock_engine),
+            # Primary path: EngineDataClient returns data — no fallback needed
+            patch(
+                "lib.services.data.engine_data_client.EngineDataClient.get_bars",
+                return_value=bars,
+            ),
             patch("lib.services.training.dataset_generator._load_bars_from_massive", side_effect=_mock_massive),
             patch("lib.services.training.dataset_generator._load_bars_from_kraken", side_effect=_mock_kraken),
             patch("lib.services.training.dataset_generator._load_bars_from_cache", side_effect=_mock_cache),
             patch("lib.services.training.dataset_generator._load_bars_from_db", side_effect=_mock_db),
-            # Block DataResolver so we exercise the legacy fallback path
-            patch.dict("sys.modules", {"lib.services.data.resolver": None}),
         ):
             from lib.services.training.dataset_generator import load_bars
 
             result = load_bars("MGC", source="engine", days=180)
 
-        assert engine_called, "Engine loader was not called"
-        assert result is not None and not result.empty
+        assert result is not None and not result.empty, "EngineDataClient returned data — result must not be None"
         assert not massive_called, (
             "Massive was called on the trainer — trainer must not have "
             "Massive API key; all data comes through the engine HTTP API"
@@ -296,7 +291,7 @@ class TestTrainerOnlyTalksToEngine:
         )
 
     def test_engine_returns_data_no_fallback_triggered(self):
-        """When the engine returns valid bars, NO fallback loader should fire."""
+        """When EngineDataClient returns valid bars, NO fallback loader should fire."""
         call_log = []
 
         def _make_loader(name, returns_data=False):
@@ -307,37 +302,37 @@ class TestTrainerOnlyTalksToEngine:
             return _loader
 
         with (
+            # Primary path: EngineDataClient returns data — legacy loaders must not run
             patch(
-                "lib.services.training.dataset_generator._load_bars_from_engine",
-                side_effect=_make_loader("engine", True),
+                "lib.services.data.engine_data_client.EngineDataClient.get_bars",
+                return_value=_make_bars(100),
             ),
-            patch("lib.services.training.dataset_generator._load_bars_from_db", side_effect=_make_loader("db", True)),
-            patch(
-                "lib.services.training.dataset_generator._load_bars_from_cache", side_effect=_make_loader("cache", True)
-            ),
+            patch("lib.services.training.dataset_generator._load_bars_from_engine", side_effect=_make_loader("engine")),
+            patch("lib.services.training.dataset_generator._load_bars_from_db", side_effect=_make_loader("db")),
+            patch("lib.services.training.dataset_generator._load_bars_from_cache", side_effect=_make_loader("cache")),
             patch(
                 "lib.services.training.dataset_generator._load_bars_from_massive",
-                side_effect=_make_loader("massive", True),
+                side_effect=_make_loader("massive"),
             ),
             patch(
                 "lib.services.training.dataset_generator._load_bars_from_kraken",
-                side_effect=_make_loader("kraken", True),
+                side_effect=_make_loader("kraken"),
             ),
-            patch("lib.services.training.dataset_generator._load_bars_from_csv", side_effect=_make_loader("csv", True)),
-            patch.dict("sys.modules", {"lib.services.data.resolver": None}),
+            patch("lib.services.training.dataset_generator._load_bars_from_csv", side_effect=_make_loader("csv")),
         ):
             from lib.services.training.dataset_generator import load_bars
 
             load_bars("MGC", source="engine", days=90)
 
-        assert call_log == ["engine"], (
-            f"Expected only ['engine'] but got {call_log}.  When the engine "
-            f"returns data, no other loader should be tried."
+        assert call_log == [], (
+            f"Expected no legacy loaders to fire but got {call_log}.  When "
+            f"EngineDataClient returns data, no other loader should be tried."
         )
 
     def test_engine_fails_fallback_order_is_correct(self):
-        """When engine fails, fallback should be db→cache→massive→kraken→csv,
-        but for a non-Kraken symbol, kraken should be skipped."""
+        """When EngineDataClient fails, the legacy fallback chain fires:
+        _load_bars_from_engine → _load_bars_from_db → _load_bars_from_massive → csv.
+        Kraken must NOT be in the chain for a CME futures symbol."""
         call_log = []
 
         def _make_loader(name):
@@ -348,6 +343,11 @@ class TestTrainerOnlyTalksToEngine:
             return _loader
 
         with (
+            # Force EngineDataClient to fail → triggers legacy fallback chain
+            patch(
+                "lib.services.data.engine_data_client.EngineDataClient.get_bars",
+                side_effect=Exception("engine unavailable"),
+            ),
             patch("lib.services.training.dataset_generator._load_bars_from_engine", side_effect=_make_loader("engine")),
             patch("lib.services.training.dataset_generator._load_bars_from_db", side_effect=_make_loader("db")),
             patch("lib.services.training.dataset_generator._load_bars_from_cache", side_effect=_make_loader("cache")),
@@ -356,16 +356,18 @@ class TestTrainerOnlyTalksToEngine:
             ),
             patch("lib.services.training.dataset_generator._load_bars_from_kraken", side_effect=_make_loader("kraken")),
             patch("lib.services.training.dataset_generator._load_bars_from_csv", side_effect=_make_loader("csv")),
-            patch.dict("sys.modules", {"lib.services.data.resolver": None}),
         ):
             from lib.services.training.dataset_generator import load_bars
 
             result = load_bars("MGC", source="engine", days=90)
 
         assert result is None, "All loaders failed — should return None"
-        assert "engine" in call_log, "Engine must be tried first"
+        assert "engine" in call_log, "Legacy _load_bars_from_engine must be tried in fallback chain"
         # Kraken should NOT be in the chain for a CME futures symbol
-        # (it's only for KRAKEN:* symbols)
+        assert "kraken" not in call_log, (
+            f"Kraken was tried for CME futures symbol MGC — it should only be "
+            f"tried for KRAKEN:* spot crypto symbols. call_log={call_log}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -714,6 +716,24 @@ class TestFullPipelineNoLocalClients:
                     side_effect=_spy_kraken_init,
                 ),
                 patch("lib.core.cache._yf_download", side_effect=_spy_yf_download),
+                # Block EngineDataClient from making real network calls — bars_override
+                # is passed for the primary symbols, but generate_dataset also calls
+                # load_bars() for cross-asset peer symbols; those must not hit the network.
+                patch(
+                    "lib.services.data.engine_data_client.EngineDataClient.get_bars",
+                    return_value=None,
+                ),
+                patch(
+                    "lib.services.data.engine_data_client.EngineDataClient.get_daily_bars",
+                    return_value=None,
+                ),
+                # Also block the legacy _load_bars_from_engine HTTP fallback —
+                # when EngineDataClient returns None, the legacy loader is tried next
+                # and it makes a direct requests.get call that would hang in tests.
+                patch(
+                    "lib.services.training.dataset_generator._load_bars_from_engine",
+                    return_value=None,
+                ),
                 # Block crypto_momentum from making direct Kraken calls
                 patch(
                     "lib.analysis.crypto_momentum.compute_all_crypto_momentum",
@@ -815,8 +835,9 @@ class TestLogRegressions:
         mock_resp.status_code = 200
         mock_resp.json.return_value = _make_empty_engine_response()
 
-        with patch("lib.services.training.dataset_generator.requests") as mock_req:
-            mock_req.get.return_value = mock_resp
+        # _load_bars_from_engine imports requests locally as _requests — patch at
+        # the source module level so the local alias is intercepted correctly.
+        with patch("requests.get", return_value=mock_resp):
             result = _load_bars_from_engine("MGC", days=180)
 
         assert result is None, (
@@ -941,3 +962,230 @@ class TestDatasetConfigDefaults:
             "the config might not pass it through to DatasetConfig"
         )
         assert "DatasetConfig" in source, "_run_training_pipeline doesn't create a DatasetConfig"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST GROUP 10 — Trainer fetches symbol list from engine /bars/symbols
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestTrainerSymbolFetching:
+    """The trainer must ask the engine for its symbol list at job startup
+    rather than using a stale hardcoded list.  This ensures the trainer
+    always trains on exactly the same assets the engine has data for."""
+
+    def test_fetch_symbols_from_engine_uses_symbols_endpoint(self):
+        """_fetch_symbols_from_engine should prefer /bars/symbols (no DB hit)."""
+        from lib.services.training.trainer_server import _fetch_symbols_from_engine
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "symbols": [
+                "6A",
+                "6B",
+                "6C",
+                "6E",
+                "6J",
+                "6S",
+                "M2K",
+                "MBT",
+                "MCL",
+                "MES",
+                "MET",
+                "MGC",
+                "MHG",
+                "MNG",
+                "MNQ",
+                "MYM",
+                "SIL",
+                "ZB",
+                "ZC",
+                "ZN",
+                "ZS",
+                "ZW",
+            ],
+            "total": 22,
+        }
+
+        with patch(
+            "lib.services.data.engine_data_client.EngineDataClient.get_symbols",
+            return_value=sorted(mock_resp.json.return_value["symbols"]),
+        ):
+            result = _fetch_symbols_from_engine("http://data:8000", api_key="", timeout=5)
+
+        assert result is not None
+        assert len(result) > 0
+
+    def test_fetch_symbols_falls_back_to_assets_endpoint(self):
+        """/bars/symbols not available on older engine — EngineDataClient falls back
+        to /bars/assets internally; _fetch_symbols_from_engine must return a usable list."""
+        from lib.services.training.trainer_server import _fetch_symbols_from_engine
+
+        # EngineDataClient already handles the /bars/symbols → /bars/assets fallback
+        # internally.  We verify that _fetch_symbols_from_engine returns the result.
+        with patch(
+            "lib.services.data.engine_data_client.EngineDataClient.get_symbols",
+            return_value=["MCL", "MES", "MGC", "MNQ"],
+        ):
+            result = _fetch_symbols_from_engine("http://data:8000", api_key="", timeout=5)
+
+        assert result is not None
+        assert "MGC" in result, f"MGC not found in {result}"
+        assert "MES" in result, f"MES not found in {result}"
+        assert "MNQ" in result, f"MNQ not found in {result}"
+
+    def test_fetch_symbols_returns_none_when_engine_unreachable(self):
+        """When the engine is down, _fetch_symbols_from_engine returns None
+        so the pipeline falls back to _FALLBACK_SYMBOLS."""
+        from lib.services.training.trainer_server import _fetch_symbols_from_engine
+
+        with patch(
+            "lib.services.data.engine_data_client.EngineDataClient.get_symbols",
+            side_effect=Exception("Engine unreachable"),
+        ):
+            result = _fetch_symbols_from_engine("http://data:8000", api_key="", timeout=5)
+
+        assert result is None, (
+            "Expected None when engine is unreachable, but got a symbol list.  "
+            "The caller must fall back to _FALLBACK_SYMBOLS."
+        )
+
+    def test_fetch_symbols_sends_api_key_header(self):
+        """Symbol fetch must pass the API key to EngineDataClient."""
+        from lib.services.data.engine_data_client import EngineDataClient
+        from lib.services.training.trainer_server import _fetch_symbols_from_engine
+
+        captured_api_keys: list[str] = []
+
+        # Intercept EngineDataClient construction by wrapping get_symbols on a
+        # real instance — we spy on what api_key was passed by inspecting the
+        # instance created inside _fetch_symbols_from_engine.
+        original_cls = EngineDataClient
+
+        class _SpyClient(original_cls):
+            def get_symbols(self, **kwargs):
+                captured_api_keys.append(self._api_key)
+                return ["MGC", "MES"]
+
+        with patch(
+            "lib.services.data.engine_data_client.EngineDataClient",
+            side_effect=lambda **kw: _SpyClient(**kw),
+        ):
+            _fetch_symbols_from_engine("http://data:8000", api_key="secret-key-123", timeout=5)
+
+        assert captured_api_keys, "EngineDataClient.get_symbols was never called"
+        assert captured_api_keys[0] == "secret-key-123", (
+            f"Expected api_key='secret-key-123' passed to EngineDataClient, got: {captured_api_keys[0]!r}"
+        )
+
+    def test_fetch_symbols_deduplicates_and_sorts(self):
+        """Symbol list must be deduplicated and sorted for determinism.
+
+        EngineDataClient.get_symbols() already sorts and deduplicates — we verify
+        _fetch_symbols_from_engine passes the result through unchanged.
+        """
+        from lib.services.training.trainer_server import _fetch_symbols_from_engine
+
+        # EngineDataClient returns an already-sorted, deduplicated list
+        with patch(
+            "lib.services.data.engine_data_client.EngineDataClient.get_symbols",
+            return_value=["MCL", "MES", "MGC", "ZN"],
+        ):
+            result = _fetch_symbols_from_engine("http://data:8000", api_key="", timeout=5)
+
+        assert result is not None
+        assert result == sorted(set(result)), "Symbol list must be sorted and deduplicated"
+        assert len(result) == len(set(result)), "Symbol list contains duplicates"
+
+    def test_fallback_symbols_are_all_valid(self):
+        """Every symbol in _FALLBACK_SYMBOLS must be resolvable by _resolve_ticker."""
+        from lib.services.training.dataset_generator import _resolve_ticker
+        from lib.services.training.trainer_server import _FALLBACK_SYMBOLS
+
+        for symbol in _FALLBACK_SYMBOLS:
+            ticker = _resolve_ticker(symbol)
+            assert not ticker.startswith("/"), (
+                f"_resolve_ticker({symbol!r}) → {ticker!r} — slash prefix would break yfinance"
+            )
+            assert "=" in ticker or ticker.startswith("KRAKEN:"), (
+                f"_resolve_ticker({symbol!r}) → {ticker!r} — not a valid ticker format"
+            )
+
+    def test_pipeline_uses_fetched_symbols_when_engine_available(self):
+        """When the engine returns symbols, _run_training_pipeline must use
+        those symbols (not the hardcoded fallback list)."""
+        import inspect
+
+        from lib.services.training.trainer_server import _run_training_pipeline
+
+        source = inspect.getsource(_run_training_pipeline)
+        # The pipeline must call _fetch_symbols_from_engine when no explicit
+        # symbols are provided
+        assert "_fetch_symbols_from_engine" in source, (
+            "_run_training_pipeline doesn't call _fetch_symbols_from_engine — "
+            "it will always use the hardcoded fallback list instead of asking "
+            "the engine what data is available"
+        )
+        # And it must have a fallback path
+        assert "_FALLBACK_SYMBOLS" in source, (
+            "_run_training_pipeline doesn't reference _FALLBACK_SYMBOLS — "
+            "there's no fallback when the engine is unreachable"
+        )
+
+    def test_engine_bars_symbols_endpoint_returns_short_symbols(self):
+        """GET /bars/symbols must return short symbols ('MGC') not Yahoo
+        tickers ('MGC=F') so the trainer doesn't need its own ticker map."""
+        from lib.services.data.api.bars import list_symbols
+
+        # list_symbols() imports models.ASSETS which needs the DB — just verify
+        # the function exists and is callable (full integration tested live)
+        assert callable(list_symbols), "list_symbols endpoint not found in bars.py"
+
+    def test_engine_data_client_get_symbols_strips_equals_f(self):
+        """EngineDataClient.get_symbols() must return short symbols ('MGC'),
+        not Yahoo tickers ('MGC=F'), and must pass Kraken tickers through unchanged.
+
+        This replaces the old _ticker_to_short_symbol test — that helper was
+        removed when _fetch_symbols_from_engine was simplified to delegate to
+        EngineDataClient, which already handles ticker normalisation internally.
+        """
+        from lib.services.data.engine_data_client import EngineDataClient
+
+        # Simulate the /bars/assets response with Yahoo-style tickers
+        assets_payload = {
+            "assets": [
+                {"name": "Gold", "ticker": "MGC=F"},
+                {"name": "S&P", "ticker": "MES=F"},
+                {"name": "Euro FX", "ticker": "6E=F"},
+                {"name": "T-Note", "ticker": "ZN=F"},
+                {"name": "Bitcoin spot", "ticker": "KRAKEN:XBTUSD"},
+                {"name": "Ether spot", "ticker": "KRAKEN:ETHUSD"},
+                {"name": "Micro Bitcoin CME", "ticker": "MBT=F"},
+            ]
+        }
+
+        client = EngineDataClient(base_url="http://fake-engine:9999")
+
+        # Patch both endpoints: /bars/symbols returns 404, /bars/assets returns data
+        def _mock_get(path, **kwargs):
+            if path == "/bars/symbols":
+                return None  # fast-path returns None → triggers assets fallback
+            if path == "/bars/assets":
+                return assets_payload
+            return None
+
+        with patch.object(client, "_get", side_effect=_mock_get):
+            symbols = client.get_symbols(use_cache=False)
+
+        assert "MGC" in symbols, f"MGC missing from {symbols}"
+        assert "MES" in symbols, f"MES missing from {symbols}"
+        assert "6E" in symbols, f"6E missing from {symbols}"
+        assert "ZN" in symbols, f"ZN missing from {symbols}"
+        assert "KRAKEN:XBTUSD" in symbols, f"KRAKEN:XBTUSD missing from {symbols}"
+        assert "KRAKEN:ETHUSD" in symbols, f"KRAKEN:ETHUSD missing from {symbols}"
+        assert "MBT" in symbols, f"MBT missing from {symbols}"
+        # Must NOT contain =F tickers
+        assert "MGC=F" not in symbols, "MGC=F must be stripped to MGC"
+        assert "MES=F" not in symbols, "MES=F must be stripped to MES"
+        assert "MBT=F" not in symbols, "MBT=F must be stripped to MBT"

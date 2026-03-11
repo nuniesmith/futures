@@ -318,7 +318,7 @@ def _rolling_corr(
     ).dropna()
     if len(combined) < window:
         return pd.Series(dtype=float)
-    return combined["x"].rolling(window).corr(combined["y"])
+    return combined["x"].rolling(window).corr(combined["y"])  # type: ignore[return-value]
 
 
 def _normalise_corr(raw: float) -> float:
@@ -338,7 +338,7 @@ def _extract_close(bars: pd.DataFrame) -> pd.Series:
         s = bars["close"]
     else:
         raise ValueError(f"No 'Close' column in bars (columns: {list(bars.columns)})")
-    return s.astype(float)
+    return s.astype(float)  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------

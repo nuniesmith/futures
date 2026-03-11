@@ -929,17 +929,17 @@ def cnn_dataset_preview(
     if label != "all":
         _prefix = "good" if label.lower() == "good" else "bad"
         if "label" in df.columns:
-            df = df[df["label"].str.startswith(_prefix)]
+            df = df[df["label"].str.startswith(_prefix)]  # type: ignore[index]
 
     # Filter by breakout_type
-    if breakout_type != "all" and "breakout_type" in df.columns:
-        df = df[df["breakout_type"].str.upper() == breakout_type.upper()]
+    if breakout_type != "all" and "breakout_type" in df.columns:  # type: ignore[union-attr]
+        df = df[df["breakout_type"].str.upper() == breakout_type.upper()]  # type: ignore[index]
 
     # Filter by session — infer from breakout_time hour if session column absent
     if session != "all":
-        if "session" in df.columns:
-            df = df[df["session"].str.lower() == session.lower()]
-        elif "breakout_time" in df.columns:
+        if "session" in df.columns:  # type: ignore[union-attr]
+            df = df[df["session"].str.lower() == session.lower()]  # type: ignore[index]
+        elif "breakout_time" in df.columns:  # type: ignore[union-attr]
 
             def _hour(bt: object) -> int:
                 try:
@@ -960,7 +960,12 @@ def cnn_dataset_preview(
             }
             _range = _SESSION_HOUR_RANGES.get(session.lower())
             if _range:
-                df = df[df["breakout_time"].apply(_hour).between(_range[0], _range[1] - 1)]
+                df = df[df["breakout_time"].apply(_hour).between(_range[0], _range[1] - 1)]  # type: ignore[index]
+
+    # Re-assert DataFrame type — boolean indexing widens to ndarray in pyright
+    import pandas as _pd_cast
+
+    df = _pd_cast.DataFrame(df)
 
     filtered_rows = len(df)
 

@@ -1,7 +1,7 @@
 """
-Wave Analysis Module — ported from Ruby Pine Script.
+Wave Analysis Module.
 
-This module implements the core wave dominance tracking from fks.pine:
+This module implements the core wave dominance tracking:
   - Dynamic accelerated EMA (adaptive alpha based on momentum change)
   - Bull/bear wave tracking (magnitude + duration per wave)
   - Wave ratio: bull_avg / |bear_avg| — directional strength
@@ -48,17 +48,169 @@ logger = logging.getLogger("wave_analysis")
 # ---------------------------------------------------------------------------
 # Asset-specific tuning (ported from fks.pine barstate.isfirst block)
 # ---------------------------------------------------------------------------
+# Covers all assets in models.ASSETS (CME micro futures + Kraken spot crypto).
+#
+# Tuning guide:
+#   max_length        — controls EMA responsiveness (lower = faster)
+#   accel_multiplier  — how aggressively the EMA accelerates on big moves
+#   lookback_period   — number of completed waves to include in ratio stats
+#
+# Asset class defaults:
+#   Metals             — slow EMA (20), moderate accel, long lookback
+#   Energy             — medium EMA (20), higher accel (volatile)
+#   Equity index       — fast EMA (15–18), low accel (mean-reverting)
+#   FX futures         — medium EMA (18), low accel (range-bound)
+#   Rates (T-Note/Bond)— slow EMA (22), very low accel (macro-driven)
+#   Ags (corn/wheat)   — medium EMA (20), moderate accel (seasonal)
+#   CME crypto futures — fast EMA (14), high accel (crypto-like vol)
+#   Kraken spot crypto — very fast EMA (12), highest accel (24/7 moves)
+# ---------------------------------------------------------------------------
 
 ASSET_PARAMS: dict[str, dict[str, float | int]] = {
+    # ── Metals ──────────────────────────────────────────────────────────────
     "Gold": {"max_length": 20, "accel_multiplier": 0.015, "lookback_period": 200},
     "Silver": {"max_length": 20, "accel_multiplier": 0.015, "lookback_period": 200},
     "Copper": {"max_length": 20, "accel_multiplier": 0.015, "lookback_period": 200},
+    # ── Energy ──────────────────────────────────────────────────────────────
     "Crude Oil": {"max_length": 20, "accel_multiplier": 0.02, "lookback_period": 150},
-    "S&P": {"max_length": 20, "accel_multiplier": 0.01, "lookback_period": 150},
-    "Nasdaq": {"max_length": 20, "accel_multiplier": 0.01, "lookback_period": 150},
+    "Natural Gas": {"max_length": 18, "accel_multiplier": 0.025, "lookback_period": 150},
+    # ── Equity index ────────────────────────────────────────────────────────
+    "S&P": {"max_length": 18, "accel_multiplier": 0.01, "lookback_period": 150},
+    "Nasdaq": {"max_length": 15, "accel_multiplier": 0.01, "lookback_period": 150},
+    "Russell 2000": {"max_length": 18, "accel_multiplier": 0.012, "lookback_period": 150},
+    "Dow Jones": {"max_length": 18, "accel_multiplier": 0.01, "lookback_period": 150},
+    # ── FX futures ──────────────────────────────────────────────────────────
+    "Euro FX": {"max_length": 18, "accel_multiplier": 0.008, "lookback_period": 180},
+    "British Pound": {"max_length": 18, "accel_multiplier": 0.008, "lookback_period": 180},
+    "Japanese Yen": {"max_length": 18, "accel_multiplier": 0.008, "lookback_period": 180},
+    "Australian Dollar": {"max_length": 18, "accel_multiplier": 0.008, "lookback_period": 180},
+    "Canadian Dollar": {"max_length": 18, "accel_multiplier": 0.008, "lookback_period": 180},
+    "Swiss Franc": {"max_length": 18, "accel_multiplier": 0.008, "lookback_period": 180},
+    # ── Interest rate futures ────────────────────────────────────────────────
+    "10Y T-Note": {"max_length": 22, "accel_multiplier": 0.006, "lookback_period": 200},
+    "30Y T-Bond": {"max_length": 22, "accel_multiplier": 0.006, "lookback_period": 200},
+    # ── Agricultural futures ─────────────────────────────────────────────────
+    "Corn": {"max_length": 20, "accel_multiplier": 0.018, "lookback_period": 180},
+    "Soybeans": {"max_length": 20, "accel_multiplier": 0.018, "lookback_period": 180},
+    "Wheat": {"max_length": 20, "accel_multiplier": 0.020, "lookback_period": 180},
+    # ── CME crypto futures ───────────────────────────────────────────────────
+    "Micro Bitcoin": {"max_length": 14, "accel_multiplier": 0.030, "lookback_period": 120},
+    "Micro Ether": {"max_length": 14, "accel_multiplier": 0.030, "lookback_period": 120},
+    # ── Kraken spot crypto (24/7) ────────────────────────────────────────────
+    "BTC/USD": {"max_length": 12, "accel_multiplier": 0.035, "lookback_period": 120},
+    "ETH/USD": {"max_length": 12, "accel_multiplier": 0.035, "lookback_period": 120},
+    "SOL/USD": {"max_length": 12, "accel_multiplier": 0.040, "lookback_period": 100},
+    "LINK/USD": {"max_length": 12, "accel_multiplier": 0.040, "lookback_period": 100},
+    "AVAX/USD": {"max_length": 12, "accel_multiplier": 0.040, "lookback_period": 100},
+    "DOT/USD": {"max_length": 12, "accel_multiplier": 0.040, "lookback_period": 100},
+    "ADA/USD": {"max_length": 12, "accel_multiplier": 0.040, "lookback_period": 100},
+    "MATIC/USD": {"max_length": 12, "accel_multiplier": 0.040, "lookback_period": 100},
+    "XRP/USD": {"max_length": 12, "accel_multiplier": 0.038, "lookback_period": 100},
 }
 
-DEFAULT_PARAMS = {"max_length": 20, "accel_multiplier": 0.02, "lookback_period": 200}
+DEFAULT_PARAMS: dict[str, float | int] = {"max_length": 20, "accel_multiplier": 0.02, "lookback_period": 200}
+
+# ---------------------------------------------------------------------------
+# Ticker → asset-name lookup (built lazily from models.ASSETS / KRAKEN_CONTRACT_SPECS)
+# ---------------------------------------------------------------------------
+# Allows callers that only have a ticker (e.g. "MGC=F", "KRAKEN:XBTUSD") to
+# resolve the human-readable asset name used as the key in ASSET_PARAMS.
+
+_ticker_to_asset_name: dict[str, str] | None = None
+
+
+def _build_ticker_to_asset_name() -> dict[str, str]:
+    """Build a reverse map from Yahoo/Kraken ticker → asset name string.
+
+    Reads from ``models.CONTRACT_SPECS`` and ``models.KRAKEN_CONTRACT_SPECS``
+    so the map always reflects the current set of tracked assets without
+    hardcoding tickers here.
+    """
+    result: dict[str, str] = {}
+    try:
+        from lib.core.models import KRAKEN_CONTRACT_SPECS, MICRO_CONTRACT_SPECS
+
+        for name, spec in MICRO_CONTRACT_SPECS.items():
+            for field in ("ticker", "data_ticker"):
+                t = spec.get(field, "")
+                if t:
+                    result[str(t)] = name
+        for name, spec in KRAKEN_CONTRACT_SPECS.items():
+            for field in ("ticker", "data_ticker"):
+                t = spec.get(field, "")
+                if t:
+                    result[str(t)] = name
+    except Exception:
+        pass
+    return result
+
+
+def resolve_asset_params(
+    asset_name: str | None = None,
+    ticker: str | None = None,
+) -> dict[str, float | int]:
+    """Return the wave-analysis tuning parameters for an asset.
+
+    Accepts either an asset name (``"Gold"``, ``"BTC/USD"``) or a ticker
+    (``"MGC=F"``, ``"KRAKEN:XBTUSD"``).  Falls back to ``DEFAULT_PARAMS``
+    when neither resolves to a known entry.
+
+    This is the preferred way for callers to get params instead of
+    accessing ``ASSET_PARAMS`` directly, since it handles ticker →
+    asset-name resolution automatically.
+
+    Parameters
+    ----------
+    asset_name:
+        Human-readable asset name as used in ``models.MICRO_CONTRACT_SPECS``
+        (e.g. ``"Gold"``, ``"S&P"``, ``"Micro Bitcoin"``).
+    ticker:
+        Yahoo-style or Kraken ticker (e.g. ``"MGC=F"``, ``"KRAKEN:XBTUSD"``).
+        Only used when ``asset_name`` is ``None`` or not found.
+
+    Returns
+    -------
+    dict with keys ``max_length``, ``accel_multiplier``, ``lookback_period``.
+    """
+    global _ticker_to_asset_name
+
+    # 1. Direct lookup by asset name
+    if asset_name and asset_name in ASSET_PARAMS:
+        return ASSET_PARAMS[asset_name]
+
+    # 2. Resolve ticker → asset name → params
+    if ticker:
+        if _ticker_to_asset_name is None:
+            _ticker_to_asset_name = _build_ticker_to_asset_name()
+        resolved_name = _ticker_to_asset_name.get(ticker)
+        if resolved_name and resolved_name in ASSET_PARAMS:
+            return ASSET_PARAMS[resolved_name]
+
+    # 3. Heuristic fallback: classify by ticker/name prefix
+    probe = (asset_name or ticker or "").upper()
+    if any(probe.startswith(p) for p in ("KRAKEN:", "BTC", "ETH", "SOL", "AVAX", "LINK", "DOT", "ADA", "XRP")):
+        # Spot crypto — fast/aggressive
+        return {"max_length": 12, "accel_multiplier": 0.035, "lookback_period": 100}
+    if any(probe.startswith(p) for p in ("MBT", "MET", "BTC=F", "ETH=F")):
+        # CME crypto futures
+        return {"max_length": 14, "accel_multiplier": 0.030, "lookback_period": 120}
+    if any(probe.startswith(p) for p in ("6E", "6B", "6J", "6A", "6C", "6S", "M6")):
+        # FX futures
+        return {"max_length": 18, "accel_multiplier": 0.008, "lookback_period": 180}
+    if any(probe.startswith(p) for p in ("ZN", "ZB", "ZF", "ZT")):
+        # Rates
+        return {"max_length": 22, "accel_multiplier": 0.006, "lookback_period": 200}
+    if any(probe.startswith(p) for p in ("ZC", "ZS", "ZW", "ZL", "ZM")):
+        # Ags
+        return {"max_length": 20, "accel_multiplier": 0.018, "lookback_period": 180}
+    if any(probe.startswith(p) for p in ("MES", "MNQ", "M2K", "MYM", "ES", "NQ", "RTY", "YM")):
+        # Equity index
+        return {"max_length": 18, "accel_multiplier": 0.010, "lookback_period": 150}
+    if any(probe.startswith(p) for p in ("MCL", "MNG", "CL", "NG")):
+        # Energy
+        return {"max_length": 20, "accel_multiplier": 0.022, "lookback_period": 150}
+
+    return dict(DEFAULT_PARAMS)
 
 
 def _safe_divide(numerator: float, denominator: float, default: float = 0.0) -> float:
@@ -383,6 +535,7 @@ def _detect_momentum_state(trend_speed: np.ndarray) -> str:
 def calculate_wave_analysis(
     df: pd.DataFrame,
     asset_name: str | None = None,
+    ticker: str | None = None,
     lookback_waves: int | None = None,
 ) -> dict[str, Any]:
     """Full wave analysis on OHLCV DataFrame — main entry point.
@@ -396,7 +549,11 @@ def calculate_wave_analysis(
 
     Args:
         df: OHLCV DataFrame with columns: Open, High, Low, Close, Volume
-        asset_name: Optional asset name for tuned parameters (e.g. "Gold", "S&P")
+        asset_name: Optional asset name for tuned parameters (e.g. "Gold", "S&P",
+                    "BTC/USD"). Any name from ``models.MICRO_CONTRACT_SPECS`` or
+                    ``models.KRAKEN_CONTRACT_SPECS`` is accepted.
+        ticker: Optional ticker string (e.g. "MGC=F", "KRAKEN:XBTUSD"). Used to
+                look up params when ``asset_name`` is not provided or not found.
         lookback_waves: Max number of recent waves to consider (default from asset params)
 
     Returns:
@@ -424,8 +581,10 @@ def calculate_wave_analysis(
     if df is None or df.empty or len(df) < 30:
         return default_result
 
-    # Get asset-specific parameters
-    params = ASSET_PARAMS.get(asset_name, DEFAULT_PARAMS) if asset_name else DEFAULT_PARAMS
+    # Get asset-specific parameters — resolve_asset_params handles ticker
+    # aliases (e.g. "MGC=F" → "Gold") and heuristic fallbacks so all 25+
+    # tracked assets get appropriate tuning without hardcoding tickers here.
+    params = resolve_asset_params(asset_name=asset_name, ticker=ticker)
     max_length = int(params["max_length"])
     accel_mult = float(params["accel_multiplier"])
     lookback_period = lookback_waves or int(params["lookback_period"])

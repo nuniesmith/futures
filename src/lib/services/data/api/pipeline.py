@@ -1257,9 +1257,9 @@ async def test_massive():
         if not key:
             return JSONResponse({"ok": False, "message": "No Massive API key configured"})
 
-        from lib.integrations.massive_client import MassiveClient
+        from lib.integrations.massive_client import MassiveDataProvider
 
-        MassiveClient(api_key=key)
+        MassiveDataProvider(api_key=key)
         return JSONResponse({"ok": True, "message": "Massive Futures connected — beta access confirmed"})
     except Exception as exc:
         return JSONResponse({"ok": False, "message": f"Massive test error: {exc}"})
@@ -1269,9 +1269,9 @@ async def test_massive():
 async def test_kraken():
     """Test Kraken connection."""
     try:
-        from lib.integrations.kraken_client import KrakenClient
+        from lib.integrations.kraken_client import KrakenDataProvider
 
-        client = KrakenClient()
+        client = KrakenDataProvider()
         # Try a simple public API call
         ticker = client.get_ticker("XBTUSD")
         if ticker:

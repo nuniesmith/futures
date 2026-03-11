@@ -5,9 +5,8 @@ Computes real-time crypto momentum signals from Kraken BTC/ETH/SOL data
 and scores how strongly they predict follow-through in correlated futures
 instruments (MES, MNQ, MGC, MCL).
 
-This is the foundation for the Multi-Source Breakout Detection system
-described in todo.md — using crypto's 24/7 data to provide overnight
-context for futures that only trade ~23 hours.
+This is the foundation for the Multi-Source Breakout Detection system — using
+crypto's 24/7 data to provide overnight context for futures that only trade ~23 hours.
 
 Key observations this module captures:
   - BTC/ETH breakout during Asian session (19:00–02:00 ET) often leads
@@ -18,8 +17,11 @@ Key observations this module captures:
     risk-on/risk-off events, weaker during idiosyncratic moves
 
 Architecture:
-  - Pulls recent OHLCV from Kraken via the existing KrakenDataProvider
-    or from Redis cache (hot path) if the Kraken WebSocket feed is running
+  - Pulls recent OHLCV from the engine/data service via EngineDataClient
+    (GET /bars/{symbol}) — the engine resolves Redis → Postgres → Kraken
+    internally so the caller never needs a Kraken API key or Redis access.
+  - Falls back to the legacy Kraken/cache path when ENGINE_DATA_URL is not
+    reachable (e.g. local dev without Docker).
   - Computes per-crypto momentum metrics (ATR breakout, EMA cross, RSI,
     volume surge, session high/low break)
   - Correlates crypto momentum direction with each futures instrument
@@ -464,12 +466,12 @@ def compute_session_high_low(
 
     # Ensure index is timezone-aware in ET
     idx = df.index
-    if hasattr(idx, "tz") and idx.tz is None:
+    if hasattr(idx, "tz") and idx.tz is None:  # type: ignore[union-attr]
         with contextlib.suppress(Exception):
-            idx = idx.tz_localize("UTC").tz_convert(_EST)
-    elif hasattr(idx, "tz") and idx.tz is not None:
+            idx = idx.tz_localize("UTC").tz_convert(_EST)  # type: ignore[union-attr]
+    elif hasattr(idx, "tz") and idx.tz is not None:  # type: ignore[union-attr]
         with contextlib.suppress(Exception):
-            idx = idx.tz_convert(_EST)
+            idx = idx.tz_convert(_EST)  # type: ignore[union-attr]
 
     times = pd.Series(idx).dt.time.values if hasattr(idx, "time") else None
     if times is None:
@@ -849,8 +851,12 @@ def score_futures_from_crypto(
 class CryptoMomentumScorer:
     """Orchestrates crypto momentum computation across all anchors and targets.
 
-    In live mode, pulls data from Kraken cache/API. In test mode, accepts
-    pre-built DataFrames via ``score_with_data()``.
+    In live mode, pulls data from the engine HTTP API (EngineDataClient).
+    The engine handles the full resolution chain: Redis → Postgres → Kraken.
+    In test mode, accepts pre-built DataFrames via ``score_with_data()``.
+
+    The legacy Kraken/cache path is kept as a fallback for environments where
+    the engine is not reachable (local dev without Docker networking).
     """
 
     def __init__(
@@ -859,11 +865,15 @@ class CryptoMomentumScorer:
         anchors: list[dict[str, str]] | None = None,
         interval: str = "5m",
         lookback_bars: int = MOMENTUM_LOOKBACK_BARS,
+        data_client: Any | None = None,
     ):
         self.targets = targets or FUTURES_TARGETS
         self.anchors = anchors or CRYPTO_ANCHORS
         self.interval = interval
         self.lookback_bars = lookback_bars
+        # Optional injected data client (EngineDataClient or StaticBarProvider).
+        # When None the scorer creates one lazily from environment variables.
+        self._data_client = data_client
 
     def score_with_data(
         self,
@@ -929,10 +939,12 @@ class CryptoMomentumScorer:
         return signals
 
     def score_all(self, now: datetime | None = None) -> list[CryptoMomentumSignal]:
-        """Score all targets using live Kraken data.
+        """Score all targets using live data from the engine HTTP API.
 
-        Pulls OHLCV from the Kraken cache / REST API. Falls back gracefully
-        if Kraken feed is not running.
+        Routes all data fetching through ``EngineDataClient`` (GET /bars/...)
+        so the engine/data service handles the full resolution chain:
+        Redis → Postgres → Kraken REST API.  Falls back gracefully to the
+        legacy Kraken/cache path when the engine is unreachable.
         """
         crypto_bars: dict[str, pd.DataFrame] = {}
 
@@ -963,81 +975,60 @@ class CryptoMomentumScorer:
 
         return self.score_with_data(crypto_bars, futures_bars, now=now)
 
-    def _fetch_crypto_bars(self, internal_ticker: str) -> pd.DataFrame | None:
-        """Fetch crypto OHLCV from cache (Redis) first, then Kraken REST.
-
-        Routes through ``cache.get_data`` so that repeated calls within a
-        short window are served from Redis instead of hammering the Kraken
-        REST API and triggering ``EGeneral:Too many requests``.
-        """
-        # --- Hot path: Redis / in-process cache --------------------------
+    def _get_data_client(self) -> Any:
+        """Return the EngineDataClient, creating from env vars if not injected."""
+        if self._data_client is not None:
+            return self._data_client
         try:
-            from lib.core.cache import get_data
+            from lib.services.data.engine_data_client import get_client
 
-            df = get_data(internal_ticker, interval=self.interval, period="1d")
+            return get_client()
+        except Exception:
+            return None
+
+    def _fetch_crypto_bars(self, internal_ticker: str) -> pd.DataFrame | None:
+        """Fetch crypto OHLCV bars via the engine HTTP API.
+
+        Routes through EngineDataClient (GET /bars/{symbol}) — the engine
+        handles Redis → Postgres → Kraken REST internally.
+        Returns None when the engine is unreachable; the scorer degrades
+        gracefully to base_correlation values.
+        """
+        client = self._get_data_client()
+        if client is None:
+            logger.debug("No data client available for crypto bars: %s", internal_ticker)
+            return None
+        try:
+            df = client.get_bars(internal_ticker, interval=self.interval, days_back=1)
             if df is not None and not df.empty:
                 return df
+            # Try short alias: "KRAKEN:XBTUSD" → "BTC"
+            short = internal_ticker.replace("KRAKEN:", "").replace("USD", "")
+            if short and short != internal_ticker:
+                df = client.get_bars(short, interval=self.interval, days_back=1)
+                if df is not None and not df.empty:
+                    return df
         except Exception as exc:
-            logger.debug("cache.get_data failed for %s: %s", internal_ticker, exc)
-
-        # --- Cold path: Kraken REST API ----------------------------------
-        try:
-            from lib.integrations.kraken_client import get_kraken_ohlcv
-
-            return get_kraken_ohlcv(internal_ticker, interval=self.interval, period="1d")
-        except ImportError:
-            logger.debug("kraken_client not available — cannot fetch crypto bars")
-            return None
-        except Exception as exc:
-            logger.debug("Failed to fetch crypto bars for %s: %s", internal_ticker, exc)
-            return None
+            logger.debug("EngineDataClient failed for crypto %s: %s", internal_ticker, exc)
+        logger.debug("No crypto bars available for %s (engine unreachable?)", internal_ticker)
+        return None
 
     def _fetch_futures_bars(self, symbol: str) -> pd.DataFrame | None:
-        """Fetch futures OHLCV from the data resolver / cache.
+        """Fetch futures OHLCV bars via the engine HTTP API.
 
-        Resolves the short symbol (e.g. "MES") to a Yahoo-style ticker
-        (e.g. "MES=F") so that ``cache.get_data`` / yfinance receives a
-        valid ticker instead of the invalid ``/MES`` slash-prefixed form
-        that previously caused ``TypeError: 'Response' object is not
-        subscriptable`` in newer yfinance versions.
-
-        Also tries the DataResolver (Redis → Postgres → API) first when
-        it is available so we stay within the cache tier.
-
-        Never falls back to yfinance — CME micro futures (MGC, MES, etc.) are
-        not reliably served by Yahoo Finance and the 500 responses just pollute
-        logs.  Futures bars are only used for rolling correlation; the feature
-        degrades gracefully to ``base_correlation`` when they are unavailable.
+        Routes through EngineDataClient — the engine handles Redis → Postgres →
+        Massive internally. Futures correlation bars are optional; returning None
+        causes score_with_data() to fall back to base_correlation from config.
         """
-        # --- Preferred path: DataResolver (Redis → Postgres → API) ------
-        # Only uses the warm/hot cache tiers (Redis + Postgres); does NOT
-        # trigger an external API fetch so there is no risk of yfinance or
-        # Massive being called here.
+        client = self._get_data_client()
+        if client is None:
+            return None
         try:
-            from lib.services.data.resolver import DataResolver
-
-            resolver = DataResolver(enable_backfill_redis=False, enable_backfill_postgres=False)
-            df = resolver.resolve(symbol, days=1)
-            if df is not None and not df.empty:
-                return df
-        except Exception:
-            pass  # fall through to cache.get_data
-
-        # --- Fallback: in-process Redis cache only -----------------------
-        # Use the short symbol directly; get_data will resolve it internally.
-        # We explicitly skip yfinance here — CME micro contracts return 500
-        # HTML from Yahoo and are served exclusively by Massive/the engine.
-        try:
-            from lib.core.cache import get_data
-
-            df = get_data(symbol, interval=self.interval, period="1d")
+            df = client.get_bars(symbol, interval=self.interval, days_back=1)
             if df is not None and not df.empty:
                 return df
         except Exception as exc:
-            logger.debug("Failed to fetch futures bars for %s from cache: %s", symbol, exc)
-
-        # Futures correlation bars are optional — returning None causes
-        # score_with_data() to fall back to base_correlation from config.
+            logger.debug("EngineDataClient failed for futures %s: %s", symbol, exc)
         return None
 
     def _build_composite_returns(self, crypto_bars: dict[str, pd.DataFrame]) -> dict[str, float]:

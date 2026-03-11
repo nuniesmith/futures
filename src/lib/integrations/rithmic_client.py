@@ -350,7 +350,7 @@ def _resolve_gateway(name: str) -> Any:
     global _GATEWAY_MAP
     if not _GATEWAY_MAP:
         try:
-            from async_rithmic import Gateway
+            from async_rithmic import Gateway  # type: ignore[import-untyped]
 
             _GATEWAY_MAP = {
                 "Chicago": Gateway.CHICAGO,
@@ -618,7 +618,8 @@ class RithmicAccountManager:
                     system_name=config.system_name,
                     app_name=config.app_name,
                     app_version=config.app_version,
-                    gateway=gateway,
+                    url=gateway,
+                    manual_or_auto=OrderPlacement.MANUAL,
                 )
                 await asyncio.wait_for(client.connect(), timeout=15.0)
 

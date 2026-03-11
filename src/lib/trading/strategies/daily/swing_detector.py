@@ -62,16 +62,15 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, time
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from zoneinfo import ZoneInfo
+
+import pandas as pd
 
 from lib.trading.strategies.daily.bias_analyzer import (
     BiasDirection,
     DailyBias,
 )
-
-if TYPE_CHECKING:
-    import pandas as pd
 
 logger = logging.getLogger("strategies.daily.swing_detector")
 
@@ -339,7 +338,7 @@ def _get_point_value(asset_name: str) -> float:
 
 def _compute_ema(series: pd.Series, period: int) -> pd.Series:
     """Compute EMA on a price series."""
-    return series.ewm(span=period, adjust=False).mean()
+    return pd.Series(series.ewm(span=period, adjust=False).mean())
 
 
 def _bar_body_ratio(open_: float, high: float, low: float, close: float) -> float:
@@ -478,7 +477,7 @@ def detect_pullback_entry(
 
     # Add intraday EMA-21 if we have enough bars
     if len(bars) >= EMA_PULLBACK_PERIOD + 5:
-        ema21 = _compute_ema(bars["Close"], EMA_PULLBACK_PERIOD)
+        ema21 = _compute_ema(bars["Close"], EMA_PULLBACK_PERIOD)  # type: ignore[arg-type]
         ema_val = _safe_float(ema21.iloc[-1])
         if ema_val > 0:
             levels.append(("ema_21", ema_val))
@@ -1286,7 +1285,7 @@ def evaluate_swing_exits(
 
     # ── 4. EMA-21 Trailing Stop (after TP1 hit) ────────────────────────
     if phase in (SwingPhase.TP1_HIT, SwingPhase.TRAILING) and bars is not None and len(bars) >= TRAIL_EMA_PERIOD + 3:
-        ema = _compute_ema(bars["Close"], TRAIL_EMA_PERIOD)
+        ema = _compute_ema(bars["Close"], TRAIL_EMA_PERIOD)  # type: ignore[arg-type]
         ema_val = _safe_float(ema.iloc[-1])
 
         if ema_val > 0:
@@ -1450,6 +1449,7 @@ def update_swing_state(
     # Evaluate exits
     risk_dollars = state.signal.risk_dollars if state.signal else 0.0
 
+    assert bars is not None
     exit_signals = evaluate_swing_exits(
         bars=bars,
         entry_price=state.entry_price,

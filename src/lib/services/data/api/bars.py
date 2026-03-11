@@ -905,6 +905,71 @@ def _run_fill_all_job(job: _FillJob, days_back: int, interval: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+@router.get("/bars/symbols")
+def list_symbols() -> JSONResponse:
+    """Return a lightweight symbol list for the trainer — no DB queries.
+
+    Unlike ``GET /bars/assets`` this endpoint does **not** hit the database
+    for bar counts, so it is fast and safe to call at training-job startup.
+
+    Response:
+    ```json
+    {
+      "symbols": ["6A", "6B", "6C", ...],
+      "assets": [
+        {"name": "Gold", "ticker": "MGC=F", "symbol": "MGC"},
+        ...
+      ],
+      "total": 25
+    }
+    ```
+
+    The ``symbol`` field is the short name the trainer and dataset generator
+    use internally (e.g. ``"MGC"`` rather than the Yahoo ticker ``"MGC=F"``).
+    The trainer calls this endpoint to discover which symbols the engine has
+    mapped in ``models.ASSETS`` without needing a local copy of the models
+    module.
+    """
+    assets = _get_enabled_assets()
+
+    # Build a reverse map from Yahoo ticker → shortest short symbol using the
+    # dataset generator's _SYMBOL_TO_TICKER mapping.
+    ticker_to_short: dict[str, str] = {}
+    try:
+        from lib.services.training.dataset_generator import _SYMBOL_TO_TICKER
+
+        for sym, tkr in _SYMBOL_TO_TICKER.items():
+            if tkr not in ticker_to_short or len(sym) < len(ticker_to_short[tkr]):
+                ticker_to_short[tkr] = sym
+    except Exception:
+        pass
+
+    result = []
+    short_symbols: list[str] = []
+    for name, ticker in sorted(assets.items()):
+        # Derive the short symbol: prefer the reverse-map lookup, then strip
+        # "=F", then leave Kraken tickers as-is.
+        if ticker in ticker_to_short:
+            short = ticker_to_short[ticker]
+        elif ticker.startswith("KRAKEN:"):
+            short = ticker
+        else:
+            short = ticker.replace("=F", "")
+
+        result.append({"name": name, "ticker": ticker, "symbol": short})
+        if short not in short_symbols:
+            short_symbols.append(short)
+
+    short_symbols.sort()
+    return JSONResponse(
+        {
+            "symbols": short_symbols,
+            "assets": result,
+            "total": len(short_symbols),
+        }
+    )
+
+
 @router.get("/bars/assets")
 def list_assets() -> JSONResponse:
     """List all enabled assets with their tickers and stored bar counts.

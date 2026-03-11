@@ -1,7 +1,7 @@
 """
-K-Means Adaptive Volatility Clustering — ported from Ruby Pine Script.
+K-Means Adaptive Volatility Clustering.
 
-This module implements the exact K-Means clustering logic from fks.pine:
+This module implements the exact K-Means clustering logic:
   - Training window of ATR values (default 250 bars)
   - 3 clusters: LOW, MEDIUM, HIGH volatility
   - Iterative centroid convergence with configurable max iterations

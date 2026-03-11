@@ -871,178 +871,99 @@ def _load_bars_from_kraken(symbol: str, days: int = 90) -> pd.DataFrame | None:
         ticker,
         pair,
     )
-    return pd.DataFrame(df) if not df.empty else None
+    return pd.DataFrame(df) if len(df) > 0 else None
 
 
 def load_bars(
     symbol: str,
-    source: str = "db",
+    source: str = "engine",
     days: int = 90,
     csv_dir: str = "data/bars",
 ) -> pd.DataFrame | None:
-    """Load 1-minute bars from the configured source, with fallback chain.
+    """Load 1-minute bars via the engine data client with CSV fallback.
 
-    Tries the specified source first, then falls back through the remaining
-    sources in priority order:
+    Primary path: EngineDataClient → GET /bars/{symbol} on the engine/data
+    service. The engine resolves the full hierarchy internally:
+        Redis → Postgres → Massive (futures) / Kraken REST (crypto)
 
-        db → cache → massive/kraken → csv
+    This single path replaces all the previous source-specific branches.
+    The ``source`` parameter is accepted for backward compatibility but only
+    ``"engine"`` and ``"csv"`` are actively used; all other values resolve
+    via the engine as well.
 
-    The ``"db"`` source reads from the Postgres/SQLite ``historical_bars``
-    table that is populated by the data service's nightly backfill and
-    on-demand gap-fill endpoints.  It is the preferred source for CNN
-    dataset generation because it supports deep history (up to 365 days
-    with Massive) and has no live network dependency at generation time.
-
-    When the cold-path API is hit (Massive or Kraken REST), the fetched bars
-    are automatically backfilled into both Postgres and Redis via
-    ``DataResolver`` so subsequent calls for the same symbol are served from
-    the warm/hot tiers without another network round-trip.
+    Fallback chain (only when engine is unavailable):
+        engine → legacy loaders → csv
 
     Args:
-        symbol: Instrument symbol (e.g. "MGC") or Kraken internal ticker
-                (e.g. "KRAKEN:XBTUSD") or short alias (e.g. "BTC").
-        source: Primary source — "db", "cache", "massive", "kraken", or "csv".
-        days: Number of days of history to request.
-        csv_dir: Directory for CSV bar files (used when source=="csv").
+        symbol: Short symbol ("MGC"), Yahoo-style ticker ("MGC=F"), or
+                Kraken alias ("BTC", "KRAKEN:XBTUSD").
+        source: Primary source hint — "engine" (default), "massive",
+                "kraken", "db", "cache", or "csv".
+        days:   Days of 1-minute bar history to request.
+        csv_dir: Directory for CSV files (only used if source=="csv" or all else fails).
 
     Returns:
-        DataFrame with OHLCV columns and DatetimeIndex, or None if all
-        sources fail.
+        DataFrame with OHLCV columns and UTC DatetimeIndex, or None.
     """
-    # Ordered fallback chain: engine is tried first (covers all sub-sources
-    # transparently); csv is last resort (offline / synthetic data).
-    _FALLBACK_ORDER = ["engine", "db", "cache", "massive", "kraken", "csv"]
+    # --- CSV-only path (offline/test) ------------------------------------
+    if source == "csv":
+        return _load_bars_from_csv(symbol, csv_dir)
 
-    # Kraken spot pairs bypass Massive/yfinance entirely — route directly.
-    # _resolve_ticker() handles short aliases like "BTC" → "KRAKEN:XBTUSD".
+    # --- Primary path: EngineDataClient ----------------------------------
+    try:
+        from lib.services.data.engine_data_client import get_client
+
+        client = get_client()
+        df = client.get_bars(symbol, interval="1m", days_back=days, auto_fill=True)
+        if df is not None and not df.empty:
+            logger.debug("load_bars: %d bars for %s via EngineDataClient", len(df), symbol)
+            return df
+    except Exception as exc:
+        logger.debug("EngineDataClient failed for %s: %s", symbol, exc)
+
+    # --- Legacy fallback path (engine unavailable) -----------------------
+    # Keeps the trainer usable in local dev without a running data service.
     _is_kraken = _is_kraken_symbol(symbol)
 
-    # ------------------------------------------------------------------
-    # Fast path: use DataResolver for the full three-tier hierarchy.
-    # DataResolver handles Redis → Postgres → API with automatic backfill,
-    # so we get free cache warming for every cold-path API hit.
-    # This path covers both Kraken and Massive-backed symbols.
-    # ------------------------------------------------------------------
-    # Only use DataResolver when the caller hasn't explicitly asked for "csv"
-    # or "engine" (engine path uses its own HTTP loader below) and we're not
-    # in a pure offline / test context.
-    if source not in ("csv", "engine"):
-        try:
-            from lib.services.data.resolver import DataResolver
-
-            # Resolve the canonical ticker that DataResolver understands.
-            # For Kraken symbols we pass the internal ticker (KRAKEN:XBTUSD);
-            # for futures we pass the short symbol (MES, MGC, …).
-            resolver_symbol = _resolve_ticker(symbol) if _is_kraken else symbol
-
-            # Determine skip flags based on the requested primary source so
-            # the caller can still force "massive" or "cache" explicitly.
-            skip_redis = source not in ("cache", "db", "massive", "kraken")
-            skip_postgres = source == "cache"
-
-            resolver = DataResolver(
-                enable_backfill_redis=True,
-                enable_backfill_postgres=True,
-                skip_redis=skip_redis,
-                skip_postgres=skip_postgres,
-            )
-
-            df, meta = resolver.resolve_with_meta(resolver_symbol, days=days)
-            if df is not None and not df.empty:
-                logger.debug(
-                    "DataResolver: loaded %d bars for %s via %s (backfill: pg=%s redis=%s)",
-                    len(df),
-                    symbol,
-                    meta.source,
-                    meta.backfilled_postgres,
-                    meta.backfilled_redis,
-                )
-                return df
-            logger.debug("DataResolver returned no data for %s — falling back to legacy loaders", symbol)
-        except ImportError:
-            logger.debug("DataResolver not available — falling back to legacy loaders")
-        except Exception as exc:
-            logger.debug("DataResolver failed for %s (%s) — falling back: %s", symbol, source, exc)
-
-    # ------------------------------------------------------------------
-    # Legacy fallback path — kept for offline/CSV use and edge cases where
-    # the DataResolver is not available (e.g. running outside the service).
-    # ------------------------------------------------------------------
-    loaders: dict[str, Any] = {
-        "engine": lambda: _load_bars_from_engine(symbol, days),
-        "db": lambda: _load_bars_from_db(symbol, days),
-        "cache": lambda: _load_bars_from_cache(symbol, days),
-        "csv": lambda: _load_bars_from_csv(symbol, csv_dir),
-        "massive": lambda: _load_bars_from_massive(symbol, days),
-        "kraken": lambda: _load_bars_from_kraken(symbol, days),
-    }
-
-    # For Kraken symbols, respect the configured source first.
-    # When source=="engine", route through the engine HTTP API so that Redis →
-    # Postgres → Kraken REST resolution happens server-side and the trainer
-    # doesn't hammer the Kraken public REST endpoint directly (which triggers
-    # EGeneral:Too many requests when multiple symbols are processed in sequence).
     if _is_kraken:
-        # Build the ordered loader list for Kraken symbols.
-        # "engine" goes first when that source was explicitly requested so
-        # the engine's three-tier cache is used before falling back to direct
-        # Kraken REST.  "kraken" (direct REST) is tried last as a cold-path
-        # fallback for when the engine is unreachable.
-        kraken_order = ["engine", "kraken", "db", "csv"] if source == "engine" else ["kraken", "db", "csv"]
-
-        for name in kraken_order:
-            loader = loaders.get(name)
-            if loader is None:
-                continue
+        for loader_fn in [
+            lambda: _load_bars_from_kraken(symbol, days),
+            lambda: _load_bars_from_csv(symbol, csv_dir),
+        ]:
             try:
-                df = loader()
+                df = loader_fn()
                 if df is not None and not df.empty:
-                    logger.info("Loaded Kraken bars for %s via legacy %s", symbol, name)
                     return df
             except Exception:
                 continue
-        logger.warning("Could not load Kraken bars for %s from any source", symbol)
-        return None
+    else:
+        for loader_fn in [
+            lambda: _load_bars_from_engine(symbol, days),
+            lambda: _load_bars_from_db(symbol, days),
+            lambda: _load_bars_from_massive(symbol, days),
+            lambda: _load_bars_from_csv(symbol, csv_dir),
+        ]:
+            try:
+                df = loader_fn()
+                if df is not None and not df.empty:
+                    return df
+            except Exception:
+                continue
 
-    # Try primary source first
-    if source in loaders:
-        try:
-            df = loaders[source]()
-            if df is not None and not df.empty:
-                return df
-        except Exception as exc:
-            logger.debug("Primary source %r failed for %s: %s", source, symbol, exc)
-
-    # Fallback chain — skip the source we already tried
-    for name in _FALLBACK_ORDER:
-        if name == source:
-            continue
-        loader = loaders.get(name)
-        if loader is None:
-            continue
-        try:
-            df = loader()
-            if df is not None and not df.empty:
-                logger.info("Loaded bars for %s via fallback source: %s", symbol, name)
-                return df
-        except Exception:
-            continue
-
-    logger.warning("Could not load bars for %s from any source", symbol)
+    logger.warning("load_bars: no bars available for %s from any source", symbol)
     return None
 
 
 def load_daily_bars(
     symbol: str,
-    source: str = "cache",
+    source: str = "engine",
     csv_dir: str = "data/bars",
 ) -> pd.DataFrame | None:
-    """Load daily bars for NR7 detection.
+    """Load daily bars — resampled from 1-minute data via the engine.
 
-    Tries to derive daily bars from 1-minute data by resampling,
-    or loads a dedicated daily CSV if available.
+    Used for NR7 detection and daily range context in the dataset generator.
     """
-    # Try dedicated daily CSV first
+    # Try dedicated daily CSV first (offline use)
     daily_csv = os.path.join(csv_dir, f"{symbol}_daily.csv")
     if os.path.isfile(daily_csv):
         try:
@@ -1052,21 +973,24 @@ def load_daily_bars(
         except Exception:
             pass
 
-    # Resample from 1-minute bars
-    bars_1m = load_bars(symbol, source=source, csv_dir=csv_dir)
+    # Primary: engine daily bars endpoint
+    try:
+        from lib.services.data.engine_data_client import get_client
+
+        client = get_client()
+        df = client.get_daily_bars(symbol, days_back=365)
+        if df is not None and not df.empty:
+            return df
+    except Exception as exc:
+        logger.debug("Daily bars via EngineDataClient failed for %s: %s", symbol, exc)
+
+    # Fallback: resample from 1-minute data
+    bars_1m = load_bars(symbol, source=source, csv_dir=csv_dir, days=90)
     if bars_1m is not None and len(bars_1m) > 100:
         try:
             _resampled = (
                 bars_1m.resample("1D")
-                .agg(
-                    {
-                        "Open": "first",
-                        "High": "max",
-                        "Low": "min",
-                        "Close": "last",
-                        "Volume": "sum",
-                    }
-                )
+                .agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})
                 .dropna()
             )
             daily = pd.DataFrame(_resampled) if not isinstance(_resampled, pd.DataFrame) else _resampled
@@ -2106,7 +2030,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
         if _cfg is not None and hasattr(_cfg, "tp3_atr_mult"):
             tp3_atr_mult_raw = float(_cfg.tp3_atr_mult)
         elif hasattr(result, "tp3_atr_mult"):
-            tp3_atr_mult_raw = float(result.tp3_atr_mult)
+            tp3_atr_mult_raw = float(result.tp3_atr_mult)  # type: ignore[union-attr]
         else:
             # Fall back to looking up the canonical config by breakout type
             try:
@@ -2808,7 +2732,7 @@ def _cli():
     try:
         from pathlib import Path
 
-        from dotenv import load_dotenv
+        from dotenv import load_dotenv  # type: ignore[import-untyped]
 
         _env_path = Path(__file__).resolve().parents[1] / ".env"
         if _env_path.is_file():

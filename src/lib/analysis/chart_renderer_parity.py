@@ -1,8 +1,6 @@
 """
-Chart Renderer Parity — C#-Matching CNN Snapshot Renderer
+Chart Renderer Parity — CNN Snapshot Renderer
 ==========================================================
-Renders 224×224 chart images using pure Pillow (no mplfinance) that
-pixel-match the C# ``OrbChartRenderer`` in ``BreakoutStrategy.cs``.
 
 **Why this exists:**
 The biggest accuracy blocker in the ORB CNN pipeline is the distribution
@@ -70,8 +68,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("analysis.chart_renderer_parity")
 
-try:
+if TYPE_CHECKING:
     from PIL import Image, ImageDraw
+
+try:
+    from PIL import Image, ImageDraw  # type: ignore[assignment]  # re-import at runtime
 
     _PIL_AVAILABLE = True
 except ImportError:
@@ -433,7 +434,7 @@ def render_parity_snapshot(
     #       using (var vb = new SolidBrush(vc))
     #           g.FillRectangle(vb, x, vy, bodyW, vh);
     #   }
-    H - VOL_PANEL_H
+    # H - VOL_PANEL_H  (mirrors the C# reference comment above)
     for i in range(n):
         x = LEFT_PAD + i * bar_w
         bar = bars[i]
@@ -651,11 +652,11 @@ def dataframe_to_parity_bars(
         try:
             bars.append(
                 ParityBar(
-                    open=float(row[col_map["open"]]),
-                    high=float(row[col_map["high"]]),
-                    low=float(row[col_map["low"]]),
-                    close=float(row[col_map["close"]]),
-                    volume=float(row[col_map["volume"]]) if has_volume else 0.0,
+                    open=float(row[col_map["open"]]),  # type: ignore[arg-type]
+                    high=float(row[col_map["high"]]),  # type: ignore[arg-type]
+                    low=float(row[col_map["low"]]),  # type: ignore[arg-type]
+                    close=float(row[col_map["close"]]),  # type: ignore[arg-type]
+                    volume=float(row[col_map["volume"]]) if has_volume else 0.0,  # type: ignore[arg-type]
                 )
             )
         except (ValueError, TypeError):

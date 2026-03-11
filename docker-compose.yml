@@ -159,9 +159,6 @@ services:
             - ENABLE_KRAKEN_CRYPTO=${ENABLE_KRAKEN_CRYPTO:-1}
             - TRAINER_API_KEY=${TRAINER_API_KEY:-}
             - TRAINER_SERVICE_URL=${TRAINER_SERVICE_URL:-http://100.113.72.63:8200}
-            # TradingView integration (Phase TV-D)
-            - TV_WEBHOOK_SECRET=${TV_WEBHOOK_SECRET:-}
-            - GITHUB_SIGNALS_TOKEN=${GITHUB_SIGNALS_TOKEN:-}
             - GITHUB_SIGNALS_REPO=${GITHUB_SIGNALS_REPO:-nuniesmith/futures-signals}
             - LOG_LEVEL=info
             - PYTHONPATH=/app/src
@@ -225,9 +222,6 @@ services:
             - ENABLE_KRAKEN_CRYPTO=${ENABLE_KRAKEN_CRYPTO:-0}
             - TRAINER_API_KEY=${TRAINER_API_KEY:-}
             - TRAINER_SERVICE_URL=${TRAINER_SERVICE_URL:-http://100.113.72.63:8200}
-            # TradingView integration (Phase TV-D)
-            - TV_WEBHOOK_SECRET=${TV_WEBHOOK_SECRET:-}
-            - GITHUB_SIGNALS_TOKEN=${GITHUB_SIGNALS_TOKEN:-}
             - GITHUB_SIGNALS_REPO=${GITHUB_SIGNALS_REPO:-nuniesmith/futures-signals}
             - LOG_LEVEL=info
             - PYTHONPATH=/app/src

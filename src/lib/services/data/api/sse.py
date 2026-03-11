@@ -967,7 +967,8 @@ async def _bars_event_generator(request: Request, symbol: str) -> AsyncGenerator
             last = df.iloc[-1]
             ts_val = str(df.index[-1])
             try:
-                ts_unix = int(pd.Timestamp(ts_val).timestamp())
+                _ts = pd.Timestamp(ts_val)
+                ts_unix = int(_ts.timestamp()) if _ts is not pd.NaT else int(datetime.now(tz=_EST).timestamp())  # type: ignore[union-attr]
             except Exception:
                 ts_unix = int(datetime.now(tz=_EST).timestamp())
 
@@ -1054,7 +1055,10 @@ async def _bars_event_generator(request: Request, symbol: str) -> AsyncGenerator
                         last_row = df.iloc[-1]
                         ts_val = str(df.index[-1])
                         try:
-                            ts_unix = int(pd.Timestamp(ts_val).timestamp())
+                            _ts2 = pd.Timestamp(ts_val)
+                            ts_unix = (
+                                int(_ts2.timestamp()) if _ts2 is not pd.NaT else int(datetime.now(tz=_EST).timestamp())  # type: ignore[union-attr]
+                            )
                         except Exception:
                             ts_unix = int(datetime.now(tz=_EST).timestamp())
 

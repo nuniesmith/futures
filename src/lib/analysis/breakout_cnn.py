@@ -102,11 +102,11 @@ except ImportError:
 # The dataset and inference code must provide them in exactly this order.
 #
 # v8 contract (37 features) — extends v7.1's 28 features with 9 new slots
-# from cross-asset correlation (Phase v8-B) and asset fingerprint (Phase v8-C).
+# from cross-asset correlation and asset fingerprint.
 # Slots [13] asset_class_id and [15] asset_volatility_class are still present
 # in the tabular vector for backward compat, but v8 models also receive
 # asset_class_idx and asset_idx as separate integer IDs routed to nn.Embedding
-# layers (Phase v8-A).
+# layers.
 #
 # Aligns with NinjaTrader BreakoutStrategy PrepareCnnTabular() and
 # OrbCnnPredictor.NormaliseTabular() in C#.
@@ -140,7 +140,7 @@ except ImportError:
 #  [21]  weekly_range_position   price position in prior week H/L  [0, 1]
 #  [22]  monthly_trend_score     20-day EMA slope [-1,+1] → [0, 1]
 #  [23]  crypto_momentum_score   from crypto_momentum: [-1,+1] → [0, 1]
-#  ── v7.1 additions (slots 24–27) — Phase 4B sub-feature decomposition ──
+#  ── v7.1 additions (slots 24–27) — sub-feature decomposition ──
 #  [24]  breakout_type_category  time-based=0, range-based=0.5, squeeze=1.0
 #  [25]  session_overlap_flag    1.0 if London+NY overlap window, else 0.0
 #  [26]  atr_trend               ATR expanding=1.0, contracting=0.0 (10-bar)
@@ -183,7 +183,7 @@ TABULAR_FEATURES: list[str] = [
     "weekly_range_position",  # [21] price in week range [0, 1]
     "monthly_trend_score",  # [22] EMA slope [-1,+1] → [0, 1]
     "crypto_momentum_score",  # [23] crypto lead [-1,+1] → [0, 1]
-    # ── v7.1 additions — Phase 4B sub-feature decomposition ──────────────
+    # ── v7.1 additions — sub-feature decomposition ──────────────
     "breakout_type_category",  # [24] time=0, range=0.5, squeeze=1.0
     "session_overlap_flag",  # [25] 1.0 if London+NY overlap
     "atr_trend",  # [26] expanding=1.0, contracting=0.0
@@ -204,9 +204,9 @@ TABULAR_FEATURES: list[str] = [
 NUM_TABULAR = len(TABULAR_FEATURES)
 
 # Feature contract version — must match NinjaTrader BreakoutStrategy.
-# v8 adds hierarchical asset embeddings (Phase v8-A), 3 cross-asset
-# correlation features (Phase v8-B), 6 asset fingerprint features
-# (Phase v8-C), and architecture upgrades (Phase v8-D).
+# v8 adds hierarchical asset embeddings, 3 cross-asset
+# correlation features, 6 asset fingerprint features
+# , and architecture upgrades .
 FEATURE_CONTRACT_VERSION = 8
 
 # Asset class ordinal map — mirrors GetAssetClassNorm() in BreakoutStrategy.cs.
@@ -330,7 +330,7 @@ def get_breakout_type_ordinal(breakout_type: str) -> float:
 
 
 # ---------------------------------------------------------------------------
-# v7.1 feature helpers — Phase 4B sub-feature decomposition
+# v7.1 feature helpers — sub-feature decomposition
 # ---------------------------------------------------------------------------
 
 # Breakout type → category mapping.
@@ -527,13 +527,13 @@ def get_volume_trend(
         vol = bars["Volume"].astype(float).values[-lookback:]
 
         # Skip if all zero (no volume data)
-        if np.sum(vol) <= 0:
+        if np.sum(vol) <= 0:  # type: ignore[call-overload]
             return 0.5
 
         # Simple linear regression slope: y = vol, x = 0..lookback-1
         x = np.arange(lookback, dtype=float)
         x_mean = x.mean()
-        vol_mean = vol.mean()
+        vol_mean = vol.mean()  # type: ignore[union-attr]
 
         if vol_mean <= 0:
             return 0.5
@@ -585,7 +585,7 @@ def get_daily_bias_direction(
         from lib.trading.strategies.daily.bias_analyzer import compute_daily_bias
 
         if bars_daily is not None and not bars_daily.empty:
-            bias = compute_daily_bias(asset_name, bars_daily)
+            bias = compute_daily_bias(asset_name, bars_daily)  # type: ignore[arg-type]
             return bias.direction_feature
     except Exception:
         pass
@@ -609,7 +609,7 @@ def get_daily_bias_confidence(
         from lib.trading.strategies.daily.bias_analyzer import compute_daily_bias
 
         if bars_daily is not None and not bars_daily.empty:
-            bias = compute_daily_bias(asset_name, bars_daily)
+            bias = compute_daily_bias(asset_name, bars_daily)  # type: ignore[arg-type]
             return bias.confidence_feature
     except Exception:
         pass
@@ -639,7 +639,7 @@ def get_prior_day_pattern(
         from lib.trading.strategies.daily.bias_analyzer import compute_daily_bias
 
         if bars_daily is not None and not bars_daily.empty:
-            bias = compute_daily_bias(asset_name, bars_daily)
+            bias = compute_daily_bias(asset_name, bars_daily)  # type: ignore[arg-type]
             return bias.candle_pattern_feature
     except Exception:
         pass
@@ -664,7 +664,7 @@ def get_weekly_range_position(
         from lib.trading.strategies.daily.bias_analyzer import compute_daily_bias
 
         if bars_daily is not None and not bars_daily.empty:
-            bias = compute_daily_bias(asset_name, bars_daily)
+            bias = compute_daily_bias(asset_name, bars_daily)  # type: ignore[arg-type]
             return bias.weekly_range_feature
     except Exception:
         pass
@@ -690,7 +690,7 @@ def get_monthly_trend_score(
         from lib.trading.strategies.daily.bias_analyzer import compute_daily_bias
 
         if bars_daily is not None and not bars_daily.empty:
-            bias = compute_daily_bias(asset_name, bars_daily)
+            bias = compute_daily_bias(asset_name, bars_daily)  # type: ignore[arg-type]
             return bias.monthly_trend_feature
     except Exception:
         pass
@@ -1009,12 +1009,12 @@ if _TORCH_AVAILABLE:
                     return os.path.join(self.image_root, p)
                 return p
 
-            exists_mask = self.df["image_path"].apply(lambda p: os.path.isfile(_resolve(str(p))))
-            dropped_missing = int((~exists_mask).sum())
+            exists_mask = self.df["image_path"].apply(lambda p: os.path.isfile(_resolve(str(p))))  # type: ignore[union-attr]
+            dropped_missing = int((~exists_mask).sum())  # type: ignore[arg-type]
             self.df = self.df[exists_mask]
 
             # 3. Reset index so iloc is contiguous
-            self.df = self.df.reset_index(drop=True)
+            self.df = self.df.reset_index(drop=True)  # type: ignore[union-attr]
 
             if dropped_empty > 0 or dropped_missing > 0:
                 logger.warning(
@@ -1032,7 +1032,7 @@ if _TORCH_AVAILABLE:
             return len(self.df)
 
         def __getitem__(self, idx: int):
-            row = self.df.iloc[idx]
+            row = self.df.iloc[idx]  # type: ignore[union-attr]
 
             # --- Image ---
             img_path = str(row["image_path"]).strip()
@@ -1744,13 +1744,13 @@ def train_model(
         n = len(train_dataset)
         n_val = max(1, int(n * 0.15))
         n_train = n - n_val
-        split_train, split_val = torch.utils.data.random_split(train_dataset, [n_train, n_val])
+        split_train, split_val = torch.utils.data.random_split(train_dataset, [n_train, n_val])  # type: ignore[arg-type]
         train_dataset = split_train  # type: ignore[assignment]
         val_dataset = split_val  # type: ignore[assignment]
         logger.info("Auto-split: %d train / %d val", n_train, n_val)
 
     train_loader = DataLoader(
-        train_dataset,
+        train_dataset,  # type: ignore[arg-type]
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
@@ -1759,7 +1759,7 @@ def train_model(
         collate_fn=BreakoutDataset.skip_invalid_collate,
     )
     val_loader = DataLoader(
-        val_dataset,
+        val_dataset,  # type: ignore[arg-type]
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -1775,7 +1775,7 @@ def train_model(
         ASSET_CLASS_EMBED_DIM,
         ASSET_ID_EMBED_DIM,
     )
-    model = model.to(device)
+    model = model.to(device)  # type: ignore[union-attr]
 
     # --- Optimizer with separate param groups (v8-E) ---
     # Backbone gets lower LR; tabular head + embeddings get higher LR
@@ -2026,7 +2026,7 @@ def evaluate_model(
             return None
 
         val_loader = DataLoader(
-            val_dataset,
+            val_dataset,  # type: ignore[arg-type]
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
@@ -2203,8 +2203,8 @@ def _build_model_from_checkpoint(state_dict: dict) -> Any:
         pretrained=False,  # weights come from checkpoint
         use_asset_embeddings=use_asset_emb,
     )
-    model.load_state_dict(state_dict, strict=False)
-    model.eval()
+    model.load_state_dict(state_dict, strict=False)  # type: ignore[union-attr]
+    model.eval()  # type: ignore[union-attr]
     return model
 
 

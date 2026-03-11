@@ -1,5 +1,5 @@
 """
-Asset Fingerprint — Per-Asset Behavioral Profiling for CNN (Phase 7C)
+Asset Fingerprint — Per-Asset Behavioral Profiling for CNN
 =====================================================================
 Profiles what makes each asset unique so the CNN can learn asset-specific
 breakout behavior, and so the dashboard can display an "Asset DNA" radar
@@ -21,7 +21,7 @@ Per-asset fingerprint vector (computed daily, cacheable):
                                        and do gaps fill or continue?
 
 These are NOT tabular features directly — they are used to:
-  1. Create asset embedding training labels (Phase 7A)
+  1. Create asset embedding training labels
   2. Detect when an asset is "acting like something else" (regime anomaly)
   3. Render the "Asset DNA" radar chart on the dashboard
 
@@ -355,13 +355,13 @@ def _compute_session_concentration(
 
         df = bars_1m.copy()
         # Ensure datetime index in ET
-        if df.index.tz is None:
-            df.index = df.index.tz_localize("UTC")
-        df.index = df.index.tz_convert(_ET)
+        if df.index.tz is None:  # type: ignore[union-attr]
+            df.index = df.index.tz_localize("UTC")  # type: ignore[union-attr]
+        df.index = df.index.tz_convert(_ET)  # type: ignore[union-attr]
 
         # Group by trading date
-        df["hour"] = df.index.hour
-        df["date"] = df.index.date
+        df["hour"] = df.index.hour  # type: ignore[union-attr]
+        df["date"] = df.index.date  # type: ignore[union-attr]
 
         dates = sorted(df["date"].unique())
         if len(dates) > lookback_days:
@@ -392,10 +392,10 @@ def _compute_session_concentration(
                 (us, us_ranges),
                 (settle, settle_ranges),
             ]:
-                if not session_bars.empty:
+                if not session_bars.empty:  # type: ignore[union-attr]
                     try:
-                        h = float(session_bars[high_col].max())
-                        lo = float(session_bars[low_col].min())
+                        h = float(session_bars[high_col].max())  # type: ignore[arg-type]
+                        lo = float(session_bars[low_col].min())  # type: ignore[arg-type]
                         range_list.append(max(0.0, h - lo))
                     except Exception:
                         range_list.append(0.0)
@@ -520,25 +520,25 @@ def _classify_volume_profile(
         if vol_col not in df.columns:
             return VolumeProfileShape.UNKNOWN
 
-        if df.index.tz is None:
-            df.index = df.index.tz_localize("UTC")
-        df.index = df.index.tz_convert(_ET)
-        df["hour"] = df.index.hour
+        if df.index.tz is None:  # type: ignore[union-attr]
+            df.index = df.index.tz_localize("UTC")  # type: ignore[union-attr]
+        df.index = df.index.tz_convert(_ET)  # type: ignore[union-attr]
+        df["hour"] = df.index.hour  # type: ignore[union-attr]
 
         # Use only the last N days
-        df["date"] = df.index.date
+        df["date"] = df.index.date  # type: ignore[union-attr]
         dates = sorted(df["date"].unique())
         if len(dates) > lookback_days:
             dates = dates[-lookback_days:]
-            df = df[df["date"].isin(set(dates))]
+            df = df[df["date"].isin(set(dates))]  # type: ignore[arg-type]
 
         # Average volume per hour bucket
         hourly_vol = df.groupby("hour")[vol_col].mean()
-        if hourly_vol.empty or hourly_vol.sum() == 0:
+        if hourly_vol.empty or hourly_vol.sum() == 0:  # type: ignore[union-attr]
             return VolumeProfileShape.UNKNOWN
 
         # Normalise to [0, 1]
-        vol_norm = hourly_vol / hourly_vol.max()
+        vol_norm = hourly_vol / hourly_vol.max()  # type: ignore[operator]
 
         # Classify based on shape heuristics
         # RTH hours: 9–15 (09:00–15:59 ET)
@@ -733,13 +733,13 @@ def compute_asset_fingerprint(
 
     # 1. Typical daily range / ATR
     try:
-        fp.typical_daily_range_atr = _compute_typical_daily_range_atr(bars_daily, lookback_days)
+        fp.typical_daily_range_atr = _compute_typical_daily_range_atr(bars_daily, lookback_days)  # type: ignore[arg-type]
     except Exception as exc:
         errors.append(f"daily_range: {exc}")
 
     # 2. Session concentration
     try:
-        fp.session_concentration = _compute_session_concentration(bars_1m, lookback_days)
+        fp.session_concentration = _compute_session_concentration(bars_1m, lookback_days)  # type: ignore[arg-type]
     except Exception as exc:
         errors.append(f"session_conc: {exc}")
 
@@ -747,19 +747,19 @@ def compute_asset_fingerprint(
     try:
         if bars_daily is not None and not bars_daily.empty:
             close_prices = bars_daily["Close"].astype(float)
-            fp.mean_reversion_tendency = _compute_hurst_exponent(close_prices)
+            fp.mean_reversion_tendency = _compute_hurst_exponent(close_prices)  # type: ignore[arg-type]
     except Exception as exc:
         errors.append(f"hurst: {exc}")
 
     # 4. Volume profile shape
     try:
-        fp.volume_profile_shape = _classify_volume_profile(bars_1m, lookback_days)
+        fp.volume_profile_shape = _classify_volume_profile(bars_1m, lookback_days)  # type: ignore[arg-type]
     except Exception as exc:
         errors.append(f"vol_profile: {exc}")
 
     # 5. Overnight gap statistics
     try:
-        fp.overnight_gap = _compute_overnight_gap_stats(bars_daily, lookback_days)
+        fp.overnight_gap = _compute_overnight_gap_stats(bars_daily, lookback_days)  # type: ignore[arg-type]
     except Exception as exc:
         errors.append(f"gap_stats: {exc}")
 
@@ -772,7 +772,7 @@ def compute_asset_fingerprint(
         fp.lookback_days = min(lookback_days, len(bars_daily))
     elif bars_1m is not None and not bars_1m.empty:
         try:
-            fp.lookback_days = bars_1m.index.normalize().nunique()
+            fp.lookback_days = bars_1m.index.normalize().nunique()  # type: ignore[union-attr]
         except Exception:
             fp.lookback_days = 0
 

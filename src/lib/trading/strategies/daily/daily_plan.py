@@ -598,21 +598,73 @@ def _compute_signal_quality_for_asset(asset_name: str) -> float:
 
 
 def _fetch_asset_data(asset_name: str) -> tuple[float, float]:
-    """Fetch last price and ATR for an asset from cache.
+    """Fetch last price and ATR for an asset.
+
+    Routing priority:
+      1. EngineDataClient (GET /bars/{symbol}) — engine handles Redis →
+         Postgres → Massive/Kraken internally; no direct API keys required.
+      2. Engine snapshot endpoint (GET /market_data/snapshot/{symbol}) —
+         provides a live price without needing bar history.
+      3. Legacy fallback: ``cache.get_data`` (Redis/yfinance) — used when
+         the engine is unreachable (e.g. local dev without Docker).
 
     Returns:
         (last_price, atr) — both 0.0 on failure.
     """
+    # ── Resolve ticker from asset name ────────────────────────────────────
+    ticker: str | None = None
     try:
-        from lib.analysis.volatility import kmeans_volatility_clusters
-        from lib.core.cache import get_data
         from lib.core.models import ASSETS
 
         ticker = ASSETS.get(asset_name)
-        if not ticker:
-            return 0.0, 0.0
+    except Exception:
+        pass
 
-        df = get_data(ticker, "5m", "5d")
+    symbol = ticker or asset_name  # fall back to using the name directly
+
+    # ── Primary path: engine HTTP API ─────────────────────────────────────
+    try:
+        from lib.analysis.engine_data_client import get_client
+        from lib.analysis.volatility import kmeans_volatility_clusters
+
+        client = get_client()
+        df = client.get_bars(symbol, interval="5m", days_back=5)
+        if df is not None and not df.empty and len(df) >= 10:
+            last_price = _safe_float(df["Close"].iloc[-1])
+            try:
+                vol = kmeans_volatility_clusters(df)
+                atr = _safe_float(vol.get("raw_atr", 0.0))
+            except Exception:
+                if "High" in df.columns and "Low" in df.columns:
+                    recent = df.tail(14)
+                    tr = recent["High"] - recent["Low"]
+                    atr = _safe_float(tr.mean())
+                else:
+                    atr = last_price * 0.005
+            if last_price > 0:
+                return last_price, atr
+
+        # Engine has no bars yet — try snapshot for at least a live price
+        snap = client.get_snapshot(symbol)
+        if snap:
+            snap_price = _safe_float(snap.get("price", 0.0))
+            if snap_price > 0:
+                logger.debug(
+                    "Using snapshot price for %s (no bars from engine): %.4f",
+                    asset_name,
+                    snap_price,
+                )
+                return snap_price, snap_price * 0.005  # rough ATR estimate
+
+    except Exception as exc:
+        logger.debug("EngineDataClient fetch failed for %s: %s", asset_name, exc)
+
+    # ── Legacy fallback: local cache / Redis ──────────────────────────────
+    try:
+        from lib.analysis.volatility import kmeans_volatility_clusters
+        from lib.core.cache import get_data
+
+        df = get_data(symbol, "5m", "5d")
         if df is None or df.empty or len(df) < 10:
             return 0.0, 0.0
 
@@ -621,7 +673,6 @@ def _fetch_asset_data(asset_name: str) -> tuple[float, float]:
             vol = kmeans_volatility_clusters(df)
             atr = _safe_float(vol.get("raw_atr", 0.0))
         except Exception:
-            # Fallback: simple ATR from high-low range
             if "High" in df.columns and "Low" in df.columns:
                 recent = df.tail(14)
                 tr = recent["High"] - recent["Low"]
@@ -629,9 +680,13 @@ def _fetch_asset_data(asset_name: str) -> tuple[float, float]:
             else:
                 atr = last_price * 0.005
 
+        logger.debug(
+            "Asset data for %s served from local cache (engine unavailable)",
+            asset_name,
+        )
         return last_price, atr
     except Exception as exc:
-        logger.debug("Data fetch failed for %s: %s", asset_name, exc)
+        logger.debug("Legacy cache fetch failed for %s: %s", asset_name, exc)
         return 0.0, 0.0
 
 

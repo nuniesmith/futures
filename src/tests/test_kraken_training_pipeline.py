@@ -588,8 +588,8 @@ class TestLoadBarsRouting:
 
         from lib.services.training.dataset_generator import load_bars
 
-        # Patch DataResolver to not interfere
-        with patch("lib.services.data.resolver.DataResolver", side_effect=ImportError):
+        # Force EngineDataClient to return None so the legacy fallback path is exercised
+        with patch("lib.services.data.engine_data_client.EngineDataClient.get_bars", return_value=None):
             df = load_bars("BTC", source="kraken", days=1)
 
         assert df is not None
@@ -609,15 +609,17 @@ class TestLoadBarsRouting:
 
         from lib.services.training.dataset_generator import load_bars
 
-        with patch("lib.services.data.resolver.DataResolver", side_effect=ImportError):
+        # Force EngineDataClient to return None so the legacy fallback path is exercised
+        with patch("lib.services.data.engine_data_client.EngineDataClient.get_bars", return_value=None):
             df = load_bars("KRAKEN:XBTUSD", source="kraken", days=1)
 
         assert df is not None
         assert mock_kraken.called
 
+    @patch("lib.services.training.dataset_generator._load_bars_from_engine")
     @patch("lib.services.training.dataset_generator._load_bars_from_massive")
     @patch("lib.services.training.dataset_generator._load_bars_from_db")
-    def test_futures_does_not_route_to_kraken(self, mock_db, mock_massive):
+    def test_futures_does_not_route_to_kraken(self, mock_db, mock_massive, mock_engine):
         """MES should NOT route to Kraken — should try db → massive → csv."""
         import pandas as pd
 
@@ -626,10 +628,12 @@ class TestLoadBarsRouting:
             index=pd.DatetimeIndex([datetime.now(tz=UTC)], name="datetime"),
         )
         mock_db.return_value = None
+        mock_engine.return_value = None
 
         from lib.services.training.dataset_generator import load_bars
 
-        with patch("lib.services.data.resolver.DataResolver", side_effect=ImportError):
+        # Force EngineDataClient to return None so the legacy fallback path is exercised
+        with patch("lib.services.data.engine_data_client.EngineDataClient.get_bars", return_value=None):
             df = load_bars("MES", source="massive", days=1)
 
         assert df is not None
@@ -720,7 +724,7 @@ class TestChartRenderingCompatibility:
                     orb_high=df["High"].iloc[10],
                     orb_low=df["Low"].iloc[10],
                     direction="long",
-                    quality_pct=85.0,
+                    quality_pct=85,
                     label="long",
                     save_path=tmp.name,
                 )

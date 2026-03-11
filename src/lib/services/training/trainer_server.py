@@ -152,13 +152,43 @@ DEFAULT_LR = float(os.getenv("CNN_RETRAIN_LR", "0.0001"))
 DEFAULT_PATIENCE = int(os.getenv("CNN_RETRAIN_PATIENCE", "12"))
 
 # Dataset generation defaults
-DEFAULT_SYMBOLS = os.getenv(
-    "CNN_RETRAIN_SYMBOLS",
-    # 22 CME micro futures + 3 Kraken spot crypto (BTC/ETH/SOL).
-    # Kraken symbols are resolved via DataResolver → Kraken REST API with
-    # automatic Postgres/Redis backfill so subsequent training runs are fast.
-    "MGC,SIL,MHG,MCL,MNG,MES,MNQ,M2K,MYM,6E,6B,6J,6A,6C,6S,ZN,ZB,ZC,ZS,ZW,MBT,MET,BTC,ETH,SOL",
-).split(",")
+# ---------------------------------------------------------------------------
+# Symbol list — derived from engine /bars/assets at runtime.
+# This fallback list mirrors models.ASSETS (all CME micro futures) and is
+# used when the engine is unreachable at startup or when CNN_RETRAIN_SYMBOLS
+# is explicitly set in the environment.
+# ---------------------------------------------------------------------------
+_FALLBACK_SYMBOLS: list[str] = [
+    "MGC",
+    "SIL",
+    "MHG",
+    "MCL",
+    "MNG",
+    "MES",
+    "MNQ",
+    "M2K",
+    "MYM",
+    "6E",
+    "6B",
+    "6J",
+    "6A",
+    "6C",
+    "6S",
+    "ZN",
+    "ZB",
+    "ZC",
+    "ZS",
+    "ZW",
+    "MBT",
+    "MET",
+    "BTC",
+    "ETH",
+    "SOL",
+]
+
+DEFAULT_SYMBOLS: list[str] = (
+    os.getenv("CNN_RETRAIN_SYMBOLS", "").split(",") if os.getenv("CNN_RETRAIN_SYMBOLS") else _FALLBACK_SYMBOLS
+)
 DEFAULT_DAYS_BACK = int(os.getenv("CNN_RETRAIN_DAYS_BACK", "180"))
 # "engine" is the preferred default — the trainer calls the engine's HTTP API
 # (GET /bars/{symbol}?auto_fill=true) which handles Redis → Postgres → external
@@ -166,6 +196,47 @@ DEFAULT_DAYS_BACK = int(os.getenv("CNN_RETRAIN_DAYS_BACK", "180"))
 # separate GPU machine without direct Redis/Postgres access.
 DEFAULT_BARS_SOURCE = os.getenv("CNN_RETRAIN_BARS_SOURCE", "engine")
 DEFAULT_ORB_SESSION = os.getenv("CNN_RETRAIN_ORB_SESSION", os.getenv("CNN_ORB_SESSION", "all"))
+
+# Engine data service URL — same variable used by dataset_generator.py so
+# both modules always talk to the same host.
+_ENGINE_DATA_URL: str = (os.getenv("ENGINE_DATA_URL") or os.getenv("DATA_SERVICE_URL") or "http://data:8000").rstrip(
+    "/"
+)
+
+
+def _fetch_symbols_from_engine(
+    engine_url: str = _ENGINE_DATA_URL,
+    api_key: str = "",
+    timeout: int = 15,
+) -> list[str] | None:
+    """Return the enabled symbol list from the engine via EngineDataClient.
+
+    Uses the canonical client (which already has fast-path /bars/symbols with
+    /bars/assets fallback and in-process TTL caching) so no duplicate logic
+    is needed here.
+
+    Returns a sorted list of short symbols, or None if the engine is unreachable.
+    """
+    try:
+        from lib.services.data.engine_data_client import EngineDataClient
+
+        client = EngineDataClient(
+            base_url=engine_url,
+            api_key=api_key,
+            snapshot_timeout=timeout,
+        )
+        symbols = client.get_symbols(use_cache=False)
+        if symbols:
+            logger.info(
+                "Fetched %d symbols from engine: %s",
+                len(symbols),
+                ", ".join(symbols[:10]) + ("..." if len(symbols) > 10 else ""),
+            )
+            return symbols
+    except Exception as exc:
+        logger.warning("Could not fetch symbols from engine (%s) — using fallback list", exc)
+    return None
+
 
 # Paths
 MODELS_DIR = Path(os.getenv("MODELS_DIR", "/app/models"))
@@ -346,7 +417,35 @@ def _run_training_pipeline(params: TrainRequest) -> None:
     """
     try:
         # ----- Resolve parameters -----
-        symbols = params.symbols or DEFAULT_SYMBOLS
+        # Symbol list priority:
+        #   1. Explicit symbols in the TrainRequest (caller override)
+        #   2. CNN_RETRAIN_SYMBOLS env var (set at container startup)
+        #   3. Live symbol list from engine /bars/assets (preferred — always
+        #      mirrors models.ASSETS on the engine/data box)
+        #   4. _FALLBACK_SYMBOLS hardcoded list (offline / engine unreachable)
+        if params.symbols:
+            symbols = params.symbols
+        elif os.getenv("CNN_RETRAIN_SYMBOLS"):
+            symbols = DEFAULT_SYMBOLS
+        else:
+            engine_api_key = os.getenv("API_KEY", "").strip()
+            fetched = _fetch_symbols_from_engine(
+                engine_url=_ENGINE_DATA_URL,
+                api_key=engine_api_key,
+            )
+            if fetched:
+                symbols = fetched
+                logger.info(
+                    "Using %d symbols fetched from engine /bars/assets",
+                    len(symbols),
+                )
+            else:
+                symbols = _FALLBACK_SYMBOLS
+                logger.info(
+                    "Engine /bars/assets unreachable — using %d fallback symbols",
+                    len(symbols),
+                )
+
         days_back = params.days_back or DEFAULT_DAYS_BACK
         orb_session = params.orb_session or DEFAULT_ORB_SESSION
         bars_source = params.bars_source or DEFAULT_BARS_SOURCE
@@ -759,6 +858,41 @@ async def status() -> JSONResponse:
                 "default_batch_size": DEFAULT_BATCH_SIZE,
                 "default_session": DEFAULT_ORB_SESSION,
             },
+        }
+    )
+
+
+@app.get("/symbols")
+async def get_symbols() -> JSONResponse:
+    """Return the symbol list that will be used for the next training run.
+
+    Queries the engine via EngineDataClient so the response always reflects
+    the current state of models.ASSETS on the engine/data box.
+    Falls back to DEFAULT_SYMBOLS if the engine is unreachable.
+    """
+    engine_api_key = os.getenv("API_KEY", "").strip()
+
+    if os.getenv("CNN_RETRAIN_SYMBOLS"):
+        source = "env"
+        symbols = DEFAULT_SYMBOLS
+    else:
+        fetched = _fetch_symbols_from_engine(
+            engine_url=_ENGINE_DATA_URL,
+            api_key=engine_api_key,
+        )
+        if fetched:
+            source = "engine"
+            symbols = fetched
+        else:
+            source = "fallback"
+            symbols = _FALLBACK_SYMBOLS
+
+    return JSONResponse(
+        {
+            "symbols": symbols,
+            "total": len(symbols),
+            "source": source,
+            "engine_url": _ENGINE_DATA_URL,
         }
     )
 

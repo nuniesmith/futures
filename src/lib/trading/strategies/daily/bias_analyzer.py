@@ -232,7 +232,7 @@ def _classify_candle(
     body_ratio = body / candle_range
     upper_wick = h - max(o, c)
     lower_wick = min(o, c) - l
-    prev_h - prev_l
+    _ = prev_h - prev_l  # noqa: B018
 
     # Inside day: today's range entirely within yesterday's range
     if h <= prev_h and l >= prev_l:
@@ -366,10 +366,10 @@ def _compute_atr_trend(daily_df: pd.DataFrame, atr_period: int = 14, lookback: i
 
     # Compute true range
     tr = np.maximum(
-        highs[1:] - lows[1:],
+        highs[1:] - lows[1:],  # type: ignore[operator]
         np.maximum(
-            np.abs(highs[1:] - closes[:-1]),
-            np.abs(lows[1:] - closes[:-1]),
+            np.abs(highs[1:] - closes[:-1]),  # type: ignore[operator]
+            np.abs(lows[1:] - closes[:-1]),  # type: ignore[operator]
         ),
     )
 
@@ -377,7 +377,7 @@ def _compute_atr_trend(daily_df: pd.DataFrame, atr_period: int = 14, lookback: i
         return False
 
     # Simple moving average ATR
-    atr_series = pd.Series(tr).rolling(atr_period).mean().dropna()
+    atr_series = pd.Series(tr).rolling(atr_period).mean().dropna()  # type: ignore[union-attr]
     if len(atr_series) < lookback:
         return False
 
@@ -487,7 +487,7 @@ def compute_daily_bias(
     # ══════════════════════════════════════════════════════════════════════
     # Component 3: Monthly Trend Score (weight: 25%)
     # ══════════════════════════════════════════════════════════════════════
-    monthly_trend = _compute_monthly_trend(daily_bars["Close"])
+    monthly_trend = _compute_monthly_trend(daily_bars["Close"])  # type: ignore[arg-type]
     result.monthly_trend_score = monthly_trend
     result.component_scores["monthly_trend"] = monthly_trend
 
@@ -495,7 +495,7 @@ def compute_daily_bias(
     # Component 4: Volume Confirmation (weight: 10%)
     # ══════════════════════════════════════════════════════════════════════
     has_volume = "Volume" in daily_bars.columns
-    vol_confirm = _compute_volume_confirmation(daily_bars["Volume"]) if has_volume else False
+    vol_confirm = _compute_volume_confirmation(daily_bars["Volume"]) if has_volume else False  # type: ignore[arg-type]
     result.volume_confirmation = vol_confirm
     # Volume confirms the candle direction — if no volume, neutral
     vol_bias = 0.0

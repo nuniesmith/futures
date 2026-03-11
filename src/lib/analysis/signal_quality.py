@@ -1,5 +1,5 @@
 """
-Ruby Signal Quality Score — ported from fks.pine and fks_info.pine.
+Signal Quality Score.
 
 This module computes the multi-factor signal quality score exactly as
 implemented in your Pine Script indicators. The score combines 5 weighted
