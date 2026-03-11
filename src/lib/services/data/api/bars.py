@@ -1156,16 +1156,15 @@ def get_bars(
                 except Exception as exc:
                     logger.debug("Kraken fallback failed for %s (%s): %s", symbol, _kraken_ticker, exc)
 
-        if df.empty:
+        if df.empty and symbol.upper() not in _KRAKEN_SPOT_SYMBOLS:
             # Last resort: yfinance (futures only — skip for known Kraken spot symbols)
-            if df.empty and symbol.upper() not in _KRAKEN_SPOT_SYMBOLS:
-                try:
-                    from lib.core.cache import get_data
+            try:
+                from lib.core.cache import get_data
 
-                    period_str = f"{min(days_back, 60)}d"
-                    df = get_data(symbol, interval=interval, period=period_str)
-                except Exception as exc:
-                    logger.debug("yfinance fallback failed for %s: %s", symbol, exc)
+                period_str = f"{min(days_back, 60)}d"
+                df = get_data(symbol, interval=interval, period=period_str)
+            except Exception as exc:
+                logger.debug("yfinance fallback failed for %s: %s", symbol, exc)
 
     data_payload = _df_to_split(df)
 
