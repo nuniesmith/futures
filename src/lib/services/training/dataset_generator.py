@@ -884,13 +884,28 @@ def load_bars(
         "kraken": lambda: _load_bars_from_kraken(symbol, days),
     }
 
-    # For Kraken symbols always try the Kraken loader first regardless of
-    # the configured source, then fall back to DB (in case bars were
-    # previously stored by the backfill service) and finally CSV.
+    # For Kraken symbols, respect the configured source first.
+    # When source=="engine", route through the engine HTTP API so that Redis →
+    # Postgres → Kraken REST resolution happens server-side and the trainer
+    # doesn't hammer the Kraken public REST endpoint directly (which triggers
+    # EGeneral:Too many requests when multiple symbols are processed in sequence).
     if _is_kraken:
-        for name in ["kraken", "db", "csv"]:
+        # Build the ordered loader list for Kraken symbols.
+        # "engine" goes first when that source was explicitly requested so
+        # the engine's three-tier cache is used before falling back to direct
+        # Kraken REST.  "kraken" (direct REST) is tried last as a cold-path
+        # fallback for when the engine is unreachable.
+        if source == "engine":
+            kraken_order = ["engine", "kraken", "db", "csv"]
+        else:
+            kraken_order = ["kraken", "db", "csv"]
+
+        for name in kraken_order:
+            loader = loaders.get(name)
+            if loader is None:
+                continue
             try:
-                df = loaders[name]()
+                df = loader()
                 if df is not None and not df.empty:
                     logger.info("Loaded Kraken bars for %s via legacy %s", symbol, name)
                     return df

@@ -337,28 +337,52 @@ class KrakenDataProvider:
         """Make a rate-limited GET to a Kraken public endpoint.
 
         Returns the ``result`` dict from the response, or raises on error.
+
+        Automatically retries on ``EGeneral:Too many requests`` with
+        exponential backoff (1s, 2s, 4s) before giving up.
         """
         if not self.is_available:
             raise RuntimeError("Kraken REST client not initialized")
 
-        self._rate_limit_public()
         url = f"{KRAKEN_REST_PUBLIC}/{endpoint}"
 
-        try:
-            resp = self._session.get(url, params=params, timeout=15)
-            resp.raise_for_status()
-            body = resp.json()
-        except Exception as exc:
-            logger.error("Kraken API error (%s): %s", endpoint, exc)
-            raise
+        _MAX_RETRIES = 3
+        _RETRY_DELAYS = (1.0, 2.0, 4.0)  # seconds — exponential backoff
 
-        errors = body.get("error", [])
-        if errors:
-            err_msg = "; ".join(str(e) for e in errors)
-            logger.error("Kraken API returned errors (%s): %s", endpoint, err_msg)
-            raise RuntimeError(f"Kraken API error: {err_msg}")
+        for attempt in range(_MAX_RETRIES + 1):
+            self._rate_limit_public()
 
-        return body.get("result", {})
+            try:
+                resp = self._session.get(url, params=params, timeout=15)
+                resp.raise_for_status()
+                body = resp.json()
+            except Exception as exc:
+                logger.error("Kraken API error (%s): %s", endpoint, exc)
+                raise
+
+            errors = body.get("error", [])
+            if errors:
+                err_msg = "; ".join(str(e) for e in errors)
+                # Retry on rate-limit errors with backoff
+                if "Too many requests" in err_msg or "EAPI:Rate limit" in err_msg:
+                    if attempt < _MAX_RETRIES:
+                        delay = _RETRY_DELAYS[attempt]
+                        logger.warning(
+                            "Kraken rate-limit on %s (attempt %d/%d) — backing off %.1fs",
+                            endpoint,
+                            attempt + 1,
+                            _MAX_RETRIES,
+                            delay,
+                        )
+                        time.sleep(delay)
+                        continue
+                logger.error("Kraken API returned errors (%s): %s", endpoint, err_msg)
+                raise RuntimeError(f"Kraken API error: {err_msg}")
+
+            return body.get("result", {})
+
+        # Exhausted retries
+        raise RuntimeError(f"Kraken API error: Too many requests for {endpoint} after {_MAX_RETRIES} retries")
 
     def _private_post(self, endpoint: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         """Make a rate-limited signed POST to a Kraken private endpoint."""

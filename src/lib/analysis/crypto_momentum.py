@@ -943,7 +943,23 @@ class CryptoMomentumScorer:
         return self.score_with_data(crypto_bars, futures_bars, now=now)
 
     def _fetch_crypto_bars(self, internal_ticker: str) -> pd.DataFrame | None:
-        """Fetch crypto OHLCV from cache or Kraken REST."""
+        """Fetch crypto OHLCV from cache (Redis) first, then Kraken REST.
+
+        Routes through ``cache.get_data`` so that repeated calls within a
+        short window are served from Redis instead of hammering the Kraken
+        REST API and triggering ``EGeneral:Too many requests``.
+        """
+        # --- Hot path: Redis / in-process cache --------------------------
+        try:
+            from lib.core.cache import get_data
+
+            df = get_data(internal_ticker, interval=self.interval, period="1d")
+            if df is not None and not df.empty:
+                return df
+        except Exception as exc:
+            logger.debug("cache.get_data failed for %s: %s", internal_ticker, exc)
+
+        # --- Cold path: Kraken REST API ----------------------------------
         try:
             from lib.integrations.kraken_client import get_kraken_ohlcv
 
@@ -956,14 +972,54 @@ class CryptoMomentumScorer:
             return None
 
     def _fetch_futures_bars(self, symbol: str) -> pd.DataFrame | None:
-        """Fetch futures OHLCV from the data resolver / cache."""
+        """Fetch futures OHLCV from the data resolver / cache.
+
+        Resolves the short symbol (e.g. "MES") to a Yahoo-style ticker
+        (e.g. "MES=F") so that ``cache.get_data`` / yfinance receives a
+        valid ticker instead of the invalid ``/MES`` slash-prefixed form
+        that previously caused ``TypeError: 'Response' object is not
+        subscriptable`` in newer yfinance versions.
+
+        Also tries the DataResolver (Redis → Postgres → API) first when
+        it is available so we stay within the cache tier.
+        """
+        # --- Preferred path: DataResolver (Redis → Postgres → API) ------
+        try:
+            from lib.services.data.resolver import DataResolver
+
+            resolver = DataResolver(enable_backfill_redis=False, enable_backfill_postgres=False)
+            df = resolver.resolve(symbol, days=1)
+            if df is not None and not df.empty:
+                return df
+        except Exception:
+            pass  # fall through to cache.get_data
+
+        # --- Fallback: cache.get_data with a valid Yahoo-style ticker ----
+        # Map short names → Yahoo =F suffix; skip KRAKEN: symbols.
+        _FUTURES_TICKER_MAP: dict[str, str] = {
+            "MES": "MES=F",
+            "MNQ": "MNQ=F",
+            "MGC": "MGC=F",
+            "MCL": "MCL=F",
+            "MYM": "MYM=F",
+            "M2K": "M2K=F",
+            "ES": "ES=F",
+            "NQ": "NQ=F",
+            "GC": "GC=F",
+            "CL": "CL=F",
+            "YM": "YM=F",
+        }
+        ticker = _FUTURES_TICKER_MAP.get(symbol.upper(), f"{symbol.upper()}=F")
         try:
             from lib.core.cache import get_data
 
-            return get_data(f"/{symbol}", interval=self.interval, period="1d")
+            df = get_data(ticker, interval=self.interval, period="1d")
+            if df is not None and not df.empty:
+                return df
         except Exception as exc:
-            logger.debug("Failed to fetch futures bars for %s: %s", symbol, exc)
-            return None
+            logger.debug("Failed to fetch futures bars for %s (ticker=%s): %s", symbol, ticker, exc)
+
+        return None
 
     def _build_composite_returns(self, crypto_bars: dict[str, pd.DataFrame]) -> dict[str, float]:
         """Build a weighted composite of crypto returns, keyed by timestamp.
