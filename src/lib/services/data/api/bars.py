@@ -219,6 +219,132 @@ def _ensure_table() -> None:
         logger.debug("Could not ensure backfill table: %s", exc)
 
 
+# ---------------------------------------------------------------------------
+# Symbol normalisation
+# ---------------------------------------------------------------------------
+
+# Kraken spot crypto symbols — these are NOT futures and must never get =F
+_KRAKEN_PREFIXES = ("KRAKEN:",)
+_KRAKEN_SPOT_SYMBOLS = frozenset(
+    [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XBT",
+        "ADA",
+        "AVAX",
+        "DOT",
+        "MATIC",
+        "LINK",
+        "UNI",
+        "AAVE",
+        "ALGO",
+        "ATOM",
+        "XRP",
+        "LTC",
+        "BCH",
+    ]
+)
+
+# CME/CBOT futures short names that arrive without the =F suffix.
+# All symbols in the Massive product map that end with =F are eligible;
+# we keep an explicit set here so we never accidentally append =F to
+# a Kraken spot ticker or a symbol that's already normalised.
+_FUTURES_SHORT_NAMES = frozenset(
+    [
+        "MGC",
+        "SIL",
+        "MHG",
+        "MCL",
+        "MNG",
+        "MES",
+        "MNQ",
+        "M2K",
+        "MYM",
+        "6E",
+        "6B",
+        "6J",
+        "6A",
+        "6C",
+        "6S",
+        "M6E",
+        "M6B",
+        "M6J",
+        "ZN",
+        "ZB",
+        "ZC",
+        "ZS",
+        "ZW",
+        "ZF",
+        "ZT",
+        "ZL",
+        "ZM",
+        "MBT",
+        "MET",
+        "ES",
+        "NQ",
+        "GC",
+        "SI",
+        "HG",
+        "CL",
+        "NG",
+        "RTY",
+        "YM",
+        "BTC=F",
+        "ETH=F",  # CME crypto futures (distinct from Kraken spot)
+    ]
+)
+
+
+def _normalize_symbol(symbol: str) -> str:
+    """Normalise a caller-supplied symbol to the canonical =F ticker form.
+
+    The /bars endpoints accept both short names (e.g. ``MES``) and fully
+    qualified Yahoo-style tickers (e.g. ``MES=F``).  All internal helpers
+    (backfill, Massive resolver, DB queries) expect the ``=F`` form for
+    CME/CBOT futures.  Kraken spot symbols (BTC, ETH, SOL, KRAKEN:XBTUSD)
+    are returned unchanged.
+
+    Examples
+    --------
+    >>> _normalize_symbol("MES")   -> "MES=F"
+    >>> _normalize_symbol("MES=F") -> "MES=F"
+    >>> _normalize_symbol("BTC")   -> "BTC"        (Kraken spot)
+    >>> _normalize_symbol("KRAKEN:XBTUSD") -> "KRAKEN:XBTUSD"
+    """
+    # Already has =F — return as-is
+    if "=" in symbol:
+        return symbol
+
+    # Explicit Kraken prefix — never a futures ticker
+    for prefix in _KRAKEN_PREFIXES:
+        if symbol.upper().startswith(prefix.upper()):
+            return symbol
+
+    # Known Kraken spot names — do not append =F
+    if symbol.upper() in _KRAKEN_SPOT_SYMBOLS:
+        return symbol
+
+    # Known CME/CBOT futures short name — append =F
+    if symbol.upper() in _FUTURES_SHORT_NAMES:
+        return f"{symbol.upper()}=F"
+
+    # Unknown symbol: try to detect via Massive resolver; if it resolves,
+    # it's a futures ticker.  Fall back to appending =F so we at least try.
+    try:
+        from lib.core.cache import _get_massive_provider
+
+        provider = _get_massive_provider()
+        if provider is not None and provider.is_available:
+            if provider.resolve_from_yahoo(f"{symbol.upper()}=F"):
+                return f"{symbol.upper()}=F"
+    except Exception:
+        pass
+
+    # Default: assume futures
+    return f"{symbol.upper()}=F"
+
+
 def _fetch_stored_bars(
     symbol: str,
     interval: str = "1m",
@@ -793,6 +919,7 @@ def get_gaps(
     The ``symbol`` value should be a Yahoo-style ticker, e.g. ``MGC%3DF``
     (URL-encode the ``=`` as ``%3D``).
     """
+    symbol = _normalize_symbol(symbol)
     _ensure_table()
     try:
         from lib.services.engine.backfill import get_gap_report
@@ -817,6 +944,7 @@ def get_gaps(
 
 @router.post("/bars/{symbol}/fill")
 def fill_symbol(symbol: str, req: FillRequest) -> JSONResponse:
+    symbol = _normalize_symbol(symbol)
     """Trigger an immediate incremental fill for a specific symbol.
 
     This call **blocks** until the fill is complete and returns a summary
@@ -829,6 +957,7 @@ def fill_symbol(symbol: str, req: FillRequest) -> JSONResponse:
     3. Upserts the new bars into Postgres / SQLite.
     4. Warms the Redis cache so downstream consumers see fresh data.
     """
+    symbol = _normalize_symbol(symbol)
     _ensure_table()
     result = _run_incremental_fill(
         symbol,
@@ -915,6 +1044,7 @@ def get_bars(
     The ``data`` field is in pandas ``split`` orientation and can be
     reconstructed on the client with ``pd.DataFrame(**response["data"])``.
     """
+    symbol = _normalize_symbol(symbol)
     _ensure_table()
 
     # Parse optional explicit time bounds
@@ -992,14 +1122,51 @@ def get_bars(
             logger.debug("Direct Massive fetch failed for %s: %s", symbol, exc)
 
         if df.empty:
-            # Last resort: yfinance
-            try:
-                from lib.core.cache import get_data
+            # Kraken spot fallback — for BTC, ETH, SOL etc. that are not in Massive.
+            # Resolve short names to their Kraken internal ticker before calling.
+            _KRAKEN_SPOT_TICKER_MAP: dict[str, str] = {
+                "BTC": "KRAKEN:XBTUSD",
+                "XBT": "KRAKEN:XBTUSD",
+                "ETH": "KRAKEN:ETHUSD",
+                "SOL": "KRAKEN:SOLUSD",
+                "ADA": "KRAKEN:ADAUSD",
+                "AVAX": "KRAKEN:AVAXUSD",
+                "DOT": "KRAKEN:DOTUSD",
+                "LINK": "KRAKEN:LINKUSD",
+                "XRP": "KRAKEN:XRPUSD",
+                "LTC": "KRAKEN:LTCUSD",
+                "BCH": "KRAKEN:BCHUSD",
+            }
+            _kraken_ticker = _KRAKEN_SPOT_TICKER_MAP.get(
+                symbol.upper(),
+                symbol if symbol.upper().startswith("KRAKEN:") else None,
+            )
+            if _kraken_ticker:
+                try:
+                    from lib.integrations.kraken_client import get_kraken_ohlcv
 
-                period_str = f"{min(days_back, 60)}d"
-                df = get_data(symbol, interval=interval, period=period_str)
-            except Exception as exc:
-                logger.debug("yfinance fallback failed for %s: %s", symbol, exc)
+                    df_kraken = get_kraken_ohlcv(_kraken_ticker, interval=interval, period=f"{days_back}d")
+                    if df_kraken is not None and not df_kraken.empty:
+                        df = df_kraken
+                        logger.info(
+                            "Kraken fallback supplied %d bars for %s (%s)",
+                            len(df),
+                            symbol,
+                            _kraken_ticker,
+                        )
+                except Exception as exc:
+                    logger.debug("Kraken fallback failed for %s (%s): %s", symbol, _kraken_ticker, exc)
+
+        if df.empty:
+            # Last resort: yfinance (futures only — skip for known Kraken spot symbols)
+            if symbol.upper() not in _KRAKEN_SPOT_SYMBOLS:
+                try:
+                    from lib.core.cache import get_data
+
+                    period_str = f"{min(days_back, 60)}d"
+                    df = get_data(symbol, interval=interval, period=period_str)
+                except Exception as exc:
+                    logger.debug("yfinance fallback failed for %s: %s", symbol, exc)
 
     data_payload = _df_to_split(df)
 
@@ -1036,6 +1203,7 @@ def get_bars_bulk(req: BulkBarsRequest) -> JSONResponse:
     }
     ```
     """
+    req.symbols = [_normalize_symbol(s) for s in req.symbols]
     _ensure_table()
 
     if not req.symbols:

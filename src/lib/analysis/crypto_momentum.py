@@ -1003,8 +1003,16 @@ class CryptoMomentumScorer:
 
         Also tries the DataResolver (Redis → Postgres → API) first when
         it is available so we stay within the cache tier.
+
+        Never falls back to yfinance — CME micro futures (MGC, MES, etc.) are
+        not reliably served by Yahoo Finance and the 500 responses just pollute
+        logs.  Futures bars are only used for rolling correlation; the feature
+        degrades gracefully to ``base_correlation`` when they are unavailable.
         """
         # --- Preferred path: DataResolver (Redis → Postgres → API) ------
+        # Only uses the warm/hot cache tiers (Redis + Postgres); does NOT
+        # trigger an external API fetch so there is no risk of yfinance or
+        # Massive being called here.
         try:
             from lib.services.data.resolver import DataResolver
 
@@ -1015,31 +1023,21 @@ class CryptoMomentumScorer:
         except Exception:
             pass  # fall through to cache.get_data
 
-        # --- Fallback: cache.get_data with a valid Yahoo-style ticker ----
-        # Map short names → Yahoo =F suffix; skip KRAKEN: symbols.
-        _FUTURES_TICKER_MAP: dict[str, str] = {
-            "MES": "MES=F",
-            "MNQ": "MNQ=F",
-            "MGC": "MGC=F",
-            "MCL": "MCL=F",
-            "MYM": "MYM=F",
-            "M2K": "M2K=F",
-            "ES": "ES=F",
-            "NQ": "NQ=F",
-            "GC": "GC=F",
-            "CL": "CL=F",
-            "YM": "YM=F",
-        }
-        ticker = _FUTURES_TICKER_MAP.get(symbol.upper(), f"{symbol.upper()}=F")
+        # --- Fallback: in-process Redis cache only -----------------------
+        # Use the short symbol directly; get_data will resolve it internally.
+        # We explicitly skip yfinance here — CME micro contracts return 500
+        # HTML from Yahoo and are served exclusively by Massive/the engine.
         try:
             from lib.core.cache import get_data
 
-            df = get_data(ticker, interval=self.interval, period="1d")
+            df = get_data(symbol, interval=self.interval, period="1d")
             if df is not None and not df.empty:
                 return df
         except Exception as exc:
-            logger.debug("Failed to fetch futures bars for %s (ticker=%s): %s", symbol, ticker, exc)
+            logger.debug("Failed to fetch futures bars for %s from cache: %s", symbol, exc)
 
+        # Futures correlation bars are optional — returning None causes
+        # score_with_data() to fall back to base_correlation from config.
         return None
 
     def _build_composite_returns(self, crypto_bars: dict[str, pd.DataFrame]) -> dict[str, float]:

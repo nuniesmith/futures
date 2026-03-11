@@ -222,6 +222,7 @@ services:
             - "8180:8080"
         environment:
             - DATA_SERVICE_URL=http://data:8000
+            - CHARTING_SERVICE_URL=http://localhost:8003
             - TRAINER_SERVICE_URL=${TRAINER_SERVICE_URL:-http://100.113.72.63:8200}
             - WEB_HOST=0.0.0.0
             - WEB_PORT=8080
@@ -261,7 +262,7 @@ services:
         ports:
             - "8003:8003"
         environment:
-            - DATA_SERVICE_URL=http://data:8001
+            - DATA_SERVICE_URL=http://data:8000
             - CHARTING_SERVICE_PORT=8003
             - CORS_ORIGINS=*
         volumes:

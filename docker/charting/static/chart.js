@@ -2133,14 +2133,14 @@ async function resolveDataServiceUrl() {
                     return data_service_url.replace(/\/$/, "");
                 }
                 const u = new URL(data_service_url);
-                return `${window.location.protocol}//${window.location.hostname}:${u.port || 8001}`;
+                return `${window.location.protocol}//${window.location.hostname}:${u.port || 8050}`;
             }
         }
     } catch (_) {
         // /config unreachable — fall through to fallback
     }
 
-    return `${window.location.protocol}//${window.location.hostname}:8001`;
+    return `${window.location.protocol}//${window.location.hostname}:8050`;
 }
 
 // ── Control wiring ─────────────────────────────────────────────────────────────

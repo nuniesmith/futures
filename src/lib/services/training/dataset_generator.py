@@ -1528,6 +1528,29 @@ def generate_dataset_for_symbol(
     stats.total_windows = len(all_sim_results)
     stats.total_trades = sum(1 for r in all_sim_results if r.is_trade)
 
+    # ── Pre-compute crypto momentum score once for this symbol ────────────
+    # compute_all_crypto_momentum() uses a single shared _all_cache keyed by
+    # wall-clock time (TTL 5 min).  All 25 symbols in a training run therefore
+    # share one Kraken REST fetch instead of firing 25 simultaneous requests
+    # that immediately trigger EGeneral:Too many requests.
+    # The score is attached to every result so _build_row() reads a plain
+    # float attribute with zero network activity.
+    _crypto_mom_score = 0.5
+    try:
+        from lib.analysis.crypto_momentum import (
+            compute_all_crypto_momentum as _compute_all_cm,
+        )
+        from lib.analysis.crypto_momentum import (
+            crypto_momentum_to_tabular as _cm_to_tabular,
+        )
+
+        _all_scores = _cm_to_tabular(_compute_all_cm())
+        # _all_scores is {futures_symbol: float} in [-1, +1]; map to [0, 1]
+        _raw = _all_scores.get(symbol, 0.0)
+        _crypto_mom_score = max(0.0, min(1.0, (_raw + 1.0) / 2.0))
+    except Exception:
+        pass
+
     # ── Attach context data to each result for v7/v8 feature computation ──
     # _build_row() reads these private attributes to compute:
     #   - v7 features [18-23]: daily bias, weekly range, monthly trend
@@ -1564,6 +1587,9 @@ def generate_dataset_for_symbol(
         # can find them by ticker.
         if _bars_by_ticker_safe:
             r._bars_by_ticker = _bars_by_ticker_safe
+
+        # Pre-computed crypto momentum score — avoids per-row Kraken REST calls.
+        r._crypto_momentum_score = _crypto_mom_score
 
     sim_results = all_sim_results
 
@@ -2061,13 +2087,10 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
         pass
 
     # [23] crypto_momentum_score — [-1,+1] → [0, 1]
-    crypto_mom = 0.5
-    try:
-        from lib.analysis.breakout_cnn import get_crypto_momentum_score
-
-        crypto_mom = get_crypto_momentum_score(result.symbol)
-    except Exception:
-        pass
+    # Read the pre-computed score attached by generate_dataset_for_symbol().
+    # This avoids a Kraken REST call on every row; the score is computed once
+    # per symbol and reused across all its trade rows.
+    crypto_mom = float(getattr(result, "_crypto_momentum_score", 0.5))
 
     # ── v7.1 sub-features [24–27] — Phase 4B decomposition ───────────────
     # These sub-features enrich existing features with additional nuance
