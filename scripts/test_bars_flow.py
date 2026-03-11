@@ -123,7 +123,6 @@ def check_bars(base: str, days: int) -> dict[str, Any]:
             bc = d.get("bar_count", 0)
             src = d.get("source", "?")
             err = d.get("error", "")
-            filled = d.get("filled", False)
 
             # Rough bar-count sanity: 1m bars, ~390 RTH bars/day for US futures
             # crypto runs ~1440/day; use 200/day as a loose floor
@@ -206,7 +205,7 @@ def check_dataset_generator(base: str, days: int) -> None:
             print(f"  {RED}✗{RESET} {sym:<6} EXCEPTION: {e}")
 
     # Also confirm the engine-sourced DataResolver path that _load_bars_from_engine uses
-    print(f"\n  Confirming engine URL used by trainer DataResolver ...")
+    print("\n  Confirming engine URL used by trainer DataResolver ...")
     try:
         # The trainer reads ENGINE_DATA_URL; locally that's the data service
         import os

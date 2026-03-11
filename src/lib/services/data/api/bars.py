@@ -335,9 +335,8 @@ def _normalize_symbol(symbol: str) -> str:
         from lib.core.cache import _get_massive_provider
 
         provider = _get_massive_provider()
-        if provider is not None and provider.is_available:
-            if provider.resolve_from_yahoo(f"{symbol.upper()}=F"):
-                return f"{symbol.upper()}=F"
+        if provider is not None and provider.is_available and provider.resolve_from_yahoo(f"{symbol.upper()}=F"):
+            return f"{symbol.upper()}=F"
     except Exception:
         pass
 
@@ -1159,7 +1158,7 @@ def get_bars(
 
         if df.empty:
             # Last resort: yfinance (futures only — skip for known Kraken spot symbols)
-            if symbol.upper() not in _KRAKEN_SPOT_SYMBOLS:
+            if df.empty and symbol.upper() not in _KRAKEN_SPOT_SYMBOLS:
                 try:
                     from lib.core.cache import get_data
 
