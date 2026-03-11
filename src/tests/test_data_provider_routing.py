@@ -719,14 +719,14 @@ class TestFullPipelineNoLocalClients:
                     "lib.analysis.crypto_momentum.compute_all_crypto_momentum",
                     side_effect=Exception("Blocked: no Kraken on trainer"),
                 ),
+                contextlib.suppress(Exception),
             ):
-                with contextlib.suppress(Exception):
-                    generate_dataset(
-                        symbols=["MGC"],
-                        days_back=30,
-                        config=config,
-                        bars_override=bars_override,
-                    )
+                generate_dataset(
+                    symbols=["MGC"],
+                    days_back=30,
+                    config=config,
+                    bars_override=bars_override,
+                )
 
         # The important assertions:
         assert not yf_calls, (
