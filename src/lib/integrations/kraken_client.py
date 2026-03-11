@@ -364,18 +364,17 @@ class KrakenDataProvider:
             if errors:
                 err_msg = "; ".join(str(e) for e in errors)
                 # Retry on rate-limit errors with backoff
-                if "Too many requests" in err_msg or "EAPI:Rate limit" in err_msg:
-                    if attempt < _MAX_RETRIES:
-                        delay = _RETRY_DELAYS[attempt]
-                        logger.warning(
-                            "Kraken rate-limit on %s (attempt %d/%d) — backing off %.1fs",
-                            endpoint,
-                            attempt + 1,
-                            _MAX_RETRIES,
-                            delay,
-                        )
-                        time.sleep(delay)
-                        continue
+                if ("Too many requests" in err_msg or "EAPI:Rate limit" in err_msg) and attempt < _MAX_RETRIES:
+                    delay = _RETRY_DELAYS[attempt]
+                    logger.warning(
+                        "Kraken rate-limit on %s (attempt %d/%d) — backing off %.1fs",
+                        endpoint,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
                 logger.error("Kraken API returned errors (%s): %s", endpoint, err_msg)
                 raise RuntimeError(f"Kraken API error: {err_msg}")
 

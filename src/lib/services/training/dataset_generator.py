@@ -895,10 +895,7 @@ def load_bars(
         # the engine's three-tier cache is used before falling back to direct
         # Kraken REST.  "kraken" (direct REST) is tried last as a cold-path
         # fallback for when the engine is unreachable.
-        if source == "engine":
-            kraken_order = ["engine", "kraken", "db", "csv"]
-        else:
-            kraken_order = ["kraken", "db", "csv"]
+        kraken_order = ["engine", "kraken", "db", "csv"] if source == "engine" else ["kraken", "db", "csv"]
 
         for name in kraken_order:
             loader = loaders.get(name)
