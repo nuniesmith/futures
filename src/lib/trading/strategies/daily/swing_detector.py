@@ -1161,7 +1161,7 @@ def detect_swing_entries(
 
 
 def evaluate_swing_exits(
-    bars: pd.DataFrame,
+    bars: pd.DataFrame | None,
     entry_price: float,
     direction: str,
     stop_loss: float,
@@ -1449,7 +1449,6 @@ def update_swing_state(
     # Evaluate exits
     risk_dollars = state.signal.risk_dollars if state.signal else 0.0
 
-    assert bars is not None
     exit_signals = evaluate_swing_exits(
         bars=bars,
         entry_price=state.entry_price,
