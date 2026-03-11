@@ -163,7 +163,7 @@ def get_assets_for_session_key(session_key: str) -> list[dict[str, Any]]:
     """
     try:
         from lib.core.cache import cache_get
-        from lib.trading.strategies.rb.orb import SESSION_ASSETS
+        from lib.trading.strategies.rb.open import SESSION_ASSETS
 
         raw_focus = cache_get("engine:daily_focus")
         if not raw_focus:
@@ -228,7 +228,9 @@ def get_htf_bars(
     # Fall back to resampling 1-minute bars
     if bars_1m is not None and not bars_1m.empty:
         with contextlib.suppress(Exception):
-            return (
+            import pandas as pd
+
+            resampled = (
                 bars_1m.resample("15min")
                 .agg(
                     {
@@ -241,6 +243,8 @@ def get_htf_bars(
                 )
                 .dropna()
             )
+            if isinstance(resampled, pd.DataFrame):
+                return resampled
     return None
 
 
@@ -693,7 +697,7 @@ def build_cnn_tabular_features(
 
     # --- [14] breakout_type_ord ---
     _btype_raw = getattr(result, "breakout_type", "ORB")
-    _btype_name = _btype_raw.value if hasattr(_btype_raw, "value") else str(_btype_raw)
+    _btype_name = _btype_raw.value if hasattr(_btype_raw, "value") else str(_btype_raw)  # type: ignore[union-attr]
     _btype_ord_val = _get_btype_ord(_btype_name)
 
     # --- [15] asset_volatility_class ---
@@ -923,7 +927,7 @@ def _publish_orb_result(result: Any, session_key: str = "us") -> None:
     Falls back to the generic publisher if the ORB module is not available.
     """
     try:
-        from lib.trading.strategies.rb.orb import ORB_SESSIONS, publish_orb_alert
+        from lib.trading.strategies.rb.open import ORB_SESSIONS, publish_orb_alert
 
         # Build a lightweight ORB-compat shim so publish_orb_alert can consume it
         class _ORBShim:

@@ -161,22 +161,30 @@ try:
 
         def on_created(self, event) -> None:
             if self._should_handle(event):
-                self._debounced_invalidate(f"created {Path(event.src_path).name}")
+                src = event.src_path.decode() if isinstance(event.src_path, bytes) else event.src_path
+                self._debounced_invalidate(f"created {Path(src).name}")
 
         def on_modified(self, event) -> None:
             if self._should_handle(event):
-                self._debounced_invalidate(f"modified {Path(event.src_path).name}")
+                src = event.src_path.decode() if isinstance(event.src_path, bytes) else event.src_path
+                self._debounced_invalidate(f"modified {Path(src).name}")
 
         def on_moved(self, event) -> None:
             if self._should_handle(event):
-                dst_name = Path(event.dest_path).name if event.dest_path else "?"
+                dst_raw = event.dest_path if event.dest_path else None
+                if dst_raw is not None:
+                    dst_str = dst_raw.decode() if isinstance(dst_raw, bytes) else dst_raw
+                    dst_name = Path(dst_str).name
+                else:
+                    dst_name = "?"
                 self._debounced_invalidate(f"moved → {dst_name}")
 
         def on_deleted(self, event) -> None:
             if self._should_handle(event):
+                src = event.src_path.decode() if isinstance(event.src_path, bytes) else event.src_path
                 logger.warning(
                     "⚠️  Model file deleted: %s — model will be unavailable until re-synced",
-                    Path(event.src_path).name,
+                    Path(src).name,
                 )
 
     _WatchdogHandler = _ModelFileHandler

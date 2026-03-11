@@ -464,23 +464,23 @@ def _micro_position_to_snapshot(micro_pos: Any) -> PositionSnapshot:
 
     # Compute R-multiple
     r_mult = 0.0
-    if hasattr(micro_pos, "r_multiple"):
+    if not isinstance(micro_pos, dict) and hasattr(micro_pos, "r_multiple"):
         with contextlib.suppress(TypeError, ValueError):
-            r_mult = float(micro_pos.r_multiple)
+            r_mult = float(micro_pos.r_multiple)  # type: ignore[union-attr]
     elif "r_multiple" in d:
         with contextlib.suppress(TypeError, ValueError):
             r_mult = float(d["r_multiple"])
 
     # Hold duration
     hold_secs = 0
-    if hasattr(micro_pos, "hold_duration_seconds"):
+    if not isinstance(micro_pos, dict) and hasattr(micro_pos, "hold_duration_seconds"):
         with contextlib.suppress(TypeError, ValueError):
-            hold_secs = int(micro_pos.hold_duration_seconds)
+            hold_secs = int(micro_pos.hold_duration_seconds)  # type: ignore[union-attr]
 
     # Bracket phase
     phase = "INITIAL"
-    if hasattr(micro_pos, "phase"):
-        phase_obj = micro_pos.phase
+    if not isinstance(micro_pos, dict) and hasattr(micro_pos, "phase"):
+        phase_obj = micro_pos.phase  # type: ignore[union-attr]
         if hasattr(phase_obj, "name"):
             phase = phase_obj.name
         elif hasattr(phase_obj, "value"):

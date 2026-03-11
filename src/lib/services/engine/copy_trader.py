@@ -539,7 +539,7 @@ class CopyTrader:
             return {"key": key, "connected": False, "error": "unknown gateway"}
 
         try:
-            client = RithmicClient(
+            client = RithmicClient(  # type: ignore[call-arg]
                 user=username,
                 password=password,
                 system_name=getattr(config, "system_name", ""),
@@ -552,7 +552,7 @@ class CopyTrader:
             # Discover account IDs
             account_ids: list[str] = []
             try:
-                accounts = await asyncio.wait_for(client.list_accounts(), timeout=10.0)
+                accounts = await asyncio.wait_for(client.list_accounts(), timeout=10.0)  # type: ignore[attr-defined]
                 account_ids = [getattr(a, "account_id", str(a)) for a in (accounts or [])]
             except Exception as exc:
                 logger.warning("copy_trader[%s]: list_accounts failed: %s", key, exc)
