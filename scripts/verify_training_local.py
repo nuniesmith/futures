@@ -38,9 +38,7 @@ import os
 import subprocess
 import sys
 import time
-import traceback
 from pathlib import Path
-from typing import Any
 
 # ---------------------------------------------------------------------------
 # Make sure we can import from src/ whether running from repo root or scripts/
@@ -870,7 +868,6 @@ def check_dataset_generation(symbol: str = "MGC", days: int = 7) -> bool:
             exc_box.append(("runtime", exc))
 
     t = threading.Thread(target=_worker, daemon=True)
-    t0_wall = time.monotonic()
     t.start()
     t.join(timeout=60)
 
@@ -885,7 +882,7 @@ def check_dataset_generation(symbol: str = "MGC", days: int = 7) -> bool:
         return _record(
             "dataset_generator produces images",
             False,
-            f"timed out after 60s — engine HTTP may be stalled or bars_source chain is blocked",
+            "timed out after 60s — engine HTTP may be stalled or bars_source chain is blocked",
         )
 
     if exc_box:
@@ -1066,7 +1063,7 @@ _REMEDIATION: dict[str, str] = {
         "Or if running bare-metal:  uvicorn lib.services.data.main:app --port 8000\n"
         "Then set:  ENGINE_DATA_URL=http://localhost:8000"
     ),
-    f"Engine /bars/MGC returns data": (
+    "Engine /bars/MGC returns data": (
         "The data service is running but has no bars for MGC.\n"
         "Trigger a backfill:  POST /api/backfill  or wait for the engine's\n"
         "nightly HISTORICAL_BACKFILL action to complete."
