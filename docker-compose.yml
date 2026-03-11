@@ -128,6 +128,10 @@ services:
             - LOG_LEVEL=info
             - PYTHONPATH=/app/src
             - PYTHONUNBUFFERED=1
+            # Backfill chunk size — increase to 30 when MASSIVE_API_KEY is set
+            # to reduce round-trips on long initial fills (5 days default is
+            # safe for yfinance but causes ~36 chunks for a 180-day Massive fill).
+            - BACKFILL_CHUNK_DAYS=${BACKFILL_CHUNK_DAYS:-5}
         volumes:
             - app_data:/app/data
         depends_on:
@@ -354,6 +358,17 @@ services:
             # ----------------------------------------------------------------
             - ENGINE_DATA_URL=http://data:8000
             - DATA_SERVICE_URL=http://data:8000
+            # Timeout (seconds) for a single GET /bars/{symbol} call.
+            # The data service now returns immediately with existing data +
+            # filling=true when a background fill is in progress, so 60s is
+            # usually enough.  Increase on slow Tailscale links.
+            - ENGINE_BARS_TIMEOUT=${ENGINE_BARS_TIMEOUT:-60}
+            # Max seconds to wait for an in-progress background fill before
+            # giving up and using the partial data already returned.
+            # 300 = 5 minutes; covers most initial Massive backfills.
+            - ENGINE_FILL_POLL_MAX_WAIT=${ENGINE_FILL_POLL_MAX_WAIT:-300}
+            # Seconds between fill-status polls while waiting.
+            - ENGINE_FILL_POLL_INTERVAL=${ENGINE_FILL_POLL_INTERVAL:-10}
 
             # ----------------------------------------------------------------
             # Market data — Massive API (futures) + Kraken API (crypto)

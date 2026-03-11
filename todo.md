@@ -66,6 +66,23 @@ TradingView  →  Reference overlay only (no position sendback)
 
 ## 🔴 Blocking — Must Do Before Training
 
+### 0. Async fill + trainer timeout mitigations (completed)
+- [x] **`GET /bars/{symbol}` is now non-blocking** — fills fire in a background thread; response returns immediately with existing data + `filling: true` flag so the trainer never times out waiting for a long Massive backfill
+  - Added `_SymbolFillJob` class + per-symbol fill registry (`_symbol_fills`)
+  - Added `_get_or_start_symbol_fill()` helper — reuses a running job instead of spawning duplicates
+  - `get_bars()` now checks `_bar_count()` and always fires async; returns stale-or-empty data immediately
+  - Response payload gains `filling: bool` and `fill_status_url: str | null` fields
+- [x] **`GET /bars/{symbol}/fill/status` endpoint added** — clients poll this until `status == "complete"` or `"failed"`, then re-fetch bars
+- [x] **Trainer fill-poll loop added** (`_load_bars_from_engine`)
+  - On `filling: true` response, polls `/bars/{symbol}/fill/status` every `ENGINE_FILL_POLL_INTERVAL` seconds (default 10)
+  - Waits up to `ENGINE_FILL_POLL_MAX_WAIT` seconds (default 300 = 5 min) then re-fetches with `auto_fill=false`
+  - Falls back gracefully to the partial data already returned if the fill takes too long or fails
+- [x] **Engine bar-fetch timeout is now env-driven** — `ENGINE_BARS_TIMEOUT` (default 60s) replaces the hardcoded 60s in `_load_bars_from_engine`
+- [x] **`BACKFILL_CHUNK_DAYS` documented** — expanded comment in `backfill.py` with recommended values (5 = safe default, 30 = Massive-optimised)
+- [x] **New env vars wired into compose files** — `docker-compose.yml` (data + trainer services) and `docker-compose.trainer.yml`:
+  - `data`: `BACKFILL_CHUNK_DAYS` (default 5; set to 30 when `MASSIVE_API_KEY` is in use)
+  - `trainer`: `ENGINE_BARS_TIMEOUT`, `ENGINE_FILL_POLL_MAX_WAIT`, `ENGINE_FILL_POLL_INTERVAL`
+
 ### 1. Verify CI/CD secrets & fix port mismatch
 - [x] `docker-compose.yml` `web` service — `TRAINER_SERVICE_URL` moved to env var: `${TRAINER_SERVICE_URL:-http://100.113.72.63:8200}`
 - [x] Verify `scripts/sync_models.sh` still works for Ubuntu Server — audited, platform-agnostic (no Pi-specific code)

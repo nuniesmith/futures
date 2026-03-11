@@ -102,6 +102,29 @@ services:
             - CNN_RETRAIN_BARS_SOURCE=${CNN_RETRAIN_BARS_SOURCE:-engine}
 
             # ----------------------------------------------------------------
+            # Engine bar-fetch timing knobs
+            #
+            # The data service now fires background fills asynchronously and
+            # returns immediately with existing data + filling=true when a
+            # backfill is in progress.  The trainer polls fill status and
+            # re-fetches once complete, so it never times out on long fills.
+            #
+            # ENGINE_BARS_TIMEOUT     — HTTP timeout (seconds) per request
+            #                           to GET /bars/{symbol}.  60s is safe
+            #                           for the initial call since the service
+            #                           returns immediately.  Increase on slow
+            #                           Tailscale links (e.g. 120).
+            # ENGINE_FILL_POLL_MAX_WAIT — Max seconds to wait for a running
+            #                           background fill before giving up and
+            #                           using partial data.  300 = 5 minutes,
+            #                           covers most initial Massive backfills.
+            # ENGINE_FILL_POLL_INTERVAL — Seconds between fill-status polls.
+            # ----------------------------------------------------------------
+            - ENGINE_BARS_TIMEOUT=${ENGINE_BARS_TIMEOUT:-60}
+            - ENGINE_FILL_POLL_MAX_WAIT=${ENGINE_FILL_POLL_MAX_WAIT:-300}
+            - ENGINE_FILL_POLL_INTERVAL=${ENGINE_FILL_POLL_INTERVAL:-10}
+
+            # ----------------------------------------------------------------
             # Dataset generation defaults
             # ----------------------------------------------------------------
             - CNN_RETRAIN_SYMBOLS=${CNN_RETRAIN_SYMBOLS:-MGC,SIL,MHG,MCL,MNG,MES,MNQ,M2K,MYM,6E,6B,6J,6A,6C,6S,ZN,ZB,ZC,ZS,ZW,MBT,MET,BTC,ETH,SOL}

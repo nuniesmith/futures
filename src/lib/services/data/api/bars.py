@@ -74,7 +74,7 @@ import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
@@ -110,6 +110,15 @@ _fill_jobs_lock = threading.Lock()
 # Keep at most this many completed jobs in memory to avoid unbounded growth.
 _MAX_COMPLETED_JOBS = 20
 
+# ---------------------------------------------------------------------------
+# Per-symbol fill job registry
+# ---------------------------------------------------------------------------
+# Tracks the most recent async fill triggered by GET /bars/{symbol}.
+# key = normalised symbol string, value = _SymbolFillJob
+# This lets clients poll /bars/{symbol}/fill/status while a fill is running.
+_symbol_fills: dict[str, _SymbolFillJob] = {}
+_symbol_fills_lock = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # Internal job tracker
@@ -144,6 +153,104 @@ class _FillJob:
             "completed_count": len(self.results),
             "errors": self.errors[:20],
         }
+
+
+class _SymbolFillJob:
+    """Tracks the most-recent async fill triggered for a single symbol.
+
+    Created when ``GET /bars/{symbol}`` fires a background fill instead of
+    blocking.  Clients can poll ``GET /bars/{symbol}/fill/status`` to learn
+    when the fill completes and then re-fetch the bars.
+    """
+
+    def __init__(self, symbol: str, days_back: int, interval: str):
+        self.job_id: str = str(uuid.uuid4())
+        self.symbol: str = symbol
+        self.days_back: int = days_back
+        self.interval: str = interval
+        self.started_at: str = datetime.now(tz=UTC).isoformat()
+        self.finished_at: str | None = None
+        self.status: Literal["running", "complete", "failed"] = "running"
+        self.bars_added: int = 0
+        self.error: str | None = None
+        self._future: Future[None] | None = None
+
+    @property
+    def is_running(self) -> bool:
+        return self.status == "running"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "symbol": self.symbol,
+            "days_back": self.days_back,
+            "interval": self.interval,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "status": self.status,
+            "bars_added": self.bars_added,
+            "error": self.error,
+            "poll_url": f"/bars/{self.symbol}/fill/status",
+        }
+
+
+def _run_symbol_fill_job(job: _SymbolFillJob) -> None:
+    """Worker executed in the thread pool for a single-symbol async fill.
+
+    Updates *job* in place so callers polling ``to_dict()`` always see the
+    latest state.  Registers the completed result back into
+    ``_symbol_fills`` so the status endpoint can return it after the
+    ``Future`` has resolved.
+    """
+    try:
+        result = _run_incremental_fill(job.symbol, days_back=job.days_back, interval=job.interval)
+        job.bars_added = result.get("bars_added", 0)
+        err = result.get("error")
+        if err:
+            job.error = str(err)
+            job.status = "failed"
+            logger.warning("Async fill failed for %s: %s", job.symbol, err)
+        else:
+            job.status = "complete"
+            logger.info(
+                "Async fill complete for %s: +%d bars",
+                job.symbol,
+                job.bars_added,
+            )
+    except Exception as exc:
+        job.error = str(exc)
+        job.status = "failed"
+        logger.error("Async fill raised for %s: %s", job.symbol, exc)
+    finally:
+        job.finished_at = datetime.now(tz=UTC).isoformat()
+
+
+def _get_or_start_symbol_fill(symbol: str, days_back: int, interval: str) -> _SymbolFillJob:
+    """Return the current running fill for *symbol*, or start a new one.
+
+    If a fill is already running for the symbol, the existing job is
+    returned so the caller can report its status without spawning a
+    duplicate fill.  If the previous job finished (complete or failed) a
+    new job is created and submitted to the thread pool.
+    """
+    with _symbol_fills_lock:
+        existing = _symbol_fills.get(symbol)
+        if existing is not None and existing.is_running:
+            logger.debug("Fill for %s already running (job %s) — reusing", symbol, existing.job_id)
+            return existing
+
+        job = _SymbolFillJob(symbol=symbol, days_back=days_back, interval=interval)
+        _symbol_fills[symbol] = job
+
+    # Submit outside the lock so the worker can acquire it if needed
+    job._future = _executor.submit(_run_symbol_fill_job, job)
+    logger.info(
+        "Async fill started for %s (job %s, %d days back)",
+        symbol,
+        job.job_id,
+        days_back,
+    )
+    return job
 
 
 # ---------------------------------------------------------------------------
@@ -941,6 +1048,34 @@ def get_gaps(
     return JSONResponse(report)
 
 
+@router.get("/bars/{symbol}/fill/status")
+def symbol_fill_status(symbol: str) -> JSONResponse:
+    """Return the status of the most-recent async fill for a single symbol.
+
+    This endpoint is polled by dataset generators and other clients after
+    receiving a ``filling: true`` flag from ``GET /bars/{symbol}``.
+
+    Response when a fill is in progress::
+
+        {"status": "running", "symbol": "MGC=F", "bars_added": 0, ...}
+
+    Response when complete::
+
+        {"status": "complete", "symbol": "MGC=F", "bars_added": 1234, ...}
+
+    Response when no fill has been triggered yet::
+
+        {"status": "no_fill", "symbol": "MGC=F"}
+    """
+    symbol = _normalize_symbol(symbol)
+    with _symbol_fills_lock:
+        job = _symbol_fills.get(symbol)
+
+    if job is None:
+        return JSONResponse({"status": "no_fill", "symbol": symbol})
+    return JSONResponse(job.to_dict())
+
+
 @router.post("/bars/{symbol}/fill")
 def fill_symbol(symbol: str, req: FillRequest) -> JSONResponse:
     symbol = _normalize_symbol(symbol)
@@ -1082,20 +1217,41 @@ def get_bars(
     if auto_fill:
         needs, gap_min = _needs_fill(symbol, interval)
         if needs:
-            logger.info(
-                "Auto-fill triggered for %s (gap: %d min, threshold: %d min)",
-                symbol,
-                gap_min,
-                _stale_minutes(),
-            )
-            fill_result = _run_incremental_fill(
-                symbol,
-                days_back=days_back,
-                interval=interval,
-            )
-            bars_added = fill_result.get("bars_added", 0)
-            fill_error = fill_result.get("error") or None
-            filled = True
+            # Decide whether to block or fire-and-forget based on whether
+            # the DB already has *any* data for this symbol.
+            #
+            # • No stored data at all → fire async and return empty immediately.
+            #   The client should poll /bars/{symbol}/fill/status and retry.
+            # • Stale data exists → also fire async; return the stale data
+            #   straight away so the caller isn't blocked on the backfill.
+            #   The ``filling`` flag signals that fresher data will arrive.
+            #
+            # This prevents the trainer from timing out when the engine needs
+            # to run a long multi-chunk backfill (e.g. 180 days × 36 chunks).
+            existing_count = _bar_count(symbol, interval)
+            if existing_count > 0:
+                # Stale data present — return it immediately, fill in background
+                logger.info(
+                    "Async auto-fill triggered for %s (gap: %d min, %d bars cached)",
+                    symbol,
+                    gap_min,
+                    existing_count,
+                )
+                fill_job = _get_or_start_symbol_fill(symbol, days_back=days_back, interval=interval)
+                filled = True
+                fill_error = None
+                _ = fill_job  # status available via /bars/{symbol}/fill/status
+            else:
+                # No data at all — still async; caller gets empty + filling=True
+                logger.info(
+                    "Async auto-fill triggered for %s (no stored data, gap: %d min)",
+                    symbol,
+                    gap_min,
+                )
+                fill_job = _get_or_start_symbol_fill(symbol, days_back=days_back, interval=interval)
+                filled = True
+                fill_error = None
+                _ = fill_job
 
     # ── Step 2: fetch bars from DB ─────────────────────────────────────────
     df = _fetch_stored_bars(
@@ -1168,6 +1324,11 @@ def get_bars(
 
     data_payload = _df_to_split(df)
 
+    # Determine whether a fill is currently running in the background
+    with _symbol_fills_lock:
+        _sym_job = _symbol_fills.get(symbol)
+    filling = _sym_job is not None and _sym_job.is_running
+
     return JSONResponse(
         {
             "symbol": symbol,
@@ -1175,6 +1336,8 @@ def get_bars(
             "days_back": days_back,
             "bar_count": len(df) if df is not None and not df.empty else 0,
             "filled": filled,
+            "filling": filling,
+            "fill_status_url": f"/bars/{symbol}/fill/status" if filling else None,
             "bars_added": bars_added,
             "fill_error": fill_error,
             "data": data_payload,

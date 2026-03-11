@@ -268,6 +268,24 @@ _ENGINE_DATA_URL: str = (os.getenv("ENGINE_DATA_URL") or os.getenv("DATA_SERVICE
 # When set, sent as X-API-Key header on all engine HTTP requests.
 _API_KEY: str = os.getenv("API_KEY", "").strip()
 
+# Timeout (seconds) for a single GET /bars/{symbol} call to the engine.
+# The engine now returns immediately with existing data + filling=true when a
+# background fill is in progress, so a 60-second timeout is usually enough for
+# the initial call.  Set ENGINE_BARS_TIMEOUT to a higher value if the engine is
+# far away on a slow link (e.g. cross-continent Tailscale tunnel).
+_ENGINE_BARS_TIMEOUT: int = int(os.getenv("ENGINE_BARS_TIMEOUT", "60"))
+
+# When the engine responds with filling=true (background fill in progress),
+# the loader will poll /bars/{symbol}/fill/status and then re-fetch once the
+# fill is done.  These two knobs control the polling behaviour:
+#
+#   ENGINE_FILL_POLL_INTERVAL  — seconds between status polls (default 10)
+#   ENGINE_FILL_POLL_MAX_WAIT  — maximum seconds to wait for the fill before
+#                                giving up and returning the partial data we
+#                                already have (default 300 = 5 minutes).
+_ENGINE_FILL_POLL_INTERVAL: int = int(os.getenv("ENGINE_FILL_POLL_INTERVAL", "10"))
+_ENGINE_FILL_POLL_MAX_WAIT: int = int(os.getenv("ENGINE_FILL_POLL_MAX_WAIT", "300"))
+
 
 # ---------------------------------------------------------------------------
 # The backtest/dataset scripts use short names like "MGC", "MES", "MNQ"
@@ -408,7 +426,7 @@ def _load_bars_from_engine(symbol: str, days: int = 90) -> pd.DataFrame | None:
         headers["X-API-Key"] = _API_KEY
 
     try:
-        resp = _requests.get(url, params=params, headers=headers, timeout=60)
+        resp = _requests.get(url, params=params, headers=headers, timeout=_ENGINE_BARS_TIMEOUT)
         if resp.status_code == 404:
             logger.debug("Engine has no bars for %s (404)", symbol)
             return None
@@ -422,6 +440,80 @@ def _load_bars_from_engine(symbol: str, days: int = 90) -> pd.DataFrame | None:
             return None
 
         payload = resp.json()
+
+        # ── Fill-poll loop ─────────────────────────────────────────────────
+        # The engine now fires background fills asynchronously instead of
+        # blocking.  When filling=true the response contains current
+        # (possibly partial / stale) data.  We wait up to
+        # ENGINE_FILL_POLL_MAX_WAIT seconds for the fill to finish and then
+        # re-fetch the bars so the dataset gets the full history.
+        if payload.get("filling") and _ENGINE_FILL_POLL_MAX_WAIT > 0:
+            fill_status_url = payload.get("fill_status_url")
+            if fill_status_url:
+                fill_status_url = f"{_ENGINE_DATA_URL}{fill_status_url}"
+            else:
+                fill_status_url = f"{_ENGINE_DATA_URL}/bars/{symbol}/fill/status"
+
+            waited = 0
+            logger.info(
+                "Engine fill in progress for %s — polling %s (max wait %ds, interval %ds)",
+                symbol,
+                fill_status_url,
+                _ENGINE_FILL_POLL_MAX_WAIT,
+                _ENGINE_FILL_POLL_INTERVAL,
+            )
+            while waited < _ENGINE_FILL_POLL_MAX_WAIT:
+                time.sleep(_ENGINE_FILL_POLL_INTERVAL)
+                waited += _ENGINE_FILL_POLL_INTERVAL
+                try:
+                    status_resp = _requests.get(
+                        fill_status_url,
+                        headers=headers,
+                        timeout=_ENGINE_BARS_TIMEOUT,
+                    )
+                    if status_resp.status_code == 200:
+                        status_data = status_resp.json()
+                        fill_status = status_data.get("status", "unknown")
+                        logger.debug(
+                            "Fill status for %s after %ds: %s (bars_added=%s)",
+                            symbol,
+                            waited,
+                            fill_status,
+                            status_data.get("bars_added", "?"),
+                        )
+                        if fill_status in ("complete", "failed", "no_fill"):
+                            if fill_status == "failed":
+                                logger.warning(
+                                    "Engine fill failed for %s: %s",
+                                    symbol,
+                                    status_data.get("error"),
+                                )
+                            break
+                except Exception as poll_exc:
+                    logger.debug("Fill status poll failed for %s: %s", symbol, poll_exc)
+
+            # Re-fetch bars now that the fill has (hopefully) completed
+            logger.info(
+                "Re-fetching bars for %s after fill wait (%ds)",
+                symbol,
+                waited,
+            )
+            try:
+                refetch_resp = _requests.get(
+                    url,
+                    params={**params, "auto_fill": "false"},  # don't re-trigger fill
+                    headers=headers,
+                    timeout=_ENGINE_BARS_TIMEOUT,
+                )
+                if refetch_resp.status_code == 200:
+                    payload = refetch_resp.json()
+            except Exception as refetch_exc:
+                logger.debug(
+                    "Re-fetch after fill failed for %s: %s — using original payload",
+                    symbol,
+                    refetch_exc,
+                )
+
         split_data = payload.get("data")
         if not split_data:
             logger.debug("Engine /bars/%s: empty data payload", symbol)
@@ -445,11 +537,12 @@ def _load_bars_from_engine(symbol: str, days: int = 90) -> pd.DataFrame | None:
 
         bar_count = payload.get("bar_count", len(df))
         logger.debug(
-            "Loaded %d bars for %s from engine (%s, filled=%s)",
+            "Loaded %d bars for %s from engine (%s, filled=%s, filling=%s)",
             bar_count,
             symbol,
             _ENGINE_DATA_URL,
             payload.get("filled", False),
+            payload.get("filling", False),
         )
         return df
 

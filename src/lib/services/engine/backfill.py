@@ -64,6 +64,19 @@ DEFAULT_DAYS_BACK = int(os.getenv("BACKFILL_DAYS_BACK", "30"))
 
 # Chunk size in calendar days per API request.  yfinance works best with
 # 5-day chunks for 1-min data.  Massive can handle larger windows.
+#
+# Recommended values:
+#   5  (default) — safe for both yfinance and Massive; produces ~36 chunks for
+#                  a 180-day backfill.  Fine for small histories but can cause
+#                  Massive REST timeouts on very long initial fills because each
+#                  chunk is a separate HTTP request with a short read window.
+#  30             — reduces a 180-day Massive fill from ~36 chunks to ~6,
+#                  dramatically cutting round-trip overhead and timeout risk.
+#                  Use this when MASSIVE_API_KEY is set and yfinance is not the
+#                  primary source.  Set via: BACKFILL_CHUNK_DAYS=30
+#
+# Note: changing this only affects *new* incremental fills; already-stored bars
+# are never re-fetched (idempotent upsert).
 CHUNK_DAYS = int(os.getenv("BACKFILL_CHUNK_DAYS", "5"))
 
 # Symbols to backfill — defaults to all micro contract data tickers.
