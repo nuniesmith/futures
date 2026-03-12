@@ -7,17 +7,22 @@ degradation when optional dependencies are not installed.
 """
 
 import importlib
+import logging
 from collections.abc import Callable
 from functools import lru_cache
 from typing import Any
 
-logger: Any
-try:
-    from loguru import logger
-except ImportError:
-    import logging
 
-    logger = logging.getLogger(__name__)  # type: ignore[no-redef]
+def _get_logger() -> Any:
+    try:
+        from loguru import logger as _l
+
+        return _l
+    except ImportError:
+        return logging.getLogger(__name__)
+
+
+logger: Any = _get_logger()
 
 # Registry of features with detection functions
 _FEATURE_REGISTRY: dict[str, Callable[[], bool]] = {}

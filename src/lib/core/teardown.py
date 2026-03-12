@@ -14,13 +14,19 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
-logger: Any
-try:
-    from loguru import logger
-except ImportError:
-    import logging
 
-    logger = logging.getLogger("core.teardown")  # type: ignore[no-redef]
+def _get_logger() -> Any:
+    try:
+        from loguru import logger as _l
+
+        return _l
+    except ImportError:
+        import logging
+
+        return logging.getLogger("core.teardown")
+
+
+logger: Any = _get_logger()
 
 # Core components that require specific teardown procedures
 CORE_COMPONENTS = [

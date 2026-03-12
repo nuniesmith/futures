@@ -24,13 +24,19 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
-logger: Any
-try:
-    from loguru import logger
-except ImportError:
-    import logging
 
-    logger = logging.getLogger("core.initialization")  # type: ignore[no-redef]
+def _get_logger() -> Any:
+    try:
+        from loguru import logger as _l
+
+        return _l
+    except ImportError:
+        import logging
+
+        return logging.getLogger("core.initialization")
+
+
+logger: Any = _get_logger()
 
 # Default configuration values
 DEFAULT_CONFIG_PATH = "/app/config/fks/app.yaml"

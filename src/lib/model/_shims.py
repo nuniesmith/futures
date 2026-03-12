@@ -15,11 +15,18 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Logger — use loguru if available, else stdlib
 # ---------------------------------------------------------------------------
-logger: Any
-try:
-    from loguru import logger
-except ImportError:
-    logger = logging.getLogger("lib.model")  # type: ignore[no-redef]
+
+
+def _get_logger() -> Any:
+    try:
+        from loguru import logger as _l
+
+        return _l
+    except ImportError:
+        return logging.getLogger("lib.model")
+
+
+logger: Any = _get_logger()
 
 # ---------------------------------------------------------------------------
 # Exception stubs
