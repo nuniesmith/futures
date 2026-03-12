@@ -102,7 +102,7 @@ class BaseModel(ABC):
         return self.set_params(**config)
 
     @abstractmethod
-    def fit(self, train_data: Any, target_column: Any = None, **kwargs) -> "BaseModel":
+    def fit(self, train_data: Any, target_column: Any = None, **kwargs) -> BaseModel:
         """
         Fit the model to training data.
 
@@ -118,7 +118,7 @@ class BaseModel(ABC):
     @abstractmethod
     def train(
         self, data: Any = None, target: Any = None, X_train: Any = None, y_train: Any = None, **kwargs
-    ) -> "BaseModel":
+    ) -> BaseModel:
         """
         Train the model with flexible parameter options.
 

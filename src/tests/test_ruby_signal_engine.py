@@ -948,6 +948,7 @@ class TestRubySignalDict:
         eng = RubySignalEngine("MNQ", config=RubyConfig(max_history=100))
         _feed_bars(eng, 30, seed=2)
         sig = eng.last_signal()
+        assert sig is not None
         d = sig.to_dict()
 
         ruby_keys = [
@@ -996,6 +997,7 @@ class TestRubySignalDict:
         eng = RubySignalEngine("MNQ", config=RubyConfig(max_history=100))
         _feed_bars(eng, 30, seed=3)
         sig = eng.last_signal()
+        assert sig is not None
         d = sig.to_dict()
         # Must not raise
         json.dumps(d)
@@ -1012,6 +1014,7 @@ class TestRubySignalDict:
         eng = RubySignalEngine("X", config=RubyConfig(max_history=50))
         eng.update(_make_bar(100.0, time=t))
         sig = eng.last_signal()
+        assert sig is not None
         d = sig.to_dict()
         assert d["bar_time"] is not None
         # Should be parseable ISO string
@@ -1171,18 +1174,21 @@ class TestPositionManagerCompatibility:
         eng = RubySignalEngine("MNQ", config=RubyConfig(max_history=50))
         eng.update(_make_bar(18000.0))
         sig = eng.last_signal()
+        assert sig is not None
         assert isinstance(sig.trigger_price, float)
 
     def test_breakout_detected_is_bool(self):
         eng = RubySignalEngine("MNQ", config=RubyConfig(max_history=50))
         eng.update(_make_bar(18000.0))
         sig = eng.last_signal()
+        assert sig is not None
         assert isinstance(sig.breakout_detected, bool)
 
     def test_filter_passed_is_bool(self):
         eng = RubySignalEngine("MNQ", config=RubyConfig(max_history=50))
         eng.update(_make_bar(18000.0))
         sig = eng.last_signal()
+        assert sig is not None
         assert isinstance(sig.filter_passed, bool)
 
     def test_cnn_signal_matches_cnn_prob_threshold(self):

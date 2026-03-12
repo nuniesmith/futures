@@ -575,7 +575,7 @@ async def get_position_html(asset_name: str):
                 margin-top:6px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <span style="color:{side_color};font-weight:bold;font-size:14px;">
-                {"🟢" if side == "LONG" else "🔴"} {side} LIVE — {_esc(phase_label)}
+                {"🟢" if side == "LONG" else "🔴"} {side} LIVE — {_esc(phase_label or "")}
             </span>
             <span style="color:#888;font-size:11px;">⏱ {hold_str}</span>
         </div>

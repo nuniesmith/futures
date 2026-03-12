@@ -667,10 +667,10 @@ def compare_with_reference(
         img_b = Image.open(img_b).convert("RGB")
 
     # Ensure same size
-    if img_a.size != img_b.size:
+    if img_a.size != img_b.size:  # type: ignore[union-attr]
         return {
             "match": False,
-            "error": f"Size mismatch: {img_a.size} vs {img_b.size}",
+            "error": f"Size mismatch: {img_a.size} vs {img_b.size}",  # type: ignore[union-attr]
         }
 
     arr_a = np.array(img_a, dtype=np.int16)

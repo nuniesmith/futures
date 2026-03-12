@@ -88,7 +88,7 @@ class JSONFormatter(logging.Formatter):
 
         # Add extra contextual info
         if hasattr(record, "extra_data"):
-            log_dict.update(record.extra_data)
+            log_dict.update(record.extra_data)  # type: ignore[attr-defined]
 
         # Add source location
         log_dict["location"] = f"{record.pathname}:{record.lineno}"

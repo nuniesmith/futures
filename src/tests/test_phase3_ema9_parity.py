@@ -676,12 +676,13 @@ class TestPhase3ExitParity:
         cs, py, warm = self._warmed_up_state("long", entry, tp3, 2410.0, n_warmup)
 
         # Confirm both EMA9s agree after warm-up (< 0.5 ticks)
-        assert cs.ema9_value() is not None
+        ema9 = cs.ema9_value()
+        assert ema9 is not None
         assert py.ema9_trail_price > 0
-        assert abs(cs.ema9_value() - py.ema9_trail_price) / tick < 0.5
+        assert abs(ema9 - py.ema9_trail_price) / tick < 0.5
 
         # Now add a sharp drop bar that goes below EMA9
-        drop_close = cs.ema9_value() - 5.0  # well below EMA9
+        drop_close = ema9 - 5.0  # well below EMA9
         drop_low = drop_close - 0.2
         drop_high = drop_close + 0.2
 
@@ -709,12 +710,13 @@ class TestPhase3ExitParity:
 
         cs, py, warm = self._warmed_up_state("short", entry, tp3, 2390.0, n_warmup)
 
-        assert cs.ema9_value() is not None
+        ema9 = cs.ema9_value()
+        assert ema9 is not None
         assert py.ema9_trail_price > 0
-        assert abs(cs.ema9_value() - py.ema9_trail_price) / tick < 0.5
+        assert abs(ema9 - py.ema9_trail_price) / tick < 0.5
 
         # Sharp rise above EMA9
-        rise_close = cs.ema9_value() + 5.0
+        rise_close = ema9 + 5.0
         rise_low = rise_close - 0.2
         rise_high = rise_close + 0.2
 
@@ -1185,6 +1187,7 @@ class TestRatchetBehaviour:
             cs.process_bar(i, float(row.Close))
 
         ema9 = cs.ema9_value()
+        assert ema9 is not None
         # Close above EMA9
         result = cs.process_bar(40, ema9 + 1.0)
         assert result is None, f"C# fired spurious exit: {result}"

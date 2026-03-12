@@ -6,8 +6,8 @@ from collections.abc import Callable, Iterable
 from typing import Any, cast
 
 import redis.asyncio as redis_async
-import redis_clients
 from loguru import logger
+from redis.asyncio import ConnectionError as RedisConnectionError
 from redis.asyncio.client import Pipeline, PubSub
 
 from lib.core.db.redis_clients import BaseRedisClient, RedisError, _ensure_connection
@@ -26,7 +26,10 @@ class AsyncRedisClient(BaseRedisClient):
 
     _log_prefix_class = f"{_log_prefix_base} - AsyncRedisClient"
 
-    def _create_connection(self) -> redis_async.Redis:
+    # Override connection type to async Redis
+    connection: redis_async.Redis | None  # type: ignore[assignment]
+
+    def _create_connection(self) -> redis_async.Redis:  # type: ignore[override]
         """Creates an asynchronous Redis connection using connection pooling."""
         log_prefix = f"{self._log_prefix_class} - _create_connection"
         logger.debug(f"{log_prefix} START - Creating asynchronous Redis connection using URL: {self.clean_url}")
@@ -127,7 +130,7 @@ class AsyncRedisClient(BaseRedisClient):
                         f"{log_prefix} END - Async connection initialization SUCCESS on attempt {attempt_num}."
                     )
                     return
-            except redis_clients.RedisError as e:
+            except RedisError as e:
                 logger.warning(
                     f"{log_prefix} ⚠️ Redis connection failed on attempt {attempt_num}/{self.max_retries}: {e}"
                 )
@@ -165,7 +168,7 @@ class AsyncRedisClient(BaseRedisClient):
         pubsub_obj = self.connection.pubsub()
         logger.debug(f"{log_prefix} Asynchronous PubSub object created successfully: {pubsub_obj}")
         logger.debug(f"{log_prefix} END - PubSub retrieval SUCCESS.")
-        return cast("PubSub", pubsub_obj)
+        return pubsub_obj
 
     @_ensure_connection
     async def get(self, key: str) -> Any | None:
@@ -212,7 +215,7 @@ class AsyncRedisClient(BaseRedisClient):
                 logger.debug(f"{log_prefix} END - ASYNC GET operation - Key not found: '{key}'.")
                 return None
 
-        except redis_clients.ConnectionError as e:
+        except RedisConnectionError as e:
             logger.error(
                 f"{log_prefix} ❌ Connection error during ASYNC GET operation for key '{key}': {e}", exc_info=True
             )
@@ -223,7 +226,7 @@ class AsyncRedisClient(BaseRedisClient):
             return None
 
     @_ensure_connection
-    async def set(self, key: str, value: Any, expiry: int | None = None) -> bool:
+    async def set(self, key: str, value: Any, expiry: int | None = None) -> bool:  # type: ignore[override]
         """
         Asynchronously store a value in Redis, after serializing it to JSON.
 
@@ -265,7 +268,7 @@ class AsyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} END - ASYNC SET operation SUCCESS for key: '{key}'.")
             return True
 
-        except redis_clients.RedisError as e:
+        except RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis ASYNC SET error for key '{key}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - ASYNC SET operation ERROR. Returning False due to RedisError.")
             return False
@@ -301,7 +304,7 @@ class AsyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} END - ASYNC DELETE operation for key: '{key}'. Result: {bool(result)}.")
             return bool(result)
 
-        except redis_clients.RedisError as e:
+        except RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis ASYNC DELETE error for key '{key}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - ASYNC DELETE operation ERROR. Returning False due to RedisError.")
             return False
@@ -337,7 +340,7 @@ class AsyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} END - ASYNC EXISTS check for key: '{key}'.")
             return bool(result)
 
-        except redis_clients.RedisError as e:
+        except RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis ASYNC EXISTS error for key '{key}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - ASYNC EXISTS check ERROR. Returning False due to RedisError.")
             return False
@@ -374,7 +377,7 @@ class AsyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} END - ASYNC KEYS retrieval SUCCESS with pattern: '{pattern}'.")
             return keys_converted
 
-        except redis_clients.RedisError as e:
+        except RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis ASYNC KEYS error with pattern '{pattern}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - ASYNC KEYS retrieval ERROR. Returning empty list due to RedisError.")
             return []
@@ -410,7 +413,7 @@ class AsyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} END - ASYNC PUBLISH SUCCESS to channel: '{channel}'. Subscribers: {result}.")
             return result
 
-        except redis_clients.RedisError as e:
+        except RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis ASYNC publish error for channel '{channel}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - ASYNC PUBLISH ERROR. Returning 0 subscribers due to RedisError.")
             return 0
@@ -496,7 +499,7 @@ class AsyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} END - ASYNC ZRANGE SUCCESS for key: '{key}', count: {len(result)}.")
             return result
 
-        except redis_clients.RedisError as e:
+        except RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis ASYNC ZRANGE error for key '{key}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - ASYNC ZRANGE ERROR. Returning empty list due to RedisError.")
             return []
@@ -684,7 +687,7 @@ class AsyncRedisClient(BaseRedisClient):
                 logger.debug(f"{log_prefix} END - ASYNC HGET - Key not found in hash: '{name}', key: '{key}'.")
                 return None
 
-        except redis_clients.RedisError as e:
+        except RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis ASYNC HGET error for hash '{name}', key '{key}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - ASYNC HGET ERROR. Returning None due to RedisError.")
             return None
@@ -725,7 +728,7 @@ class AsyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} END - ASYNC HSET SUCCESS for hash: '{name}', key: '{key}'.")
             return True
 
-        except redis_clients.RedisError as e:
+        except RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis ASYNC HSET error for hash '{name}', key '{key}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - ASYNC HSET ERROR. Returning False due to RedisError.")
             return False
@@ -766,7 +769,7 @@ class AsyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} END - ASYNC SETEX SUCCESS for key: '{name}'.")
             return True
 
-        except redis_clients.RedisError as e:
+        except RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis ASYNC SETEX error for key '{name}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - ASYNC SETEX ERROR. Returning False due to RedisError.")
             return False

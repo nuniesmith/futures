@@ -14,6 +14,8 @@ from typing import Any, TypeVar
 from loguru import logger
 from prometheus_client import CollectorRegistry, Counter
 
+T = TypeVar("T", bound="BaseException")
+
 # Custom Prometheus registry to avoid global duplication
 ERROR_REGISTRY = CollectorRegistry()
 
@@ -172,7 +174,7 @@ class BaseException(Exception):
         actual_message = message or getattr(cls, "DEFAULT_MESSAGE", "An error occurred")
         actual_code = code or getattr(cls, "DEFAULT_CODE", 1000)
 
-        return cls(message=actual_message, code=actual_code, **kwargs)
+        return cls(message=actual_message, code=actual_code, **kwargs)  # type: ignore[call-arg]
 
     def __repr__(self) -> str:
         """
@@ -188,9 +190,6 @@ class BaseException(Exception):
             f"severity={self.severity.name}, "
             f"retryable={self.retryable})"
         )
-
-
-T = TypeVar("T", bound="BaseException")
 
 
 class GeneralError(BaseException):

@@ -23,7 +23,7 @@ class JSONEncoder(json.JSONEncoder):
     - Sets: Converted to lists
     """
 
-    def default(self, obj: Any) -> Any:
+    def default(self, obj: Any) -> Any:  # type: ignore[override]
         if isinstance(obj, (datetime.datetime, datetime.date)):
             return obj.isoformat()
         if isinstance(obj, datetime.time):

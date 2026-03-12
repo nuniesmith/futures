@@ -1149,7 +1149,7 @@ class TestRealisticScenarios:
 
         for sig in signals:
             # Flat crypto shouldn't produce strong directional signals
-            assert sig.strength < 0.5 if hasattr(sig, "strength") else True
+            assert sig.score < 0.5
 
     def test_mixed_crypto_signals(self):
         """BTC bullish + SOL bearish → should produce a moderate/mixed signal."""

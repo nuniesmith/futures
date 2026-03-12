@@ -8,7 +8,7 @@ using trained models for different assets.
 import asyncio
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from lib.model._shims import logger
 from lib.model.prediction.manager import ModelManager

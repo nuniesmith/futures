@@ -100,14 +100,14 @@ def _expand_env_vars(obj: Any) -> Any:
                 # Process ${VAR} format first
                 def replace_with_env1(match):
                     env_var = match.group(1)
-                    return os.environ.get(env_var, match.group(0))
+                    return os.environ.get(env_var) or match.group(0)
 
                 result = re.sub(pattern1, replace_with_env1, obj)
 
                 # Then process $VAR format
                 def replace_with_env2(match):
                     env_var = match.group(1)
-                    return os.environ.get(env_var, match.group(0))
+                    return os.environ.get(env_var) or match.group(0)
 
                 result = re.sub(pattern2, replace_with_env2, result)
 

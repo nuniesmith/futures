@@ -363,6 +363,6 @@ def configure_trading_system_logging(
         "Log Directory": str(log_dir_path),
     }
 
-    logger.log_dict(config_info, "Trading System Configuration")
+    logger.log_dict(config_info, "Trading System Configuration")  # type: ignore[attr-defined]
 
     return logger

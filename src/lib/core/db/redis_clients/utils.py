@@ -27,7 +27,7 @@ class CustomJSONEncoder(json.JSONEncoder):
 
     _log_prefix_class = f"{_log_prefix_base} - CustomJSONEncoder"
 
-    def default(self, obj: Any) -> Any:
+    def default(self, obj: Any) -> Any:  # type: ignore[override]
         """Override default method to handle pandas Timestamp."""
         log_prefix = f"{CustomJSONEncoder._log_prefix_class} - default"
         logger.debug(f"{log_prefix} START - Attempting to encode object of type: {type(obj)}.")

@@ -259,7 +259,7 @@ class TestV8Architecture:
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
         assert model.use_asset_embeddings is True
-        assert model._embed_dim == ASSET_CLASS_EMBED_DIM + ASSET_ID_EMBED_DIM  # 12
+        assert model._embed_dim == ASSET_CLASS_EMBED_DIM + ASSET_ID_EMBED_DIM  # type: ignore[attr-defined]  # 12
 
     def test_model_instantiates_without_embeddings(self):
         """Model without embeddings (legacy compat path) also instantiates."""
@@ -267,7 +267,7 @@ class TestV8Architecture:
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=False)
         assert model.use_asset_embeddings is False
-        assert model._embed_dim == 0
+        assert model._embed_dim == 0  # type: ignore[attr-defined]
 
     def test_embedding_dimensions(self):
         """Embedding layers have the exact dims specified in the v8 contract."""
@@ -293,8 +293,8 @@ class TestV8Architecture:
         assert CONTRACT_ID_DIM == ASSET_ID_EMBED_DIM
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
-        ce = model.asset_class_embedding
-        ae = model.asset_id_embedding
+        ce = model.asset_class_embedding  # type: ignore[attr-defined]
+        ae = model.asset_id_embedding  # type: ignore[attr-defined]
         assert ce.num_embeddings == NUM_ASSET_CLASSES
         assert ce.embedding_dim == ASSET_CLASS_EMBED_DIM
         assert ae.num_embeddings == NUM_ASSETS
@@ -306,7 +306,7 @@ class TestV8Architecture:
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
         # First Linear layer: in=37, out=256
-        first_linear = model.tabular_head[0]
+        first_linear = model.tabular_head[0]  # type: ignore[attr-defined]
         assert first_linear.in_features == NUM_TABULAR, (
             f"Expected tabular head input {NUM_TABULAR}, got {first_linear.in_features}"
         )
@@ -320,7 +320,7 @@ class TestV8Architecture:
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
         expected_combined = 1280 + 64 + (ASSET_CLASS_EMBED_DIM + ASSET_ID_EMBED_DIM)  # 1356
-        first_classifier_linear = model.classifier[0]
+        first_classifier_linear = model.classifier[0]  # type: ignore[attr-defined]
         assert first_classifier_linear.in_features == expected_combined, (
             f"Classifier input dim: expected {expected_combined}, got {first_classifier_linear.in_features}"
         )
@@ -330,14 +330,14 @@ class TestV8Architecture:
         from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
-        model.eval()
+        model.eval()  # type: ignore[attr-defined]
         B = 4
         imgs = torch.zeros(B, 3, 224, 224)
         tabs = torch.zeros(B, NUM_TABULAR)
         class_ids = torch.randint(0, NUM_ASSET_CLASSES, (B,))
         asset_ids = torch.randint(0, NUM_ASSETS, (B,))
         with torch.no_grad():
-            out = model(imgs, tabs, asset_class_ids=class_ids, asset_ids=asset_ids)
+            out = model(imgs, tabs, asset_class_ids=class_ids, asset_ids=asset_ids)  # type: ignore[operator]
         assert out.shape == (B, 2), f"Expected (B,2) logits, got {out.shape}"
 
     def test_forward_without_embedding_ids(self):
@@ -345,12 +345,12 @@ class TestV8Architecture:
         from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
-        model.eval()
+        model.eval()  # type: ignore[attr-defined]
         B = 2
         imgs = torch.zeros(B, 3, 224, 224)
         tabs = torch.zeros(B, NUM_TABULAR)
         with torch.no_grad():
-            out = model(imgs, tabs)  # no embedding IDs passed
+            out = model(imgs, tabs)  # type: ignore[operator]  # no embedding IDs passed
         assert out.shape == (B, 2)
 
     def test_freeze_unfreeze_backbone(self):
@@ -359,10 +359,10 @@ class TestV8Architecture:
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
         model.freeze_backbone()
-        for p in model.cnn.parameters():
+        for p in model.cnn.parameters():  # type: ignore[attr-defined]
             assert not p.requires_grad, "Backbone param should be frozen"
         model.unfreeze_backbone()
-        for p in model.cnn.parameters():
+        for p in model.cnn.parameters():  # type: ignore[attr-defined]
             assert p.requires_grad, "Backbone param should be unfrozen"
 
     def test_output_probabilities(self):
@@ -370,14 +370,14 @@ class TestV8Architecture:
         from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
-        model.eval()
+        model.eval()  # type: ignore[attr-defined]
         B = 8
         imgs = torch.randn(B, 3, 224, 224)
         tabs = torch.rand(B, NUM_TABULAR)
         class_ids = torch.randint(0, NUM_ASSET_CLASSES, (B,))
         asset_ids = torch.randint(0, NUM_ASSETS, (B,))
         with torch.no_grad():
-            logits = model(imgs, tabs, asset_class_ids=class_ids, asset_ids=asset_ids)
+            logits = model(imgs, tabs, asset_class_ids=class_ids, asset_ids=asset_ids)  # type: ignore[operator]
             probs = torch.softmax(logits, dim=1)
         # All probabilities in [0, 1]
         assert (probs >= 0).all() and (probs <= 1).all()
@@ -538,7 +538,7 @@ class TestV8TrainingLoop:
         # Checkpoints may be a raw state_dict or a dict with a 'model_state_dict' key
         if isinstance(state, dict) and "model_state_dict" in state:
             state = state["model_state_dict"]
-        model.load_state_dict(state, strict=False)  # strict=False tolerates minor key diffs
+        model.load_state_dict(state, strict=False)  # type: ignore[attr-defined]  # strict=False tolerates minor key diffs
 
     def test_no_nan_in_checkpoint(self, train_result):
         """No NaN values must appear in the saved model weights."""
@@ -577,6 +577,7 @@ class TestV8Inference:
         )
         if result is None:
             pytest.skip("Training returned None — cannot test inference")
+        assert result is not None
         return result.model_path
 
     def test_evaluate_model_runs(self, synthetic_dataset, trained_model_path):
@@ -711,7 +712,7 @@ class TestV8GradAccumAndMixup:
             pytest.skip("torch not available")
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)  # type: ignore[attr-defined]
         criterion = torch.nn.CrossEntropyLoss()
         grad_accum_steps = 2
 
@@ -725,23 +726,23 @@ class TestV8GradAccumAndMixup:
         optimizer.zero_grad()
 
         # Step 1: compute loss, backward (do NOT zero_grad yet)
-        out1 = model(imgs, tabs, asset_class_ids=class_ids, asset_ids=asset_ids)
+        out1 = model(imgs, tabs, asset_class_ids=class_ids, asset_ids=asset_ids)  # type: ignore[operator]
         loss1 = criterion(out1, labels) / grad_accum_steps
         loss1.backward()
 
         # Collect gradients after first step
-        grads_after_step1 = {name: p.grad.clone() for name, p in model.named_parameters() if p.grad is not None}
+        grads_after_step1 = {name: p.grad.clone() for name, p in model.named_parameters() if p.grad is not None}  # type: ignore[attr-defined]
         assert grads_after_step1, "No gradients computed after step 1"
 
         # Step 2: second mini-batch — gradients must ACCUMULATE (add to existing)
-        out2 = model(imgs, tabs, asset_class_ids=class_ids, asset_ids=asset_ids)
+        out2 = model(imgs, tabs, asset_class_ids=class_ids, asset_ids=asset_ids)  # type: ignore[operator]
         loss2 = criterion(out2, labels) / grad_accum_steps
         loss2.backward()
 
         # At least one grad must have changed (accumulated)
         any_changed = False
         for name, grad1 in grads_after_step1.items():
-            p = dict(model.named_parameters())[name]
+            p = dict(model.named_parameters())[name]  # type: ignore[attr-defined]
             if p.grad is not None and not torch.allclose(p.grad, grad1):
                 any_changed = True
                 break
@@ -755,7 +756,7 @@ class TestV8GradAccumAndMixup:
         optimizer.zero_grad()
 
         # After zero_grad, all grads must be zero/None
-        for p in model.parameters():
+        for p in model.parameters():  # type: ignore[attr-defined]
             if p.grad is not None:
                 assert torch.all(p.grad == 0), "Gradients not zeroed after optimizer.zero_grad()"
 
@@ -774,12 +775,12 @@ class TestV8GradAccumAndMixup:
         lr = 2e-4
         head_lr = lr * 5
 
-        backbone_params = list(model.cnn.parameters())
+        backbone_params = list(model.cnn.parameters())  # type: ignore[attr-defined]
         head_params = (
-            list(model.tabular_head.parameters())
-            + list(model.classifier.parameters())
-            + list(model.asset_class_embedding.parameters())
-            + list(model.asset_id_embedding.parameters())
+            list(model.tabular_head.parameters())  # type: ignore[attr-defined]
+            + list(model.classifier.parameters())  # type: ignore[attr-defined]
+            + list(model.asset_class_embedding.parameters())  # type: ignore[attr-defined]
+            + list(model.asset_id_embedding.parameters())  # type: ignore[attr-defined]
         )
 
         optimizer = torch.optim.AdamW(

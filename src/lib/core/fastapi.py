@@ -5,13 +5,15 @@ This module provides a concrete implementation of the BaseService
 abstract class for FastAPI applications.
 """
 
-import argparse
 import importlib
 import os
 import traceback
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lib.core.service import BaseService
+
+if TYPE_CHECKING:
+    import argparse
 
 
 class FastApiService(BaseService):
@@ -88,7 +90,7 @@ class FastApiService(BaseService):
             return None
 
         try:
-            from fastapi import FastAPI
+            from fastapi import FastAPI  # type: ignore[attr-defined]
 
             app = FastAPI(title=f"{self.service_name.capitalize()} Service (Fallback)")
 

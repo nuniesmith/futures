@@ -5,7 +5,6 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import (
-    TYPE_CHECKING,
     Any,
     ClassVar,
     Concatenate,
@@ -13,8 +12,9 @@ from typing import (
     TypeVar,
 )
 
-import redis_clients
 from loguru import logger
+from redis import ConnectionError as RedisConnectionError
+from redis import Redis
 
 _log_prefix_base = "[redis_client - base]"
 
@@ -111,7 +111,7 @@ class BaseRedisClient(ABC):
         self.max_retries = max_retries
         self.connection_kwargs = connection_kwargs or {}
         self.last_connection_attempt: float = 0  # For throttling reconnection attempts
-        self.connection: redis_clients.Redis | None = None
+        self.connection: Redis | None = None
         self.connection_params: dict[str, Any] = {}
         self._setup_connection_params()
         self._initialize_connection()
@@ -208,7 +208,7 @@ class BaseRedisClient(ABC):
         logger.debug(f"{log_prefix} END - Connection parameters setup COMPLETED.")
 
     @abstractmethod
-    def _create_connection(self) -> redis_clients.Redis:
+    def _create_connection(self) -> Redis:
         """
         Abstract method to create the Redis connection. Implement in subclasses.
 
@@ -341,7 +341,7 @@ class BaseRedisClient(ABC):
                     logger.info(f"{log_prefix} ✅ Connected to Redis on attempt {attempt_num}.")
                     logger.debug(f"{log_prefix} END - Connection initialization SUCCESS on attempt {attempt_num}.")
                     return
-            except redis_clients.ConnectionError as e:
+            except RedisConnectionError as e:
                 failures.append(str(e))
                 logger.warning(
                     f"{log_prefix} ⚠️ Redis connection failed on attempt {attempt_num}/{self.max_retries}: {e}"

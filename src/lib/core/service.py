@@ -13,7 +13,7 @@ import os
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 
 from lib.core.config import load_configuration
 from lib.core.initialization import initialize
@@ -59,7 +59,7 @@ class BaseService(abc.ABC):
             self.logger.info("Running in a container environment")
 
         # Get lifecycle
-        self.app_lifecycle: Union[ApplicationLifecycle, Any]
+        self.app_lifecycle: ApplicationLifecycle | Any
         try:
             self.app_lifecycle = get_app_lifecycle()
         except Exception as e:

@@ -581,7 +581,7 @@ def should_trade_now(
         # Check if it's a weekend (skip for crypto if not respecting weekends)
         is_weekend = False
         if isinstance(timestamp, (datetime, pd.Timestamp)):
-            is_weekend = timestamp.weekday() >= 5  # 5=Saturday, 6=Sunday
+            is_weekend = timestamp.weekday() >= 5  # type: ignore[union-attr]  # 5=Saturday, 6=Sunday
 
         # For crypto, optionally ignore weekend restrictions
         if (

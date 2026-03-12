@@ -789,10 +789,13 @@ class TestReversalFlow:
         # Open LONG
         long_signal = MockSignal(direction="LONG", trigger_price=100.0, atr_value=2.0)
         pm.process_signal(long_signal)
-        assert pm.get_position("MGC=F").direction == "LONG"
+        pos0 = pm.get_position("MGC=F")
+        assert pos0 is not None
+        assert pos0.direction == "LONG"
 
         # Set entry time far enough back to pass cooldown
         pos = pm.get_position("MGC=F")
+        assert pos is not None
         pos.entry_time = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
         pos.current_price = 99.0  # Losing
 
@@ -823,6 +826,7 @@ class TestReversalFlow:
 
         # Set up for reversal
         pos = pm.get_position("MGC=F")
+        assert pos is not None
         pos.entry_time = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
         pos.current_price = 99.0
 
@@ -948,6 +952,7 @@ class TestSessionManagement:
         signal_us = MockSignal(symbol="MGC=F", direction="LONG", session_key="us")
         pm.process_signal(signal_us)
         pos = pm.get_position("MGC=F")
+        assert pos is not None
         pos.session_key = "us"
         pos.breakout_type = "ORB"
 
@@ -955,6 +960,7 @@ class TestSessionManagement:
         signal_london = MockSignal(symbol="MCL=F", direction="LONG", session_key="london")
         pm.process_signal(signal_london)
         pos_london = pm.get_position("MCL=F")
+        assert pos_london is not None
         pos_london.session_key = "london"
         pos_london.breakout_type = "ORB"
 
@@ -972,6 +978,7 @@ class TestSessionManagement:
         signal = MockSignal(symbol="MGC=F", direction="LONG")
         pm.process_signal(signal)
         pos = pm.get_position("MGC=F")
+        assert pos is not None
         pos.session_key = "us"
         pos.breakout_type = "Weekly"  # Swing type
 
@@ -984,6 +991,7 @@ class TestSessionManagement:
         signal = MockSignal(symbol="MGC=F", direction="LONG")
         pm.process_signal(signal)
         pos = pm.get_position("MGC=F")
+        assert pos is not None
         pos.session_key = "us"
         pos.breakout_type = "Monthly"
 
@@ -995,6 +1003,7 @@ class TestSessionManagement:
         signal = MockSignal(symbol="MGC=F", direction="LONG")
         pm.process_signal(signal)
         pos = pm.get_position("MGC=F")
+        assert pos is not None
         pos.session_key = "us"
         pos.breakout_type = "Asian"
 
@@ -1111,6 +1120,7 @@ class TestStatusSummary:
         pm.process_signal(signal)
 
         pos = pm.get_position("MGC=F")
+        assert pos is not None
         entry = pos.entry_price
         # Close above entry to ensure it's a win
         pm._close_position(pos, reason="test close", close_price=entry + 5.0)
@@ -1182,6 +1192,7 @@ class TestClosePosition:
         pm.process_signal(signal)
 
         pos = pm.get_position("MGC=F")
+        assert pos is not None
         entry = pos.entry_price
         # Close well above entry to guarantee positive P&L
         pm._close_position(pos, reason="test", close_price=entry + 10.0)
@@ -1195,6 +1206,7 @@ class TestClosePosition:
         pm.process_signal(signal)
 
         pos = pm.get_position("MGC=F")
+        assert pos is not None
         entry = pos.entry_price
         # Close well below entry to guarantee positive P&L for SHORT
         pm._close_position(pos, reason="test", close_price=entry - 10.0)
@@ -1207,6 +1219,7 @@ class TestClosePosition:
         pm.process_signal(signal)
 
         pos = pm.get_position("MGC=F")
+        assert pos is not None
         pm._close_position(pos, reason="test", close_price=100.0)
 
         assert pm.get_position("MGC=F") is None
@@ -1218,6 +1231,7 @@ class TestClosePosition:
         pm.process_signal(signal)
 
         pos = pm.get_position("MGC=F")
+        assert pos is not None
         pm._close_position(pos, reason="test reason", close_price=100.0)
 
         history = pm.get_history()
@@ -1277,6 +1291,7 @@ class TestEdgeCases:
         signal = MockSignal(direction="LONG", trigger_price=100.0)
         orders = pm.process_signal(signal)
         pos = pm.get_position("MGC=F")
+        assert pos is not None
 
         for order in orders:
             assert order.position_id == pos.position_id

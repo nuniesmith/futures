@@ -20,7 +20,7 @@ except ImportError:
     logger = logging.getLogger("core.lifecycle")  # type: ignore[assignment]
 
 try:
-    from fastapi import FastAPI
+    from fastapi import FastAPI  # type: ignore[attr-defined]
 
     FASTAPI_AVAILABLE = True
 except ImportError:
@@ -124,7 +124,7 @@ def get_sync_lifespan_manager() -> Callable:
 
         # Try to get service registry if available
         try:
-            from lib.core.registry import get_service_registry
+            from lib.core.registry import get_service_registry  # type: ignore[attr-defined]
 
             service_registry = get_service_registry()
         except ImportError:

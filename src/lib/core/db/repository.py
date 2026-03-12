@@ -373,10 +373,11 @@ class BaseRepository(Generic[T, ID]):
             # Convert to dict if it's a model
             if isinstance(data, BaseModel):
                 # Use model_dump() for Pydantic v2, fallback to dict() for v1
-                if hasattr(data, "model_dump"):
-                    data_dict = data.model_dump(exclude_unset=True)
+                _data: Any = data
+                if hasattr(_data, "model_dump"):
+                    data_dict = _data.model_dump(exclude_unset=True)
                 else:
-                    data_dict = data.dict(exclude_unset=True)
+                    data_dict = _data.dict(exclude_unset=True)
             else:
                 data_dict = data
 
@@ -450,10 +451,11 @@ class BaseRepository(Generic[T, ID]):
             # Convert to dict if it's a model
             if isinstance(data, BaseModel):
                 # Use model_dump() for Pydantic v2, fallback to dict() for v1
-                if hasattr(data, "model_dump"):
-                    data_dict = data.model_dump(exclude_unset=True)
+                _data_u: Any = data
+                if hasattr(_data_u, "model_dump"):
+                    data_dict = _data_u.model_dump(exclude_unset=True)
                 else:
-                    data_dict = data.dict(exclude_unset=True)
+                    data_dict = _data_u.dict(exclude_unset=True)
             else:
                 data_dict = data
 

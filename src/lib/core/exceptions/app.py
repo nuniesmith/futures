@@ -13,10 +13,10 @@ import logging
 import traceback
 from typing import Any
 
-from fastapi import Request, status
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi import Request, status  # type: ignore[attr-defined]
+from fastapi.exceptions import RequestValidationError  # type: ignore[attr-defined]
+from fastapi.responses import JSONResponse  # type: ignore[attr-defined]
+from starlette.exceptions import HTTPException as StarletteHTTPException  # type: ignore[attr-defined]
 
 from lib.core.exceptions.base import FrameworkException
 
