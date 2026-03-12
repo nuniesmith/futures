@@ -159,31 +159,26 @@ DEFAULT_PATIENCE = int(os.getenv("CNN_RETRAIN_PATIENCE", "12"))
 # is explicitly set in the environment.
 # ---------------------------------------------------------------------------
 _FALLBACK_SYMBOLS: list[str] = [
-    "MGC",
-    "SIL",
-    "MHG",
-    "MCL",
-    "MNG",
-    "MES",
-    "MNQ",
-    "M2K",
-    "MYM",
-    "6E",
-    "6B",
-    "6J",
-    "6A",
-    "6C",
-    "6S",
-    "ZN",
-    "ZB",
-    "ZC",
-    "ZS",
-    "ZW",
-    "MBT",
-    "MET",
-    "BTC",
-    "ETH",
-    "SOL",
+    # Metals — deep Massive history, clean ORB patterns
+    "MGC",  # Micro Gold
+    "SIL",  # Micro Silver
+    # Equity index micros — highest liquidity, best data coverage
+    "MES",  # Micro S&P 500
+    "MNQ",  # Micro Nasdaq-100
+    "M2K",  # Micro Russell 2000
+    "MYM",  # Micro Dow Jones
+    # Interest rate futures — full history available
+    "ZN",  # 10Y T-Note
+    "ZB",  # 30Y T-Bond
+    # Agricultural — ZW has sufficient coverage; ZC/ZS dropped (<96% coverage)
+    "ZW",  # Wheat
+    # Dropped symbols (insufficient 1-min bar history for 180-day training window):
+    # MHG  (14.3%), MCL  (0.4%),  MNG  (0.0%),
+    # 6E   (2.5%),  6B   (2.6%),  6J   (4.7%),
+    # 6A   (1.7%),  6C   (1.3%),  6S   (1.1%),
+    # MBT  (15.1%), MET  (10.1%), BTC  (6.0%),
+    # ETH  (7.2%),  SOL  (2.0%),
+    # ZS   (90.2%), ZC   (95.1%)  — borderline; excluded until data deepens
 ]
 
 DEFAULT_SYMBOLS: list[str] = (
