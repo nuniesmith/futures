@@ -1657,7 +1657,7 @@ def generate_dataset_for_symbol(
     _renderable_count = sum(1 for r in sim_results if r.is_trade or cfg.include_no_trade)
     _render_t0 = time.monotonic()
     _rendered_count = 0
-    _progress_interval = max(50, _renderable_count // 10)  # log every 50 or ~10%
+    _progress_interval = max(25, _renderable_count // 20)  # log every 25 or ~5%
 
     for sim_idx, result in enumerate(sim_results):
         # Skip no_trade unless configured to include them
@@ -1702,7 +1702,7 @@ def generate_dataset_for_symbol(
             rows.append(_build_row(result, image_path))
             stats.total_images += 1
             _rendered_count += 1
-            if _rendered_count % _progress_interval == 0:
+            if _rendered_count % _progress_interval == 0 or _rendered_count == _renderable_count:
                 _elapsed = time.monotonic() - _render_t0
                 _rate = _rendered_count / _elapsed if _elapsed > 0 else 0
                 logger.info(
