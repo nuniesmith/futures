@@ -45,12 +45,12 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from lib.core.utils import safe_float as _safe_float
 from lib.trading.strategies.daily.bias_analyzer import (
     BiasDirection,
     DailyBias,
     compute_all_daily_biases,
 )
+from lib.utils import safe_float as _safe_float
 
 if TYPE_CHECKING:
     from typing import Any as _Any  # noqa: F401 — keep block non-empty

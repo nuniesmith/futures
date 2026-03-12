@@ -5,7 +5,7 @@ This module consolidates small helper functions that were previously duplicated
 across multiple modules (safe_float, ema, atr, rsi).
 
 Usage:
-    from lib.core.utils import safe_float, ema, atr, rsi
+    from lib.utils import safe_float, ema, atr, rsi
 """
 
 from __future__ import annotations

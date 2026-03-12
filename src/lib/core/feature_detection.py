@@ -2,7 +2,7 @@
 Feature Detection Module
 
 This module provides utilities to detect available features and optional
-dependencies within the Ruby Futures framework. It helps with graceful 
+dependencies within the Ruby Futures framework. It helps with graceful
 degradation when optional dependencies are not installed.
 """
 

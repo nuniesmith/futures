@@ -34,12 +34,12 @@ from typing import TypeVar
 
 # Re-export helper functions
 try:
-    from lib.core.main.factory import ServiceFactory, create_fastapi_service, create_flask_service, run_service
-    from lib.core.main.implementations.fastapi import FastApiService
-    from lib.core.main.runner import ServiceRunner
+    from lib.core.factory import ServiceFactory, create_fastapi_service, create_flask_service, run_service
+    from lib.core.fastapi import FastApiService
+    from lib.core.runner import ServiceRunner
 
     # Re-export classes and functions from refactored modules
-    from lib.core.main.service import BaseService
+    from lib.core.service import BaseService
 except ImportError:
     pass
 
@@ -67,6 +67,16 @@ DEFAULT_WORKERS = 1
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_LOG_DIR = "/app/logs"
 DEFAULT_CONFIG_PATHS = ["/app/config/fks/{service_name}.yaml", "{base_dir}/config/fks/{service_name}.yaml"]
+
+
+class BaseComponent:
+    """
+    BaseComponent serves as a common ancestor for all components in the service framework.
+    It can be used to define shared attributes or methods that are common across different components.
+    """
+
+    pass
+
 
 # For backward compatibility, re-export the entire contents of the modules
 __all__ = [

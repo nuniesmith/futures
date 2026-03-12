@@ -1,10 +1,12 @@
 import json
-from typing import Any, Optional, Union
+from typing import Any
 from urllib.parse import urlparse, urlunparse
+
 import pandas as pd
 from loguru import logger
 
 _log_prefix_base = "[redis_client - utils]"
+
 
 # --- Custom JSON Encoder ---
 class CustomJSONEncoder(json.JSONEncoder):
@@ -22,6 +24,7 @@ class CustomJSONEncoder(json.JSONEncoder):
     print(json_string)
     ```
     """
+
     _log_prefix_class = f"{_log_prefix_base} - CustomJSONEncoder"
 
     def default(self, obj: Any) -> Any:
@@ -45,11 +48,11 @@ def construct_redis_url(
     user: str = "default",
     password: str = "",
     host: str = "redis",
-    port: Union[str, int] = "6379",
-    db: Union[str, int] = "0",
+    port: str | int = "6379",
+    db: str | int = "0",
     use_tls: bool = False,
     use_sentinel: bool = False,
-    use_cluster: bool = False  # Added missing parameter
+    use_cluster: bool = False,  # Added missing parameter
 ) -> str:
     """
     Construct the Redis connection URL, supporting optional TLS, Sentinel, and Cluster modes.
@@ -70,15 +73,17 @@ def construct_redis_url(
         str: The constructed Redis connection URL.
     """
     log_prefix = f"{_log_prefix_base} - construct_redis_url"
-    logger.debug(f"{log_prefix} START - Constructing Redis URL. TLS enabled: {use_tls}, "
-                 f"Sentinel enabled: {use_sentinel}, Cluster enabled: {use_cluster}, "
-                 f"Host: {host}, Port: {port}, DB: {db}, User provided: {bool(user)}, "
-                 f"Password provided: {bool(password)}.")
+    logger.debug(
+        f"{log_prefix} START - Constructing Redis URL. TLS enabled: {use_tls}, "
+        f"Sentinel enabled: {use_sentinel}, Cluster enabled: {use_cluster}, "
+        f"Host: {host}, Port: {port}, DB: {db}, User provided: {bool(user)}, "
+        f"Password provided: {bool(password)}."
+    )
 
     protocol = "rediss" if use_tls else "redis"
     user, password = user.strip(), password.strip()
     url = ""
-    
+
     if user and password:
         url = f"{protocol}://{user}:{password}@{host}:{port}/{db}"
         logger.debug(f"{log_prefix} Constructed URL with user & password: {clean_redis_url(url)}")
@@ -96,6 +101,7 @@ def construct_redis_url(
     cleaned_url = clean_redis_url(url)
     logger.debug(f"{log_prefix} END - Redis URL construction SUCCESS. Clean URL: {cleaned_url}")
     return url
+
 
 def clean_redis_url(redis_url: str) -> str:
     """

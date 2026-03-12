@@ -171,7 +171,7 @@ def shutdown_databases() -> bool:
         try:
             # Use conditional import to prevent linting errors
             if TYPE_CHECKING:
-                from lib.core.data.db import close_all_connections
+                from lib.core.db import close_all_connections
             else:
                 # Dynamic import at runtime
                 try:
@@ -199,7 +199,7 @@ def shutdown_databases() -> bool:
         # Shut down ORM engine
         try:
             if TYPE_CHECKING:
-                from lib.core.data.db.orm import shutdown_engine
+                from lib.core.db.orm import shutdown_engine
             else:
                 try:
                     orm_module = importlib.import_module("lib.core.db.orm")

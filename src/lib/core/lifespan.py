@@ -46,9 +46,9 @@ async def get_lifespan_manager(app: Any | None = None) -> AsyncGenerator[None, N
 
     # Try to get service registry if available
     try:
-        from lib.core.registry import get_service_registry
+        from lib.core.registry import get_registry
 
-        service_registry = get_service_registry()
+        service_registry = get_registry()
     except ImportError:
         service_registry = None
         logger.debug("Service registry not available")

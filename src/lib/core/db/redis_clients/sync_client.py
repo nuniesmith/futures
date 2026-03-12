@@ -1,52 +1,44 @@
-import redis_clients
 import json
-import errno
-from typing import Any, Optional, Tuple, Dict, cast, Union, Callable, Awaitable, Iterable
-from urllib.parse import urlparse, urlunparse
+from collections.abc import Callable
+from typing import Any, cast
+
+import redis_clients
 from loguru import logger
-from src.lib.core.db.redis_clients import BaseRedisClient, _ensure_connection, RedisError
-from src.lib.core.db.redis_clients.utils import CustomJSONEncoder, construct_redis_url, clean_redis_url
 from redis.client import Pipeline, PubSub  # Import necessary types
+from src.lib.core.db.redis_clients import BaseRedisClient, RedisError, _ensure_connection
+from src.lib.core.db.redis_clients.utils import CustomJSONEncoder
 
 _log_prefix_base = "[redis_client - sync]"
+
 
 class SyncRedisClient(BaseRedisClient):
     """
     Synchronous Redis client implementing all Redis operations.
     Inherits connection and reconnection logic from BaseRedisClient.
     """
+
     _log_prefix_class = f"{_log_prefix_base} - SyncRedisClient"
 
     def _create_connection(self) -> redis_clients.Redis:
         """Creates a synchronous Redis connection."""
         log_prefix = f"{self._log_prefix_class} - _create_connection"
         logger.debug(f"{log_prefix} START - Creating synchronous Redis connection using URL: {self.clean_url}")
-        
+
         # Get connection pool configuration
         pool_kwargs = self._get_connection_pool_kwargs()
-        
+
         # Generate unique key for this connection config
         pool_key = self._get_connection_pool_key()
-        
+
         # Define factory function for the connection pool
         def create_pool(**kwargs):
-            return redis_clients.ConnectionPool.from_url(
-                url=self.redis_url,
-                **kwargs
-            )
-        
+            return redis_clients.ConnectionPool.from_url(url=self.redis_url, **kwargs)
+
         # Get or create a standard connection pool
-        pool = self._get_or_create_connection_pool(
-            pool_key, 
-            create_pool,
-            **pool_kwargs
-        )
-        
-        connection = redis_clients.Redis(
-            connection_pool=pool,
-            decode_responses=True
-        )
-        
+        pool = self._get_or_create_connection_pool(pool_key, create_pool, **pool_kwargs)
+
+        connection = redis_clients.Redis(connection_pool=pool, decode_responses=True)
+
         # Verify connection works - this is critical for early detection of connection issues
         ping_result = connection.ping()
         logger.debug(f"{log_prefix} Connection ping test result: {ping_result}")
@@ -141,7 +133,7 @@ class SyncRedisClient(BaseRedisClient):
         return pipeline_obj
 
     @_ensure_connection
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """
         Retrieve data from Redis by key, and deserialize from JSON.
 
@@ -160,10 +152,10 @@ class SyncRedisClient(BaseRedisClient):
         try:
             value_raw = self.connection.get(key)
             logger.debug(f"{log_prefix} Raw value for key '{key}': {value_raw}")
-            
+
             if value_raw:
                 try:
-                    value = json.loads(cast(str, value_raw))
+                    value = json.loads(cast("str", value_raw))
                     logger.debug(f"{log_prefix} JSON deserialization successful for key '{key}'. Value: {value}")
                     logger.debug(f"{log_prefix} END - GET operation SUCCESS for key: '{key}'.")
                     return value
@@ -175,15 +167,17 @@ class SyncRedisClient(BaseRedisClient):
                 logger.debug(f"{log_prefix} No value found for key '{key}'. Returning None.")
                 logger.debug(f"{log_prefix} END - GET operation - Key not found: '{key}'.")
                 return None
-                
+
         except redis_clients.ConnectionError as e:
             logger.error(f"{log_prefix} ❌ Connection error during GET operation for key '{key}': {e}", exc_info=True)
             self._initialize_connection()
-            logger.debug(f"{log_prefix} END - GET operation ERROR - Connection error. Reconnection attempted. Returning None.")
+            logger.debug(
+                f"{log_prefix} END - GET operation ERROR - Connection error. Reconnection attempted. Returning None."
+            )
             return None
 
     @_ensure_connection
-    def set(self, key: str, value: Any, ex: Optional[int] = None) -> bool:
+    def set(self, key: str, value: Any, ex: int | None = None) -> bool:
         """
         Store a value in Redis, after serializing it to JSON.
 
@@ -203,17 +197,17 @@ class SyncRedisClient(BaseRedisClient):
         try:
             value_json = json.dumps(value, cls=CustomJSONEncoder)
             logger.debug(f"{log_prefix} JSON serialization successful for key '{key}'.")
-            
+
             if ex:
                 result = self.connection.setex(key, ex, value_json)
                 logger.debug(f"{log_prefix} Key '{key}' set with expiry {ex}. Result: {result}")
             else:
                 result = self.connection.set(key, value_json)
                 logger.debug(f"{log_prefix} Key '{key}' set without expiry. Result: {result}")
-                
+
             logger.debug(f"{log_prefix} END - SET operation SUCCESS for key: '{key}'.")
             return True
-            
+
         except redis_clients.RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis SET error for key '{key}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - SET operation ERROR. Returning False due to RedisError.")
@@ -236,17 +230,19 @@ class SyncRedisClient(BaseRedisClient):
             RedisError: If Redis connection is not established.
         """
         log_prefix = f"{self._log_prefix_class} - setex"
-        logger.debug(f"{log_prefix} START - SETEX operation for key: '{name}', expiry: {time}s. Value type: {type(value)}.")
-        
+        logger.debug(
+            f"{log_prefix} START - SETEX operation for key: '{name}', expiry: {time}s. Value type: {type(value)}."
+        )
+
         try:
             value_json = json.dumps(value, cls=CustomJSONEncoder)
             logger.debug(f"{log_prefix} JSON serialization successful for key '{name}'.")
-            
+
             result = self.connection.setex(name, time, value_json)
             logger.debug(f"{log_prefix} Key '{name}' set with expiry {time}s. Result: {result}")
             logger.debug(f"{log_prefix} END - SETEX SUCCESS for key: '{name}'.")
             return True
-        
+
         except redis_clients.RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis SETEX error for key '{name}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - SETEX ERROR. Returning False due to RedisError.")
@@ -273,7 +269,7 @@ class SyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} DELETE operation result for key '{key}': {result}")
             logger.debug(f"{log_prefix} END - DELETE operation for key: '{key}' with result: {bool(result)}.")
             return bool(result)
-            
+
         except redis_clients.RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis DELETE error for key '{key}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - DELETE operation ERROR. Returning False due to RedisError.")
@@ -300,7 +296,7 @@ class SyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} EXISTS check for key '{key}' returned: {result}.")
             logger.debug(f"{log_prefix} END - EXISTS check for key: '{key}'.")
             return result
-            
+
         except redis_clients.RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis EXISTS error for key '{key}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - EXISTS check ERROR. Returning False due to RedisError.")
@@ -328,14 +324,14 @@ class SyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} Retrieved {len(keys_converted)} keys for pattern '{pattern}'.")
             logger.debug(f"{log_prefix} END - KEYS retrieval SUCCESS with pattern: '{pattern}'.")
             return keys_converted
-            
+
         except redis_clients.RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis KEYS error with pattern '{pattern}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - KEYS retrieval ERROR. Returning empty list due to RedisError.")
             return []
 
     @_ensure_connection
-    def publish(self, channel: str, message: Union[str, bytes]) -> int:
+    def publish(self, channel: str, message: str | bytes) -> int:
         """
         Publish a message to a Redis channel.
 
@@ -353,18 +349,18 @@ class SyncRedisClient(BaseRedisClient):
         logger.debug(f"{log_prefix} START - PUBLISH message to channel: '{channel}'.")
         try:
             result_raw = self.connection.publish(channel, message)
-            result = cast(int, result_raw) if result_raw is not None else 0
+            result = cast("int", result_raw) if result_raw is not None else 0
             logger.debug(f"{log_prefix} Message published to channel '{channel}'. Subscribers count: {result}")
             logger.debug(f"{log_prefix} END - PUBLISH SUCCESS for channel: '{channel}'.")
             return result
-            
+
         except redis_clients.RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis publish error for channel '{channel}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - PUBLISH ERROR. Returning 0 subscribers due to RedisError.")
             return 0
 
     @_ensure_connection
-    def hget(self, name: str, key: str) -> Optional[Any]:
+    def hget(self, name: str, key: str) -> Any | None:
         """
         Get the value of a hash field.
 
@@ -381,15 +377,17 @@ class SyncRedisClient(BaseRedisClient):
         """
         log_prefix = f"{self._log_prefix_class} - hget"
         logger.debug(f"{log_prefix} START - HGET operation for hash: '{name}', key: '{key}'.")
-        
+
         try:
             value_raw = self.connection.hget(name, key)
             logger.debug(f"{log_prefix} Raw value for hash '{name}', key '{key}': {value_raw}")
-            
+
             if value_raw:
                 try:
-                    value = json.loads(cast(str, value_raw))
-                    logger.debug(f"{log_prefix} JSON deserialization successful for hash '{name}', key '{key}'. Value: {value}")
+                    value = json.loads(cast("str", value_raw))
+                    logger.debug(
+                        f"{log_prefix} JSON deserialization successful for hash '{name}', key '{key}'. Value: {value}"
+                    )
                     logger.debug(f"{log_prefix} END - HGET SUCCESS for hash: '{name}', key: '{key}'.")
                     return value
                 except json.JSONDecodeError:
@@ -400,7 +398,7 @@ class SyncRedisClient(BaseRedisClient):
                 logger.debug(f"{log_prefix} No value found for hash '{name}', key '{key}'. Returning None.")
                 logger.debug(f"{log_prefix} END - HGET - Key not found in hash: '{name}', key: '{key}'.")
                 return None
-                
+
         except redis_clients.RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis HGET error for hash '{name}', key '{key}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - HGET ERROR. Returning None due to RedisError.")
@@ -423,24 +421,26 @@ class SyncRedisClient(BaseRedisClient):
             RedisError: If Redis connection is not established.
         """
         log_prefix = f"{self._log_prefix_class} - hset"
-        logger.debug(f"{log_prefix} START - HSET operation for hash: '{name}', key: '{key}'. Value type: {type(value)}.")
-        
+        logger.debug(
+            f"{log_prefix} START - HSET operation for hash: '{name}', key: '{key}'. Value type: {type(value)}."
+        )
+
         try:
             value_json = json.dumps(value, cls=CustomJSONEncoder)
             logger.debug(f"{log_prefix} JSON serialization successful for hash '{name}', key '{key}'.")
-            
+
             result = self.connection.hset(name, key, value_json)
             logger.debug(f"{log_prefix} Hash field '{key}' set in hash '{name}'. Result: {result}")
             logger.debug(f"{log_prefix} END - HSET SUCCESS for hash: '{name}', key: '{key}'.")
             return True
-            
+
         except redis_clients.RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis HSET error for hash '{name}', key '{key}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - HSET ERROR. Returning False due to RedisError.")
             return False
 
     @_ensure_connection
-    def health_check(self) -> Dict[str, Any]:
+    def health_check(self) -> dict[str, Any]:
         """
         Check if the Redis connection is healthy.
 
@@ -450,10 +450,7 @@ class SyncRedisClient(BaseRedisClient):
         log_prefix = f"{self._log_prefix_class} - health_check"
         logger.debug(f"{log_prefix} START - Running health check on Redis connection")
 
-        health_info = {
-            "status": False,
-            "details": {}
-        }
+        health_info = {"status": False, "details": {}}
 
         try:
             # Basic ping check
@@ -472,10 +469,10 @@ class SyncRedisClient(BaseRedisClient):
                 except Exception as e:
                     logger.error(f"{log_prefix} Error getting Redis stats: {e}", exc_info=True)
                     health_info["details"]["stats_error"] = str(e)
-            
+
             logger.debug(f"{log_prefix} END - Health check complete - Status: {health_info['status']}")
             return health_info
-            
+
         except Exception as e:
             logger.error(f"{log_prefix} ❌ Error during health check: {e}", exc_info=True)
             health_info["details"]["error"] = str(e)
@@ -490,7 +487,7 @@ class SyncRedisClient(BaseRedisClient):
         end: int,
         desc: bool = False,
         withscores: bool = False,
-        score_cast_func: Optional[Callable[[str], float]] = None
+        score_cast_func: Callable[[str], float] | None = None,
     ) -> list:
         """
         Retrieve members from a sorted set within a range.
@@ -510,24 +507,28 @@ class SyncRedisClient(BaseRedisClient):
             RedisError: If Redis connection is not established.
         """
         log_prefix = f"{self._log_prefix_class} - zrange"
-        logger.debug(f"{log_prefix} START - ZRANGE operation for key: '{key}', start: {start}, end: {end}, desc: {desc}, withscores: {withscores}, score_cast_func provided: {score_cast_func is not None}.")
+        logger.debug(
+            f"{log_prefix} START - ZRANGE operation for key: '{key}', start: {start}, end: {end}, desc: {desc}, withscores: {withscores}, score_cast_func provided: {score_cast_func is not None}."
+        )
         try:
             if score_cast_func is None:
                 result_raw = self.connection.zrange(key, start, end, desc=desc, withscores=withscores)
             else:
-                result_raw = self.connection.zrange(key, start, end, desc=desc, withscores=withscores, score_cast_func=score_cast_func)
-                
-            result = cast(list, result_raw)
+                result_raw = self.connection.zrange(
+                    key, start, end, desc=desc, withscores=withscores, score_cast_func=score_cast_func
+                )
+
+            result = cast("list", result_raw)
             logger.debug(f"{log_prefix} Retrieved {len(result)} members from sorted set for key '{key}'.")
             logger.debug(f"{log_prefix} END - ZRANGE SUCCESS for key: '{key}', count: {len(result)}.")
             return result
-            
+
         except redis_clients.RedisError as e:
             logger.error(f"{log_prefix} ❌ Redis zrange error for key '{key}': {e}", exc_info=True)
             logger.debug(f"{log_prefix} END - ZRANGE ERROR. Returning empty list due to RedisError.")
             return []
 
-    def get_last_fetched_timestamp(self, asset: str, timeframe: str) -> Optional[int]:
+    def get_last_fetched_timestamp(self, asset: str, timeframe: str) -> int | None:
         """
         Retrieve the last fetched timestamp for an asset and timeframe.
 
@@ -540,7 +541,9 @@ class SyncRedisClient(BaseRedisClient):
         """
         log_prefix = f"{self._log_prefix_class} - get_last_fetched_timestamp"
         key = f"last_fetched:{asset}:{timeframe}"
-        logger.debug(f"{log_prefix} START - Retrieving last fetched timestamp for asset: '{asset}', timeframe: '{timeframe}'. Key: '{key}'.")
+        logger.debug(
+            f"{log_prefix} START - Retrieving last fetched timestamp for asset: '{asset}', timeframe: '{timeframe}'. Key: '{key}'."
+        )
         value = self.get(key)
         if value is not None:
             try:
@@ -550,7 +553,9 @@ class SyncRedisClient(BaseRedisClient):
                 return ts
             except ValueError:
                 logger.error(f"{log_prefix} ❌ Invalid last fetched timestamp format for {asset} {timeframe}: {value}.")
-                logger.debug(f"{log_prefix} END - Last fetched timestamp retrieval WARNING - Invalid format. Returning None.")
+                logger.debug(
+                    f"{log_prefix} END - Last fetched timestamp retrieval WARNING - Invalid format. Returning None."
+                )
         else:
             logger.debug(f"{log_prefix} No timestamp found in Redis for key '{key}'.")
             logger.debug(f"{log_prefix} END - Last fetched timestamp retrieval - Key not found. Returning None.")
@@ -570,7 +575,9 @@ class SyncRedisClient(BaseRedisClient):
         """
         log_prefix = f"{self._log_prefix_class} - set_last_fetched_timestamp"
         key = f"last_fetched:{asset}:{timeframe}"
-        logger.debug(f"{log_prefix} START - Setting last fetched timestamp for asset: '{asset}', timeframe: '{timeframe}', timestamp: {timestamp}. Key: '{key}'.")
+        logger.debug(
+            f"{log_prefix} START - Setting last fetched timestamp for asset: '{asset}', timeframe: '{timeframe}', timestamp: {timestamp}. Key: '{key}'."
+        )
         result = self.set(key, timestamp)
         logger.debug(f"{log_prefix} SET operation result: {result}")
         logger.debug(f"{log_prefix} END - Set last fetched timestamp operation - Result: {result}.")
@@ -578,7 +585,7 @@ class SyncRedisClient(BaseRedisClient):
 
     def calculate_fetch_range(
         self, asset: str, timeframe: str, current_time: int, buffer_seconds: int = 120
-    ) -> Tuple[int, int]:
+    ) -> tuple[int, int]:
         """
         Calculate the fetch range for the next API call.
 
@@ -610,8 +617,12 @@ class SyncRedisClient(BaseRedisClient):
         logger.debug(f"{log_prefix} Calculated end_timestamp: {end_timestamp}")
         if start_timestamp >= end_timestamp:
             logger.debug(f"{log_prefix} No new data needed as start_timestamp >= end_timestamp.")
-            logger.debug(f"{log_prefix} END - Fetch range calculation - No new data needed. Returning interval: ({start_timestamp}, {end_timestamp}).")
+            logger.debug(
+                f"{log_prefix} END - Fetch range calculation - No new data needed. Returning interval: ({start_timestamp}, {end_timestamp})."
+            )
         else:
             logger.debug(f"{log_prefix} Calculated fetch range: Start: {start_timestamp}, End: {end_timestamp}")
-            logger.debug(f"{log_prefix} END - Fetch range calculation SUCCESS. Interval: ({start_timestamp}, {end_timestamp}).")
+            logger.debug(
+                f"{log_prefix} END - Fetch range calculation SUCCESS. Interval: ({start_timestamp}, {end_timestamp})."
+            )
         return start_timestamp, end_timestamp

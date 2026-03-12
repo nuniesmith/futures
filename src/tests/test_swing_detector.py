@@ -670,6 +670,7 @@ class TestSwingExitReasonEnum:
 # Pullback Entry Tests
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestPullbackEntry:
     def test_returns_none_on_neutral_bias(self):
         bars = _make_intraday_bars()
@@ -883,9 +884,11 @@ class TestPullbackEntry:
             assert "Pullback" in result.reasoning or "pullback" in result.reasoning.lower()
             assert result.key_level_used != ""
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Breakout Entry Tests
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestBreakoutEntry:
     def test_returns_none_on_neutral_bias(self):

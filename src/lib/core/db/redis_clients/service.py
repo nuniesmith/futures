@@ -1,70 +1,70 @@
-import os
-import time
-import random
-import json
-from typing import Any, Optional, Tuple, Callable, Awaitable, Union, Dict, List
-from urllib.parse import urlparse, urlunparse
-from loguru import logger
-from redis.client import Pipeline, PubSub
-from redis.asyncio.client import Pipeline as AsyncPipeline, PubSub as AsyncPubSub
-import pandas as pd
+from collections.abc import Awaitable, Callable
+from typing import Any
 
-from redis_service import RedisError, _ensure_connection
-utils.redis.sync_client import SyncRedisService
-utils.redis.async_client import AsyncRedisService
-utils.redis.queue import RedisQueue  # Add this import
-from redis_service.utils import CustomJSONEncoder, construct_redis_url, clean_redis_url, clean_redis_url
+from loguru import logger
+from redis.asyncio.client import Pipeline as AsyncPipeline
+from redis.asyncio.client import PubSub as AsyncPubSub
+from redis.client import Pipeline, PubSub
+from utils.redis.async_client import AsyncRedisService
+from utils.redis.queue import RedisQueue
+from utils.redis.sync_client import SyncRedisService
 
 _log_prefix_base = "[redis_service]"
 
-class RedisService():
+
+class RedisService:
     """
     Redis client factory that returns either a SyncRedisService or an AsyncRedisService.
 
     This implementation supports both synchronous and asynchronous usage.
     In asynchronous code with a sync client, wrap methods with asyncio.to_thread.
-    
+
     Example usage:
         # Synchronous usage
         redis = RedisService()
         value = redis.get("my_key")
-        
+
         # Asynchronous usage
         async_redis = RedisService(use_async=True)
         value = await async_redis.get("my_key")
-        
+
         # Context manager usage
         with RedisService() as redis:
             redis.set("key", "value")
-            
+
         # Async context manager
         async with RedisService(use_async=True) as redis:
             await redis.set("key", "value")
     """
+
     _log_prefix_class = f"{_log_prefix_base} - RedisServiceFactory"
 
     def __init__(
-        self, 
-        use_async: bool = False, 
-        timeout: int = 5, 
+        self,
+        use_async: bool = False,
+        timeout: int = 5,
         max_retries: int = 5,
         max_connections: int = 10,
-        connection_kwargs: Optional[Dict[str, Any]] = None
+        connection_kwargs: dict[str, Any] | None = None,
     ):
         log_prefix = f"{RedisService._log_prefix_class} - __init__"
-        logger.debug(f"{log_prefix} START - Initializing RedisService Factory. Async mode: {use_async}, Timeout: {timeout}s, Max retries: {max_retries}.")
+        logger.debug(
+            f"{log_prefix} START - Initializing RedisService Factory. Async mode: {use_async}, Timeout: {timeout}s, Max retries: {max_retries}."
+        )
         self.use_async = use_async
         self.timeout = timeout
         self.max_retries = max_retries
         self.max_connections = max_connections
         self.connection_kwargs = connection_kwargs or {}
-        self._client = self._create_client() # self._client will be either SyncRedisService or AsyncRedisService
-        logger.debug(f"{log_prefix} END - RedisService Factory initialization COMPLETED. Client type: {'AsyncRedisService' if use_async else 'SyncRedisService'}.")
+        self._client = self._create_client()  # self._client will be either SyncRedisService or AsyncRedisService
+        logger.debug(
+            f"{log_prefix} END - RedisService Factory initialization COMPLETED. Client type: {'AsyncRedisService' if use_async else 'SyncRedisService'}."
+        )
 
     def _create_client(self):
         """
         Create and return either a SyncRedisService or an AsyncRedisService instance.
-        
+
         Returns:
             Union[SyncRedisService, AsyncRedisService]: Redis client instance
         """
@@ -74,42 +74,38 @@ class RedisService():
             # Fix: Don't pass connection_kwargs if it's empty
             if not self.connection_kwargs:
                 return AsyncRedisService(
-                    timeout=self.timeout,
-                    max_retries=self.max_retries,
-                    max_connections=self.max_connections
+                    timeout=self.timeout, max_retries=self.max_retries, max_connections=self.max_connections
                 )
             else:
                 # Only pass non-empty connection_kwargs
                 return AsyncRedisService(
-                    timeout=self.timeout, 
+                    timeout=self.timeout,
                     max_retries=self.max_retries,
                     max_connections=self.max_connections,
-                    connection_kwargs=self.connection_kwargs
+                    connection_kwargs=self.connection_kwargs,
                 )
         else:
             logger.debug(f"{log_prefix} Creating SyncRedisService instance.")
             # Apply the same fix for SyncRedisService
             if not self.connection_kwargs:
                 return SyncRedisService(
-                    timeout=self.timeout, 
-                    max_retries=self.max_retries,
-                    max_connections=self.max_connections
+                    timeout=self.timeout, max_retries=self.max_retries, max_connections=self.max_connections
                 )
             else:
                 return SyncRedisService(
-                    timeout=self.timeout, 
+                    timeout=self.timeout,
                     max_retries=self.max_retries,
                     max_connections=self.max_connections,
-                    connection_kwargs=self.connection_kwargs
+                    connection_kwargs=self.connection_kwargs,
                 )
 
     def queue(self, queue_name: str = "default_queue") -> RedisQueue:
         """
         Create a Redis queue for managing jobs between services.
-        
+
         Args:
             queue_name (str): Base name for the queue keys (default: "default_queue")
-            
+
         Returns:
             RedisQueue: A queue instance using this Redis client
         """
@@ -117,7 +113,7 @@ class RedisService():
         logger.debug(f"{log_prefix} Creating RedisQueue with name: '{queue_name}'")
         return RedisQueue(redis_service=self, queue_name=queue_name)
 
-    def ping(self, timeout: Optional[float] = None) -> Union[bool, Awaitable[bool]]:
+    def ping(self, timeout: float | None = None) -> bool | Awaitable[bool]:
         """
         Check if the Redis connection is alive.
 
@@ -134,7 +130,7 @@ class RedisService():
         logger.debug(f"{log_prefix} Ping result: {result}")
         return result
 
-    def pubsub(self) -> Union[PubSub, Awaitable[AsyncPubSub]]:
+    def pubsub(self) -> PubSub | Awaitable[AsyncPubSub]:
         """
         Return a Redis PubSub object for pub/sub operations.
 
@@ -148,7 +144,7 @@ class RedisService():
         logger.debug(f"{log_prefix} PubSub object obtained: {result}")
         return result
 
-    def get(self, key: str) -> Union[Optional[Any], Awaitable[Optional[Any]]]:
+    def get(self, key: str) -> Any | None | Awaitable[Any | None]:
         """
         Retrieve data from Redis.
 
@@ -165,7 +161,7 @@ class RedisService():
         logger.debug(f"{log_prefix} Get result: {result}")
         return result
 
-    def set(self, key: str, value: Any, ex: Optional[int] = None) -> Union[bool, Awaitable[bool]]:
+    def set(self, key: str, value: Any, ex: int | None = None) -> bool | Awaitable[bool]:
         """
         Store a value in Redis.
 
@@ -184,7 +180,7 @@ class RedisService():
         logger.debug(f"{log_prefix} Set result: {result}")
         return result
 
-    def delete(self, key: str) -> Union[bool, Awaitable[bool]]:
+    def delete(self, key: str) -> bool | Awaitable[bool]:
         """
         Delete a key from Redis.
 
@@ -201,7 +197,7 @@ class RedisService():
         logger.debug(f"{log_prefix} Delete result: {result}")
         return result
 
-    def exists(self, key: str) -> Union[bool, Awaitable[bool]]:
+    def exists(self, key: str) -> bool | Awaitable[bool]:
         """
         Check if a key exists in Redis.
 
@@ -218,7 +214,7 @@ class RedisService():
         logger.debug(f"{log_prefix} Exists result: {result}")
         return result
 
-    def keys(self, pattern: str = "*") -> Union[List[str], Awaitable[List[str]]]:
+    def keys(self, pattern: str = "*") -> list[str] | Awaitable[list[str]]:
         """
         Retrieve a list of keys matching a pattern.
 
@@ -235,7 +231,7 @@ class RedisService():
         logger.debug(f"{log_prefix} Keys result: {result}")
         return result
 
-    def hset(self, name: str, key: str, value: Any) -> Union[bool, Awaitable[bool]]:
+    def hset(self, name: str, key: str, value: Any) -> bool | Awaitable[bool]:
         """
         Set the value of a hash field.
 
@@ -254,7 +250,7 @@ class RedisService():
         logger.debug(f"{log_prefix} Hset result: {result}")
         return result
 
-    def hget(self, name: str, key: str) -> Union[Optional[Any], Awaitable[Optional[Any]]]:
+    def hget(self, name: str, key: str) -> Any | None | Awaitable[Any | None]:
         """
         Get the value of a hash field.
 
@@ -272,7 +268,7 @@ class RedisService():
         logger.debug(f"{log_prefix} Hget result: {result}")
         return result
 
-    def setex(self, key: str, time: int, value: Any) -> Union[bool, Awaitable[bool]]:
+    def setex(self, key: str, time: int, value: Any) -> bool | Awaitable[bool]:
         """
         Set a value with expiration.
 
@@ -291,7 +287,7 @@ class RedisService():
         logger.debug(f"{log_prefix} Setex result: {result}")
         return result
 
-    def publish(self, channel: str, message: Union[str, bytes]) -> Union[int, Awaitable[int]]:
+    def publish(self, channel: str, message: str | bytes) -> int | Awaitable[int]:
         """
         Publish a message to a Redis channel.
 
@@ -309,10 +305,10 @@ class RedisService():
         logger.debug(f"{log_prefix} Publish result: {result}")
         return result
 
-    def health_check(self) -> Union[Dict[str, Any], Awaitable[Dict[str, Any]]]:
+    def health_check(self) -> dict[str, Any] | Awaitable[dict[str, Any]]:
         """
         Perform a comprehensive health check on the Redis connection.
-        
+
         Returns:
             Union[Dict[str, Any], Awaitable[Dict[str, Any]]]: Health check results with metrics.
             If the client is asynchronous, returns an awaitable.
@@ -323,7 +319,7 @@ class RedisService():
         logger.debug(f"{log_prefix} Health check result: {result}")
         return result
 
-    def close(self) -> Union[None, Awaitable[None]]:
+    def close(self) -> None | Awaitable[None]:
         """
         Closes the Redis connection gracefully.
 
@@ -336,7 +332,7 @@ class RedisService():
         logger.debug(f"{log_prefix} Connection closed")
         return result
 
-    def pipeline(self, transaction: bool = True) -> Union[Pipeline, AsyncPipeline]:
+    def pipeline(self, transaction: bool = True) -> Pipeline | AsyncPipeline:
         """
         Return a Redis pipeline for batching multiple commands.
 
@@ -360,8 +356,8 @@ class RedisService():
         end: int,
         desc: bool = False,
         withscores: bool = False,
-        score_cast_func: Optional[Callable[[str], float]] = None
-    ) -> Union[list, Awaitable[list]]:
+        score_cast_func: Callable[[str], float] | None = None,
+    ) -> list | Awaitable[list]:
         """
         Retrieve members from a sorted set in Redis in the specified range.
 
@@ -378,12 +374,14 @@ class RedisService():
             If the client is asynchronous, returns an awaitable.
         """
         log_prefix = f"{RedisService._log_prefix_class} - zrange"
-        logger.debug(f"{log_prefix} Getting range from sorted set '{key}', start: {start}, end: {end}, desc: {desc}, withscores: {withscores}")
+        logger.debug(
+            f"{log_prefix} Getting range from sorted set '{key}', start: {start}, end: {end}, desc: {desc}, withscores: {withscores}"
+        )
         result = self._client.zrange(key, start, end, desc, withscores, score_cast_func)
         logger.debug(f"{log_prefix} Zrange result obtained")
         return result
 
-    def get_last_fetched_timestamp(self, asset: str, timeframe: str) -> Union[Optional[int], Awaitable[Optional[int]]]:
+    def get_last_fetched_timestamp(self, asset: str, timeframe: str) -> int | None | Awaitable[int | None]:
         """
         Retrieve the last fetched timestamp for a given asset and timeframe.
 
@@ -400,7 +398,7 @@ class RedisService():
         key = f"last_fetched:{asset.upper()}:{timeframe}"
         try:
             result = self._client.get(key)
-            if isinstance(result, bytes) or isinstance(result, str):
+            if isinstance(result, (bytes, str)):
                 # For synchronous result that needs conversion
                 try:
                     timestamp = int(result)
@@ -415,7 +413,7 @@ class RedisService():
             logger.error(f"{log_prefix} Error getting timestamp: {e}")
             return None
 
-    def set_last_fetched_timestamp(self, asset: str, timeframe: str, timestamp: int) -> Union[bool, Awaitable[bool]]:
+    def set_last_fetched_timestamp(self, asset: str, timeframe: str, timestamp: int) -> bool | Awaitable[bool]:
         """
         Store the last fetched timestamp for a given asset and timeframe.
 
@@ -429,13 +427,15 @@ class RedisService():
             If the client is asynchronous, returns an awaitable.
         """
         log_prefix = f"{RedisService._log_prefix_class} - set_last_fetched_timestamp"
-        logger.debug(f"{log_prefix} Setting last fetched timestamp for asset: '{asset}', timeframe: '{timeframe}', timestamp: {timestamp}")
+        logger.debug(
+            f"{log_prefix} Setting last fetched timestamp for asset: '{asset}', timeframe: '{timeframe}', timestamp: {timestamp}"
+        )
         key = f"last_fetched:{asset.upper()}:{timeframe}"
         return self._client.set(key, str(timestamp))
 
     def calculate_fetch_range(
         self, asset: str, timeframe: str, current_time: int, buffer_seconds: int = 120
-    ) -> Union[Tuple[int, int], Awaitable[Tuple[int, int]]]:
+    ) -> tuple[int, int] | Awaitable[tuple[int, int]]:
         """
         Calculate the fetch range for the next API call based on the last fetched timestamp and current time.
 
@@ -450,20 +450,21 @@ class RedisService():
             If the client is asynchronous, returns an awaitable.
         """
         log_prefix = f"{RedisService._log_prefix_class} - calculate_fetch_range"
-        logger.debug(f"{log_prefix} Calculating fetch range for asset: '{asset}', timeframe: '{timeframe}', current_time: {current_time}")
-        
+        logger.debug(
+            f"{log_prefix} Calculating fetch range for asset: '{asset}', timeframe: '{timeframe}', current_time: {current_time}"
+        )
+
         # For async client, implement the fetch range calculation logic
         if self.use_async:
             # We need to write a custom implementation that handles awaitable
-            import asyncio
-            
+
             async def _async_calculate_range():
                 last_timestamp = await self.get_last_fetched_timestamp(asset, timeframe)
                 start_time = last_timestamp + 1 if last_timestamp else 0
                 end_time = current_time - buffer_seconds
                 logger.debug(f"{log_prefix} Range calculated: ({start_time}, {end_time})")
                 return start_time, end_time
-                
+
             return _async_calculate_range()
         else:
             # For synchronous client
@@ -473,7 +474,7 @@ class RedisService():
             logger.debug(f"{log_prefix} Range calculated: ({start_time}, {end_time})")
             return start_time, end_time
 
-    def lpush(self, key: str, *values) -> Union[int, Awaitable[int]]:
+    def lpush(self, key: str, *values) -> int | Awaitable[int]:
         """
         Push one or more values to the left (head) of a list.
 
@@ -490,8 +491,8 @@ class RedisService():
         result = self._client.lpush(key, *values)
         logger.debug(f"{log_prefix} Lpush result: {result}")
         return result
-    
-    def rpush(self, key: str, *values) -> Union[int, Awaitable[int]]:
+
+    def rpush(self, key: str, *values) -> int | Awaitable[int]:
         """
         Push one or more values to the right (tail) of a list.
 
@@ -508,8 +509,8 @@ class RedisService():
         result = self._client.rpush(key, *values)
         logger.debug(f"{log_prefix} Rpush result: {result}")
         return result
-    
-    def lpop(self, key: str) -> Union[Optional[Any], Awaitable[Optional[Any]]]:
+
+    def lpop(self, key: str) -> Any | None | Awaitable[Any | None]:
         """
         Remove and return the first element of a list.
 
@@ -525,8 +526,8 @@ class RedisService():
         result = self._client.lpop(key)
         logger.debug(f"{log_prefix} Lpop result: {result}")
         return result
-    
-    def rpop(self, key: str) -> Union[Optional[Any], Awaitable[Optional[Any]]]:
+
+    def rpop(self, key: str) -> Any | None | Awaitable[Any | None]:
         """
         Remove and return the last element of a list.
 
@@ -542,8 +543,8 @@ class RedisService():
         result = self._client.rpop(key)
         logger.debug(f"{log_prefix} Rpop result: {result}")
         return result
-    
-    def llen(self, key: str) -> Union[int, Awaitable[int]]:
+
+    def llen(self, key: str) -> int | Awaitable[int]:
         """
         Get the length of a list.
 
@@ -559,8 +560,8 @@ class RedisService():
         result = self._client.llen(key)
         logger.debug(f"{log_prefix} Llen result: {result}")
         return result
-    
-    def lrem(self, key: str, count: int, value) -> Union[int, Awaitable[int]]:
+
+    def lrem(self, key: str, count: int, value) -> int | Awaitable[int]:
         """
         Remove elements equal to value from the list.
 
@@ -578,15 +579,15 @@ class RedisService():
         result = self._client.lrem(key, count, value)
         logger.debug(f"{log_prefix} Lrem result: {result}")
         return result
-    
-    def rpoplpush(self, source: str, destination: str) -> Union[Optional[Any], Awaitable[Optional[Any]]]:
+
+    def rpoplpush(self, source: str, destination: str) -> Any | None | Awaitable[Any | None]:
         """
         Remove the last element in a list and push it to another list.
-        
+
         Args:
             source (str): Source list key
             destination (str): Destination list key
-            
+
         Returns:
             Union[Optional[Any], Awaitable[Optional[Any]]]: The element being transferred or None if source is empty.
             If the client is asynchronous, returns an awaitable.
@@ -597,14 +598,14 @@ class RedisService():
         logger.debug(f"{log_prefix} Rpoplpush result: {result}")
         return result
 
-    def execute_command(self, command: str, *args) -> Union[Any, Awaitable[Any]]:
+    def execute_command(self, command: str, *args) -> Any | Awaitable[Any]:
         """
         Execute an arbitrary Redis command.
-        
+
         Args:
             command (str): Redis command name
             *args: Command arguments
-            
+
         Returns:
             Union[Any, Awaitable[Any]]: The command result or an awaitable.
         """
@@ -613,14 +614,14 @@ class RedisService():
         result = self._client.execute_command(command, *args)
         logger.debug(f"{log_prefix} Command result type: {type(result)}")
         return result
-    
+
     @property
     def raw_client(self):
         """
         Access the raw Redis client directly.
-        
+
         This bypasses the RedisService wrapper functionality and should be used with caution.
-        
+
         Returns:
             The underlying Redis client instance
         """
@@ -656,7 +657,9 @@ class RedisService():
         if not self.use_async:
             return self._client.__enter__()  # Delegate to sync client
         else:
-            raise RuntimeError("Cannot use synchronous context manager with AsyncRedisService. Use 'async with' instead.")
+            raise RuntimeError(
+                "Cannot use synchronous context manager with AsyncRedisService. Use 'async with' instead."
+            )
 
     def __exit__(self, exc_type, exc_val, traceback):
         """Synchronous context manager exit method."""
@@ -665,4 +668,6 @@ class RedisService():
         if not self.use_async:
             return self._client.__exit__(exc_type, exc_val, traceback)  # Delegate to sync client
         else:
-            raise RuntimeError("Cannot use synchronous context manager with AsyncRedisService. Use 'async with' instead.")
+            raise RuntimeError(
+                "Cannot use synchronous context manager with AsyncRedisService. Use 'async with' instead."
+            )
