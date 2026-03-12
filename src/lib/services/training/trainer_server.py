@@ -563,8 +563,34 @@ def _run_training_pipeline(params: TrainRequest) -> None:
                     label_balance=ds_stats.label_distribution,
                 )
 
+            # ── Drop symbols that couldn't meet the bar threshold ─────────
+            # generate_dataset (fetch_only) attempts a deeper fill for any
+            # under-stocked symbol and populates dropped_symbols with those
+            # that still don't have enough data.  Remove them now so neither
+            # the image-generation step nor training sees them.
+            dropped = getattr(ds_stats, "dropped_symbols", [])
+            if dropped:
+                logger.warning(
+                    "Dropping %d symbol(s) from pipeline — insufficient bar data after fill attempt: %s",
+                    len(dropped),
+                    ", ".join(dropped),
+                )
+                symbols = [s for s in symbols if s not in dropped]
+                logger.info(
+                    "%d symbol(s) remaining after drop: %s",
+                    len(symbols),
+                    ", ".join(symbols),
+                )
+
             if step == "load_data":
-                _state.finish(result={"step": "load_data", "symbols": len(symbols), "days_back": days_back})
+                _state.finish(
+                    result={
+                        "step": "load_data",
+                        "symbols": len(symbols),
+                        "days_back": days_back,
+                        "dropped_symbols": dropped,
+                    }
+                )
                 return
 
         # ═══════════════════════════════════════════════════════════════════

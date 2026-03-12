@@ -157,10 +157,10 @@ KRAKEN_PAIRS: dict[str, dict[str, str]] = {
         "quote": "USD",
     },
     "Polygon": {
-        "rest_pair": "MATICUSD",
-        "ws_pair": "MATIC/USD",
-        "internal_ticker": "KRAKEN:MATICUSD",
-        "base": "MATIC",
+        "rest_pair": "POLUSD",
+        "ws_pair": "POL/USD",
+        "internal_ticker": "KRAKEN:POLUSD",
+        "base": "POL",
         "quote": "USD",
     },
     "XRP": {

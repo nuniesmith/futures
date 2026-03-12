@@ -758,7 +758,7 @@ def _build_registry() -> dict[str, Asset]:
         ("Avalanche", "KRAKEN:AVAXUSD", "AVAX/USD", 0.001, 30, ("Ethereum", "Solana")),
         ("Polkadot", "KRAKEN:DOTUSD", "DOT/USD", 0.0001, 15, ("Ethereum",)),
         ("Cardano", "KRAKEN:ADAUSD", "ADA/USD", 0.00001, 10, ("Ethereum", "Polkadot")),
-        ("Polygon", "KRAKEN:MATICUSD", "MATIC/USD", 0.0001, 10, ("Ethereum",)),
+        ("Polygon", "KRAKEN:POLUSD", "POL/USD", 0.0001, 10, ("Ethereum",)),
         ("XRP", "KRAKEN:XRPUSD", "XRP/USD", 0.0001, 10, ("Bitcoin",)),
     ]
 
@@ -802,7 +802,7 @@ _KRAKEN_SHORT_ALIASES: dict[str, str] = {
     "AVAX": "Avalanche",
     "DOT": "Polkadot",
     "ADA": "Cardano",
-    "MATIC": "Polygon",
+    "POL": "Polygon",
     "XRP": "XRP",
 }
 _TICKER_TO_NAME.update(_KRAKEN_SHORT_ALIASES)

@@ -208,6 +208,10 @@ class DatasetStats:
     render_failures: int = 0
     label_distribution: dict[str, int] = field(default_factory=dict)
     symbols_processed: list[str] = field(default_factory=list)
+    # Symbols that were dropped because bar data was insufficient even after a
+    # deeper fill attempt.  Callers (e.g. trainer_server) should remove these
+    # from any subsequent generate_dataset / train calls.
+    dropped_symbols: list[str] = field(default_factory=list)
     csv_path: str = ""
     duration_seconds: float = 0.0
     errors: list[str] = field(default_factory=list)
@@ -229,6 +233,7 @@ class DatasetStats:
             "render_failures": self.render_failures,
             "label_distribution": self.label_distribution,
             "symbols_processed": self.symbols_processed,
+            "dropped_symbols": self.dropped_symbols,
             "csv_path": self.csv_path,
             "duration_seconds": round(self.duration_seconds, 1),
             "errors": self.errors[:20],  # cap error list
@@ -351,7 +356,7 @@ _SYMBOL_TO_TICKER: dict[str, str] = {
     "KRAKEN:SOLUSD": "KRAKEN:SOLUSD",  # Solana / USD
     "KRAKEN:AVAXUSD": "KRAKEN:AVAXUSD",  # Avalanche / USD
     "KRAKEN:LINKUSD": "KRAKEN:LINKUSD",  # Chainlink / USD
-    "KRAKEN:MATICUSD": "KRAKEN:MATICUSD",  # Polygon / USD
+    "KRAKEN:POLUSD": "KRAKEN:POLUSD",  # Polygon (POL) / USD
     "KRAKEN:DOTUSD": "KRAKEN:DOTUSD",  # Polkadot / USD
     "KRAKEN:ADAUSD": "KRAKEN:ADAUSD",  # Cardano / USD
     "KRAKEN:XRPUSD": "KRAKEN:XRPUSD",  # Ripple / USD
@@ -363,7 +368,7 @@ _SYMBOL_TO_TICKER: dict[str, str] = {
     "SOL": "KRAKEN:SOLUSD",  # Solana spot via Kraken
     "AVAX": "KRAKEN:AVAXUSD",  # Avalanche spot via Kraken
     "LINK": "KRAKEN:LINKUSD",  # Chainlink spot via Kraken
-    "MATIC": "KRAKEN:MATICUSD",  # Polygon spot via Kraken
+    "POL": "KRAKEN:POLUSD",  # Polygon (POL) spot via Kraken
     "DOT": "KRAKEN:DOTUSD",  # Polkadot spot via Kraken
     "ADA": "KRAKEN:ADAUSD",  # Cardano spot via Kraken
     "XRP": "KRAKEN:XRPUSD",  # Ripple spot via Kraken
@@ -373,7 +378,7 @@ _SYMBOL_TO_TICKER: dict[str, str] = {
     "SOLUSD": "KRAKEN:SOLUSD",
     "AVAXUSD": "KRAKEN:AVAXUSD",
     "LINKUSD": "KRAKEN:LINKUSD",
-    "MATICUSD": "KRAKEN:MATICUSD",
+    "POLUSD": "KRAKEN:POLUSD",
     "DOTUSD": "KRAKEN:DOTUSD",
     "ADAUSD": "KRAKEN:ADAUSD",
     "XRPUSD": "KRAKEN:XRPUSD",
@@ -548,6 +553,58 @@ def _load_bars_from_engine(symbol: str, days: int = 90) -> pd.DataFrame | None:
     except Exception as exc:
         logger.debug("Engine bar load failed for %s: %s", symbol, exc)
         return None
+
+
+def _request_deeper_fill(symbol: str, days: int) -> None:
+    """Ask the engine to run a blocking deeper fill for *symbol*.
+
+    Calls ``POST /bars/{symbol}/fill`` with the requested ``days_back`` so
+    the engine fetches further back in history from Massive / yfinance.
+    The call is best-effort — any network or engine error is logged at DEBUG
+    level and silently swallowed so callers can always continue.
+
+    This is used by the low-bar retry path in ``generate_dataset`` to try to
+    bring under-stocked symbols up to the minimum bar threshold before
+    deciding whether to drop them from the dataset run.
+    """
+    try:
+        import requests as _requests
+    except ImportError:
+        logger.debug("requests not available — cannot request deeper fill for %s", symbol)
+        return
+
+    url = f"{_ENGINE_DATA_URL}/bars/{symbol}/fill"
+    headers: dict[str, str] = {}
+    if _API_KEY:
+        headers["X-API-Key"] = _API_KEY
+
+    try:
+        resp = _requests.post(
+            url,
+            json={"days_back": days, "interval": "1m"},
+            headers=headers,
+            # Filling can be slow for large windows — use a generous timeout.
+            # The /fill endpoint blocks until complete.
+            timeout=max(_ENGINE_BARS_TIMEOUT * 4, 240),
+        )
+        if resp.status_code == 200:
+            result = resp.json()
+            bars_added = result.get("bars_added", 0)
+            logger.info(
+                "  Deeper fill for %s complete: +%d bars (total: %d)",
+                symbol,
+                bars_added,
+                result.get("bars_after", "?"),
+            )
+        else:
+            logger.debug(
+                "Deeper fill request for %s returned HTTP %s: %s",
+                symbol,
+                resp.status_code,
+                resp.text[:200],
+            )
+    except Exception as exc:
+        logger.debug("Deeper fill request failed for %s: %s", symbol, exc)
 
 
 def _load_bars_from_db(symbol: str, days: int = 90) -> pd.DataFrame | None:
@@ -2435,6 +2492,8 @@ def generate_dataset(
     # steps only have to read local data.
     if fetch_only:
         total_bars_fetched = 0
+        # symbol → bar count, recorded for low-bar analysis after the loop
+        _fetched_bar_counts: dict[str, int] = {}
         all_fetch_symbols = list(symbols) + sorted(_peer_only_tickers)
         for sym_idx, symbol in enumerate(all_fetch_symbols, 1):
             logger.info("Fetching bars for %s [%d/%d]...", symbol, sym_idx, len(all_fetch_symbols))
@@ -2446,9 +2505,11 @@ def generate_dataset(
                     csv_dir=cfg.csv_bars_dir,
                 )
                 if bars_1m is not None and not bars_1m.empty:
-                    total_bars_fetched += len(bars_1m)
+                    n = len(bars_1m)
+                    total_bars_fetched += n
+                    _fetched_bar_counts[symbol] = n
                     aggregate_stats.symbols_processed.append(symbol)
-                    logger.info("  ✓ %s: %d bars fetched", symbol, len(bars_1m))
+                    logger.info("  ✓ %s: %d bars fetched", symbol, n)
                 else:
                     msg = f"No bar data returned for {symbol}"
                     logger.warning("  ✗ %s", msg)
@@ -2457,6 +2518,74 @@ def generate_dataset(
                 msg = f"Bar fetch failed for {symbol}: {exc}"
                 logger.warning("  ✗ %s", msg)
                 aggregate_stats.errors.append(msg)
+
+        # ── Low-bar detection + retry ─────────────────────────────────
+        # Flag symbols whose bar count is well below what we'd expect for
+        # `days_back` of history.  1-minute futures trade ~23 h/day on
+        # weekdays, so a conservative floor of 200 bars/day (accounts for
+        # weekends, holidays, and CME maintenance windows) gives us a
+        # threshold that catches genuinely sparse symbols without
+        # false-positives on recently-listed contracts.
+        _low_bar_threshold = days_back * 200
+        _low_bar_symbols: list[tuple[str, int]] = [
+            (sym, cnt)
+            for sym, cnt in sorted(_fetched_bar_counts.items(), key=lambda x: x[1])
+            if cnt < _low_bar_threshold
+        ]
+        if _low_bar_symbols:
+            logger.warning(
+                "⚠  %d symbol(s) have fewer bars than expected for %d days "
+                "(threshold: %d bars = %d days x 200 bars/day).",
+                len(_low_bar_symbols),
+                days_back,
+                _low_bar_threshold,
+                days_back,
+            )
+            logger.warning("   These symbols will produce fewer training samples and may hurt model quality.")
+            logger.warning("   Requesting a deeper fill then re-checking each one...")
+            logger.warning("   %-10s  %8s  %8s  %7s", "Symbol", "Got", "Expected", "Cover%")
+            logger.warning("   %-10s  %8s  %8s  %7s", "------", "---", "--------", "-------")
+            for sym, cnt in _low_bar_symbols:
+                pct = 100.0 * cnt / _low_bar_threshold if _low_bar_threshold else 0.0
+                logger.warning("   %-10s  %8d  %8d  %6.1f%%", sym, cnt, _low_bar_threshold, pct)
+
+            # ── Retry: request a deeper fill then re-fetch ────────────
+            # Ask the engine to pull further back (3× the original window)
+            # for each under-stocked symbol.  If the bar count still falls
+            # short after the fill we drop the symbol so it doesn't produce
+            # a lop-sided, under-representative slice of the dataset.
+            _deeper_days = days_back * 3
+            for sym, _cnt in _low_bar_symbols:
+                logger.info("  → requesting deeper fill for %s (%d days)...", sym, _deeper_days)
+                _request_deeper_fill(sym, _deeper_days)
+
+                # Re-fetch to see how many bars we have now
+                try:
+                    refetched = load_bars(
+                        sym,
+                        source=cfg.bars_source,
+                        days=_deeper_days,
+                        csv_dir=cfg.csv_bars_dir,
+                    )
+                    new_cnt = len(refetched) if refetched is not None and not refetched.empty else 0
+                except Exception:
+                    new_cnt = 0
+
+                if new_cnt >= _low_bar_threshold:
+                    logger.info("  ✓ %s: now %d bars after deeper fill — keeping", sym, new_cnt)
+                    _fetched_bar_counts[sym] = new_cnt
+                else:
+                    logger.warning(
+                        "  ✗ %s: still only %d bars after deeper fill (need %d) — dropping from dataset",
+                        sym,
+                        new_cnt,
+                        _low_bar_threshold,
+                    )
+                    aggregate_stats.dropped_symbols.append(sym)
+                    aggregate_stats.errors.append(
+                        f"DROPPED:{sym}: only {new_cnt} bars available "
+                        f"(need {_low_bar_threshold}) after deeper fill attempt"
+                    )
 
         aggregate_stats.duration_seconds = time.monotonic() - start_time
         logger.info(

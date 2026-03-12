@@ -849,7 +849,7 @@ def kraken_account_html():
                     "AVAX": "AVAX",
                     "DOT": "DOT",
                     "ADA": "ADA",
-                    "MATIC": "MATIC",
+                    "POL": "POL",
                     "XXRP": "XRP",
                 }.get(asset, asset)
                 if amt >= 1000:
@@ -1360,7 +1360,7 @@ def _resolve_internal_ticker(pair: str) -> str | None:
         "polkadot": "Polkadot",
         "ada": "Cardano",
         "cardano": "Cardano",
-        "matic": "Polygon",
+        "pol": "Polygon",
         "polygon": "Polygon",
         "xrp": "XRP",
     }

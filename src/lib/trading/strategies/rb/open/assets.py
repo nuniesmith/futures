@@ -236,7 +236,7 @@ CRYPTO_SYMBOL_OVERRIDES: dict[str, dict[str, float]] = {
         "min_depth_atr_pct": 0.10,
         "min_body_ratio": 0.43,
     },
-    "KRAKEN:MATIC/USD": {
+    "KRAKEN:POL/USD": {
         "breakout_multiplier": 0.62,
         "max_or_atr_ratio": 2.6,
         "min_or_atr_ratio": 0.03,

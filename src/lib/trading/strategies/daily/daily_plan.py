@@ -127,7 +127,7 @@ ASSET_SESSION_MAP: dict[str, tuple[str, ...]] = {
     "AVAX/USD": ("us",),
     "DOT/USD": ("asian",),
     "ADA/USD": ("asian", "us"),
-    "MATIC/USD": ("us",),
+    "POL/USD": ("us",),
     "XRP/USD": ("us", "asian"),
 }
 

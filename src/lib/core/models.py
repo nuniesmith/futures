@@ -531,9 +531,9 @@ KRAKEN_CONTRACT_SPECS: dict[str, dict[str, Any]] = {
         "exchange": "kraken",
         "asset_class": "crypto",
     },
-    "MATIC/USD": {
-        "ticker": "KRAKEN:MATICUSD",
-        "data_ticker": "KRAKEN:MATICUSD",
+    "POL/USD": {
+        "ticker": "KRAKEN:POLUSD",
+        "data_ticker": "KRAKEN:POLUSD",
         "point": 1.0,
         "tick": 0.0001,
         "margin": 10,

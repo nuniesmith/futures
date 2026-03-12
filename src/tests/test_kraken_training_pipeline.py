@@ -138,7 +138,7 @@ class TestSymbolResolution:
             ("AVAX", "KRAKEN:AVAXUSD"),
             ("DOT", "KRAKEN:DOTUSD"),
             ("ADA", "KRAKEN:ADAUSD"),
-            ("MATIC", "KRAKEN:MATICUSD"),
+            ("POL", "KRAKEN:POLUSD"),
             ("XRP", "KRAKEN:XRPUSD"),
         ]
         for short, internal in expected_pairs:
@@ -214,7 +214,7 @@ class TestAssetClassMapping:
             "AVAX",
             "DOT",
             "ADA",
-            "MATIC",
+            "POL",
             "XRP",
             "KRAKEN:XBTUSD",
             "KRAKEN:ETHUSD",
@@ -263,7 +263,7 @@ class TestVolatilityClassMapping:
             "AVAX",
             "DOT",
             "ADA",
-            "MATIC",
+            "POL",
             "XRP",
             "KRAKEN:XBTUSD",
             "KRAKEN:ETHUSD",
@@ -349,7 +349,7 @@ class TestFeatureContract:
             "AVAX",
             "DOT",
             "ADA",
-            "MATIC",
+            "POL",
             "XRP",
             "KRAKEN:XBTUSD",
             "KRAKEN:ETHUSD",
@@ -358,7 +358,7 @@ class TestFeatureContract:
             "KRAKEN:AVAXUSD",
             "KRAKEN:DOTUSD",
             "KRAKEN:ADAUSD",
-            "KRAKEN:MATICUSD",
+            "KRAKEN:POLUSD",
             "KRAKEN:XRPUSD",
         ],
     )
@@ -377,7 +377,7 @@ class TestFeatureContract:
             "AVAX",
             "DOT",
             "ADA",
-            "MATIC",
+            "POL",
             "XRP",
             "KRAKEN:XBTUSD",
             "KRAKEN:ETHUSD",
@@ -853,7 +853,7 @@ class TestTabularFeatureShape:
     def test_volatility_class_for_all_9_kraken_pairs(self):
         from lib.analysis.ml.breakout_cnn import get_asset_volatility_class
 
-        pairs = ["BTC", "ETH", "SOL", "LINK", "AVAX", "DOT", "ADA", "MATIC", "XRP"]
+        pairs = ["BTC", "ETH", "SOL", "LINK", "AVAX", "DOT", "ADA", "POL", "XRP"]
         for p in pairs:
             assert get_asset_volatility_class(p) == 1.0, f"{p} vol class != 1.0"
 

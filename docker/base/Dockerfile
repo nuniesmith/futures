@@ -54,7 +54,7 @@ COPY src/lib/__init__.py src/lib/__init__.py
 # Install all base dependencies (no [gpu] extras — those belong to trainer).
 # --no-cache-dir keeps the image lean; the build cache is handled by
 # Docker's layer cache on the COPY above instead.
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir ".[rithmic]"
 
 # ---------------------------------------------------------------------------
 # Stage 2 — runtime base

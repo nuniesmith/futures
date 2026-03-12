@@ -9,7 +9,7 @@
 #   data       — FastAPI REST + SSE API (port 8050); bar cache, Kraken feed,
 #                Redis reads of engine-published state
 #   engine     — background computation worker; publishes focus/risk to Redis
-#   web        — HTMX dashboard frontend; reverse-proxies to data (port 8180)
+#   web        — HTMX dashboard frontend; reverse-proxies to data (port 8080)
 #   trainer    — GPU CNN training server (port 8200)  [training profile]
 #   prometheus — metrics collection & alerting
 #   grafana    — dashboards & visualization
@@ -260,7 +260,7 @@ services:
                 base: docker-image://nuniesmith/futures:base
         restart: unless-stopped
         ports:
-            - "8180:8080"
+            - "8080:8080"
         environment:
             - DATA_SERVICE_URL=http://data:8000
             - CHARTING_SERVICE_URL=http://localhost:8003

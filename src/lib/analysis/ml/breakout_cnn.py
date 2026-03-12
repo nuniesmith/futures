@@ -250,7 +250,7 @@ ASSET_CLASS_ORDINALS: dict[str, float] = {
     "AVAX": 4.0 / 4,
     "DOT": 4.0 / 4,
     "ADA": 4.0 / 4,
-    "MATIC": 4.0 / 4,
+    "POL": 4.0 / 4,
     "XRP": 4.0 / 4,
     # Crypto (Kraken internal tickers — KRAKEN: prefix)
     "KRAKEN:XBTUSD": 4.0 / 4,
@@ -260,7 +260,7 @@ ASSET_CLASS_ORDINALS: dict[str, float] = {
     "KRAKEN:AVAXUSD": 4.0 / 4,
     "KRAKEN:DOTUSD": 4.0 / 4,
     "KRAKEN:ADAUSD": 4.0 / 4,
-    "KRAKEN:MATICUSD": 4.0 / 4,
+    "KRAKEN:POLUSD": 4.0 / 4,
     "KRAKEN:XRPUSD": 4.0 / 4,
 }
 
@@ -305,7 +305,7 @@ ASSET_VOLATILITY_CLASS: dict[str, float] = {
     "AVAX": 1.0,
     "DOT": 1.0,
     "ADA": 1.0,
-    "MATIC": 1.0,
+    "POL": 1.0,
     "XRP": 1.0,
     # Crypto Kraken internal tickers
     "KRAKEN:XBTUSD": 1.0,
@@ -315,7 +315,7 @@ ASSET_VOLATILITY_CLASS: dict[str, float] = {
     "KRAKEN:AVAXUSD": 1.0,
     "KRAKEN:DOTUSD": 1.0,
     "KRAKEN:ADAUSD": 1.0,
-    "KRAKEN:MATICUSD": 1.0,
+    "KRAKEN:POLUSD": 1.0,
     "KRAKEN:XRPUSD": 1.0,
 }
 
@@ -1372,7 +1372,7 @@ ASSET_ID_LOOKUP: dict[str, int] = {
     "AVAX": 22,  # alt-coins share an embedding
     "DOT": 23,
     "ADA": 23,
-    "MATIC": 23,
+    "POL": 23,
     "XRP": 23,
     # Kraken tickers → same as their short aliases
     "KRAKEN:XBTUSD": 20,
@@ -1382,7 +1382,7 @@ ASSET_ID_LOOKUP: dict[str, int] = {
     "KRAKEN:AVAXUSD": 22,
     "KRAKEN:DOTUSD": 23,
     "KRAKEN:ADAUSD": 23,
-    "KRAKEN:MATICUSD": 23,
+    "KRAKEN:POLUSD": 23,
     "KRAKEN:XRPUSD": 23,
 }
 NUM_ASSETS = 25  # unique asset IDs (0–24)
@@ -1427,7 +1427,7 @@ ASSET_CLASS_IDX_LOOKUP: dict[str, int] = {
     "AVAX": 4,
     "DOT": 4,
     "ADA": 4,
-    "MATIC": 4,
+    "POL": 4,
     "XRP": 4,
     "KRAKEN:XBTUSD": 4,
     "KRAKEN:ETHUSD": 4,
@@ -1436,7 +1436,7 @@ ASSET_CLASS_IDX_LOOKUP: dict[str, int] = {
     "KRAKEN:AVAXUSD": 4,
     "KRAKEN:DOTUSD": 4,
     "KRAKEN:ADAUSD": 4,
-    "KRAKEN:MATICUSD": 4,
+    "KRAKEN:POLUSD": 4,
     "KRAKEN:XRPUSD": 4,
 }
 

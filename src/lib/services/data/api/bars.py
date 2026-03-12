@@ -341,7 +341,7 @@ _KRAKEN_SPOT_SYMBOLS = frozenset(
         "ADA",
         "AVAX",
         "DOT",
-        "MATIC",
+        "POL",
         "LINK",
         "UNI",
         "AAVE",

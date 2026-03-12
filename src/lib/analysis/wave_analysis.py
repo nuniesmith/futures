@@ -104,7 +104,7 @@ ASSET_PARAMS: dict[str, dict[str, float | int]] = {
     "AVAX/USD": {"max_length": 12, "accel_multiplier": 0.040, "lookback_period": 100},
     "DOT/USD": {"max_length": 12, "accel_multiplier": 0.040, "lookback_period": 100},
     "ADA/USD": {"max_length": 12, "accel_multiplier": 0.040, "lookback_period": 100},
-    "MATIC/USD": {"max_length": 12, "accel_multiplier": 0.040, "lookback_period": 100},
+    "POL/USD": {"max_length": 12, "accel_multiplier": 0.040, "lookback_period": 100},
     "XRP/USD": {"max_length": 12, "accel_multiplier": 0.038, "lookback_period": 100},
 }
 
