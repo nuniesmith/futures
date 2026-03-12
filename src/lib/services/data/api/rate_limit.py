@@ -215,7 +215,9 @@ def _rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
     from typing import Any as _Any
     from typing import cast
 
-    retry_after = cast("_Any", exc).detail if isinstance(exc, RateLimitExceeded) and hasattr(exc, "detail") else "unknown"
+    retry_after = (
+        cast("_Any", exc).detail if isinstance(exc, RateLimitExceeded) and hasattr(exc, "detail") else "unknown"
+    )
 
     logger.warning(
         "Rate limit exceeded: %s %s from %s — limit: %s",
