@@ -418,9 +418,19 @@ class TestCryptoMomentumNoDirectAPICalls:
         )
 
         # Make crypto_momentum raise (simulating no Kraken on trainer)
-        with patch(
-            "lib.analysis.crypto_momentum.compute_all_crypto_momentum",
-            side_effect=Exception("No Kraken on trainer"),
+        # Also mock the chart renderer to avoid Pillow _idat.fileno()
+        # errors on some platforms — this test validates crypto_momentum
+        # error handling, not chart rendering.
+        _mock_render = MagicMock(return_value="/tmp/fake_render.png")
+        with (
+            patch(
+                "lib.analysis.crypto_momentum.compute_all_crypto_momentum",
+                side_effect=Exception("No Kraken on trainer"),
+            ),
+            patch(
+                "lib.analysis.rendering.chart_renderer.render_ruby_snapshot",
+                _mock_render,
+            ),
         ):
             # Should not raise — crypto_momentum failure is non-fatal
             rows, stats = generate_dataset_for_symbol(

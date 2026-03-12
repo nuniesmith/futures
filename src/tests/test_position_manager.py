@@ -339,6 +339,7 @@ class TestOpenPosition:
         assert pos.tp1 < pos.entry_price
         assert pos.stop_loss > pos.entry_price
 
+    @patch("lib.services.engine.position_manager.FOCUS_LOCK_ENABLED", False)
     def test_max_positions_enforced(self):
         pm = _make_pm()
 
@@ -923,6 +924,7 @@ class TestEntryTypeDecision:
 class TestSessionManagement:
     """Tests for session-end closure and close-all."""
 
+    @patch("lib.services.engine.position_manager.FOCUS_LOCK_ENABLED", False)
     def test_close_all(self):
         pm = _make_pm()
 
@@ -938,6 +940,7 @@ class TestSessionManagement:
         assert pm.get_position_count() == 0
         assert all(o.order_type == OrderType.MARKET for o in orders)
 
+    @patch("lib.services.engine.position_manager.FOCUS_LOCK_ENABLED", False)
     def test_close_for_session_end_closes_matching_session(self):
         pm = _make_pm()
 
@@ -1246,6 +1249,7 @@ class TestEdgeCases:
         assert pos is not None
         assert pos.entry_atr > 0
 
+    @patch("lib.services.engine.position_manager.FOCUS_LOCK_ENABLED", False)
     def test_multiple_positions_different_tickers(self):
         pm = _make_pm()
 
@@ -1287,6 +1291,7 @@ class TestEdgeCases:
         orders = pm.close_for_session_end("us")
         assert len(orders) == 0
 
+    @patch("lib.services.engine.position_manager.FOCUS_LOCK_ENABLED", False)
     def test_update_all_with_mixed_valid_invalid_bars(self):
         pm = _make_pm()
 

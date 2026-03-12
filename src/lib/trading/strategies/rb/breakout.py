@@ -86,7 +86,7 @@ _UTC = ZoneInfo("UTC")
 
 
 # ===========================================================================
-# Phase 1A — BreakoutType is now the canonical IntEnum from core.
+# Phase 1A — BreakoutType is now the canonical IntEnum from src.lib.core.
 #
 # The old engine StrEnum has been removed.  All code in this module (and
 # callers) uses ``lib.core.breakout_types.BreakoutType`` (IntEnum) directly.

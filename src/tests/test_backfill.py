@@ -1185,7 +1185,7 @@ class TestFullRoundTrip:
         # Create bars with known values using recent timestamps
         now = datetime.now(tz=_EST)
         recent_start = now - timedelta(minutes=15)
-        idx = pd.date_range(recent_start, periods=10, freq="1min", tz="America/New_York")
+        idx = pd.date_range(recent_start, periods=10, freq="1min")
         df = pd.DataFrame(
             {
                 "Open": [100.0 + i for i in range(10)],

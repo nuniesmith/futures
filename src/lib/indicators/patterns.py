@@ -25,7 +25,7 @@ class PatternDetector:
         Returns:
             DataFrame with detected patterns
         """
-        # This would call process_data from core.processor
+        # This would call process_data from src.lib.core.processor
         # with the appropriate parameters
         return process_data(df, enhanced_detection=self.enhanced_detection, asset_type=self.asset_type)
 

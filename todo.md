@@ -1168,7 +1168,7 @@ CLEANUP-D (dead code)       ← overlaps with Phase INDICATORS, coordinate
 | Category | Count | Description |
 |---|---|---|
 | **Syntax errors** | 10 | Missing `from` keyword in imports (`prediction/generator.py`, `prediction/manager.py`, `prediction/multi.py`), concatenated statements (`manager.py` L14) |
-| **Broken import paths** | 12 | `from src.lib.model.estimator` → `from lib.model.base.estimator`, `from core.exceptions.model` → doesn't exist, `from src.lib.core.utils.logging_utils` → doesn't exist, `from strategy.evaluator` → doesn't exist, `from core.constants.manager` → doesn't exist |
+| **Broken import paths** | 12 | `from src.lib.model.estimator` → `from lib.model.base.estimator`, `from src.lib.core.exceptions.model` → doesn't exist, `from src.lib.core.utils.logging_utils` → doesn't exist, `from strategy.evaluator` → doesn't exist, `from src.lib.core.constants.manager` → doesn't exist |
 | **Runtime bugs** | 3 | `pl.training(...)` should be `pl.Trainer(...)` in `service.py`, `deep/lstm.py`, `deep/tft.py`; `nn.py` line-break splits `np.mean` call |
 | **Whitespace/style (auto-fixable)** | ~2,048 | `W293` blank-line-whitespace (2,041), `W291` trailing-whitespace (158), `W292` missing-newline (27) |
 | **Deprecated typing (auto-fixable)** | ~322 | `UP006` non-pep585 (131), `UP045` non-pep604-optional (91), `UP035` deprecated-import (53), `UP007` non-pep604-union (47) |
@@ -1188,15 +1188,15 @@ CLEANUP-D (dead code)       ← overlaps with Phase INDICATORS, coordinate
 
 - [ ] **A4**: `src/lib/model/base/classifier.py` — `from src.lib.model.estimator` → `from lib.model.base.estimator`
 - [ ] **A5**: `src/lib/model/base/regressor.py` — `from src.lib.model.estimator` → `from lib.model.base.estimator`
-- [ ] **A6**: `src/lib/model/base/estimator.py` — remove broken `from core.models.base` and `from core.validation.dataframe` imports; have `Estimator` inherit from `lib.model.base.model.BaseModel` instead
-- [ ] **A7**: `src/lib/model/ml/xgboost.py` — fix `from src.lib.model.regressor` → `from lib.model.base.regressor`, `from src.lib.model.classifier` → `from lib.model.base.classifier`, `from core.exceptions.model` → create shim or inline `ModelError`
-- [ ] **A8**: `src/lib/model/statistical/arima.py` — fix `from src.lib.model.estimator` → `from lib.model.base.estimator`, `from core.exceptions` → inline `ModelError`, remove duplicate `StatsARIMAModel` import
+- [ ] **A6**: `src/lib/model/base/estimator.py` — remove broken `from src.lib.core.models.base` and `from src.lib.core.validation.dataframe` imports; have `Estimator` inherit from `lib.model.base.model.BaseModel` instead
+- [ ] **A7**: `src/lib/model/ml/xgboost.py` — fix `from src.lib.model.regressor` → `from lib.model.base.regressor`, `from src.lib.model.classifier` → `from lib.model.base.classifier`, `from src.lib.core.exceptions.model` → create shim or inline `ModelError`
+- [ ] **A8**: `src/lib/model/statistical/arima.py` — fix `from src.lib.model.estimator` → `from lib.model.base.estimator`, `from src.lib.core.exceptions` → inline `ModelError`, remove duplicate `StatsARIMAModel` import
 - [ ] **A9**: `src/lib/model/statistical/garch.py` — same pattern: fix `model.estimator` and `core.exceptions.model`
 - [ ] **A10**: `src/lib/model/factory.py` — fix all `from src.lib.model.*` → `from lib.model.*`
 - [ ] **A11**: `src/lib/model/registry.py` — fix `from src.lib.model.base.model` → `from lib.model.base.model`, `from src.lib.model.utils.metadata` → `from lib.model.utils.metadata`
 - [ ] **A12**: `src/lib/model/deep/lstm.py` — fix `from src.lib.model.base.model` → `from lib.model.base.model`, `from src.lib.model.utils.metadata` → `from lib.model.utils.metadata`
 - [ ] **A13**: `src/lib/model/deep/nn.py` — fix `from src.lib.model.base.model` → `from lib.model.base.model`
-- [ ] **A14**: `src/lib/model/deep/tft.py` — fix `from src.lib.model.base.model` → `from lib.model.base.model`, remove `from core.constants.manager`, remove `from utils.data_utils`
+- [ ] **A14**: `src/lib/model/deep/tft.py` — fix `from src.lib.model.base.model` → `from lib.model.base.model`, remove `from src.lib.core.constants.manager`, remove `from utils.data_utils`
 - [ ] **A15**: `src/lib/model/ensemble/ensemble.py` — fix `from src.lib.model.base.model` → `from lib.model.base.model`, `from src.lib.model.utils.metadata` → `from lib.model.utils.metadata`
 - [ ] **A16**: `src/lib/model/evaluation/service.py` — guard `pytorch_forecasting` import with `try/except`
 - [ ] **A17**: `src/lib/model/ml/logistic.py` — fix `from src.lib.model.base.model`, remove `from strategy.evaluator`
@@ -1205,7 +1205,7 @@ CLEANUP-D (dead code)       ← overlaps with Phase INDICATORS, coordinate
 - [ ] **A20**: `src/lib/model/service.py` — fix all internal `model.*` references
 - [ ] **A21**: `src/lib/model/persistence.py` — `from loguru import logger` → guard or replace
 
-**Agent prompt**: *"Fix all import paths in `src/lib/model/` to use the `lib.model.*` namespace. Fix syntax errors in `prediction/generator.py`, `prediction/manager.py`, `prediction/multi.py`. Replace all `from src.lib.model.X` with `from lib.model.X`. Replace all `from core.exceptions.model import ModelError` with an inline `class ModelError(Exception): pass` at the top of files that need it. Replace all `from src.lib.core.utils.logging_utils import log_execution` with a no-op shim: `def log_execution(func): return func`. Replace all `from strategy.evaluator import ModelEvaluator` with `ModelEvaluator = None`. Guard `loguru` with `try: from loguru import logger; except ImportError: import logging; logger = logging.getLogger(__name__)`. Do NOT change any business logic — only fix imports and add shims."*
+**Agent prompt**: *"Fix all import paths in `src/lib/model/` to use the `lib.model.*` namespace. Fix syntax errors in `prediction/generator.py`, `prediction/manager.py`, `prediction/multi.py`. Replace all `from src.lib.model.X` with `from lib.model.X`. Replace all `from src.lib.core.exceptions.model import ModelError` with an inline `class ModelError(Exception): pass` at the top of files that need it. Replace all `from src.lib.core.utils.logging_utils import log_execution` with a no-op shim: `def log_execution(func): return func`. Replace all `from strategy.evaluator import ModelEvaluator` with `ModelEvaluator = None`. Guard `loguru` with `try: from loguru import logger; except ImportError: import logging; logger = logging.getLogger(__name__)`. Do NOT change any business logic — only fix imports and add shims."*
 
 **Acceptance**: `ruff check src/lib/model/ --select E,F --no-fix` reports zero `E999` (syntax) and zero `F821` (undefined name) errors.
 

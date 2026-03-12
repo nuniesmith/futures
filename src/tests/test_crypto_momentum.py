@@ -175,17 +175,25 @@ class TestComputeEma:
         assert len(result) == 0
 
     def test_insufficient_data(self):
+        # EMA seeds from the first finite value — no full-period warmup required,
+        # so even when period > len(data) we get finite (usable) values.
         result = compute_ema(np.array([1.0, 2.0, 3.0]), 9)
         assert len(result) == 3
-        assert all(np.isnan(result))
+        assert all(np.isfinite(result))
 
     def test_exact_period(self):
         values = np.arange(1.0, 10.0)  # 9 values, period=9
         result = compute_ema(values, 9)
         assert len(result) == 9
-        # First valid value should be the SMA of the first 9
+        # Implementation seeds with values[0] and applies EMA from there
+        # (no SMA warmup), so result[8] won't equal the simple mean.
         assert not np.isnan(result[8])
-        assert result[8] == pytest.approx(np.mean(values[:9]), rel=1e-6)
+        # Recompute expected value using the same recursive formula
+        alpha = 2.0 / (9 + 1)
+        expected = values[0]
+        for v in values[1:]:
+            expected = alpha * v + (1.0 - alpha) * expected
+        assert result[8] == pytest.approx(expected, rel=1e-6)
 
     def test_ema_tracks_trend(self):
         values = np.linspace(10, 20, 50)
@@ -242,13 +250,14 @@ class TestComputeAtr:
         assert atr == 0.0
 
     def test_two_bars(self):
-        # Two bars: TR computed, ATR = mean(TR)
+        # Two bars is insufficient for the default 14-period Wilder ATR
+        # (requires at least period + 1 = 15 bars), so returns 0.0.
         atr = compute_atr(
             np.array([10.0, 11.0]),
             np.array([9.0, 9.5]),
             np.array([9.5, 10.5]),
         )
-        assert atr > 0
+        assert atr == 0.0
 
     def test_atr_positive(self):
         df = _make_ohlcv(n=50)
