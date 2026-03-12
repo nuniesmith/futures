@@ -98,7 +98,7 @@
         "AVAX": 1.0,
         "DOT": 1.0,
         "ADA": 1.0,
-        "MATIC": 1.0,
+        "POL": 1.0,
         "XRP": 1.0,
         "KRAKEN:XBTUSD": 1.0,
         "KRAKEN:ETHUSD": 1.0,
@@ -107,7 +107,7 @@
         "KRAKEN:AVAXUSD": 1.0,
         "KRAKEN:DOTUSD": 1.0,
         "KRAKEN:ADAUSD": 1.0,
-        "KRAKEN:MATICUSD": 1.0,
+        "KRAKEN:POLUSD": 1.0,
         "KRAKEN:XRPUSD": 1.0
     },
     "breakout_type_ordinals": {
@@ -145,7 +145,7 @@
         "AVAX": 1.0,
         "DOT": 1.0,
         "ADA": 1.0,
-        "MATIC": 1.0,
+        "POL": 1.0,
         "XRP": 1.0,
         "KRAKEN:XBTUSD": 1.0,
         "KRAKEN:ETHUSD": 1.0,
@@ -154,7 +154,7 @@
         "KRAKEN:AVAXUSD": 1.0,
         "KRAKEN:DOTUSD": 1.0,
         "KRAKEN:ADAUSD": 1.0,
-        "KRAKEN:MATICUSD": 1.0,
+        "KRAKEN:POLUSD": 1.0,
         "KRAKEN:XRPUSD": 1.0
     },
     "breakout_types": {
@@ -427,7 +427,7 @@
         "AVAX": 4,
         "DOT": 4,
         "ADA": 4,
-        "MATIC": 4,
+        "POL": 4,
         "XRP": 4,
         "KRAKEN:XBTUSD": 4,
         "KRAKEN:ETHUSD": 4,
@@ -436,7 +436,7 @@
         "KRAKEN:AVAXUSD": 4,
         "KRAKEN:DOTUSD": 4,
         "KRAKEN:ADAUSD": 4,
-        "KRAKEN:MATICUSD": 4,
+        "KRAKEN:POLUSD": 4,
         "KRAKEN:XRPUSD": 4
     },
     "asset_id_lookup": {
@@ -471,7 +471,7 @@
         "AVAX": 22,
         "DOT": 23,
         "ADA": 23,
-        "MATIC": 23,
+        "POL": 23,
         "XRP": 23,
         "KRAKEN:XBTUSD": 20,
         "KRAKEN:ETHUSD": 21,
@@ -480,7 +480,7 @@
         "KRAKEN:AVAXUSD": 22,
         "KRAKEN:DOTUSD": 23,
         "KRAKEN:ADAUSD": 23,
-        "KRAKEN:MATICUSD": 23,
+        "KRAKEN:POLUSD": 23,
         "KRAKEN:XRPUSD": 23
     },
     "num_asset_classes": 5,
