@@ -2,7 +2,7 @@
 PostgreSQL database connection management.
 
 This module provides functionality for creating, managing and closing
-PostgreSQL database connections for the FKS Trading Systems.
+PostgreSQL database connections for the Ruby Futures System.
 """
 
 import os

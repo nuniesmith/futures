@@ -1,5 +1,5 @@
 """
-FKS Trading Systems
+Ruby Futures System
 Core logging module for configuring system-wide logging.
 
 This module provides a simplified interface to our comprehensive logging system,
@@ -50,7 +50,7 @@ def setup_logging(
     metrics_enabled: bool = False,
 ) -> Any:
     """
-    Configure logging for the FKS Trading Systems.
+    Configure logging for the Ruby Futures System.
 
     This function provides a unified interface to our comprehensive logging system,
     setting up appropriate handlers and formatters based on the provided options.
@@ -142,7 +142,7 @@ def setup_logging(
         logger = get_logger()
 
         # Extra fields for structured logging
-        extra_fields = {"app": "FKS Trading Systems", "version": os.environ.get("FKS_VERSION", "unknown")}
+        extra_fields = {"app": "Ruby Futures System", "version": os.environ.get("FKS_VERSION", "unknown")}
 
         # Add service name if provided
         if service_name:
@@ -317,7 +317,7 @@ def configure_trading_system_logging(
     # Extra fields for structured logging
     extra_fields = {
         "trading_system": system_name,
-        "app": "FKS Trading Systems",
+        "app": "Ruby Futures System",
         "start_time": datetime.now().isoformat(),
     }
 

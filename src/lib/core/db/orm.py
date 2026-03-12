@@ -1,5 +1,5 @@
 """
-ORM engine management for the FKS Trading Systems.
+ORM engine management for the Ruby Futures System.
 
 This module provides SQLAlchemy ORM engine initialization, management
 and cleanup functionality for the application.

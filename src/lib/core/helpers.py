@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FKS Trading Systems Dashboard - Utility Helpers
+Ruby Futures System Dashboard - Utility Helpers
 General purpose utility functions used throughout the application
 """
 

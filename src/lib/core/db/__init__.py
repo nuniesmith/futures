@@ -1,5 +1,5 @@
 """
-Database connection management for the FKS Trading Systems.
+Database connection management for the Ruby Futures System.
 
 This module provides centralized management for database connections
 across the application, with support for multiple database types.
