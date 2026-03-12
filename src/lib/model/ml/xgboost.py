@@ -17,7 +17,7 @@ try:
 
     HAS_XGBOOST = True
 except ImportError:
-    xgb = None
+    xgb = None  # type: ignore[assignment]
     HAS_XGBOOST = False
 
 
@@ -63,9 +63,13 @@ class XGBoostRegressor(Regressor):
             self.xgb_params.update(params)
 
         # Initialize model
-        self._model = xgb.XGBRegressor(**self.xgb_params)
+        self._model: Any = None
+        if HAS_XGBOOST and xgb is not None:
+            self._model = xgb.XGBRegressor(**self.xgb_params)
 
-    def fit(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray) -> "XGBoostRegressor":
+    def fit(  # type: ignore[override]
+        self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray
+    ) -> "XGBoostRegressor":
         """
         Fit the XGBoost regressor to the data.
 
@@ -92,7 +96,7 @@ class XGBoostRegressor(Regressor):
         except Exception as e:
             raise ModelError(f"Error fitting XGBoost regressor: {str(e)}") from e
 
-    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray:
+    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray:  # type: ignore[override]
         """
         Make predictions using the fitted XGBoost regressor.
 
@@ -223,9 +227,13 @@ class XGBoostClassifier(Classifier):
             self.xgb_params.update(params)
 
         # Initialize model
-        self._model = xgb.XGBClassifier(**self.xgb_params)
+        self._model: Any = None
+        if HAS_XGBOOST and xgb is not None:
+            self._model = xgb.XGBClassifier(**self.xgb_params)
 
-    def fit(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray) -> "XGBoostClassifier":
+    def fit(  # type: ignore[override]
+        self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray
+    ) -> "XGBoostClassifier":
         """
         Fit the XGBoost classifier to the data.
 
@@ -255,7 +263,7 @@ class XGBoostClassifier(Classifier):
         except Exception as e:
             raise ModelError(f"Error fitting XGBoost classifier: {str(e)}") from e
 
-    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray:
+    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray:  # type: ignore[override]
         """
         Predict class labels for the input samples.
 
@@ -370,10 +378,13 @@ class ConcreteXGBoostModel(XGBoostClassifier):
     def __init__(self, name: str = "ConcreteXGBoostModel", params: dict[str, Any] | None = None):
         super().__init__()
 
-    def fit(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray) -> "ConcreteXGBoostModel":
-        return super().fit(X, y)
+    def fit(  # type: ignore[override]
+        self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray
+    ) -> "ConcreteXGBoostModel":
+        super().fit(X, y)
+        return self
 
-    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray:
+    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray:  # type: ignore[override]
         return super().predict(X)
 
     def predict_proba(self, X: pd.DataFrame | np.ndarray) -> np.ndarray:
@@ -386,4 +397,5 @@ class ConcreteXGBoostModel(XGBoostClassifier):
         return super().save(path)
 
     def load(self, path: str) -> "ConcreteXGBoostModel":
-        return super().load(path)
+        super().load(path)
+        return self

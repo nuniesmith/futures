@@ -2,7 +2,7 @@ import re
 import time
 from datetime import UTC, datetime, timedelta
 
-import pytz
+import pytz  # type: ignore[import-untyped]
 
 
 def now() -> datetime:

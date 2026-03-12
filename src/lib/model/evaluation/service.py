@@ -8,11 +8,11 @@ import pandas as pd
 from lib.model._shims import logger
 
 try:
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 
     HAS_YAML = True
 except ImportError:
-    yaml = None
+    yaml = None  # type: ignore[assignment]
     HAS_YAML = False
 
 try:
@@ -20,7 +20,7 @@ try:
 
     HAS_TORCH = True
 except ImportError:
-    torch = None
+    torch = None  # type: ignore[assignment]
     HAS_TORCH = False
 
 try:
@@ -28,7 +28,7 @@ try:
 
     HAS_MATPLOTLIB = True
 except ImportError:
-    plt = None
+    plt = None  # type: ignore[assignment]
     HAS_MATPLOTLIB = False
 
 try:
@@ -38,12 +38,12 @@ try:
 
     HAS_PYTORCH_FORECASTING = True
 except ImportError:
-    TemporalFusionTransformer = None
-    TimeSeriesDataSet = None
+    TemporalFusionTransformer = None  # type: ignore[assignment]
+    TimeSeriesDataSet = None  # type: ignore[assignment]
     MAPE = None
     MAE = None
     RMSE = None
-    GroupNormalizer = None
+    GroupNormalizer = None  # type: ignore[assignment]
     HAS_PYTORCH_FORECASTING = False
 
 
@@ -81,7 +81,7 @@ class EvaluationService:
         self.training_dataset = None
         self.test_dataloader = None
         self.val_dataloader = None
-        self.evaluation_results = {}
+        self.evaluation_results: dict[str, Any] = {}
         self.df_train = None
         self.df_test = None
         self.df_val = None
@@ -98,9 +98,15 @@ class EvaluationService:
             with open(self.config_path) as f:
                 self.config = yaml.safe_load(f)
 
+            if not isinstance(self.config, dict):
+                logger.error("Configuration file did not produce a valid mapping")
+                return False
+
+            config: dict[str, Any] = self.config
+
             # Ensure dataset section has default empty lists for critical parameters
-            if "dataset" in self.config:
-                dataset_defaults = {
+            if "dataset" in config:
+                dataset_defaults: dict[str, Any] = {
                     "time_varying_known_categoricals": [],
                     "time_varying_unknown_categoricals": [],
                     "static_categoricals": [],
@@ -108,20 +114,20 @@ class EvaluationService:
                 }
 
                 for key, default_value in dataset_defaults.items():
-                    if key not in self.config["dataset"]:
+                    if key not in config["dataset"]:
                         logger.warning(f"Missing '{key}' in dataset config. Using empty list as default.")
-                        self.config["dataset"][key] = default_value
+                        config["dataset"][key] = default_value
 
-            if not self._validate_config(self.config):
+            if not self._validate_config(config):
                 logger.error("Invalid configuration file")
                 return False
 
             # Log dataset configuration for debugging
-            if "dataset" in self.config:
+            if "dataset" in config:
                 logger.debug("Dataset configuration:")
                 for key in ["time_idx", "target", "group_ids"]:
-                    if key in self.config["dataset"]:
-                        logger.debug(f"  {key}: {self.config['dataset'][key]}")
+                    if key in config["dataset"]:
+                        logger.debug(f"  {key}: {config['dataset'][key]}")
 
                 # Log categorical and real variables
                 for key in [
@@ -130,8 +136,8 @@ class EvaluationService:
                     "time_varying_known_reals",
                     "time_varying_unknown_reals",
                 ]:
-                    if key in self.config["dataset"]:
-                        logger.debug(f"  {key}: {self.config['dataset'][key]}")
+                    if key in config["dataset"]:
+                        logger.debug(f"  {key}: {config['dataset'][key]}")
 
             return True
         except Exception as e:
@@ -461,11 +467,12 @@ class EvaluationService:
             self.model = TemporalFusionTransformer.load_from_checkpoint(self.model_path)
 
             # Set model to evaluation mode and move to correct device
+            assert self.model is not None
             self.model.eval()
-            if self.accelerator == "cuda" and torch.cuda.is_available():
+            if self.accelerator == "cuda" and torch.cuda.is_available():  # type: ignore[union-attr]
                 self.model.to("cuda")
                 logger.info("Using CUDA accelerator")
-            elif self.accelerator == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            elif self.accelerator == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():  # type: ignore[union-attr]
                 self.model.to("mps")
                 logger.info("Using MPS accelerator")
             else:

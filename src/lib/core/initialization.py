@@ -22,8 +22,9 @@ import traceback
 from datetime import datetime
 from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
+logger: Any
 try:
     from loguru import logger
 except ImportError:
@@ -179,7 +180,7 @@ def setup_database_connections(config: dict[str, Any] | None) -> tuple[bool, dic
     """
     logger.info("Setting up database connections")
 
-    db_connections = {}
+    db_connections: dict[str, Any] = {}
 
     # Handle None config gracefully
     if config is None:
@@ -432,8 +433,8 @@ def initialize(
         init_components = list(components) if components is not None else list(CORE_COMPONENTS)
 
         # Step 5: Initialize components
-        initialized_components = {}
-        failed_components = {}
+        initialized_components: dict[str, Any] = {}
+        failed_components: dict[str, Any] = {}
 
         # Add database connections to initialized components
         initialized_components["databases"] = db_connections

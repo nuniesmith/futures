@@ -11,8 +11,9 @@ from uuid import UUID
 
 from loguru import logger
 from pydantic import BaseModel
-from src.lib.core.db.base import Database
-from src.lib.core.exceptions.data import DatabaseError, DatabaseQueryError, DataNotFoundError, DataValidationException
+
+from lib.core.db.base import Database
+from lib.core.exceptions.data import DatabaseError, DatabaseQueryError, DataNotFoundError, DataValidationException
 
 # Generic type for models
 T = TypeVar("T", bound=BaseModel)

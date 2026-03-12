@@ -13,7 +13,7 @@ from typing import Any
 
 # Try to import yaml libraries
 try:
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 
     YAML_AVAILABLE = True
 except ImportError:

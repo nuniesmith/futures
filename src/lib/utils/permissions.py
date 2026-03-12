@@ -25,7 +25,7 @@ def verify_permissions(path: str | Path | None, write_access: bool = False) -> d
         return {"path": None, "exists": False, "errors": ["Path is None"]}
 
     path_obj = Path(path) if isinstance(path, str) else path
-    result = {"path": str(path_obj), "exists": path_obj.exists(), "errors": []}
+    result: dict[str, Any] = {"path": str(path_obj), "exists": path_obj.exists(), "errors": []}
 
     if not path_obj.exists():
         result["errors"].append("Path does not exist")

@@ -6,11 +6,12 @@ prediction models for different assets.
 """
 
 import os
+from typing import Any
 
 from lib.model._shims import logger
 
 # --- Stubs for modules not present in this project ---
-AssetDataManager = None  # stub: data.manager.AssetDataManager
+AssetDataManager = None  # stub: data.manager.AssetDataManager  # type: ignore[assignment]
 
 try:
     from lib.model.statistical.bayesian import BayesianLinearRegression as BayesianPredictor
@@ -36,7 +37,7 @@ class ModelManager:
     creation, initialization, and persistence.
     """
 
-    def __init__(self, data_fetcher: AssetDataManager | None = None, model_dir: str | None = None):
+    def __init__(self, data_fetcher: "AssetDataManager | None" = None, model_dir: str | None = None):  # type: ignore[valid-type]
         """
         Initialize the model manager.
 
@@ -45,11 +46,11 @@ class ModelManager:
             model_dir: Directory where models are stored
         """
         # Get constants
-        self.constants = get_config()
+        self.constants = get_config()  # type: ignore[misc]
 
-        self.data_fetcher = data_fetcher or AssetDataManager()
+        self.data_fetcher = data_fetcher or AssetDataManager()  # type: ignore[misc]
         self.model_dir = model_dir or self.constants.MODEL_DIR
-        self.models = {}
+        self.models: dict[str, Any] = {}
         self.model_types = {"gold": "bayesian", "bitcoin": "gaussian"}
 
         # Ensure model directory exists
@@ -87,7 +88,7 @@ class ModelManager:
             if model_type == "bayesian":
                 # Get model parameters
                 params = getattr(self.constants, "MODEL_PARAMS", {}).get("bayesian", {})
-                return BayesianPredictor(asset=asset, data_fetcher=self.data_fetcher, **params)
+                return BayesianPredictor(asset=asset, data_fetcher=self.data_fetcher, **params)  # type: ignore[misc]
 
             elif model_type == "gaussian":
                 # Get base Gaussian parameters
@@ -101,22 +102,22 @@ class ModelManager:
 
                 # Create the model with the combined parameters
                 logger.debug(f"Creating Gaussian model for {asset} with parameters: {gaussian_params}")
-                return GaussianPredictor(asset=asset, data_fetcher=self.data_fetcher, **gaussian_params)
+                return GaussianPredictor(asset=asset, data_fetcher=self.data_fetcher, **gaussian_params)  # type: ignore[misc]
 
             elif model_type == "polynomial":
                 # Get model parameters
                 params = getattr(self.constants, "MODEL_PARAMS", {}).get("polynomial", {})
-                return PolynomialPredictor(asset=asset, data_fetcher=self.data_fetcher, **params)
+                return PolynomialPredictor(asset=asset, data_fetcher=self.data_fetcher, **params)  # type: ignore[call-arg,misc]
 
             else:
                 # Default
                 logger.warning(f"Unrecognized model type '{model_type}', using bayesian as fallback")
-                return BayesianPredictor(asset=asset, data_fetcher=self.data_fetcher)
+                return BayesianPredictor(asset=asset, data_fetcher=self.data_fetcher)  # type: ignore[misc]
 
         except Exception as e:
             logger.error(f"Error creating {model_type} model for {asset}: {str(e)}")
             # Return a default model as fallback
-            return BayesianPredictor(asset=asset, data_fetcher=self.data_fetcher)
+            return BayesianPredictor(asset=asset, data_fetcher=self.data_fetcher)  # type: ignore[misc]
 
     def get_model_path(self, asset: str) -> str:
         """

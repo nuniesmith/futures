@@ -63,7 +63,7 @@ class EnsembleModel(BaseModel):
 
         # Set up weights based on ensemble method
         if weights is not None:
-            self.weights = weights
+            self.weights: list[float] | None = weights
             total_weight = sum(self.weights)
             if total_weight > 0:  # Avoid division by zero
                 self.weights = [w / total_weight for w in self.weights]
@@ -91,9 +91,9 @@ class EnsembleModel(BaseModel):
         self.metadata.description = f"{ensemble_method.name} ensemble of {len(models)} models"
 
         # Initialize performance tracking
-        self.model_performances = {i: {} for i in range(len(models))}
+        self.model_performances: dict[int, dict[str, Any]] = {i: {} for i in range(len(models))}
 
-    def predict(self, data: Any) -> Any:
+    def predict(self, data: Any) -> Any:  # type: ignore[override]
         """
         Generate predictions using the ensemble.
 
@@ -141,7 +141,7 @@ class EnsembleModel(BaseModel):
                 return pd.Series(result, index=predictions[0].index)
         else:
             # Assume list or scalar values
-            return sum(w * p for w, p in zip(self.weights, predictions, strict=False))
+            return sum(w * p for w, p in zip(self.weights, predictions, strict=False))  # type: ignore[arg-type]
 
     def _predict_majority_vote(self, data: Any) -> Any:
         """Generate predictions using majority vote (for classification)"""
@@ -360,7 +360,7 @@ class EnsembleModel(BaseModel):
         logger.info(f"Loaded ensemble model '{ensemble.name}' from {path}")
         return ensemble
 
-    def train(self, train_data: Any, target_column: str | None = None, **kwargs: Any) -> None:
+    def train(self, train_data: Any, target_column: str | None = None, **kwargs: Any) -> None:  # type: ignore[override]
         """
         Train individual models in the ensemble.
 
@@ -408,7 +408,7 @@ class EnsembleModel(BaseModel):
             return
 
         # Aggregate metrics from all models
-        all_metrics = {}
+        all_metrics: dict[str, list[Any]] = {}
         for model_metrics in self.model_performances.values():
             for metric, value in model_metrics.items():
                 if metric not in all_metrics:
@@ -465,13 +465,13 @@ class EnsembleModel(BaseModel):
         """
         if self.ensemble_method != EnsembleMethod.WEIGHTED_AVERAGE:
             logger.warning(f"Weight optimization only applicable for WEIGHTED_AVERAGE, not {self.ensemble_method}")
-            return self.weights
+            return self.weights  # type: ignore[return-value]
 
         try:
             from scipy.optimize import minimize
         except ImportError:
             logger.error("scipy is required for weight optimization")
-            return self.weights
+            return self.weights  # type: ignore[return-value]
 
         # Get individual model predictions
         y_true = validation_data[target_column] if target_column else kwargs.get("y_true")
@@ -534,7 +534,7 @@ class EnsembleModel(BaseModel):
             return self.weights
         else:
             logger.warning(f"Weight optimization failed: {result.message}")
-            return self.weights
+            return self.weights  # type: ignore[return-value]
 
     def cleanup(self) -> None:
         """Clean up resources for the ensemble model"""
@@ -562,7 +562,7 @@ class EnsembleModel(BaseModel):
 class ConcreteEnsembleModel(EnsembleModel):
     """Concrete implementation of EnsembleModel with specific behaviors"""
 
-    def fit(self, train_data: pd.DataFrame, target_column: str, **kwargs: Any) -> Any:
+    def fit(self, train_data: pd.DataFrame, target_column: str, **kwargs: Any) -> Any:  # type: ignore[override]
         """
         Fit the ensemble on training data by fitting each base model.
 
@@ -726,7 +726,7 @@ class TimeSeriesEnsemble(EnsembleModel):
                 forecast_dfs = [df.iloc[:min_length] for df in forecast_dfs]
 
             # Weighted average across models
-            weighted_forecast = sum(w * df for w, df in zip(self.weights, forecast_dfs, strict=False))
+            weighted_forecast = sum(w * df for w, df in zip(self.weights, forecast_dfs, strict=False))  # type: ignore[arg-type]
 
             return weighted_forecast
         elif self.ensemble_method == EnsembleMethod.STACKING:

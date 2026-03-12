@@ -5,12 +5,13 @@ This module provides a concrete implementation of the BaseService
 abstract class for FastAPI applications.
 """
 
+import argparse
 import importlib
 import os
 import traceback
 from typing import Any
 
-from src.lib.core.service import BaseService
+from lib.core.service import BaseService
 
 
 class FastApiService(BaseService):
@@ -197,6 +198,15 @@ class FastApiService(BaseService):
             self.logger.error(f"Error running FastAPI app with uvicorn: {e}")
             self.logger.debug(traceback.format_exc())
             raise
+
+    def add_arguments(self, parser: "argparse.ArgumentParser") -> None:
+        """
+        Add FastAPI-specific command line arguments.
+
+        Args:
+            parser: ArgumentParser instance to add arguments to
+        """
+        pass
 
     def get_required_components(self) -> list[str]:
         """

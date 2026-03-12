@@ -335,18 +335,18 @@ class ComponentRegistry(BaseRegistry[Component]):
         Start all registered component instances.
         """
         for name, instance in self._instances.items():
-            if not instance.is_running:
+            if not instance.is_running:  # type: ignore[attr-defined]
                 logger.debug(f"[{self._name}] Starting component '{name}'")
-                instance.start()
+                instance.start()  # type: ignore[attr-defined]
 
     def stop_all(self) -> None:
         """
         Stop all registered component instances.
         """
         for name, instance in self._instances.items():
-            if instance.is_running:
+            if instance.is_running:  # type: ignore[attr-defined]
                 logger.debug(f"[{self._name}] Stopping component '{name}'")
-                instance.stop()
+                instance.stop()  # type: ignore[attr-defined]
 
 
 class SingletonRegistry(BaseRegistry[T]):

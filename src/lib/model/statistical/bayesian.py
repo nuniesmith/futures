@@ -8,7 +8,7 @@ try:
 
     HAS_MATPLOTLIB = True
 except ImportError:
-    plt = None
+    plt = None  # type: ignore[assignment]
     HAS_MATPLOTLIB = False
 
 try:
@@ -26,7 +26,7 @@ try:
 
     HAS_ARVIZ = True
 except ImportError:
-    az = None
+    az = None  # type: ignore[assignment]
     HAS_ARVIZ = False
 
 try:
@@ -34,7 +34,7 @@ try:
 
     HAS_PYMC = True
 except ImportError:
-    pm = None
+    pm = None  # type: ignore[assignment]
     HAS_PYMC = False
 
 

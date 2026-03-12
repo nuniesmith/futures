@@ -8,6 +8,7 @@ import pickle
 from abc import ABC, abstractmethod
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -101,7 +102,7 @@ class BaseModel(ABC):
         return self.set_params(**config)
 
     @abstractmethod
-    def fit(self, train_data: pd.DataFrame, target_column: str, **kwargs) -> BaseModel:
+    def fit(self, train_data: Any, target_column: Any = None, **kwargs) -> "BaseModel":
         """
         Fit the model to training data.
 
@@ -115,7 +116,9 @@ class BaseModel(ABC):
         """
 
     @abstractmethod
-    def train(self, data=None, target=None, X_train=None, y_train=None, **kwargs) -> BaseModel:
+    def train(
+        self, data: Any = None, target: Any = None, X_train: Any = None, y_train: Any = None, **kwargs
+    ) -> "BaseModel":
         """
         Train the model with flexible parameter options.
 
@@ -135,7 +138,7 @@ class BaseModel(ABC):
         """
 
     @abstractmethod
-    def predict(self, data=None, horizon: int = 0, return_ci: bool = False) -> tuple[pd.Series, pd.DataFrame | None]:
+    def predict(self, data: Any = None, horizon: int = 0, return_ci: bool = False) -> Any:
         """
         Generate forecasts with optional confidence intervals.
 
@@ -145,9 +148,7 @@ class BaseModel(ABC):
             return_ci: Whether to return confidence intervals
 
         Returns:
-            Tuple containing:
-                - A pandas Series with predictions
-                - Optional: A DataFrame with confidence intervals
+            Predictions, optionally with confidence intervals.
         """
 
     @log_execution

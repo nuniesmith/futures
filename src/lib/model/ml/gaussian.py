@@ -7,7 +7,7 @@ try:
 
     HAS_MATPLOTLIB = True
 except ImportError:
-    plt = None
+    plt = None  # type: ignore[assignment]
     HAS_MATPLOTLIB = False
 
 try:

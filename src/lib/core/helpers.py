@@ -91,7 +91,7 @@ def safe_json_serialize(obj: Any) -> dict[str, Any]:
         return {"error": "Object could not be fully serialized", "type": str(type(obj))}
 
 
-def error_handler(default_value: T = None) -> Callable[[Callable[..., R]], Callable[..., R | T]]:
+def error_handler(default_value: T | None = None) -> Callable[[Callable[..., R]], Callable[..., R | T | None]]:
     """
     Decorator to handle exceptions and return a default value on error
 
@@ -102,9 +102,9 @@ def error_handler(default_value: T = None) -> Callable[[Callable[..., R]], Calla
         Decorator function
     """
 
-    def decorator(func: Callable[..., R]) -> Callable[..., R | T]:
+    def decorator(func: Callable[..., R]) -> Callable[..., R | T | None]:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> R | T:
+        def wrapper(*args, **kwargs) -> R | T | None:
             try:
                 return func(*args, **kwargs)
             except Exception as e:
@@ -203,7 +203,10 @@ def batch_process(items: list[T], batch_size: int, process_func: Callable[[list[
 
 
 def retry(
-    max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0, exceptions: tuple[Exception, ...] = (Exception,)
+    max_attempts: int = 3,
+    delay: float = 1.0,
+    backoff: float = 2.0,
+    exceptions: tuple[type[Exception], ...] = (Exception,),
 ) -> Callable:
     """
     Retry decorator with exponential backoff

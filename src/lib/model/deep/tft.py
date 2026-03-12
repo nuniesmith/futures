@@ -15,12 +15,12 @@ from lib.model._shims import DEFAULT_DEVICE, log_execution, logger
 try:
     import torch
 except ImportError:
-    torch = None
+    torch = None  # type: ignore[assignment]
 
 try:
     import pytorch_lightning as pl
 except ImportError:
-    pl = None
+    pl = None  # type: ignore[assignment]
 
 try:
     from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
@@ -154,7 +154,7 @@ class TFTModel(BaseModel):
             logger.warning("Using simplified TFT implementation as PyTorch Forecasting is not available")
 
         # Initialize training parameters
-        self.training_params = {
+        self.training_params: dict[str, Any] = {
             "target_column": None,
             "time_idx_column": None,
             "group_ids": None,
@@ -167,7 +167,7 @@ class TFTModel(BaseModel):
         }
 
     def _prepare_data(
-        self, data: pd.DataFrame, target_column: str, time_idx_column: str = "", group_ids: list[str] = None
+        self, data: pd.DataFrame, target_column: str, time_idx_column: str = "", group_ids: list[str] | None = None
     ):
         """
         Prepare data for TFT model.
@@ -241,8 +241,8 @@ class TFTModel(BaseModel):
             # Store data preparation parameters
             self.training_params.update(
                 {
-                    "target_column": target_column,
-                    "time_idx_column": time_idx_column,
+                    "target_column": target_column,  # type: ignore[dict-item]
+                    "time_idx_column": time_idx_column,  # type: ignore[dict-item]
                     "group_ids": group_ids,
                     "time_varying_unknown_reals": self.time_varying_unknown_reals,
                 }
@@ -313,7 +313,7 @@ class TFTModel(BaseModel):
         target_column: str,
         validation_data: pd.DataFrame | None = None,
         time_idx_column: str = "",
-        group_ids: list[str] = None,
+        group_ids: list[str] | None = None,
         **kwargs,
     ):
         """
@@ -359,13 +359,15 @@ class TFTModel(BaseModel):
 
             # Create a simple dataset and dataloader
             dataset = torch.utils.data.TensorDataset(X_train, y_train)
-            dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.hyperparams["batch_size"], shuffle=True)
+            dataloader = torch.utils.data.DataLoader(
+                dataset, batch_size=int(self.hyperparams["batch_size"]), shuffle=True
+            )
 
             # Train the model
             self._train_simple_model(dataloader)
 
             # Update metadata
-            self.metadata["updated_at"] = pd.Timestamp.now().isoformat()
+            self.metadata["updated_at"] = pd.Timestamp.now().isoformat()  # type: ignore[index]
             logger.info(f"Model trained with simplified implementation, target: {target_column}")
 
         else:
@@ -393,21 +395,21 @@ class TFTModel(BaseModel):
             # Create validation dataset if provided
             if validation_data is not None:
                 self.validation_dataset = TimeSeriesDataSet.from_dataset(self.training_dataset, validation_data)
-                val_dataloader = self.validation_dataset.to_dataloader(batch_size=self.hyperparams["batch_size"])
+                val_dataloader = self.validation_dataset.to_dataloader(batch_size=self.hyperparams["batch_size"])  # type: ignore[attr-defined]
             else:
                 val_dataloader = None
 
             # Create dataloaders
-            train_dataloader = self.training_dataset.to_dataloader(
+            train_dataloader = self.training_dataset.to_dataloader(  # type: ignore[attr-defined]
                 batch_size=self.hyperparams["batch_size"], train=True
             )
 
             # Create PyTorch Lightning trainer
-            self.training = pl.Trainer(
+            self.training = pl.Trainer(  # type: ignore[assignment]
                 max_epochs=kwargs.get("epochs", 20),
                 accelerator="gpu" if self.device == "cuda" else "cpu",
                 gradient_clip_val=self.hyperparams["gradient_clip_val"],
-                devices=1 if torch.cuda.is_available() and self.device == "cuda" else None,
+                devices=1 if torch.cuda.is_available() and self.device == "cuda" else 1,
                 enable_progress_bar=True,
                 logger=kwargs.get("logger", True),
             )
@@ -425,12 +427,12 @@ class TFTModel(BaseModel):
             )
 
             # Fit the model
-            self.training.fit(self.model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
+            self.training.fit(self.model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)  # type: ignore[attr-defined]
 
             # Calculate and store feature importance if available
             try:
-                feature_importance = self.model.feature_importance()
-                self.metadata["feature_importance"] = {
+                feature_importance = self.model.feature_importance()  # type: ignore[attr-defined]
+                self.metadata["feature_importance"] = {  # type: ignore[index]
                     name: float(importance)
                     for name, importance in zip(
                         self.time_varying_unknown_reals, feature_importance.mean(0), strict=False
@@ -440,7 +442,7 @@ class TFTModel(BaseModel):
                 logger.warning(f"Could not calculate feature importance: {e}")
 
             # Update metadata
-            self.metadata["updated_at"] = pd.Timestamp.now().isoformat()
+            self.metadata["updated_at"] = pd.Timestamp.now().isoformat()  # type: ignore[index]
             logger.info(f"TFT model trained with {len(data)} samples, target: {target_column}")
 
     @log_execution
@@ -680,6 +682,7 @@ class TFTModel(BaseModel):
                 self.model = self._create_simple_model((seq_len, n_features))
 
                 # Load state dict
+                assert self.model is not None
                 self.model.load_state_dict(torch.load(load_path, map_location=self.device))
                 self.model.eval()
                 logger.info(f"Loaded simplified TFT model from {load_path}")
@@ -748,7 +751,7 @@ class ConcreteTFTModel(TFTModel):
         """Initialize the model with default hyperparameters."""
         super().__init__(**kwargs)
 
-    def fit(self, train_data: pd.DataFrame, target_column: str, **kwargs) -> "BaseModel":
+    def fit(self, train_data: pd.DataFrame, target_column: str, **kwargs) -> "BaseModel":  # type: ignore[override]
         """
         Fit the TFT model to the provided dataset.
 

@@ -405,7 +405,8 @@ class RedisService:
                     logger.debug(f"{log_prefix} Last timestamp: {timestamp}")
                     return timestamp
                 except (ValueError, TypeError):
-                    logger.warning(f"{log_prefix} Invalid timestamp format in Redis: {result}")
+                    result_str = result.decode("utf-8", errors="replace") if isinstance(result, bytes) else result
+                    logger.warning(f"{log_prefix} Invalid timestamp format in Redis: {result_str}")
                     return None
             # Return as is for async result (awaitable)
             return result
@@ -469,7 +470,7 @@ class RedisService:
         else:
             # For synchronous client
             last_timestamp = self.get_last_fetched_timestamp(asset, timeframe)
-            start_time = last_timestamp + 1 if last_timestamp else 0
+            start_time = last_timestamp + 1 if isinstance(last_timestamp, int) and last_timestamp else 0
             end_time = current_time - buffer_seconds
             logger.debug(f"{log_prefix} Range calculated: ({start_time}, {end_time})")
             return start_time, end_time

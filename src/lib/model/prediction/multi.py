@@ -23,10 +23,10 @@ class MultiAssetPredictor:
         self.predictors = {}
 
         # Create a shared data manager instance
-        self.data_manager = AssetDataManager()
+        self.data_manager = AssetDataManager()  # type: ignore[misc]
 
         for asset in self.assets:
-            predictor = AssetPricePredictor(asset_type=asset)
+            predictor = AssetPricePredictor(asset_type=asset)  # type: ignore[misc]
             # Assign the shared data manager to each predictor
             predictor.data_manager = self.data_manager
             self.predictors[asset] = predictor

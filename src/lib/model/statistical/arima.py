@@ -17,9 +17,9 @@ try:
     HAS_STATSMODELS = True
 except ImportError:
     HAS_STATSMODELS = False
-    sm = None
-    SARIMAModelX = None
-    StatsARIMAModel = None
+    sm = None  # type: ignore[assignment]
+    SARIMAModelX = None  # type: ignore[assignment]
+    StatsARIMAModel = None  # type: ignore[assignment]
 
 from lib.model.base.estimator import Estimator
 from lib.model.registry import register_model
@@ -55,11 +55,13 @@ class ARIMAModel(Estimator):
         self.enforce_invertibility = self.params.get("enforce_invertibility", True)
 
         # Initialize model
-        self._model = None
-        self._results = None
-        self._last_data = None
+        self._model: Any | None = None
+        self._results: Any | None = None
+        self._last_data: Any | None = None
 
-    def fit(self, X: pd.DataFrame | np.ndarray | pd.Series, y: pd.Series | np.ndarray | None = None) -> "ARIMAModel":
+    def fit(  # type: ignore[override]
+        self, X: pd.DataFrame | np.ndarray | pd.Series, y: pd.Series | np.ndarray | None = None
+    ) -> "ARIMAModel":
         """
         Fit the ARIMAModel model to the data.
 
@@ -132,7 +134,9 @@ class ARIMAModel(Estimator):
         except Exception as e:
             raise ModelError(f"Error fitting ARIMAModel model: {str(e)}") from e
 
-    def predict(self, X: pd.DataFrame | np.ndarray | None = None, steps: int = 1) -> np.ndarray:
+    def predict(  # type: ignore[override]
+        self, X: pd.DataFrame | np.ndarray | None = None, steps: int = 1
+    ) -> np.ndarray:
         """
         Make predictions using the fitted ARIMAModel model.
 
@@ -150,6 +154,7 @@ class ARIMAModel(Estimator):
             raise ModelError("Model not fitted. Call fit() before predict().")
 
         try:
+            assert self._results is not None
             # Make predictions
             forecast = self._results.forecast(steps=steps, exog=X)
 
@@ -182,6 +187,7 @@ class ARIMAModel(Estimator):
             raise ModelError("Model not fitted. Call fit() before predict_interval().")
 
         try:
+            assert self._results is not None
             # Get forecast with confidence intervals
             forecast = self._results.get_forecast(steps=steps, exog=X)
             mean_forecast = forecast.predicted_mean
@@ -215,6 +221,7 @@ class ARIMAModel(Estimator):
         if not self._is_fitted:
             raise ModelError("Model not fitted. Call fit() before get_summary().")
 
+        assert self._results is not None
         return self._results.summary().as_text()
 
     def save(self, path: str) -> None:
@@ -283,10 +290,14 @@ class ConcreteARIMAModel(ARIMAModel):
     def __init__(self, name: str = "ARIMAModel", params: dict[str, Any] | None = None):
         super().__init__(name, params)
 
-    def fit(self, X: pd.DataFrame | np.ndarray | pd.Series, y: pd.Series | np.ndarray | None = None) -> "ARIMAModel":
+    def fit(  # type: ignore[override]
+        self, X: pd.DataFrame | np.ndarray | pd.Series, y: pd.Series | np.ndarray | None = None
+    ) -> "ARIMAModel":
         return super().fit(X, y)
 
-    def predict(self, X: pd.DataFrame | np.ndarray | None = None, steps: int = 1) -> np.ndarray:
+    def predict(  # type: ignore[override]
+        self, X: pd.DataFrame | np.ndarray | None = None, steps: int = 1
+    ) -> np.ndarray:
         return super().predict(X, steps)
 
     def predict_interval(

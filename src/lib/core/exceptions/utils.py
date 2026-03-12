@@ -1,4 +1,4 @@
-import yaml
+import yaml  # type: ignore[import-untyped]
 from loguru import logger
 
 from lib.core.exceptions.base import FrameworkException

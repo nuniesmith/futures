@@ -38,7 +38,7 @@ class Estimator(BaseModel, ABC):
         self._is_fitted = False
 
     @abstractmethod
-    def fit(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray | None = None) -> Estimator:
+    def fit(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray | None = None) -> Estimator:  # type: ignore[override]
         """
         Fit the estimator to the data.
 
@@ -51,7 +51,7 @@ class Estimator(BaseModel, ABC):
         """
 
     @abstractmethod
-    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray | pd.Series:
+    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray | pd.Series:  # type: ignore[override]
         """
         Make predictions using the fitted estimator.
 

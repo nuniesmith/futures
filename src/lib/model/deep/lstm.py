@@ -17,11 +17,11 @@ try:
 
     HAS_TORCH = True
 except ImportError:
-    torch = None
-    nn = None
-    optim = None
-    TensorDataset = None
-    DataLoader = None
+    torch = None  # type: ignore[assignment]
+    nn = None  # type: ignore[assignment]
+    optim = None  # type: ignore[assignment]
+    TensorDataset = None  # type: ignore[assignment,misc]
+    DataLoader = None  # type: ignore[assignment,misc]
     HAS_TORCH = False
 
 try:
@@ -29,7 +29,7 @@ try:
 
     HAS_LIGHTNING = True
 except ImportError:
-    pl = None
+    pl = None  # type: ignore[assignment]
     HAS_LIGHTNING = False
 
 from lib.model.base.model import BaseModel
@@ -174,8 +174,8 @@ class LSTMModel(BaseModel):
         scaled = (arr - self.min_val) / (self.max_val - self.min_val)
 
         # Create training samples using sliding window
-        X_train = []
-        y_train = []
+        X_train: Any = []
+        y_train: Any = []
         for i in range(self.lookback, len(scaled)):
             X_train.append(scaled[i - self.lookback : i])
             y_train.append(scaled[i])
@@ -273,7 +273,7 @@ class LSTMModel(BaseModel):
 
         self.model.eval()
         current_window = torch.tensor(self.last_window, dtype=torch.float32).to(self.device)
-        predictions = []
+        predictions: Any = []
         with torch.no_grad():
             for _ in range(horizon):
                 pred_t = self.model(current_window)
@@ -446,7 +446,7 @@ class LightningLSTMModel(pl.LightningModule):
 
         try:
             # Save Lightning model
-            self.training.save_checkpoint(checkpoint_path)
+            self.training.save_checkpoint(checkpoint_path)  # type: ignore[attr-defined]
 
             # Save additional metadata
             with open(metadata_path, "w") as f:
@@ -547,7 +547,7 @@ class ConcreteLSTMModel(LightningLSTMModel):
             except ImportError:
                 logger.warning("StandardScaler not available, proceeding without scaling")
 
-    def train(
+    def train(  # type: ignore[override]
         self,
         train_data: pd.DataFrame,
         target_column: str,
@@ -625,7 +625,7 @@ class ConcreteLSTMModel(LightningLSTMModel):
         training.fit(self, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
         # Store training for later use
-        self.training = training
+        self.training = training  # type: ignore[attr-defined,assignment]
 
         # Update metadata
         self.metadata.updated_at = datetime.now().isoformat()
@@ -672,7 +672,7 @@ class ConcreteLSTMModel(LightningLSTMModel):
                 for i in range(len(series) - self.lookback + 1):
                     windows.append(series.iloc[i : i + self.lookback].values)
 
-                X_pred = np.array(windows).reshape(-1, self.lookback, self.hparams.input_size)
+                X_pred = np.array(windows).reshape(-1, self.lookback, self.hparams["input_size"])  # type: ignore[index]
 
                 # Disable gradients for inference
                 with torch.no_grad():

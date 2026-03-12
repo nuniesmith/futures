@@ -384,14 +384,14 @@ class IndicatorManager:
         self.logger.debug(f"Reset indicators in group: {group_name}")
         return True
 
-    def get_all_values(self) -> dict[str, float | dict[str, float]]:
+    def get_all_values(self) -> dict[str, float | dict[str, float] | None]:
         """
         Get the latest values of all calculated indicators.
 
         Returns:
             Dictionary mapping indicator IDs to their latest values.
         """
-        values = {}
+        values: dict[str, float | dict[str, float] | None] = {}
         for ind_id, indicator in self._indicators.items():
             if indicator.values is not None:
                 try:
@@ -402,7 +402,7 @@ class IndicatorManager:
 
         return values
 
-    def get_group_values(self, group_name: str) -> dict[str, float | dict[str, float]]:
+    def get_group_values(self, group_name: str) -> dict[str, float | dict[str, float] | None]:
         """
         Get the latest values of indicators in a group.
 
@@ -416,7 +416,7 @@ class IndicatorManager:
             self.logger.warning(f"Group not found: {group_name}")
             return {}
 
-        values = {}
+        values: dict[str, float | dict[str, float] | None] = {}
         for ind_id in self._groups[group_name]:
             if ind_id in self._indicators and self._indicators[ind_id].values is not None:
                 try:

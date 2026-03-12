@@ -74,7 +74,7 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         """Format the log record as JSON."""
-        log_dict = {
+        log_dict: dict[str, Any] = {
             "level": record.levelname,
             "name": record.name,
             "message": record.getMessage(),
@@ -95,8 +95,9 @@ class JSONFormatter(logging.Formatter):
 
         # Add any exception info
         if record.exc_info:
+            exc_type = record.exc_info[0]
             log_dict["exception"] = {
-                "type": record.exc_info[0].__name__,
+                "type": exc_type.__name__ if exc_type is not None else "Unknown",
                 "message": str(record.exc_info[1]),
                 "traceback": self.formatException(record.exc_info),
             }
@@ -199,8 +200,9 @@ class Logger:
         """
         if name is None:
             # Get the caller's module name
-            frame = inspect.currentframe().f_back
-            name = frame.f_globals.get("__name__", "root")
+            current_frame = inspect.currentframe()
+            frame = current_frame.f_back if current_frame is not None else None
+            name = frame.f_globals.get("__name__", "root") if frame is not None else "root"
 
         self._logger = logger.bind(name=name)
         self._configured = False
@@ -239,7 +241,7 @@ class Logger:
         self._reset_config()
 
         # Set the logger level
-        self._logger.setLevel(log_level)
+        self._logger.setLevel(log_level)  # type: ignore[attr-defined]
 
         # Create extra fields including service name if provided
         all_extra_fields = extra_fields or {}
@@ -252,12 +254,12 @@ class Logger:
             console_handler.setLevel(log_level)
 
             if json_format:
-                formatter = JSONFormatter(extra_fields=all_extra_fields)
+                formatter: logging.Formatter = JSONFormatter(extra_fields=all_extra_fields)
             else:
                 formatter = ColorFormatter(use_colors=use_colors)
 
             console_handler.setFormatter(formatter)
-            self._logger.addHandler(console_handler)
+            self._logger.addHandler(console_handler)  # type: ignore[attr-defined]
 
         # Configure file handler
         if log_file:
@@ -281,7 +283,7 @@ class Logger:
                     )
 
                 file_handler.setFormatter(formatter)
-                self._logger.addHandler(file_handler)
+                self._logger.addHandler(file_handler)  # type: ignore[attr-defined]
 
                 self._logger.info(f"File logging configured at: {log_file}")
             except Exception as e:
@@ -292,8 +294,8 @@ class Logger:
 
     def _reset_config(self) -> None:
         """Remove any existing handlers from the logger."""
-        for handler in self._logger.handlers[:]:
-            self._logger.removeHandler(handler)
+        for handler in self._logger.handlers[:]:  # type: ignore[attr-defined]
+            self._logger.removeHandler(handler)  # type: ignore[attr-defined]
 
     def bind(self, **context) -> "ContextLogger":
         """
@@ -430,7 +432,7 @@ class Logger:
         if isinstance(level, str):
             level = logging.getLevelName(level.upper())
 
-        self._logger.setLevel(level)
+        self._logger.setLevel(level)  # type: ignore[attr-defined]
 
 
 # =====================================================================
@@ -443,7 +445,7 @@ class ContextLogger:
     Logger that includes contextual information with each log message.
     """
 
-    def __init__(self, logger: logging.Logger, context: dict[str, Any]):
+    def __init__(self, logger: Any, context: dict[str, Any]):
         """
         Initialize a new ContextLogger.
 

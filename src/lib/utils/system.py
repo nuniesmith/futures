@@ -37,7 +37,7 @@ def detect_container_environment() -> dict[str, Any]:
     Returns:
         Dict[str, Any]: Container detection results
     """
-    results = {"is_docker": False, "is_kubernetes": False, "container_id": None, "container_info": {}}
+    results: dict[str, Any] = {"is_docker": False, "is_kubernetes": False, "container_id": None, "container_info": {}}
 
     # Check for Docker
     if Path("/.dockerenv").exists():

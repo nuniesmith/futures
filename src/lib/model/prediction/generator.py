@@ -8,13 +8,13 @@ using trained models for different assets.
 import asyncio
 import os
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lib.model._shims import logger
 from lib.model.prediction.manager import ModelManager
 
-AssetDataManager = None  # stub: data.manager.AssetDataManager
-get_config = None  # stub: core.constants.manager.get_config
+AssetDataManager: Any = None  # stub: data.manager.AssetDataManager
+get_config: Any = None  # stub: core.constants.manager.get_config
 
 
 class PredictionGenerator:
@@ -22,7 +22,7 @@ class PredictionGenerator:
     Handles generating predictions from trained models.
     """
 
-    def __init__(self, model_manager: ModelManager | None = None, data_fetcher: AssetDataManager | None = None):
+    def __init__(self, model_manager: ModelManager | None = None, data_fetcher: Any | None = None):
         """
         Initialize the prediction generator.
 
@@ -31,7 +31,7 @@ class PredictionGenerator:
             data_fetcher: Data fetcher for accessing market data
         """
         # Get constants
-        self.constants = get_config()
+        self.constants = get_config() if get_config is not None else None  # type: ignore[misc]
 
         self.model_manager = model_manager or ModelManager()
         self.data_fetcher = data_fetcher or self.model_manager.data_fetcher
@@ -68,21 +68,22 @@ class PredictionGenerator:
             elif not hasattr(model, "is_trained") or not model.is_trained:
                 # Load the model if it exists but isn't loaded
                 try:
-                    await asyncio.to_thread(model.load, model_path)
+                    await asyncio.to_thread(model.load, model_path)  # type: ignore[union-attr]
                     logger.info(f"Loaded existing model for {asset}")
                 except Exception as e:
                     logger.error(f"Error loading model for {asset}: {str(e)}")
 
             # Make predictions
+            predict_fn: Any = model.predict  # type: ignore[union-attr]
             predictions = await asyncio.to_thread(
-                model.predict,
+                predict_fn,
                 days_ahead=days_ahead,
                 include_confidence=include_confidence,
                 include_probabilities=include_probabilities,
             )
 
             # Get latest price data for reference
-            latest_data = await asyncio.to_thread(self.data_fetcher.get_latest_prices, asset)
+            latest_data = await asyncio.to_thread(self.data_fetcher.get_latest_prices, asset)  # type: ignore[arg-type]
 
             return {
                 "asset": asset,
@@ -116,7 +117,7 @@ class PredictionGenerator:
             Dictionary mapping asset names to their prediction results
         """
         if assets is None:
-            assets = self.constants.SUPPORTED_ASSETS
+            assets = self.constants.SUPPORTED_ASSETS if self.constants is not None else []
 
         # Use gather to run predictions concurrently
         tasks = []
@@ -159,7 +160,7 @@ class PredictionGenerator:
         price_info = {}
         for asset in assets:
             try:
-                latest = await asyncio.to_thread(self.data_fetcher.get_latest_prices, asset)
+                latest = await asyncio.to_thread(self.data_fetcher.get_latest_prices, asset)  # type: ignore[arg-type]
                 if latest:
                     price_info[asset] = latest
             except Exception as e:

@@ -87,7 +87,7 @@ class PostgresConnection:
             application_name: Client application name
             cursor_factory: Custom cursor factory
         """
-        self.dsn = dsn
+        self.dsn: str | dict[str, int | str | None] | None = dsn
         self.use_pool = use_pool
         self.cursor_factory = cursor_factory
         self.conn = None
@@ -188,7 +188,7 @@ class PostgresConnection:
             # psycopg3 doesn't use cursor_factory the same way
             if self.dsn is not None:
                 if isinstance(self.dsn, dict):
-                    return psycopg.connect(**self.dsn)
+                    return psycopg.connect(**self.dsn)  # type: ignore[arg-type]
                 else:
                     return psycopg.connect(self.dsn)
             return None

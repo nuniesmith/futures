@@ -817,7 +817,7 @@ def format_as_paragraph(text: str, width: int = 80) -> str:
     # Format as paragraph
     lines = []
     words = text.split()
-    current_line = []
+    current_line: list[str] = []
     current_length = 0
 
     for word in words:
@@ -1502,7 +1502,14 @@ def extract_entities(text: str) -> dict[str, list[str]]:
     if not text:
         return {"persons": [], "organizations": [], "locations": [], "dates": [], "emails": [], "urls": []}
 
-    entities = {"emails": [], "urls": [], "dates": [], "persons": [], "organizations": [], "locations": []}
+    entities: dict[str, list[str]] = {
+        "emails": [],
+        "urls": [],
+        "dates": [],
+        "persons": [],
+        "organizations": [],
+        "locations": [],
+    }
 
     # Extract emails
     emails = re.findall(EMAIL_REGEX, text)

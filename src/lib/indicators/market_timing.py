@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import pytz
+import pytz  # type: ignore[import-untyped]
 from loguru import logger
 
 

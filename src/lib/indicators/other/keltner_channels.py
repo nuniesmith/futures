@@ -1,3 +1,5 @@
+from typing import Any
+
 import pandas as pd
 from loguru import logger
 
@@ -36,7 +38,7 @@ class KeltnerChannelsIndicator:
         self.history_df = pd.DataFrame(columns=self.REQUIRED_COLUMNS)
         # current_value will hold the latest channels as a dictionary:
         # {'upper': value, 'lower': value, 'middle': value}
-        self.current_value = {}
+        self.current_value: dict[str, Any] = {}
 
     def _calculate_keltner_channels(self, data: pd.DataFrame) -> pd.DataFrame:
         """

@@ -13,11 +13,11 @@ import os
 import sys
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 from lib.core.config import load_configuration
 from lib.core.initialization import initialize
-from lib.core.lifespan import get_app_lifecycle
+from lib.core.lifespan import ApplicationLifecycle, get_app_lifecycle
 from lib.core.teardown import emergency_shutdown, teardown
 from lib.utils.discover import find_config_file
 from lib.utils.setup_logging import setup_logging
@@ -48,7 +48,7 @@ class BaseService(abc.ABC):
         """
         self.service_name = service_name
         # setup_logging now returns either a loguru logger or a standard logger
-        self.logger = setup_logging(service_name)
+        self.logger: Any = setup_logging(service_name)
 
         # Set up default port based on service name
         self.default_port = int(os.environ.get(f"{service_name.upper()}_PORT", 8000))
@@ -59,11 +59,12 @@ class BaseService(abc.ABC):
             self.logger.info("Running in a container environment")
 
         # Get lifecycle
+        self.app_lifecycle: Union[ApplicationLifecycle, Any]
         try:
             self.app_lifecycle = get_app_lifecycle()
         except Exception as e:
             self.logger.warning(f"Error loading app lifecycle: {e}")
-            self.app_lifecycle = {}
+            self.app_lifecycle = None
 
     def setup_environment(self) -> Path:
         """
@@ -366,7 +367,7 @@ class BaseService(abc.ABC):
         from lib.utils.system import get_system_info
 
         self.logger.info("Running service diagnostics")
-        results = {
+        results: dict[str, Any] = {
             "service": self.service_name,
             "system": get_system_info(),
             "container": self.container_info,

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from jsonschema import ValidationError, validate
 from loguru import logger
 

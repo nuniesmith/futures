@@ -37,7 +37,7 @@ class ModelLoader:
         Returns:
             Dictionary of model name to model object
         """
-        models = {}
+        models: dict[str, Any] = {}
 
         try:
             # Get all model files
@@ -47,7 +47,7 @@ class ModelLoader:
                 return models
 
             # Group by model name and find latest version
-            model_versions = {}
+            model_versions: dict[str, tuple[str, float]] = {}
             for model_file in model_files:
                 basename = os.path.basename(model_file)
                 # Expected format: model_name-timestamp.pkl
@@ -203,7 +203,7 @@ class ModelSaver:
         """
         try:
             # Group files by model name
-            model_files = {}
+            model_files: dict[str, list[tuple[str, float]]] = {}
             all_files = glob.glob(os.path.join(self.model_dir, "*.pkl"))
 
             for file_path in all_files:

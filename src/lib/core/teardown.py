@@ -14,6 +14,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
+logger: Any
 try:
     from loguru import logger
 except ImportError:
@@ -37,7 +38,7 @@ DEFAULT_TEARDOWN_TIMEOUT = 30
 
 # Thread-safe teardown state tracking
 _teardown_lock = threading.RLock()
-_teardown_state = {
+_teardown_state: dict[str, Any] = {
     "in_progress": False,
     "completed": False,
     "start_time": None,

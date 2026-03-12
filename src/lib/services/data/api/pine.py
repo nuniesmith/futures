@@ -29,7 +29,7 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 

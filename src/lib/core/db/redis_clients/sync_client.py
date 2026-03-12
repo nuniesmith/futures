@@ -5,8 +5,9 @@ from typing import Any, cast
 import redis_clients
 from loguru import logger
 from redis.client import Pipeline, PubSub  # Import necessary types
-from src.lib.core.db.redis_clients import BaseRedisClient, RedisError, _ensure_connection
-from src.lib.core.db.redis_clients.utils import CustomJSONEncoder
+
+from lib.core.db.redis_clients import BaseRedisClient, RedisError, _ensure_connection
+from lib.core.db.redis_clients.utils import CustomJSONEncoder
 
 _log_prefix_base = "[redis_client - sync]"
 
@@ -46,7 +47,7 @@ class SyncRedisClient(BaseRedisClient):
         return connection
 
     # Override the base class ping method to ensure it works properly
-    def ping(self) -> bool:
+    def ping(self) -> bool:  # type: ignore[override]
         """Check if the Redis connection is alive."""
         log_prefix = f"{self._log_prefix_class} - ping"
         logger.debug(f"{log_prefix} START - Pinging Redis connection.")
@@ -150,7 +151,7 @@ class SyncRedisClient(BaseRedisClient):
         log_prefix = f"{self._log_prefix_class} - get"
         logger.debug(f"{log_prefix} START - GET operation for key: '{key}'.")
         try:
-            value_raw = self.connection.get(key)
+            value_raw = self.connection.get(key)  # type: ignore[union-attr]
             logger.debug(f"{log_prefix} Raw value for key '{key}': {value_raw}")
 
             if value_raw:
@@ -199,10 +200,10 @@ class SyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} JSON serialization successful for key '{key}'.")
 
             if ex:
-                result = self.connection.setex(key, ex, value_json)
+                result = self.connection.setex(key, ex, value_json)  # type: ignore[union-attr]
                 logger.debug(f"{log_prefix} Key '{key}' set with expiry {ex}. Result: {result}")
             else:
-                result = self.connection.set(key, value_json)
+                result = self.connection.set(key, value_json)  # type: ignore[union-attr]
                 logger.debug(f"{log_prefix} Key '{key}' set without expiry. Result: {result}")
 
             logger.debug(f"{log_prefix} END - SET operation SUCCESS for key: '{key}'.")
@@ -238,7 +239,7 @@ class SyncRedisClient(BaseRedisClient):
             value_json = json.dumps(value, cls=CustomJSONEncoder)
             logger.debug(f"{log_prefix} JSON serialization successful for key '{name}'.")
 
-            result = self.connection.setex(name, time, value_json)
+            result = self.connection.setex(name, time, value_json)  # type: ignore[union-attr]
             logger.debug(f"{log_prefix} Key '{name}' set with expiry {time}s. Result: {result}")
             logger.debug(f"{log_prefix} END - SETEX SUCCESS for key: '{name}'.")
             return True
@@ -265,7 +266,7 @@ class SyncRedisClient(BaseRedisClient):
         log_prefix = f"{self._log_prefix_class} - delete"
         logger.debug(f"{log_prefix} START - DELETE operation for key: '{key}'.")
         try:
-            result = self.connection.delete(key)
+            result = self.connection.delete(key)  # type: ignore[union-attr]
             logger.debug(f"{log_prefix} DELETE operation result for key '{key}': {result}")
             logger.debug(f"{log_prefix} END - DELETE operation for key: '{key}' with result: {bool(result)}.")
             return bool(result)
@@ -292,7 +293,7 @@ class SyncRedisClient(BaseRedisClient):
         log_prefix = f"{self._log_prefix_class} - exists"
         logger.debug(f"{log_prefix} START - EXISTS check for key: '{key}'.")
         try:
-            result = bool(self.connection.exists(key))
+            result = bool(self.connection.exists(key))  # type: ignore[union-attr]
             logger.debug(f"{log_prefix} EXISTS check for key '{key}' returned: {result}.")
             logger.debug(f"{log_prefix} END - EXISTS check for key: '{key}'.")
             return result
@@ -319,7 +320,7 @@ class SyncRedisClient(BaseRedisClient):
         log_prefix = f"{self._log_prefix_class} - keys"
         logger.debug(f"{log_prefix} START - KEYS retrieval with pattern: '{pattern}'.")
         try:
-            keys_list = self.connection.keys(pattern)
+            keys_list = self.connection.keys(pattern)  # type: ignore[union-attr]
             keys_converted = list(keys_list)  # Simplified conversion
             logger.debug(f"{log_prefix} Retrieved {len(keys_converted)} keys for pattern '{pattern}'.")
             logger.debug(f"{log_prefix} END - KEYS retrieval SUCCESS with pattern: '{pattern}'.")
@@ -348,7 +349,7 @@ class SyncRedisClient(BaseRedisClient):
         log_prefix = f"{self._log_prefix_class} - publish"
         logger.debug(f"{log_prefix} START - PUBLISH message to channel: '{channel}'.")
         try:
-            result_raw = self.connection.publish(channel, message)
+            result_raw = self.connection.publish(channel, message)  # type: ignore[union-attr]
             result = cast("int", result_raw) if result_raw is not None else 0
             logger.debug(f"{log_prefix} Message published to channel '{channel}'. Subscribers count: {result}")
             logger.debug(f"{log_prefix} END - PUBLISH SUCCESS for channel: '{channel}'.")
@@ -379,7 +380,7 @@ class SyncRedisClient(BaseRedisClient):
         logger.debug(f"{log_prefix} START - HGET operation for hash: '{name}', key: '{key}'.")
 
         try:
-            value_raw = self.connection.hget(name, key)
+            value_raw = self.connection.hget(name, key)  # type: ignore[union-attr]
             logger.debug(f"{log_prefix} Raw value for hash '{name}', key '{key}': {value_raw}")
 
             if value_raw:
@@ -429,7 +430,7 @@ class SyncRedisClient(BaseRedisClient):
             value_json = json.dumps(value, cls=CustomJSONEncoder)
             logger.debug(f"{log_prefix} JSON serialization successful for hash '{name}', key '{key}'.")
 
-            result = self.connection.hset(name, key, value_json)
+            result = self.connection.hset(name, key, value_json)  # type: ignore[union-attr]
             logger.debug(f"{log_prefix} Hash field '{key}' set in hash '{name}'. Result: {result}")
             logger.debug(f"{log_prefix} END - HSET SUCCESS for hash: '{name}', key: '{key}'.")
             return True
@@ -450,7 +451,7 @@ class SyncRedisClient(BaseRedisClient):
         log_prefix = f"{self._log_prefix_class} - health_check"
         logger.debug(f"{log_prefix} START - Running health check on Redis connection")
 
-        health_info = {"status": False, "details": {}}
+        health_info: dict[str, Any] = {"status": False, "details": {}}
 
         try:
             # Basic ping check
@@ -461,7 +462,7 @@ class SyncRedisClient(BaseRedisClient):
             if ping_result:
                 # Add additional stats if connection is working
                 try:
-                    info = self.connection.info()
+                    info = self.connection.info()  # type: ignore[union-attr]
                     health_info["details"]["version"] = info.get("redis_version", "unknown")
                     health_info["details"]["uptime_days"] = info.get("uptime_in_days", 0)
                     health_info["details"]["memory_used"] = info.get("used_memory_human", "unknown")
@@ -512,9 +513,9 @@ class SyncRedisClient(BaseRedisClient):
         )
         try:
             if score_cast_func is None:
-                result_raw = self.connection.zrange(key, start, end, desc=desc, withscores=withscores)
+                result_raw = self.connection.zrange(key, start, end, desc=desc, withscores=withscores)  # type: ignore[union-attr]
             else:
-                result_raw = self.connection.zrange(
+                result_raw = self.connection.zrange(  # type: ignore[union-attr]
                     key, start, end, desc=desc, withscores=withscores, score_cast_func=score_cast_func
                 )
 

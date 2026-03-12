@@ -2,6 +2,7 @@ import os
 import random
 import threading
 import time
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import (
     TYPE_CHECKING,
@@ -11,10 +12,6 @@ from typing import (
     ParamSpec,
     TypeVar,
 )
-
-if TYPE_CHECKING:
-    from src.lib.core.db.redis_clients import BaseRedisClient
-from abc import ABC, abstractmethod
 
 import redis_clients
 from loguru import logger
@@ -113,7 +110,7 @@ class BaseRedisClient(ABC):
         self.timeout = timeout
         self.max_retries = max_retries
         self.connection_kwargs = connection_kwargs or {}
-        self.last_connection_attempt = 0  # For throttling reconnection attempts
+        self.last_connection_attempt: float = 0  # For throttling reconnection attempts
         self.connection: redis_clients.Redis | None = None
         self.connection_params: dict[str, Any] = {}
         self._setup_connection_params()
@@ -129,7 +126,7 @@ class BaseRedisClient(ABC):
         logger.debug(f"{log_prefix} START - Setting up connection parameters.")
 
         # Import utils here to avoid circular imports
-        from src.lib.core.db.redis_clients.utils import clean_redis_url, construct_redis_url
+        from lib.core.db.redis_clients.utils import clean_redis_url, construct_redis_url
 
         # Check if we're using Sentinel
         use_sentinel = os.getenv("REDIS_USE_SENTINEL", "false").lower() == "true"
@@ -430,7 +427,7 @@ class BaseRedisClient(ABC):
             logger.debug(f"{log_prefix} Connection is healthy, no reconnection needed.")
         logger.debug(f"{log_prefix} END - Connection check and reconnection COMPLETED.")
 
-    def ping(self, timeout: float | None = None) -> bool:
+    def ping(self, timeout: float | None = None) -> Any:
         """
         Check if the Redis connection is alive with optional timeout.
 
@@ -495,7 +492,7 @@ class BaseRedisClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def set(self, key: str, value: Any, ex: int | None = None) -> bool:
+    def set(self, key: str, value: Any, ex: int | None = None) -> Any:
         """
         Set key-value pair in Redis with optional expiration.
 
@@ -510,7 +507,7 @@ class BaseRedisClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def delete(self, key: str) -> bool:
+    def delete(self, key: str) -> Any:
         """
         Delete a key from Redis.
 
@@ -523,7 +520,7 @@ class BaseRedisClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def exists(self, key: str) -> bool:
+    def exists(self, key: str) -> Any:
         """
         Check if a key exists in Redis.
 
@@ -536,7 +533,7 @@ class BaseRedisClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def setex(self, name: str, time: int, value: Any) -> bool:
+    def setex(self, name: str, time: int, value: Any) -> Any:
         """
         Set key with expiration time.
 
@@ -551,7 +548,7 @@ class BaseRedisClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def hset(self, name: str, key: str, value: Any) -> bool:
+    def hset(self, name: str, key: str, value: Any) -> Any:
         """
         Set hash field.
 
@@ -566,7 +563,7 @@ class BaseRedisClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def hget(self, name: str, key: str) -> Any | None:
+    def hget(self, name: str, key: str) -> Any:
         """
         Get hash field.
 
@@ -593,7 +590,7 @@ class BaseRedisClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def health_check(self) -> dict[str, Any]:
+    def health_check(self) -> Any:
         """
         Perform a comprehensive health check on the Redis connection.
 
@@ -603,7 +600,7 @@ class BaseRedisClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def keys(self, pattern: str = "*") -> list[str]:
+    def keys(self, pattern: str = "*") -> Any:
         """
         Find all keys matching the given pattern.
 
@@ -616,7 +613,7 @@ class BaseRedisClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def publish(self, channel: str, message: str | bytes) -> int:
+    def publish(self, channel: str, message: str | bytes) -> Any:
         """
         Publish a message to a Redis channel.
 
@@ -638,7 +635,7 @@ class BaseRedisClient(ABC):
         desc: bool = False,
         withscores: bool = False,
         score_cast_func: Callable[[str], float] | None = None,
-    ) -> list:
+    ) -> Any:
         """
         Return a range of members in a sorted set.
 

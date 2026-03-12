@@ -1,3 +1,5 @@
+from typing import Any
+
 import pandas as pd
 from loguru import logger
 
@@ -27,7 +29,7 @@ class ElderRayIndexIndicator:
         self.history_df = pd.DataFrame(columns=self.REQUIRED_COLUMNS)
         # current_value holds the most recent calculation results as a dictionary:
         # {'bull_power': <value>, 'bear_power': <value>}
-        self.current_value = {}
+        self.current_value: dict[str, Any] = {}
 
     def _calculate_eri(self, data: pd.DataFrame) -> pd.DataFrame:
         """

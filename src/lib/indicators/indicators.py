@@ -928,6 +928,7 @@ def identify_key_levels(df: pd.DataFrame, round_digits: int = 0) -> pd.DataFrame
 
     # For crypto like BTC, we need to handle different price magnitudes
     # Determine the appropriate psychological levels based on price range
+    round_levels: list[dict[str, Any]] = []
     if max_price > 10000:
         # BTC-range prices
         round_levels = []
@@ -1003,8 +1004,8 @@ def identify_key_levels(df: pd.DataFrame, round_digits: int = 0) -> pd.DataFrame
         candle = result.iloc[i]
 
         # Check each round level
-        for level in round_levels:
-            level_price = level["price"]
+        for lvl in round_levels:
+            level_price = float(lvl["price"])
 
             # Calculate threshold based on price magnitude
             threshold = level_price * level_threshold
@@ -1012,7 +1013,7 @@ def identify_key_levels(df: pd.DataFrame, round_digits: int = 0) -> pd.DataFrame
             # Check if the candle interacts with this level
             if abs(candle["high"] - level_price) <= threshold or abs(candle["low"] - level_price) <= threshold:
                 result.iloc[i, result.columns.get_loc("at_key_level")] = True
-                result.iloc[i, result.columns.get_loc("level_type")] = level["type"]
+                result.iloc[i, result.columns.get_loc("level_type")] = lvl["type"]
                 break
 
     # Count key levels
@@ -1177,7 +1178,7 @@ def identify_bitcoin_specific_levels(df: pd.DataFrame, fibonacci_base: float | N
 
     # Calculate Fibonacci price levels
     for level in fib_levels:
-        level["price"] = fibonacci_base * level["ratio"]
+        level["price"] = fibonacci_base * float(level["ratio"])  # type: ignore[arg-type]
 
     # Combine all levels
     all_levels = btc_historical_levels + fib_levels
@@ -1190,7 +1191,7 @@ def identify_bitcoin_specific_levels(df: pd.DataFrame, fibonacci_base: float | N
 
         # Check historical and Fibonacci levels
         for level in all_levels:
-            level_price = level["price"]
+            level_price = float(level["price"])  # type: ignore[arg-type]
             level_threshold = level_price * threshold
 
             # Check if the candle interacts with this level

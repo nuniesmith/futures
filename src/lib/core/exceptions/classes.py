@@ -27,9 +27,6 @@ class ErrorSeverity(Enum):
     CRITICAL = auto()
 
 
-T = TypeVar("T", bound="BaseException")
-
-
 def _increment_error_counter(exception_name: str):
     """
     Increment Prometheus error counter for a given exception.
@@ -193,6 +190,9 @@ class BaseException(Exception):
         )
 
 
+T = TypeVar("T", bound="BaseException")
+
+
 class GeneralError(BaseException):
     """Base class for general application errors."""
 
@@ -272,7 +272,7 @@ def create_exception(exception_class: type[T], message: str | None = None, code:
     Returns:
         An instance of the specified exception class
     """
-    return exception_class.create(message=message, code=code, **kwargs)
+    return exception_class.create(message=message, code=code, **kwargs)  # type: ignore[attr-defined]
 
 
 # Automatically register base and core exception classes

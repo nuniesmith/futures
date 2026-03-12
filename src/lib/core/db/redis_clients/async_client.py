@@ -9,8 +9,9 @@ import redis.asyncio as redis_async
 import redis_clients
 from loguru import logger
 from redis.asyncio.client import Pipeline, PubSub
-from src.lib.core.db.redis_clients import BaseRedisClient, RedisError, _ensure_connection
-from src.lib.core.db.redis_clients.utils import CustomJSONEncoder
+
+from lib.core.db.redis_clients import BaseRedisClient, RedisError, _ensure_connection
+from lib.core.db.redis_clients.utils import CustomJSONEncoder
 
 _log_prefix_base = "[redis_client - async]"
 
@@ -38,29 +39,27 @@ class AsyncRedisClient(BaseRedisClient):
 
         if self.connection_params.get("use_cluster", False):
             # For cluster mode
-            from redis.asyncio.cluster import ClusterConnectionPool, RedisCluster
+            from redis.asyncio.cluster import RedisCluster  # type: ignore[attr-defined]
 
             # Define factory function to create a cluster connection pool
-            def create_cluster_pool(**kwargs):
+            def create_cluster_pool(**kwargs):  # type: ignore[return]
                 startup_nodes = [
                     {"host": host, "port": self.connection_params["cluster_port"]}
                     for host in self.connection_params["cluster_hosts"]
                 ]
-                return ClusterConnectionPool(
+                return RedisCluster(  # type: ignore[call-arg]
                     startup_nodes=startup_nodes,
                     username=self.connection_params.get("user"),
                     password=self.connection_params.get("password"),
                     ssl=self.connection_params.get("use_tls", False),
+                    decode_responses=True,
                     **kwargs,
                 )
 
             # Get or create a cluster connection pool
-            pool = self._get_or_create_connection_pool(pool_key, create_cluster_pool, **pool_kwargs)
-
-            # Create RedisCluster client with the pool
-            connection = RedisCluster(connection_pool=pool, decode_responses=True)
+            connection: Any = self._get_or_create_connection_pool(pool_key, create_cluster_pool, **pool_kwargs)
             logger.debug(f"{log_prefix} END - Asynchronous Redis CLUSTER connection created: {connection}")
-            return connection
+            return connection  # type: ignore[return-value]
         else:
             # For standard Redis or Sentinel
             # Define factory function for the connection pool
@@ -75,7 +74,7 @@ class AsyncRedisClient(BaseRedisClient):
             logger.debug(f"{log_prefix} END - Asynchronous Redis connection created: {connection}")
             return connection
 
-    async def ping(self) -> bool:
+    async def ping(self) -> bool:  # type: ignore[override]
         """
         Asynchronously ping the Redis server to verify the connection.
 
@@ -106,12 +105,13 @@ class AsyncRedisClient(BaseRedisClient):
         logger.debug(f"{log_prefix} START - Initializing async connection")
 
         now = time.time()
-        if now - self.last_connection_attempt < 5:
+        last: float = self.last_connection_attempt  # type: ignore[has-type]
+        if now - last < 5:
             logger.warning(f"{log_prefix} ⚠️ Skipping reconnect attempt (throttled). Last attempt was too recent.")
             logger.debug(f"{log_prefix} END - Connection initialization SKIPPED due to throttling.")
             return
 
-        self.last_connection_attempt = now
+        self.last_connection_attempt = now  # type: ignore[has-type]
 
         for attempt in range(self.max_retries):
             attempt_num = attempt + 1
@@ -259,7 +259,7 @@ class AsyncRedisClient(BaseRedisClient):
                 result = await self.connection.setex(key, expiry, value_json)
                 logger.debug(f"{log_prefix} Key '{key}' set with expiry {expiry}. Result: {result}")
             else:
-                result = await self.connection.set(key, value_json)
+                result = bool(await self.connection.set(key, value_json))
                 logger.debug(f"{log_prefix} Key '{key}' set without expiry. Result: {result}")
 
             logger.debug(f"{log_prefix} END - ASYNC SET operation SUCCESS for key: '{key}'.")
@@ -405,7 +405,7 @@ class AsyncRedisClient(BaseRedisClient):
                 raise RedisError(error_message)
 
             result_raw = await self.connection.publish(channel, message)
-            result = int(cast("int", result_raw)) if result_raw is not None else 0
+            result = int(result_raw) if result_raw is not None else 0  # type: ignore[redundant-cast]
             logger.debug(f"{log_prefix} Message published to channel '{channel}'. Subscribers count: {result}")
             logger.debug(f"{log_prefix} END - ASYNC PUBLISH SUCCESS to channel: '{channel}'. Subscribers: {result}.")
             return result
@@ -443,7 +443,7 @@ class AsyncRedisClient(BaseRedisClient):
         pipeline_obj = self.connection.pipeline(transaction=transaction)
         logger.debug(f"{log_prefix} Redis ASYNC pipeline object retrieved: {pipeline_obj}")
         logger.debug(f"{log_prefix} END - ASYNC Pipeline retrieval SUCCESS.")
-        return cast("Pipeline", pipeline_obj)
+        return pipeline_obj  # type: ignore[return-value]
 
     @_ensure_connection
     async def zrange(
@@ -491,7 +491,7 @@ class AsyncRedisClient(BaseRedisClient):
                     key, start, end, desc=desc, withscores=withscores, score_cast_func=score_cast_func
                 )
 
-            result = cast("list", result_raw)
+            result: list = list(result_raw) if result_raw is not None else []  # type: ignore[redundant-cast]
             logger.debug(f"{log_prefix} Retrieved {len(result)} members from sorted set for key '{key}'.")
             logger.debug(f"{log_prefix} END - ASYNC ZRANGE SUCCESS for key: '{key}', count: {len(result)}.")
             return result

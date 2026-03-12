@@ -15,6 +15,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Logger — use loguru if available, else stdlib
 # ---------------------------------------------------------------------------
+logger: Any
 try:
     from loguru import logger
 except ImportError:

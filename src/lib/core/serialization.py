@@ -78,7 +78,7 @@ def from_json(json_str: str) -> Any:
         raise ValueError(f"Invalid JSON: {e}") from e
 
 
-def to_dict(obj: Any) -> dict[str, Any]:
+def to_dict(obj: Any) -> Any:
     """
     Convert an object to a dictionary.
 
@@ -131,8 +131,8 @@ def from_dict(data: dict[str, Any], cls: type[T]) -> T:
     if data is None:
         return None
 
-    if hasattr(cls, "from_dict") and callable(cls.from_dict):
-        return cls.from_dict(data)
+    if hasattr(cls, "from_dict") and callable(cls.from_dict):  # type: ignore[attr-defined]
+        return cls.from_dict(data)  # type: ignore[attr-defined]
 
     return cls(**data)
 
@@ -212,7 +212,7 @@ def mask_sensitive_data(data: dict[str, Any], sensitive_fields: list[str]) -> di
     if not data or not sensitive_fields:
         return data
 
-    result = {}
+    result: dict[str, Any] = {}
 
     for key, value in data.items():
         if key in sensitive_fields:
@@ -259,7 +259,7 @@ def serialize_file(file_path: str | Path, binary: bool = False) -> dict[str, Any
     }
 
 
-def deserialize_file(data: dict[str, Any], output_dir: str | Path = None) -> Path:
+def deserialize_file(data: dict[str, Any], output_dir: str | Path | None = None) -> Path:
     """
     Deserialize a file from a dictionary.
 
@@ -318,7 +318,7 @@ def flatten_dict(d: dict[str, Any], parent_key: str = "", sep: str = ".") -> dic
     Returns:
         Flattened dictionary
     """
-    items = []
+    items: list[tuple[str, Any]] = []
     for k, v in d.items():
         new_key = f"{parent_key}{sep}{k}" if parent_key else k
         if isinstance(v, dict):
@@ -339,7 +339,7 @@ def unflatten_dict(d: dict[str, Any], sep: str = ".") -> dict[str, Any]:
     Returns:
         Nested dictionary
     """
-    result = {}
+    result: dict[str, Any] = {}
 
     for key, value in d.items():
         parts = key.split(sep)

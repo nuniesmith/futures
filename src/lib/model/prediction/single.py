@@ -50,8 +50,8 @@ class AssetPricePredictor:
         self.model = None
         self.model_path = model_path
         self.data_manager = data_manager
-        self.last_training_date = None
-        self.model_metrics = {}
+        self.last_training_date: datetime | None = None
+        self.model_metrics: dict[str, Any] = {}
 
         # Core technical indicator features
         self.feature_columns = [
@@ -74,7 +74,7 @@ class AssetPricePredictor:
         self.advanced_features = ["ATR", "ADX", "OBV_Change", "StochK", "StochD"]
 
         # Feature importance scores (will be populated after training)
-        self.feature_importance = {}
+        self.feature_importance: dict[str, float] = {}
 
         # Load model if path provided
         if model_path and os.path.exists(model_path):
@@ -161,9 +161,11 @@ class AssetPricePredictor:
             self.model = RandomForestClassifier(
                 n_estimators=100, max_depth=10, random_state=42, class_weight="balanced"
             )
+            assert self.model is not None
             self.model.fit(X_train, y_train)
 
         # Evaluate model
+        assert self.model is not None
         y_pred = self.model.predict(X_test)
         accuracy = accuracy_score(y_test, y_pred)
         report = classification_report(y_test, y_pred, output_dict=True)
@@ -192,10 +194,11 @@ class AssetPricePredictor:
         }
 
         # Record training date
-        self.last_training_date = datetime.now()
+        training_end = datetime.now()
+        self.last_training_date = training_end
 
         # Calculate training duration
-        training_duration = (self.last_training_date - training_start).total_seconds()
+        training_duration = (training_end - training_start).total_seconds()
 
         # Save the model if requested
         model_data = {
@@ -506,7 +509,7 @@ class AssetPricePredictor:
         features_to_use = self._prepare_feature_list(latest_data)
 
         # Make predictions
-        results = {}
+        results: dict[str, Any] = {}
         movement_map = {
             -1: "Significant Downward Movement (> 0.5% drop)",
             0: "Sideways Movement (within ±0.5%)",
@@ -516,6 +519,7 @@ class AssetPricePredictor:
         for market, record in prediction_records:
             try:
                 X_pred = record[features_to_use]
+                assert self.model is not None
                 prediction = self.model.predict(X_pred)[0]
                 probabilities = self.model.predict_proba(X_pred)[0]
                 confidence = max(probabilities) * 100
@@ -551,7 +555,7 @@ class AssetPricePredictor:
         raw_predictions = self._make_predictions(prediction_dates, latest_data, confidence_threshold)
 
         # Reformat the results
-        results = {"predictions": []}
+        results: dict[str, Any] = {"predictions": []}
 
         for time_frame, prediction_data in raw_predictions.items():
             if "error" in prediction_data:
@@ -584,7 +588,12 @@ class AssetPricePredictor:
         sorted_features = sorted(self.feature_importance.items(), key=lambda x: x[1], reverse=True)
 
         # Group features by type
-        feature_groups = {"time_based": [], "technical_indicators": [], "volume_related": [], "advanced_indicators": []}
+        feature_groups: dict[str, list[tuple[str, float]]] = {
+            "time_based": [],
+            "technical_indicators": [],
+            "volume_related": [],
+            "advanced_indicators": [],
+        }
 
         time_features = ["DayOfWeek", "Hour", "Month", "MarketHour"]
         volume_features = self.volume_features

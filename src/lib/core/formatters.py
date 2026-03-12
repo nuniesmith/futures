@@ -30,7 +30,7 @@ ASSET_PRECISION = {
 }
 
 
-def _ensure_datetime(dt_value: datetime | str | float | int) -> datetime | None:
+def _ensure_datetime(dt_value: datetime | str | float | int | None) -> datetime | None:
     """
     Convert various datetime representations to a datetime object.
 
@@ -439,14 +439,14 @@ def format_duration(duration: str | timedelta | int | float | None, include_seco
     if duration is None:
         return NA_PLACEHOLDER
 
-    total_seconds = 0
+    total_seconds: float = 0
 
     try:
         # Convert various input types to seconds
         if isinstance(duration, timedelta):
             total_seconds = duration.total_seconds()
         elif isinstance(duration, (int, float)):
-            total_seconds = duration
+            total_seconds = float(duration)
         elif isinstance(duration, str):
             total_seconds = _parse_duration_string(duration)
         else:

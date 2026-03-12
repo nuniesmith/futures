@@ -34,7 +34,7 @@ class Regressor(Estimator):
         super().__init__(name, params)
 
     @abstractmethod
-    def fit(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray) -> Regressor:
+    def fit(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray) -> Regressor:  # type: ignore[override]
         """
         Fit the regressor to the data.
 
@@ -47,7 +47,7 @@ class Regressor(Estimator):
         """
 
     @abstractmethod
-    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray | pd.Series:
+    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray | pd.Series:  # type: ignore[override]
         """
         Predict target values for the input samples.
 

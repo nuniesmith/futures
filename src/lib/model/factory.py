@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 
 from lib.model.base.classifier import Classifier
 from lib.model.base.estimator import Estimator
@@ -57,8 +57,7 @@ class ModelFactory:
         model_cls = model_registry.get(name)
         if model_cls is None:
             raise ValueError(f"BaseModel not found: {name}")
-        # Explicitly cast to our BaseModel type
-        model = cast("BaseModel", model_cls(**params))
+        model = model_cls(**params)
         return model
 
     def create_with_metadata(

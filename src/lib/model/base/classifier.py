@@ -32,10 +32,10 @@ class Classifier(Estimator):
             params: Optional parameters for the classifier.
         """
         super().__init__(name, params)
-        self._classes = None
+        self._classes: np.ndarray | None = None
 
     @abstractmethod
-    def fit(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray) -> Classifier:
+    def fit(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray) -> Classifier:  # type: ignore[override]
         """
         Fit the classifier to the data.
 
@@ -51,7 +51,7 @@ class Classifier(Estimator):
         return self
 
     @abstractmethod
-    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray | pd.Series:
+    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray | pd.Series:  # type: ignore[override]
         """
         Predict class labels for the input samples.
 

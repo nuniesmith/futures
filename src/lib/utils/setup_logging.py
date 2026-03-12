@@ -33,7 +33,7 @@ DEFAULT_SUPPRESSED_LIBS = [
 
 
 def setup_logging(
-    log_file: str | None = None,
+    log_file: str | Path | None = None,
     log_level: str = "INFO",
     verbose: bool = False,
     json_format: bool = False,
@@ -142,7 +142,10 @@ def setup_logging(
         logger = get_logger()
 
         # Extra fields for structured logging
-        extra_fields = {"app": "Ruby Futures System", "version": os.environ.get("FKS_VERSION", "unknown")}
+        extra_fields: dict[str, Any] = {
+            "app": "Ruby Futures System",
+            "version": os.environ.get("FKS_VERSION", "unknown"),
+        }
 
         # Add service name if provided
         if service_name:
@@ -280,27 +283,28 @@ def configure_trading_system_logging(
 
     # Create log directory if needed
     if log_dir is None:
-        log_dir = Path("logs") / "trading_systems"
+        log_dir_path: Path = Path("logs") / "trading_systems"
+    else:
+        log_dir_path = Path(log_dir)
 
-    log_dir = Path(log_dir)
-    log_dir.mkdir(exist_ok=True, parents=True)
+    log_dir_path.mkdir(exist_ok=True, parents=True)
 
     # Create the log file path
-    log_file = log_dir / f"{system_name}.log"
+    log_file = log_dir_path / f"{system_name}.log"
 
     # Get a logger with the trading system name
     logger = get_logger(f"trading.{system_name}")
 
     # Create specialized directories for trade and position logging if enabled
     if trade_logging:
-        trade_log_dir = log_dir / "trades"
+        trade_log_dir = log_dir_path / "trades"
         trade_log_dir.mkdir(exist_ok=True, parents=True)
         trade_log_file = trade_log_dir / f"{system_name}_trades.jsonl"
     else:
         trade_log_file = None
 
     if position_logging:
-        position_log_dir = log_dir / "positions"
+        position_log_dir = log_dir_path / "positions"
         position_log_dir.mkdir(exist_ok=True, parents=True)
         position_log_file = position_log_dir / f"{system_name}_positions.jsonl"
     else:
@@ -308,14 +312,14 @@ def configure_trading_system_logging(
 
     # Create metrics directory if metrics are enabled
     if include_metrics:
-        metrics_dir = log_dir / "metrics"
+        metrics_dir = log_dir_path / "metrics"
         metrics_dir.mkdir(exist_ok=True, parents=True)
         metrics_file = metrics_dir / f"{system_name}_metrics.jsonl"
     else:
         metrics_file = None
 
     # Extra fields for structured logging
-    extra_fields = {
+    extra_fields: dict[str, Any] = {
         "trading_system": system_name,
         "app": "Ruby Futures System",
         "start_time": datetime.now().isoformat(),
@@ -344,7 +348,7 @@ def configure_trading_system_logging(
     )
 
     # Bind common context
-    logger = logger.bind(system=system_name, start_time=datetime.now().isoformat())
+    logger = logger.bind(system=system_name, start_time=datetime.now().isoformat())  # type: ignore[assignment]
 
     logger.info(f"Trading system logger configured: {system_name}")
 
@@ -356,7 +360,7 @@ def configure_trading_system_logging(
         "Metrics Enabled": include_metrics,
         "Trade Logging": trade_logging,
         "Position Logging": position_logging,
-        "Log Directory": str(log_dir),
+        "Log Directory": str(log_dir_path),
     }
 
     logger.log_dict(config_info, "Trading System Configuration")

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 if TYPE_CHECKING:
-    from src.lib.core.db.redis_clients.service import RedisClient
+    from lib.core.db.redis_clients.service import RedisService as RedisClient
 
 
 class RedisQueue:
@@ -137,13 +137,13 @@ class RedisQueue:
                     return None
 
                 # Get job data
-                job_data_str = self.redis.hget(self.data_hash, job_id)
+                job_data_str = self.redis.hget(self.data_hash, job_id)  # type: ignore[arg-type]
                 if not job_data_str:
                     logger.warning(f"Job {job_id} has no associated data")
                     return {"job_id": job_id}
 
                 # Parse job data
-                job_data = json.loads(job_data_str)
+                job_data = json.loads(job_data_str)  # type: ignore[arg-type]
                 job_data["job_id"] = job_id
                 return job_data
             except Exception as e:
@@ -184,7 +184,7 @@ class RedisQueue:
                 # Update job data with results
                 job_data_str = self.redis.hget(self.data_hash, job_id)
                 if job_data_str:
-                    job_data = json.loads(job_data_str)
+                    job_data = json.loads(job_data_str)  # type: ignore[arg-type]
                     job_data["result"] = result
                     job_data["status"] = "completed"
                     job_data["completed_at"] = time.time()
@@ -232,7 +232,7 @@ class RedisQueue:
                 # Update job data with error
                 job_data_str = self.redis.hget(self.data_hash, job_id)
                 if job_data_str:
-                    job_data = json.loads(job_data_str)
+                    job_data = json.loads(job_data_str)  # type: ignore[arg-type]
                     job_data["error"] = error
                     job_data["status"] = "failed"
                     job_data["failed_at"] = time.time()
@@ -256,10 +256,10 @@ class RedisQueue:
         try:
             if self.use_async:
                 return {
-                    "pending": await self.redis.llen(self.pending_queue),
-                    "processing": await self.redis.llen(self.processing_queue),
-                    "completed": await self.redis.llen(self.completed_queue),
-                    "failed": await self.redis.llen(self.failed_queue),
+                    "pending": await self.redis.llen(self.pending_queue),  # type: ignore[misc]
+                    "processing": await self.redis.llen(self.processing_queue),  # type: ignore[misc]
+                    "completed": await self.redis.llen(self.completed_queue),  # type: ignore[misc]
+                    "failed": await self.redis.llen(self.failed_queue),  # type: ignore[misc]
                 }
             else:
                 return {

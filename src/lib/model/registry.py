@@ -269,7 +269,7 @@ class ModelRegistry:
         model: BaseModel,
         model_type: str,
         version: str = "",
-        metadata: dict[str, Any] = None,
+        metadata: dict[str, Any] | None = None,
         activate: bool = False,
     ) -> str:
         """
@@ -316,7 +316,11 @@ class ModelRegistry:
 
         # Create metadata object
         model_metadata = ModelMetadata(
-            model_type=model_type, version=version, params=params, features=features, **meta_dict
+            model_type=model_type,
+            version=version,
+            params=params if isinstance(params, dict) else {},
+            features=features if isinstance(features, list) else [],
+            **meta_dict,
         )
 
         # Save the model

@@ -13,8 +13,8 @@ try:
 
     HAS_ARCH = True
 except ImportError:
-    arch = None
-    arch_model = None
+    arch = None  # type: ignore[assignment]
+    arch_model = None  # type: ignore[assignment]
     HAS_ARCH = False
 
 from lib.model._shims import ModelError
@@ -58,12 +58,14 @@ class GARCH(Estimator):
         self.scale = self.params.get("scale", True)
 
         # Initialize model
-        self._model = None
-        self._results = None
-        self._scaler = None
-        self._last_data = None
+        self._model: Any | None = None
+        self._results: Any | None = None
+        self._scaler: float = 1.0
+        self._last_data: Any | None = None
 
-    def fit(self, X: pd.DataFrame | np.ndarray | pd.Series, y: pd.Series | np.ndarray | None = None) -> "GARCH":
+    def fit(  # type: ignore[override]
+        self, X: pd.DataFrame | np.ndarray | pd.Series, y: pd.Series | np.ndarray | None = None
+    ) -> "GARCH":
         """
         Fit the GARCH model to the data.
 
@@ -122,7 +124,7 @@ class GARCH(Estimator):
         except Exception as e:
             raise ModelError(f"Error fitting GARCH model: {str(e)}") from e
 
-    def predict(
+    def predict(  # type: ignore[override]
         self, X: pd.DataFrame | np.ndarray | None = None, horizon: int = 1, method: str = "analytic"
     ) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -143,6 +145,7 @@ class GARCH(Estimator):
             raise ModelError("Model not fitted. Call fit() before predict().")
 
         try:
+            assert self._results is not None
             # Make forecasts
             forecasts = self._results.forecast(horizon=horizon, method=method, reindex=False)
 
@@ -179,6 +182,7 @@ class GARCH(Estimator):
             raise ModelError("Model not fitted. Call fit() before predict_volatility().")
 
         try:
+            assert self._results is not None
             # Make forecasts
             forecasts = self._results.forecast(horizon=horizon, method=method, reindex=False)
 
@@ -214,6 +218,7 @@ class GARCH(Estimator):
             raise ModelError("Model not fitted. Call fit() before simulate().")
 
         try:
+            assert self._results is not None
             # Make simulations
             simulation = self._results.forecast(horizon=horizon, method="simulation", simulations=n_simulations, x=x)
 
@@ -245,6 +250,7 @@ class GARCH(Estimator):
         if not self._is_fitted:
             raise ModelError("Model not fitted. Call fit() before get_summary().")
 
+        assert self._results is not None
         return self._results.summary().as_text()
 
     def save(self, path: str) -> None:

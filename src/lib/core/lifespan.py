@@ -17,7 +17,7 @@ try:
 except ImportError:
     import logging
 
-    logger = logging.getLogger("core.lifecycle")
+    logger = logging.getLogger("core.lifecycle")  # type: ignore[assignment]
 
 try:
     from fastapi import FastAPI
@@ -48,7 +48,7 @@ async def get_lifespan_manager(app: Any | None = None) -> AsyncGenerator[None, N
     try:
         from lib.core.registry import get_registry
 
-        service_registry = get_registry()
+        service_registry = get_registry("component")
     except ImportError:
         service_registry = None
         logger.debug("Service registry not available")
@@ -56,10 +56,10 @@ async def get_lifespan_manager(app: Any | None = None) -> AsyncGenerator[None, N
     try:
         # Connect to database if available
         try:
-            from lib.core.db import database
+            from lib.core.db import get_db
 
             logger.info("Connecting to database")
-            db_connected = await database.connect()
+            db_connected = await get_db().connect()
             if db_connected:
                 logger.info("Database connection established")
             else:
@@ -70,7 +70,7 @@ async def get_lifespan_manager(app: Any | None = None) -> AsyncGenerator[None, N
         # Start all services if service registry is available
         if service_registry:
             logger.info("Starting registered services")
-            await service_registry.start_all()
+            await service_registry.start_all()  # type: ignore[attr-defined]
             logger.info("All services started")
 
     except Exception as e:
@@ -87,15 +87,15 @@ async def get_lifespan_manager(app: Any | None = None) -> AsyncGenerator[None, N
         # Stop all services gracefully if service registry is available
         if service_registry:
             logger.info("Stopping registered services")
-            await service_registry.stop_all()
+            await service_registry.stop_all()  # type: ignore[attr-defined]
             logger.info("All services stopped")
 
         # Disconnect database if available
         try:
-            from lib.core.db import database
+            from lib.core.db import get_db
 
             logger.info("Disconnecting from database")
-            db_disconnected = await database.disconnect()
+            db_disconnected = await get_db().disconnect()
             if db_disconnected:
                 logger.info("Database disconnected successfully")
             else:

@@ -67,11 +67,11 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from lib.core.utils import safe_float as _safe_float
 from lib.trading.strategies.daily.bias_analyzer import (
     BiasDirection,
     DailyBias,
 )
-from lib.utils import safe_float as _safe_float
 
 logger = logging.getLogger("strategies.daily.swing_detector")
 

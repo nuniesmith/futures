@@ -98,7 +98,7 @@ def close_all_connections() -> bool:
     success = True
 
     # Close PostgreSQL connections
-    if "close_postgres_connections" in globals() and close_postgres_connections:
+    if "close_postgres_connections" in globals() and close_postgres_connections is not None:
         try:
             with _connection_lock:
                 postgres_connections = _active_connections.get("postgres", []).copy()
@@ -117,7 +117,11 @@ def close_all_connections() -> bool:
     # Close any remaining connections
     with _connection_lock:
         for db_type, connections in _active_connections.items():
-            if db_type == "postgres" and "close_postgres_connections" in globals() and close_postgres_connections:
+            if (
+                db_type == "postgres"
+                and "close_postgres_connections" in globals()
+                and close_postgres_connections is not None
+            ):
                 # Already handled above
                 continue
 

@@ -141,7 +141,7 @@ def annualized_returns(returns: list[float], periods_per_year: int) -> float:
     if not returns:
         return 0
 
-    total_return = 1
+    total_return: float = 1
     for r in returns:
         total_return *= 1 + r
 
@@ -245,7 +245,7 @@ def maximum_drawdown(prices: list[float]) -> float:
     if not prices:
         return 0
 
-    max_drawdown = 0
+    max_drawdown: float = 0
     peak = prices[0]
 
     for price in prices:
@@ -485,7 +485,7 @@ def relative_strength_index(data: list[float], window: int) -> list[float]:
     avg_loss = sum(losses[:window]) / window
 
     # Calculate RSI values
-    rsi_values = []
+    rsi_values: list[float] = []
 
     for i in range(window, len(changes)):
         # Update average gain and loss
@@ -494,7 +494,7 @@ def relative_strength_index(data: list[float], window: int) -> list[float]:
 
         # Calculate RS and RSI
         if avg_loss == 0:
-            rsi = 100
+            rsi: float = 100
         else:
             rs = avg_gain / avg_loss
             rsi = 100 - (100 / (1 + rs))

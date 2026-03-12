@@ -85,7 +85,7 @@ class ModelRegistry:
         self._factories: dict[str, Callable] = {}
         self._configs: dict[str, dict[str, Any]] = {}
 
-    def register(self, name: str, factory: Callable, config: dict[str, Any] = None) -> None:
+    def register(self, name: str, factory: Callable, config: dict[str, Any] | None = None) -> None:
         """
         Register a model factory with configuration.
 
@@ -2075,7 +2075,7 @@ class ModelService:
         data: pd.DataFrame,
         target_column: str,
         features: list[str] | None = None,
-        metrics: list[str] = None,
+        metrics: list[str] | None = None,
     ) -> dict[str, float]:
         """
         Evaluate a model against test data.

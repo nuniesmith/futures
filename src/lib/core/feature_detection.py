@@ -9,7 +9,9 @@ degradation when optional dependencies are not installed.
 import importlib
 from collections.abc import Callable
 from functools import lru_cache
+from typing import Any
 
+logger: Any
 try:
     from loguru import logger
 except ImportError:
