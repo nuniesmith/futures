@@ -1,5 +1,5 @@
 """
-Generic Breakout Handler Pipeline — Phase 1C/1D
+Generic Breakout Handler Pipeline — Phase 1C/1D + Ruby Signal Engine
 ================================================
 One handler function for **all** 13 breakout types — including ORB — with
 optional quality-filter and CNN-inference stages that replace the ~800-line
@@ -62,6 +62,12 @@ if TYPE_CHECKING:
 from lib.core.breakout_types import BreakoutType
 
 logger = logging.getLogger("engine.handlers")
+
+# Redis key for published Ruby signals (one per symbol, TTL 15 min)
+_RUBY_SIGNAL_KEY_PREFIX = "engine:ruby_signal:"
+_RUBY_SIGNAL_TTL = 15 * 60  # 15 minutes
+# Aggregate map key: engine:ruby_signals → {symbol: signal_dict}
+_RUBY_SIGNALS_MAP_KEY = "engine:ruby_signals"
 
 _EST = ZoneInfo("America/New_York")
 
@@ -436,6 +442,172 @@ def send_breakout_alert(
 
 
 # ===========================================================================
+# Ruby Signal Engine handler
+# ===========================================================================
+
+
+def handle_ruby_recompute(engine: Any, session_key: str = "us") -> None:
+    """Run the RubySignalEngine over all focus assets and publish results.
+
+    For each focus asset:
+      1. Fetch the latest 1-minute bars from Redis / engine data cache.
+      2. Feed each bar to the ``RubySignalEngine`` (stateful, incremental).
+      3. Publish the latest ``RubySignal`` to Redis for the dashboard and
+         WebUI to consume.
+      4. If the signal has ``breakout_detected=True`` and ``filter_passed``,
+         forward it to ``dispatch_to_position_manager()`` so the
+         PositionManager can open / pyramid / reverse positions.
+
+    The function is intentionally side-effect-free with respect to the
+    engine object itself — it only reads bar data and writes to Redis.
+
+    All errors are caught per-asset so one bad asset never blocks the rest.
+    """
+    try:
+        import json as _json
+
+        import pandas as pd
+
+        from lib.core.cache import cache_get, cache_set
+        from lib.services.engine.ruby_signal_engine import RubySignal, get_ruby_engine
+
+        assets = get_assets_for_session_key(session_key)
+        if not assets:
+            # Fall back to all focus assets when session key is too restrictive
+            assets = get_assets_for_session_key("us") or get_assets_for_session_key("london_ny") or []
+
+        if not assets:
+            logger.debug("handle_ruby_recompute: no assets found for session=%s", session_key)
+            return
+
+        signals_map: dict[str, dict] = {}
+        published = 0
+        dispatched = 0
+
+        for asset in assets:
+            symbol = asset.get("symbol", "")
+            ticker = asset.get("ticker", "") or symbol
+            if not symbol:
+                continue
+
+            try:
+                # 1. Fetch 1-minute bars
+                bars_1m = fetch_bars_1m(engine, ticker, symbol)
+                if bars_1m is None or bars_1m.empty:
+                    logger.debug("handle_ruby_recompute: no bars for %s", symbol)
+                    continue
+
+                # 2. Get (or create) the engine for this symbol
+                ruby_eng = get_ruby_engine(symbol)
+
+                # Feed new bars to the engine.
+                # We track the last bar timestamp so we only process genuinely
+                # new bars — avoids re-processing the entire history on every
+                # 5-minute tick.
+                last_ts_key = f"engine:ruby_last_ts:{symbol}"
+                last_ts_raw = cache_get(last_ts_key)
+                last_ts: Any = None
+                if last_ts_raw:
+                    with contextlib.suppress(Exception):
+                        last_ts = pd.Timestamp(last_ts_raw.decode() if isinstance(last_ts_raw, bytes) else last_ts_raw)
+
+                # Normalise index to a datetime index
+                if not isinstance(bars_1m.index, pd.DatetimeIndex):
+                    with contextlib.suppress(Exception):
+                        bars_1m.index = pd.to_datetime(bars_1m.index, utc=True)
+
+                # Filter to only new bars
+                bars_new = bars_1m.tail(200)  # default: most recent 200 bars
+                if last_ts is not None:
+                    with contextlib.suppress(Exception):
+                        bars_new = bars_1m[bars_1m.index > last_ts]
+
+                if bars_new.empty:
+                    # No new bars — use cached last signal for the map
+                    last_sig_raw = cache_get(f"{_RUBY_SIGNAL_KEY_PREFIX}{symbol}")
+                    if last_sig_raw:
+                        with contextlib.suppress(Exception):
+                            signals_map[symbol] = _json.loads(
+                                last_sig_raw.decode() if isinstance(last_sig_raw, bytes) else last_sig_raw
+                            )
+                    continue
+
+                # Feed bars one-by-one (incremental, stateful)
+                latest_signal: RubySignal | None = None
+                col_map = {c.lower(): c for c in bars_new.columns}
+
+                for ts, row in bars_new.iterrows():
+                    bar_dict = {
+                        "time": ts,
+                        "open": float(row.get(col_map.get("open", "Open"), row.get("Open", 0.0)) or 0.0),
+                        "high": float(row.get(col_map.get("high", "High"), row.get("High", 0.0)) or 0.0),
+                        "low": float(row.get(col_map.get("low", "Low"), row.get("Low", 0.0)) or 0.0),
+                        "close": float(row.get(col_map.get("close", "Close"), row.get("Close", 0.0)) or 0.0),
+                        "volume": float(row.get(col_map.get("volume", "Volume"), row.get("Volume", 0.0)) or 0.0),
+                    }
+                    latest_signal = ruby_eng.update(bar_dict)
+
+                if latest_signal is None:
+                    continue
+
+                # Update last-processed timestamp
+                if isinstance(bars_new.index, pd.DatetimeIndex) and len(bars_new) > 0:
+                    with contextlib.suppress(Exception):
+                        cache_set(last_ts_key, str(bars_new.index[-1]).encode("utf-8"), ttl=_RUBY_SIGNAL_TTL * 2)
+
+                # 3. Publish signal to Redis
+                sig_dict = latest_signal.to_dict()
+                sig_json = _json.dumps(sig_dict).encode("utf-8")
+                cache_set(f"{_RUBY_SIGNAL_KEY_PREFIX}{symbol}", sig_json, ttl=_RUBY_SIGNAL_TTL)
+                signals_map[symbol] = sig_dict
+                published += 1
+
+                # Log non-trivial signals
+                if latest_signal.breakout_detected:
+                    logger.info(
+                        "🔔 Ruby %s: %s %s @ %.4f  quality=%.0f%%  regime=%s  wave=%.2fx",
+                        latest_signal.signal_class or "SIGNAL",
+                        latest_signal.direction,
+                        symbol,
+                        latest_signal.trigger_price,
+                        latest_signal.quality,
+                        latest_signal.regime,
+                        latest_signal.wave_ratio,
+                    )
+
+                    # 4. Forward to PositionManager if quality gate passes
+                    if latest_signal.filter_passed and latest_signal.cnn_prob >= 0.45:
+                        dispatch_to_position_manager(
+                            latest_signal,
+                            bars_1m=bars_1m,
+                            session_key=session_key,
+                        )
+                        dispatched += 1
+
+            except Exception as exc:
+                logger.debug("handle_ruby_recompute error for %s: %s", symbol, exc)
+
+        # Publish the aggregate signals map so the dashboard can render all
+        # symbols in one Redis read.
+        if signals_map:
+            with contextlib.suppress(Exception):
+                cache_set(_RUBY_SIGNALS_MAP_KEY, _json.dumps(signals_map).encode("utf-8"), ttl=_RUBY_SIGNAL_TTL)
+
+        if published:
+            logger.info(
+                "✅ Ruby recompute [%s]: %d signal(s) published, %d dispatched to PM",
+                session_key,
+                published,
+                dispatched,
+            )
+        else:
+            logger.debug("Ruby recompute [%s]: no new bars processed", session_key)
+
+    except Exception as exc:
+        logger.warning("handle_ruby_recompute top-level error (non-fatal): %s", exc)
+
+
+# ===========================================================================
 # Main generic handler
 # ===========================================================================
 
@@ -496,7 +668,7 @@ def run_quality_filters(
     so the breakout is allowed through (fail-open).
     """
     try:
-        from lib.analysis.orb_filters import (
+        from lib.analysis.breakout_filters import (
             apply_all_filters,
             extract_premarket_range,
         )
@@ -581,16 +753,16 @@ def build_cnn_tabular_features(
     _get_asset_cls: Callable[[str], float] = lambda t: 0.0  # noqa: E731
     _session_enc: float = 0.875
     try:
-        from lib.analysis.breakout_cnn import (
+        from lib.analysis.ml.breakout_cnn import (
             get_asset_class_id as _get_asset_cls,
         )
-        from lib.analysis.breakout_cnn import (
+        from lib.analysis.ml.breakout_cnn import (
             get_asset_volatility_class as _get_vol_class,
         )
-        from lib.analysis.breakout_cnn import (
+        from lib.analysis.ml.breakout_cnn import (
             get_breakout_type_ordinal as _get_btype_ord,
         )
-        from lib.analysis.breakout_cnn import (
+        from lib.analysis.ml.breakout_cnn import (
             get_session_ordinal as _get_session_ordinal,
         )
 
@@ -768,8 +940,8 @@ def run_cnn_inference(
     cnn_signal: bool = True  # default: pass through
 
     try:
-        from lib.analysis.breakout_cnn import _find_latest_model, predict_breakout
-        from lib.analysis.chart_renderer import (
+        from lib.analysis.ml.breakout_cnn import _find_latest_model, predict_breakout
+        from lib.analysis.rendering.chart_renderer import (
             cleanup_inference_images,
             render_snapshot_for_inference,
         )

@@ -77,7 +77,7 @@ risk strip all shipped.
 ### Phase 1E: Rename `orb_filters.py` → `breakout_filters.py` ✅
 - [x] `ORBFilterResult` → `BreakoutFilterResult`. Backward-compat shim in place.
 
-### Phase 1F: Rename `orb_simulator.py` → `rb_simulator.py` ✅
+### Phase 1F: Rename `rb_simulator.py` → `rb_simulator.py` ✅
 - [x] `simulate_orb_outcome` → `simulate_rb_outcome`. Shim in place.
 
 ### Phase 1G: Create `lib/strategies/` Package ✅

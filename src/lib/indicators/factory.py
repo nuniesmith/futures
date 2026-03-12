@@ -1,10 +1,14 @@
 """
 Factory for creating technical indicators.
 """
-from typing import Dict, Any, Optional, List, Tuple
+
+from typing import Any
+
 from loguru import logger
-from app.trading.indicators import Indicator
-from indicators.registry import indicator_registry
+
+from lib.indicators.base import Indicator
+from lib.indicators.registry import indicator_registry
+
 
 class IndicatorFactory:
     """
@@ -12,13 +16,14 @@ class IndicatorFactory:
     This factory uses the indicator registry to create instances of indicators
     based on their name and configuration.
     """
+
     # Add a logger for the factory
     logger = logger.bind(name="indicator.factory")
-    
+
     def __init__(self):
         """Private constructor to prevent instantiation."""
         raise NotImplementedError("IndicatorFactory should not be instantiated")
-    
+
     @staticmethod
     def create(name: str, **params: Any) -> Indicator:
         """
@@ -39,7 +44,7 @@ class IndicatorFactory:
         return indicator
 
     @staticmethod
-    def create_from_config(config: Dict[str, Any]) -> Indicator:
+    def create_from_config(config: dict[str, Any]) -> Indicator:
         """
         Create an indicator from a configuration dictionary.
         Args:
@@ -51,19 +56,19 @@ class IndicatorFactory:
         """
         if not isinstance(config, dict):
             raise ValueError("Indicator configuration must be a dictionary")
-        
-        name = config.get('name')
+
+        name = config.get("name")
         if name is None:
             raise ValueError("Indicator configuration must include 'name'")
-        
-        params = config.get('params', {})
+
+        params = config.get("params", {})
         if not isinstance(params, dict):
             raise ValueError("Indicator parameters must be a dictionary")
-        
+
         return IndicatorFactory.create(name, **params)
 
     @staticmethod
-    def validate_config(config: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    def validate_config(config: dict[str, Any]) -> tuple[bool, str | None]:
         """
         Validate an indicator configuration without creating the indicator.
         Args:
@@ -73,23 +78,23 @@ class IndicatorFactory:
         """
         if not isinstance(config, dict):
             return False, "Indicator configuration must be a dictionary"
-        
-        name = config.get('name')
+
+        name = config.get("name")
         if name is None:
             return False, "Indicator configuration must include 'name'"
-        
-        params = config.get('params', {})
+
+        params = config.get("params", {})
         if not isinstance(params, dict):
             return False, "Indicator parameters must be a dictionary"
-        
+
         # Check if the indicator exists
         if indicator_registry.get(name) is None:
             return False, f"Indicator not found: {name}"
-        
+
         return True, None
 
     @staticmethod
-    def create_multiple(configs: List[Dict[str, Any]], ignore_errors: bool = False) -> List[Indicator]:
+    def create_multiple(configs: list[dict[str, Any]], ignore_errors: bool = False) -> list[Indicator]:
         """
         Create multiple indicators from a list of configurations.
         Args:
@@ -99,7 +104,7 @@ class IndicatorFactory:
             A list of indicator instances.
         """
         indicators = []
-        
+
         for i, config in enumerate(configs):
             try:
                 indicator = IndicatorFactory.create_from_config(config)
@@ -109,19 +114,19 @@ class IndicatorFactory:
                     IndicatorFactory.logger.warning(f"Skipping invalid config at index {i}: {e}")
                     continue
                 else:
-                    raise ValueError(f"Error in configuration at index {i}: {str(e)}")
-        
+                    raise ValueError(f"Error in configuration at index {i}: {str(e)}") from e
+
         return indicators
 
     @staticmethod
-    def list_available() -> List[str]:
+    def list_available() -> list[str]:
         """
         List all available indicators.
         Returns:
             List of indicator names.
         """
         return indicator_registry.list()
-    
+
     @staticmethod
     def create_custom(indicator_class, **params: Any) -> Indicator:
         """
@@ -136,4 +141,4 @@ class IndicatorFactory:
             return indicator_class(name=indicator_class.__name__.lower(), params=params)
         except Exception as e:
             IndicatorFactory.logger.error(f"Failed to create custom indicator: {str(e)}")
-            raise ValueError(f"Failed to create custom indicator: {str(e)}")
+            raise ValueError(f"Failed to create custom indicator: {str(e)}") from e

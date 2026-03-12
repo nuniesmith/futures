@@ -1,22 +1,24 @@
 """
 Strategy module for futures backtesting.
 
-Provides ten strategy classes with trend filters and ATR-based risk management:
-  1. TrendEMACross    — EMA crossover filtered by a longer trend EMA, ATR SL/TP
-  2. RSIReversal      — RSI mean-reversion entries with trend filter, ATR SL/TP
-  3. BreakoutStrategy  — Breakout of recent high/low with volume filter, ATR SL/TP
-  4. VWAPReversion    — Mean-reversion around daily VWAP with trend filter
-  5. ORBStrategy      — Opening Range Breakout of first N bars each session
-  6. MACDMomentum     — MACD crossover with histogram acceleration filter
-  7. PullbackEMA      — Pullback-to-EMA with candlestick confirmation
-  8. EventReaction    — Post-event continuation/fade with volume confirmation
-  9. ICTTrendEMA      — TrendEMA + ICT Smart Money confluence (FVG/OB filters)
+Provides eleven strategy classes with trend filters and ATR-based risk management:
+  1. TrendEMACross         — EMA crossover filtered by a longer trend EMA, ATR SL/TP
+  2. RSIReversal           — RSI mean-reversion entries with trend filter, ATR SL/TP
+  3. BreakoutStrategy      — Breakout of recent high/low with volume filter, ATR SL/TP
+  4. VWAPReversion         — Mean-reversion around daily VWAP with trend filter
+  5. ORBStrategy           — Opening Range Breakout of first N bars each session
+  6. MACDMomentum          — MACD crossover with histogram acceleration filter
+  7. PullbackEMA           — Pullback-to-EMA with candlestick confirmation
+  8. EventReaction         — Post-event continuation/fade with volume confirmation
+  9. ICTTrendEMA           — TrendEMA + ICT Smart Money confluence (FVG/OB filters)
+  10. PlainEMACross        — Plain EMA crossover (legacy)
+  11. VolumeProfileStrategy — Volume Profile POC reversion + Value Area rejection
 
 All strategies are compatible with the `backtesting.py` library and expose
 class-level parameters that Optuna can tune.
 
-The VolumeProfileStrategy is imported from volume_profile.py and registered
-here for unified optimizer access.
+VolumeProfileStrategy uses rolling POC/VAH/VAL indicators computed via helper
+functions imported from lib.analysis.volume_profile.
 """
 
 import logging
@@ -27,6 +29,12 @@ import numpy as np
 import pandas as pd
 from backtesting import Strategy
 from backtesting.lib import crossover
+
+from lib.analysis.volume_profile import _rolling_poc, _rolling_vah_val
+from lib.core.utils import atr as _atr
+from lib.core.utils import ema as _ema
+from lib.core.utils import rsi as _rsi
+from lib.core.utils import safe_float as _safe_float
 
 logger = logging.getLogger("strategies")
 
@@ -40,36 +48,9 @@ def _passthrough(arr):
     return arr
 
 
-def _ema(series, length: int):
-    """Exponential Moving Average."""
-    return pd.Series(series).ewm(span=length, adjust=False).mean()
-
-
 def _sma(series, length: int):
     """Simple Moving Average."""
     return pd.Series(series).rolling(length).mean()
-
-
-def _atr(high, low, close, length: int = 14):
-    """Average True Range."""
-    h, lo, c = pd.Series(high), pd.Series(low), pd.Series(close)
-    tr1 = h - lo
-    tr2 = (h - c.shift(1)).abs()
-    tr3 = (lo - c.shift(1)).abs()
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    return tr.ewm(span=length, adjust=False).mean()
-
-
-def _rsi(series, length: int = 14):
-    """Relative Strength Index."""
-    s = pd.Series(series)
-    delta = s.diff()
-    gain = delta.clip(lower=0)
-    loss = (-delta).clip(lower=0)
-    avg_gain = gain.ewm(span=length, adjust=False).mean()
-    avg_loss = loss.ewm(span=length, adjust=False).mean()
-    rs = avg_gain / (avg_loss + 1e-10)  # avoid division by zero
-    return 100 - (100 / (1 + rs))
 
 
 def _rolling_max(series, length: int):
@@ -1329,25 +1310,11 @@ class ICTTrendEMA(Strategy):
 
 # ---------------------------------------------------------------------------
 # Strategy registry — used by the optimizer / engine
+# (VolumeProfileStrategy is defined later in this file; registry is populated
+# after its definition at module bottom)
 # ---------------------------------------------------------------------------
 
-# Import VolumeProfileStrategy from its dedicated module
-_VP_AVAILABLE = False
-_VolumeProfileStrategy = None
-_suggest_volume_profile_params = None
-try:
-    from lib.analysis.volume_profile import VolumeProfileStrategy as _VPS
-    from lib.analysis.volume_profile import (
-        suggest_volume_profile_params as _svpp,
-    )
-
-    _VolumeProfileStrategy = _VPS
-    _suggest_volume_profile_params = _svpp
-    _VP_AVAILABLE = True
-except ImportError:
-    pass
-
-STRATEGY_CLASSES = {
+STRATEGY_CLASSES: dict[str, type] = {
     "TrendEMA": TrendEMACross,
     "RSI": RSIReversal,
     "Breakout": BreakoutStrategy,
@@ -1359,9 +1326,6 @@ STRATEGY_CLASSES = {
     "ICTTrendEMA": ICTTrendEMA,
     "PlainEMA": PlainEMACross,
 }
-
-if _VP_AVAILABLE and _VolumeProfileStrategy is not None:
-    STRATEGY_CLASSES["VolumeProfile"] = _VolumeProfileStrategy
 
 # Human-readable labels
 STRATEGY_LABELS = {
@@ -1387,10 +1351,7 @@ def suggest_params(trial, strategy_key: str) -> dict:
     params: dict = {}
 
     if strategy_key == "VolumeProfile":
-        if _VP_AVAILABLE and _suggest_volume_profile_params is not None:
-            return _suggest_volume_profile_params(trial)
-        # Fallback if volume_profile module not available
-        return {"trade_size": trial.suggest_float("trade_size", 0.05, 0.30, step=0.05)}
+        return suggest_volume_profile_params(trial)
 
     elif strategy_key == "TrendEMA":
         params["n1"] = trial.suggest_int("n1", 5, 20)
@@ -1515,15 +1476,6 @@ def make_strategy(strategy_key: str, params: dict) -> type:
 _PENALTY = -100.0  # returned for invalid / degenerate runs
 
 
-def _safe_float(val, fallback: float = 0.0) -> float:
-    """Extract a float from backtest stats, returning fallback for NaN/missing."""
-    try:
-        f = float(val)
-        return fallback if math.isnan(f) else f
-    except (TypeError, ValueError):
-        return fallback
-
-
 def score_backtest(stats, min_trades: int = 3) -> float:
     """Compute a risk-adjusted score from backtest stats.
 
@@ -1593,3 +1545,178 @@ def _is_nan(x) -> bool:
         return math.isnan(float(x))
     except (TypeError, ValueError):
         return True
+
+
+# ---------------------------------------------------------------------------
+# Volume Profile Strategy
+# ---------------------------------------------------------------------------
+
+
+class VolumeProfileStrategy(Strategy):
+    """Volume Profile strategy combining POC reversion and Value Area rejection.
+
+    Setup 1 — POC Mean Reversion:
+        When price moves significantly away from the rolling POC (> atr_dist_mult × ATR),
+        enter toward the POC. Price reverts to POC ~75% of the time in ranging markets.
+
+    Setup 2 — Value Area Rejection:
+        When price dips below VAL and closes back above it (bullish),
+        or pushes above VAH and closes back below it (bearish),
+        enter in the rejection direction targeting POC then opposite VA boundary.
+
+    Parameters (Optuna-tunable):
+        vp_lookback: int — bars for rolling volume profile (50–200)
+        vp_bins: int — number of price bins (20–60)
+        atr_period: int — ATR period for distance/SL/TP
+        atr_dist_mult: float — ATR multiple for POC distance threshold
+        atr_sl_mult: float — ATR multiple for stop loss
+        atr_tp_mult: float — ATR multiple for take profit
+        trade_size: float — position size as fraction of equity
+    """
+
+    # Tunable parameters with defaults
+    vp_lookback: int = 100
+    vp_bins: int = 30
+    atr_period: int = 14
+    atr_dist_mult: float = 1.5  # enter when price is this many ATRs from POC
+    atr_sl_mult: float = 1.5
+    atr_tp_mult: float = 2.5
+    trade_size: float = 0.10
+
+    def init(self):
+        # ATR for distance thresholds and SL/TP
+        self.atr = self.I(
+            _atr,
+            self.data.High,
+            self.data.Low,
+            self.data.Close,
+            self.atr_period,
+            name="ATR",
+        )
+
+        # Rolling POC
+        self.poc = self.I(
+            _rolling_poc,
+            self.data.High,
+            self.data.Low,
+            self.data.Close,
+            self.data.Volume,
+            self.vp_lookback,
+            self.vp_bins,
+            name="POC",
+        )
+
+        # Rolling VAH/VAL — compute together, store as separate indicators
+        vah_arr, val_arr = _rolling_vah_val(
+            self.data.High,
+            self.data.Low,
+            self.data.Close,
+            self.data.Volume,
+            self.vp_lookback,
+            self.vp_bins,
+        )
+        self.vah = self.I(_passthrough, vah_arr.values, name="VAH")
+        self.val_line = self.I(_passthrough, val_arr.values, name="VAL")
+
+        # Trend filter: 50-period EMA
+        self.trend_ema = self.I(_ema, pd.Series(self.data.Close), 50, name="EMA50")
+
+    def next(self):
+        price = self.data.Close[-1]
+        atr_val = self.atr[-1]
+        poc = self.poc[-1]
+        vah = self.vah[-1]
+        val = self.val_line[-1]
+        trend = self.trend_ema[-1]
+
+        # Skip if indicators aren't ready
+        if (
+            math.isnan(atr_val)
+            or math.isnan(poc)
+            or math.isnan(vah)
+            or math.isnan(val)
+            or math.isnan(trend)
+            or atr_val <= 0
+        ):
+            return
+
+        # If already in a position, manage it (SL/TP handled by order placement)
+        if self.position:
+            return
+
+        dist_from_poc = price - poc
+        atr_threshold = atr_val * self.atr_dist_mult
+
+        sl_dist = atr_val * self.atr_sl_mult
+        tp_dist = atr_val * self.atr_tp_mult
+
+        # --- Setup 1: POC Mean Reversion ---
+        # Price is far above POC → short toward POC (if below trend = bearish bias)
+        if dist_from_poc > atr_threshold and price < trend:
+            sl = price + sl_dist
+            tp = price - tp_dist
+            self.sell(size=self.trade_size, sl=sl, tp=tp)
+            return
+
+        # Price is far below POC → long toward POC (if above trend = bullish bias)
+        if dist_from_poc < -atr_threshold and price > trend:
+            sl = price - sl_dist
+            tp = price + tp_dist
+            self.buy(size=self.trade_size, sl=sl, tp=tp)
+            return
+
+        # --- Setup 2: Value Area Rejection ---
+        if len(self.data.Close) < 3:
+            return
+
+        prev_close = self.data.Close[-2]
+        prev_low = self.data.Low[-2]
+        prev_high = self.data.High[-2]
+        prev_open = self.data.Open[-2]
+
+        # Bullish rejection: previous bar dipped below VAL, current close above VAL
+        # and previous bar shows bullish character (close > open = bullish candle)
+        if prev_low < val and price > val and prev_close > prev_open:
+            sl = price - sl_dist
+            tp = poc  # target POC first
+            # Ensure TP is actually above entry
+            if tp <= price:
+                tp = price + tp_dist
+            self.buy(size=self.trade_size, sl=sl, tp=tp)
+            return
+
+        # Bearish rejection: previous bar pushed above VAH, current close below VAH
+        # and previous bar shows bearish character (close < open = bearish candle)
+        if prev_high > vah and price < vah and prev_close < prev_open:
+            sl = price + sl_dist
+            tp = poc  # target POC first
+            # Ensure TP is actually below entry
+            if tp >= price:
+                tp = price - tp_dist
+            self.sell(size=self.trade_size, sl=sl, tp=tp)
+            return
+
+
+# ---------------------------------------------------------------------------
+# Optuna parameter suggestion for VolumeProfileStrategy
+# ---------------------------------------------------------------------------
+
+
+def suggest_volume_profile_params(trial) -> dict:
+    """Ask Optuna to suggest parameters for VolumeProfileStrategy.
+
+    Compatible with the optimizer in engine.py.
+    """
+    return {
+        "vp_lookback": trial.suggest_int("vp_lookback", 50, 200, step=10),
+        "vp_bins": trial.suggest_int("vp_bins", 20, 60, step=5),
+        "atr_period": trial.suggest_int("atr_period", 10, 20),
+        "atr_dist_mult": trial.suggest_float("atr_dist_mult", 1.0, 3.0, step=0.25),
+        "atr_sl_mult": trial.suggest_float("atr_sl_mult", 1.0, 3.0, step=0.25),
+        "atr_tp_mult": trial.suggest_float("atr_tp_mult", 1.5, 5.0, step=0.25),
+        "trade_size": trial.suggest_float("trade_size", 0.05, 0.30, step=0.05),
+    }
+
+
+# Register now that the class is defined
+STRATEGY_CLASSES["VolumeProfile"] = VolumeProfileStrategy

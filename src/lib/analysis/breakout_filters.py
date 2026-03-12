@@ -64,6 +64,8 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
+from lib.indicators.helpers import ema_numpy as _ema
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -394,14 +396,7 @@ def check_lunch_filter(
 # require it to point in the same direction as the breakout.
 
 
-def _ema(values: np.ndarray, span: int) -> np.ndarray:
-    """Compute exponential moving average (vectorised)."""
-    alpha = 2.0 / (span + 1)
-    out = np.empty_like(values, dtype=float)
-    out[0] = values[0]
-    for i in range(1, len(values)):
-        out[i] = alpha * values[i] + (1.0 - alpha) * out[i - 1]
-    return out
+# _ema is imported from lib.indicators.helpers (ema_numpy aliased as _ema above).
 
 
 # ---------------------------------------------------------------------------

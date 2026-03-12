@@ -330,7 +330,7 @@ def _run_sync() -> dict[str, Any]:
             logger.info("✅ Model sync completed successfully")
             # Invalidate the model cache so next inference picks up the new model
             try:
-                from lib.analysis.breakout_cnn import invalidate_model_cache
+                from lib.analysis.ml.breakout_cnn import invalidate_model_cache
 
                 invalidate_model_cache()
                 logger.info("CNN model cache invalidated after sync")

@@ -30,12 +30,10 @@ Usage:
 """
 
 import logging
-import math
 from typing import Any
 
 import numpy as np
 import pandas as pd
-from backtesting import Strategy
 
 logger = logging.getLogger("volume_profile")
 
@@ -362,21 +360,6 @@ def _passthrough(arr):
     return arr
 
 
-def _ema(series, length: int):
-    """Exponential Moving Average."""
-    return pd.Series(series).ewm(span=length, adjust=False).mean()
-
-
-def _atr(high, low, close, length: int = 14):
-    """Average True Range."""
-    h, lo, c = pd.Series(high), pd.Series(low), pd.Series(close)
-    tr1 = h - lo
-    tr2 = (h - c.shift(1)).abs()
-    tr3 = (lo - c.shift(1)).abs()
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    return tr.ewm(span=length, adjust=False).mean()
-
-
 def _rolling_poc(high, low, close, volume, lookback: int = 100, n_bins: int = 30):
     """Compute a rolling POC over a lookback window.
 
@@ -514,175 +497,21 @@ def _rolling_vah_val(
 
 
 # ---------------------------------------------------------------------------
-# Strategy: Volume Profile (POC Mean Reversion + Value Area Rejection)
+# Backwards-compatible re-exports
+# VolumeProfileStrategy and suggest_volume_profile_params have moved to
+# lib.trading.strategies.strategy_defs. These aliases keep existing imports
+# (e.g. `from lib.analysis.volume_profile import VolumeProfileStrategy`) working.
 # ---------------------------------------------------------------------------
 
+from lib.trading.strategies.strategy_defs import (  # noqa: E402
+    VolumeProfileStrategy,
+    suggest_volume_profile_params,
+)
 
-class VolumeProfileStrategy(Strategy):
-    """Volume Profile strategy combining POC reversion and Value Area rejection.
-
-    Setup 1 — POC Mean Reversion:
-        When price moves significantly away from the rolling POC (> atr_dist_mult × ATR),
-        enter toward the POC. Price reverts to POC ~75% of the time in ranging markets.
-
-    Setup 2 — Value Area Rejection:
-        When price dips below VAL and closes back above it (bullish),
-        or pushes above VAH and closes back below it (bearish),
-        enter in the rejection direction targeting POC then opposite VA boundary.
-
-    Parameters (Optuna-tunable):
-        vp_lookback: int — bars for rolling volume profile (50–200)
-        vp_bins: int — number of price bins (20–60)
-        atr_period: int — ATR period for distance/SL/TP
-        atr_dist_mult: float — ATR multiple for POC distance threshold
-        atr_sl_mult: float — ATR multiple for stop loss
-        atr_tp_mult: float — ATR multiple for take profit
-        trade_size: float — position size as fraction of equity
-    """
-
-    # Tunable parameters with defaults
-    vp_lookback: int = 100
-    vp_bins: int = 30
-    atr_period: int = 14
-    atr_dist_mult: float = 1.5  # enter when price is this many ATRs from POC
-    atr_sl_mult: float = 1.5
-    atr_tp_mult: float = 2.5
-    trade_size: float = 0.10
-
-    def init(self):
-        # ATR for distance thresholds and SL/TP
-        self.atr = self.I(
-            _atr,
-            self.data.High,
-            self.data.Low,
-            self.data.Close,
-            self.atr_period,
-            name="ATR",
-        )
-
-        # Rolling POC
-        self.poc = self.I(
-            _rolling_poc,
-            self.data.High,
-            self.data.Low,
-            self.data.Close,
-            self.data.Volume,
-            self.vp_lookback,
-            self.vp_bins,
-            name="POC",
-        )
-
-        # Rolling VAH/VAL — compute together, store as separate indicators
-        vah_arr, val_arr = _rolling_vah_val(
-            self.data.High,
-            self.data.Low,
-            self.data.Close,
-            self.data.Volume,
-            self.vp_lookback,
-            self.vp_bins,
-        )
-        self.vah = self.I(_passthrough, vah_arr.values, name="VAH")
-        self.val_line = self.I(_passthrough, val_arr.values, name="VAL")
-
-        # Trend filter: 50-period EMA
-        self.trend_ema = self.I(_ema, pd.Series(self.data.Close), 50, name="EMA50")
-
-    def next(self):
-        price = self.data.Close[-1]
-        atr_val = self.atr[-1]
-        poc = self.poc[-1]
-        vah = self.vah[-1]
-        val = self.val_line[-1]
-        trend = self.trend_ema[-1]
-
-        # Skip if indicators aren't ready
-        if (
-            math.isnan(atr_val)
-            or math.isnan(poc)
-            or math.isnan(vah)
-            or math.isnan(val)
-            or math.isnan(trend)
-            or atr_val <= 0
-        ):
-            return
-
-        # If already in a position, manage it (SL/TP handled by order placement)
-        if self.position:
-            return
-
-        dist_from_poc = price - poc
-        atr_threshold = atr_val * self.atr_dist_mult
-
-        sl_dist = atr_val * self.atr_sl_mult
-        tp_dist = atr_val * self.atr_tp_mult
-
-        # --- Setup 1: POC Mean Reversion ---
-        # Price is far above POC → short toward POC (if below trend = bearish bias)
-        if dist_from_poc > atr_threshold and price < trend:
-            sl = price + sl_dist
-            tp = price - tp_dist
-            self.sell(size=self.trade_size, sl=sl, tp=tp)
-            return
-
-        # Price is far below POC → long toward POC (if above trend = bullish bias)
-        if dist_from_poc < -atr_threshold and price > trend:
-            sl = price - sl_dist
-            tp = price + tp_dist
-            self.buy(size=self.trade_size, sl=sl, tp=tp)
-            return
-
-        # --- Setup 2: Value Area Rejection ---
-        if len(self.data.Close) < 3:
-            return
-
-        prev_close = self.data.Close[-2]
-        prev_low = self.data.Low[-2]
-        prev_high = self.data.High[-2]
-        prev_open = self.data.Open[-2]
-
-        # Bullish rejection: previous bar dipped below VAL, current close above VAL
-        # and previous bar shows bullish character (close > open = bullish candle)
-        if prev_low < val and price > val and prev_close > prev_open:
-            sl = price - sl_dist
-            tp = poc  # target POC first
-            # Ensure TP is actually above entry
-            if tp <= price:
-                tp = price + tp_dist
-            self.buy(size=self.trade_size, sl=sl, tp=tp)
-            return
-
-        # Bearish rejection: previous bar pushed above VAH, current close below VAH
-        # and previous bar shows bearish character (close < open = bearish candle)
-        if prev_high > vah and price < vah and prev_close < prev_open:
-            sl = price + sl_dist
-            tp = poc  # target POC first
-            # Ensure TP is actually below entry
-            if tp >= price:
-                tp = price - tp_dist
-            self.sell(size=self.trade_size, sl=sl, tp=tp)
-            return
-
-
-# ---------------------------------------------------------------------------
-# Optuna parameter suggestion for optimizer integration
-# ---------------------------------------------------------------------------
-
-
-def suggest_volume_profile_params(trial) -> dict:
-    """Ask Optuna to suggest parameters for VolumeProfileStrategy.
-
-    Compatible with the optimizer in engine.py.
-    """
-    return {
-        "vp_lookback": trial.suggest_int("vp_lookback", 50, 200, step=10),
-        "vp_bins": trial.suggest_int("vp_bins", 20, 60, step=5),
-        "atr_period": trial.suggest_int("atr_period", 10, 20),
-        "atr_dist_mult": trial.suggest_float("atr_dist_mult", 1.0, 3.0, step=0.25),
-        "atr_sl_mult": trial.suggest_float("atr_sl_mult", 1.0, 3.0, step=0.25),
-        "atr_tp_mult": trial.suggest_float("atr_tp_mult", 1.5, 5.0, step=0.25),
-        "trade_size": trial.suggest_float("trade_size", 0.05, 0.30, step=0.05),
-    }
-
+__all__ = [
+    "VolumeProfileStrategy",
+    "suggest_volume_profile_params",
+]
 
 # ---------------------------------------------------------------------------
 # Dashboard helpers

@@ -47,6 +47,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from lib.core.utils import safe_float as _safe_float
+
 logger = logging.getLogger("ict")
 
 # ---------------------------------------------------------------------------
@@ -59,15 +61,6 @@ def _col(df: pd.DataFrame, name: str) -> pd.Series:
     s = df[name]
     assert isinstance(s, pd.Series), f"Expected Series for column {name}"
     return pd.Series(s.to_numpy(dtype=float), index=s.index, name=s.name)
-
-
-def _safe_float(val: Any) -> float:
-    """Convert a value to float, returning 0.0 on failure."""
-    try:
-        f = float(val)
-        return f if np.isfinite(f) else 0.0
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def _swing_highs(high: pd.Series, lookback: int = 5, min_bars_between: int = 3) -> list[dict[str, Any]]:

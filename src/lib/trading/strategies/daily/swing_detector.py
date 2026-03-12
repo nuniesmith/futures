@@ -67,6 +67,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from lib.core.utils import safe_float as _safe_float
 from lib.trading.strategies.daily.bias_analyzer import (
     BiasDirection,
     DailyBias,
@@ -283,19 +284,6 @@ class SwingState:
 # ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
-
-
-def _safe_float(val: Any, default: float = 0.0) -> float:
-    """Safely convert a value to float, returning default on failure."""
-    if val is None:
-        return default
-    try:
-        f = float(val)
-        if math.isnan(f) or math.isinf(f):
-            return default
-        return f
-    except (TypeError, ValueError):
-        return default
 
 
 def _price_decimals_from_tick(tick_size: float) -> int:

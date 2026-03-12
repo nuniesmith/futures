@@ -136,6 +136,16 @@ class HighImpactRequest(BaseModel):
     enabled: bool
 
 
+class PyramidRequest(BaseModel):
+    """Request body for the ADD PYRAMID endpoint."""
+
+    ticker: str = Field(..., description="Yahoo ticker, e.g. 'MGC=F'")
+    cnn_prob: float = Field(0.70, ge=0.0, le=1.0, description="CNN confidence for this add")
+    regime: str = Field("", description="Current regime string, e.g. 'TRENDING_UP'")
+    wave_ratio: float = Field(0.0, ge=0.0, description="Wave dominance ratio from wave_analysis")
+    reason: str = Field("", max_length=120, description="Optional reason tag")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -163,6 +173,16 @@ def _get_copy_trader_direct():
         return get_copy_trader()
     except Exception as exc:
         logger.warning("copy_trader singleton unavailable: %s", exc)
+        return None
+
+
+def _get_position_manager():
+    """Return the PositionManager singleton if available."""
+    try:
+        from lib.services.engine.main import _position_manager
+
+        return _position_manager
+    except (ImportError, AttributeError):
         return None
 
 
@@ -455,6 +475,142 @@ async def get_rate_status() -> JSONResponse:
     return JSONResponse(content={"ok": True, "rate": ct.get_rate_status()})
 
 
+@router.get("/api/copy-trade/rate-alert")
+async def get_rate_alert() -> JSONResponse:
+    """WebUI-friendly rate-limit alert: level, message, counters."""
+    ct = _get_copy_trader_direct()
+    if ct is None:
+        return JSONResponse(
+            content={
+                "ok": False,
+                "level": "ok",
+                "message": "CopyTrader not initialised",
+                "actions_60min": 0,
+                "daily_actions": 0,
+            }
+        )
+    return JSONResponse(content={"ok": True, **ct.get_rate_alert()})
+
+
+@router.get("/api/copy-trade/focus")
+async def get_focus_status() -> JSONResponse:
+    """Return the PositionManager focus-lock state: focused asset + pyramid level."""
+    pm = _get_position_manager()
+    if pm is None:
+        return JSONResponse(content={"ok": False, "focus_asset": None, "pyramid_enabled": False})
+    summary = pm.status_summary()
+    return JSONResponse(
+        content={
+            "ok": True,
+            "focus_asset": summary.get("focus_asset"),
+            "focus_lock_enabled": summary.get("focus_lock_enabled", True),
+            "pyramid_enabled": summary.get("pyramid_enabled", True),
+            "active_positions": summary.get("active_positions", 0),
+            "positions": [
+                {
+                    "ticker": p.get("ticker"),
+                    "symbol": p.get("symbol"),
+                    "direction": p.get("direction"),
+                    "phase": p.get("phase"),
+                    "r_multiple": p.get("r_multiple"),
+                    "pyramid_level": p.get("pyramid_level", 0),
+                    "pyramid_contracts": p.get("pyramid_contracts", 0),
+                    "total_contracts": p.get("total_contracts", 1),
+                    "cnn_prob": p.get("cnn_prob"),
+                }
+                for p in summary.get("positions", [])
+            ],
+        }
+    )
+
+
+@router.post("/api/copy-trade/pyramid")
+async def add_pyramid(body: PyramidRequest) -> JSONResponse:
+    """ADD PYRAMID — add 1 contract to an existing winning position.
+
+    Calls PositionManager.get_next_pyramid_level() to validate all gates,
+    then apply_pyramid() to get the order commands, then routes them
+    through CopyTrader.execute_order_commands() for multi-account execution.
+
+    Returns 422 if no position exists for the ticker or if pyramid gates
+    are not met (e.g. insufficient R-multiple, CNN too low, cooldown).
+    """
+    _check_enabled()
+
+    pm = _get_position_manager()
+    if pm is None:
+        raise HTTPException(status_code=503, detail="PositionManager not initialised")
+
+    # Get the existing position for this ticker
+    pos = pm.get_position(body.ticker)
+    if pos is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"No active position for {body.ticker} — can only pyramid into existing positions",
+        )
+
+    # Get current price from the position's last known price
+    current_price = pos.current_price
+
+    # Evaluate pyramid gates
+    pyramid_action = pm.get_next_pyramid_level(
+        pos,
+        current_price=current_price,
+        cnn_prob=body.cnn_prob,
+        regime=body.regime,
+        wave_ratio=body.wave_ratio,
+    )
+
+    if pyramid_action is None:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "error": "Pyramid gates not met",
+                "detail": (
+                    f"Position {body.ticker} {pos.direction}: R={pos.r_multiple:.2f}, "
+                    f"level={pos.pyramid_level}, CNN={body.cnn_prob:.3f} — "
+                    "check R-multiple threshold, CNN probability, cooldown, and regime requirements"
+                ),
+                "current_r": pos.r_multiple,
+                "current_pyramid_level": pos.pyramid_level,
+            },
+        )
+
+    # Apply the pyramid: get order commands
+    orders = pm.apply_pyramid(pos, pyramid_action, current_price)
+
+    # Route through CopyTrader
+    ct = _get_copy_trader_direct()
+    batch_id = f"PYRAMID_{body.ticker}_{int(time.time())}"
+
+    if ct is not None:
+        try:
+            result = await ct.execute_order_commands(orders)
+            response_data = _batch_result_to_response(result)
+            _publish_sse(
+                {"event": "pyramid", "batch_id": batch_id, "ticker": body.ticker, "level": pyramid_action["level"]}
+            )
+        except Exception as exc:
+            logger.error("pyramid execute_order_commands failed: %s", exc, exc_info=True)
+            response_data = {"ok": False, "error": str(exc)}
+    else:
+        # No CopyTrader — just log the order commands (dev/test mode)
+        logger.info("Pyramid orders (no CopyTrader): %s", [o.to_dict() for o in orders])
+        response_data = {"ok": True, "note": "CopyTrader not active — orders logged only"}
+
+    return JSONResponse(
+        content={
+            "ok": True,
+            "batch_id": batch_id,
+            "ticker": body.ticker,
+            "pyramid_action": pyramid_action,
+            "orders_generated": len(orders),
+            "result": response_data,
+        }
+    )
+
+
 @router.post("/api/copy-trade/high-impact")
 async def set_high_impact(body: HighImpactRequest) -> JSONResponse:
     """Toggle high-impact mode (NFP/FOMC days).
@@ -644,3 +800,71 @@ async def get_history_html(limit: int = 10) -> Any:
             "</table>"
         )
     )
+
+
+@router.get("/api/copy-trade/accounts/html", response_class=None)  # type: ignore[arg-type]
+async def get_accounts_html() -> Any:
+    """Return an HTMX-ready HTML fragment showing per-account status cards."""
+    from fastapi.responses import HTMLResponse
+
+    ct = _get_copy_trader_direct()
+    if not _COPY_TRADING_ENABLED or ct is None:
+        return HTMLResponse(
+            content='<div style="font-size:11px;color:var(--muted);padding:6px">Copy trading not active.</div>'
+        )
+
+    summary = ct.status_summary()
+    main = summary.get("main")
+    slaves = summary.get("slaves", [])
+    rate = summary.get("rate_limit", {})
+
+    def _account_card(acct: dict, role: str) -> str:
+        connected = acct.get("connected", False)
+        label = acct.get("label", acct.get("key", "?"))
+        orders = acct.get("order_count", 0)
+        last_ts = acct.get("last_order_at", "") or ""
+        last_disp = last_ts[11:19] if len(last_ts) >= 19 else "—"
+        dot_cls = "conn-ok" if connected else "conn-warn pulse"
+        dot_color = "var(--green)" if connected else "var(--amber)"
+        enabled = acct.get("enabled", True)
+        enabled_badge = (
+            "" if enabled else '<span style="font-size:9px;color:var(--muted);margin-left:4px">[disabled]</span>'
+        )
+        return (
+            f'<div style="background:var(--s3);border:1px solid var(--b1);border-radius:4px;padding:8px 10px;margin-bottom:6px">'
+            f'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
+            f'<div class="conn-dot {dot_cls}" style="width:7px;height:7px"></div>'
+            f'<span style="font-size:11px;color:{dot_color};font-weight:600">{label}</span>'
+            f'<span style="font-size:9px;color:var(--muted);margin-left:4px">{role}</span>'
+            f"{enabled_badge}"
+            f"</div>"
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px;color:var(--muted)">'
+            f'<span>Orders: <span style="color:var(--text)">{orders}</span></span>'
+            f'<span>Last: <span style="color:var(--text)">{last_disp}</span></span>'
+            f"</div>"
+            f"</div>"
+        )
+
+    html_parts = []
+
+    if main:
+        html_parts.append(_account_card(main, "MAIN"))
+
+    for slave in slaves:
+        html_parts.append(_account_card(slave, "SLAVE"))
+
+    # Rate limit strip
+    count = rate.get("actions_60min", 0)
+    daily = rate.get("daily_actions", 0)
+    rate_color = "var(--red)" if rate.get("blocked") else ("var(--amber)" if rate.get("warn") else "var(--green)")
+    html_parts.append(
+        f'<div style="font-size:10px;color:var(--muted);border-top:1px solid var(--b1);padding-top:6px;margin-top:2px">'
+        f'Rate: <span style="color:{rate_color}">{count}/hr</span> · '
+        f'Daily: <span style="color:var(--text)">{daily}</span>'
+        f"</div>"
+    )
+
+    if not html_parts:
+        return HTMLResponse(content='<div style="font-size:11px;color:var(--muted)">No accounts connected.</div>')
+
+    return HTMLResponse(content="".join(html_parts))

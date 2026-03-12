@@ -21,8 +21,8 @@ All business logic modules live under organised sub-packages:
     from lib.analysis.scorer import PreMarketScorer
     from lib.analysis.signal_quality import compute_signal_quality
     from lib.analysis.volume_profile import compute_volume_profile
-    from lib.analysis.chart_renderer import render_ruby_snapshot
-    from lib.analysis.chart_renderer_parity import render_parity_snapshot
+    from lib.analysis.rendering.chart_renderer import render_ruby_snapshot
+    from lib.analysis.rendering.chart_renderer_parity import render_parity_snapshot
 
     # Trading modules
     from lib.trading.engine import get_engine, DashboardEngine
@@ -38,7 +38,7 @@ Services (engine, data, web, training) are sub-packages:
     from lib.services.web.main import app
     from lib.services.training.trainer_server import app
     from lib.services.training.dataset_generator import generate_dataset, DatasetConfig
-    from lib.services.training.orb_simulator import simulate_batch, BracketConfig
+    from lib.services.training.rb_simulator import simulate_batch, BracketConfig
 
 Install in editable mode for development:
 

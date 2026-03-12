@@ -1732,8 +1732,9 @@ def simulate_batch_consolidation(
             # or_end is set to the time immediately after the box ends so
             # _simulate_range_outcome scans post-box bars for the breakout.
             box_end_abs_idx = abs_box_end
+            box_end_time: dt_time = dt_time(0, 0)
             with contextlib.suppress(Exception):
-                box_end_time: dt_time = df.index[box_end_abs_idx].time()
+                box_end_time = pd.Timestamp(df.index[box_end_abs_idx]).time()  # type: ignore[arg-type]
             # Clamp to session bounds
             if box_end_time >= _sess_end:
                 continue
@@ -1914,8 +1915,9 @@ def simulate_batch_weekly(
     lows_all = np.asarray(df["Low"].astype(float).values)
 
     try:
-        times_all = pd.DatetimeIndex(df.index).time
-        dates_all = pd.DatetimeIndex(df.index).date
+        _dti = pd.DatetimeIndex(df.index)
+        times_all = _dti.time  # type: ignore[attr-defined]
+        dates_all = _dti.date  # type: ignore[attr-defined]
     except Exception:
         return []
 
@@ -2047,8 +2049,9 @@ def simulate_batch_monthly(
     lows_all = np.asarray(df["Low"].astype(float).values)
 
     try:
-        times_all = pd.DatetimeIndex(df.index).time
-        dates_all = pd.DatetimeIndex(df.index).date
+        _dti = pd.DatetimeIndex(df.index)
+        times_all = _dti.time  # type: ignore[attr-defined]
+        dates_all = _dti.date  # type: ignore[attr-defined]
     except Exception:
         return []
 
@@ -2182,8 +2185,9 @@ def simulate_batch_asian(
     lows_all = np.asarray(df["Low"].astype(float).values)
 
     try:
-        times_all = pd.DatetimeIndex(df.index).time
-        dates_all = pd.DatetimeIndex(df.index).date
+        _dti = pd.DatetimeIndex(df.index)
+        times_all = _dti.time  # type: ignore[attr-defined]
+        dates_all = _dti.date  # type: ignore[attr-defined]
     except Exception:
         return []
 
@@ -2293,8 +2297,8 @@ def _detect_bollinger_squeeze(
         return []
 
     # Bollinger Bands
-    bb_mid = pd.Series(closes).rolling(bb_period).mean().values
-    bb_std_vals = pd.Series(closes).rolling(bb_period).std(ddof=0).values
+    bb_mid = np.asarray(pd.Series(closes).rolling(bb_period).mean())
+    bb_std_vals = np.asarray(pd.Series(closes).rolling(bb_period).std(ddof=0))
     bb_upper = bb_mid + bb_std * bb_std_vals
     bb_lower = bb_mid - bb_std * bb_std_vals
 
@@ -2303,8 +2307,8 @@ def _detect_bollinger_squeeze(
     tr[0] = highs[0] - lows[0]
     for i in range(1, n):
         tr[i] = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
-    kc_mid = pd.Series(closes).rolling(kc_period).mean().values
-    kc_atr = pd.Series(tr).rolling(kc_period).mean().values
+    kc_mid = np.asarray(pd.Series(closes).rolling(kc_period).mean())
+    kc_atr = np.asarray(pd.Series(tr).rolling(kc_period).mean())
     kc_upper = kc_mid + kc_atr_mult * kc_atr
     kc_lower = kc_mid - kc_atr_mult * kc_atr
 
@@ -2381,8 +2385,9 @@ def simulate_batch_bollinger_squeeze(
     closes_all = np.asarray(df["Close"].astype(float).values)
 
     try:
-        times_all = pd.DatetimeIndex(df.index).time
-        dates_all = pd.DatetimeIndex(df.index).date
+        _dti = pd.DatetimeIndex(df.index)
+        times_all = _dti.time  # type: ignore[attr-defined]
+        dates_all = _dti.date  # type: ignore[attr-defined]
     except Exception:
         return []
 
@@ -2419,8 +2424,9 @@ def simulate_batch_bollinger_squeeze(
             if len(window) < min_squeeze_bars + 5:
                 continue
 
+            box_end_time: dt_time = dt_time(0, 0)
             with contextlib.suppress(Exception):
-                box_end_time: dt_time = df.index[abs_box_end].time()
+                box_end_time = pd.Timestamp(df.index[abs_box_end]).time()  # type: ignore[arg-type]
             if box_end_time >= _sess_end:
                 continue
 
@@ -2594,8 +2600,9 @@ def simulate_batch_value_area(
     volumes_all = np.asarray(df["Volume"].astype(float).values)
 
     try:
-        times_all = pd.DatetimeIndex(df.index).time
-        dates_all = pd.DatetimeIndex(df.index).date
+        _dti = pd.DatetimeIndex(df.index)
+        times_all = _dti.time  # type: ignore[attr-defined]
+        dates_all = _dti.date  # type: ignore[attr-defined]
     except Exception:
         return []
 
@@ -2722,8 +2729,9 @@ def simulate_batch_inside_day(
     lows_all = np.asarray(df["Low"].astype(float).values)
 
     try:
-        times_all = pd.DatetimeIndex(df.index).time
-        dates_all = pd.DatetimeIndex(df.index).date
+        _dti = pd.DatetimeIndex(df.index)
+        times_all = _dti.time  # type: ignore[attr-defined]
+        dates_all = _dti.date  # type: ignore[attr-defined]
     except Exception:
         return []
 
@@ -2873,8 +2881,9 @@ def simulate_batch_gap_rejection(
     opens_all = np.asarray(df["Open"].astype(float).values)
 
     try:
-        times_all = pd.DatetimeIndex(df.index).time
-        dates_all = pd.DatetimeIndex(df.index).date
+        _dti = pd.DatetimeIndex(df.index)
+        times_all = _dti.time  # type: ignore[attr-defined]
+        dates_all = _dti.date  # type: ignore[attr-defined]
     except Exception:
         return []
 
@@ -3052,8 +3061,9 @@ def simulate_batch_pivot_points(
     closes_all = np.asarray(df["Close"].astype(float).values)
 
     try:
-        times_all = pd.DatetimeIndex(df.index).time
-        dates_all = pd.DatetimeIndex(df.index).date
+        _dti = pd.DatetimeIndex(df.index)
+        times_all = _dti.time  # type: ignore[attr-defined]
+        dates_all = _dti.date  # type: ignore[attr-defined]
     except Exception:
         return []
 
@@ -3217,8 +3227,9 @@ def simulate_batch_fibonacci(
     closes_all = np.asarray(df["Close"].astype(float).values)
 
     try:
-        times_all = pd.DatetimeIndex(df.index).time
-        dates_all = pd.DatetimeIndex(df.index).date
+        _dti = pd.DatetimeIndex(df.index)
+        times_all = _dti.time  # type: ignore[attr-defined]
+        dates_all = _dti.date  # type: ignore[attr-defined]
     except Exception:
         return []
 

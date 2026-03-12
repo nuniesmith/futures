@@ -234,8 +234,8 @@ class TestV8Architecture:
 
     def test_import(self):
         """The module must import cleanly (no missing deps at import time)."""
-        from lib.analysis.breakout_cnn import NUM_TABULAR as CONTRACT_NUM_TABULAR
-        from lib.analysis.breakout_cnn import HybridBreakoutCNN  # noqa: F401
+        from lib.analysis.ml.breakout_cnn import NUM_TABULAR as CONTRACT_NUM_TABULAR
+        from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN  # noqa: F401
 
         assert CONTRACT_NUM_TABULAR == NUM_TABULAR, (
             f"Contract NUM_TABULAR={CONTRACT_NUM_TABULAR} != smoke test expectation {NUM_TABULAR}. "
@@ -244,7 +244,7 @@ class TestV8Architecture:
 
     def test_feature_contract_matches(self):
         """TABULAR_FEATURES list in breakout_cnn.py must match this test's list exactly."""
-        from lib.analysis.breakout_cnn import TABULAR_FEATURES
+        from lib.analysis.ml.breakout_cnn import TABULAR_FEATURES
 
         assert TABULAR_FEATURES == TABULAR_FEATURE_NAMES, (
             "TABULAR_FEATURES in breakout_cnn.py does not match TABULAR_FEATURE_NAMES "
@@ -255,7 +255,7 @@ class TestV8Architecture:
 
     def test_model_instantiates_with_embeddings(self):
         """Model with asset embeddings (v8-A) instantiates without error."""
-        from lib.analysis.breakout_cnn import HybridBreakoutCNN
+        from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
         assert model.use_asset_embeddings is True
@@ -263,7 +263,7 @@ class TestV8Architecture:
 
     def test_model_instantiates_without_embeddings(self):
         """Model without embeddings (legacy compat path) also instantiates."""
-        from lib.analysis.breakout_cnn import HybridBreakoutCNN
+        from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=False)
         assert model.use_asset_embeddings is False
@@ -271,19 +271,19 @@ class TestV8Architecture:
 
     def test_embedding_dimensions(self):
         """Embedding layers have the exact dims specified in the v8 contract."""
-        from lib.analysis.breakout_cnn import (
+        from lib.analysis.ml.breakout_cnn import (
             ASSET_CLASS_EMBED_DIM as CONTRACT_CLASS_DIM,
         )
-        from lib.analysis.breakout_cnn import (
+        from lib.analysis.ml.breakout_cnn import (
             ASSET_ID_EMBED_DIM as CONTRACT_ID_DIM,
         )
-        from lib.analysis.breakout_cnn import (
+        from lib.analysis.ml.breakout_cnn import (
             NUM_ASSET_CLASSES as CONTRACT_CLASSES,
         )
-        from lib.analysis.breakout_cnn import (
+        from lib.analysis.ml.breakout_cnn import (
             NUM_ASSETS as CONTRACT_ASSETS,
         )
-        from lib.analysis.breakout_cnn import (
+        from lib.analysis.ml.breakout_cnn import (
             HybridBreakoutCNN,
         )
 
@@ -302,7 +302,7 @@ class TestV8Architecture:
 
     def test_tabular_head_width(self):
         """Tabular head must have the wider v8-D architecture (37→256→128→64)."""
-        from lib.analysis.breakout_cnn import HybridBreakoutCNN
+        from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
         # First Linear layer: in=37, out=256
@@ -316,7 +316,7 @@ class TestV8Architecture:
 
     def test_classifier_input_dim(self):
         """Classifier must accept (1280 image + 64 tabular + 12 embedding) = 1356 dims."""
-        from lib.analysis.breakout_cnn import HybridBreakoutCNN
+        from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
         expected_combined = 1280 + 64 + (ASSET_CLASS_EMBED_DIM + ASSET_ID_EMBED_DIM)  # 1356
@@ -327,7 +327,7 @@ class TestV8Architecture:
 
     def test_forward_with_embeddings(self):
         """Full forward pass with asset embedding IDs produces (B, 2) logits."""
-        from lib.analysis.breakout_cnn import HybridBreakoutCNN
+        from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
         model.eval()
@@ -342,7 +342,7 @@ class TestV8Architecture:
 
     def test_forward_without_embedding_ids(self):
         """Forward pass without passing embedding IDs must still work (pad path)."""
-        from lib.analysis.breakout_cnn import HybridBreakoutCNN
+        from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
         model.eval()
@@ -355,7 +355,7 @@ class TestV8Architecture:
 
     def test_freeze_unfreeze_backbone(self):
         """freeze_backbone / unfreeze_backbone must correctly toggle requires_grad."""
-        from lib.analysis.breakout_cnn import HybridBreakoutCNN
+        from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
         model.freeze_backbone()
@@ -367,7 +367,7 @@ class TestV8Architecture:
 
     def test_output_probabilities(self):
         """Softmax over logits must produce valid probabilities summing to 1."""
-        from lib.analysis.breakout_cnn import HybridBreakoutCNN
+        from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN
 
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
         model.eval()
@@ -390,7 +390,7 @@ class TestBreakoutDataset:
     """Verify BreakoutDataset loads and shapes the synthetic CSV correctly."""
 
     def test_loads_synthetic_csv(self, synthetic_dataset):
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE, BreakoutDataset
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE, BreakoutDataset
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -401,7 +401,7 @@ class TestBreakoutDataset:
         assert len(ds) > 0, "Dataset must have at least one sample"
 
     def test_getitem_shapes(self, synthetic_dataset):
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE, BreakoutDataset
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE, BreakoutDataset
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -424,7 +424,7 @@ class TestBreakoutDataset:
 
     def test_all_samples_load(self, synthetic_dataset):
         """Every row in the synthetic CSV must load without error."""
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE, BreakoutDataset
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE, BreakoutDataset
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -436,7 +436,7 @@ class TestBreakoutDataset:
 
     def test_label_balance(self, synthetic_dataset):
         """Synthetic dataset should have both positive and negative labels."""
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE, BreakoutDataset
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE, BreakoutDataset
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -457,7 +457,7 @@ class TestV8TrainingLoop:
     @pytest.fixture(scope="class")
     def train_result(self, synthetic_dataset, tmp_path_factory):
         """Run 2-epoch training once; share the result across all tests in this class."""
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE, train_model
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE, train_model
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -530,7 +530,7 @@ class TestV8TrainingLoop:
 
     def test_checkpoint_loadable(self, train_result):
         """The saved checkpoint must load back into HybridBreakoutCNN without error."""
-        from lib.analysis.breakout_cnn import HybridBreakoutCNN
+        from lib.analysis.ml.breakout_cnn import HybridBreakoutCNN
 
         result, _ = train_result
         model = HybridBreakoutCNN(pretrained=False, use_asset_embeddings=True)
@@ -556,7 +556,7 @@ class TestV8Inference:
     @pytest.fixture(scope="class")
     def trained_model_path(self, synthetic_dataset, tmp_path_factory):
         """Train a quick model and return the checkpoint path."""
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE, train_model
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE, train_model
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -581,7 +581,7 @@ class TestV8Inference:
 
     def test_evaluate_model_runs(self, synthetic_dataset, trained_model_path):
         """evaluate_model() on the val CSV must return a dict with acc/prec/rec."""
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE, evaluate_model
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE, evaluate_model
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -600,7 +600,7 @@ class TestV8Inference:
 
     def test_predict_breakout_returns_probability(self, synthetic_dataset, trained_model_path):
         """predict_breakout() must return a result dict with a probability in [0.0, 1.0]."""
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE, predict_breakout
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE, predict_breakout
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -630,7 +630,7 @@ class TestV8Inference:
 
     def test_predict_breakout_batch(self, synthetic_dataset, trained_model_path):
         """predict_breakout_batch() must return a list with len == input len."""
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE, predict_breakout_batch
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE, predict_breakout_batch
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -678,7 +678,7 @@ class TestV8GradAccumAndMixup:
         When mixup_alpha > 0, the tabular features in a batch should be
         interpolated between two random samples (i.e., not identical to input).
         """
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -705,7 +705,7 @@ class TestV8GradAccumAndMixup:
         This test directly exercises the accumulation logic to confirm no
         optimizer.zero_grad() is called prematurely.
         """
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE, HybridBreakoutCNN
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE, HybridBreakoutCNN
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -765,7 +765,7 @@ class TestV8GradAccumAndMixup:
           group 0: backbone params at lr (2e-4)
           group 1: head + embedding params at lr*5 (1e-3)
         """
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE, HybridBreakoutCNN
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE, HybridBreakoutCNN
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -805,7 +805,7 @@ class TestV8GradAccumAndMixup:
           - Epoch 1: LR = base * (2/2) = 1.0×  (linear warmup step 2 of 2)
           - Epoch 2+: cosine decay (LR ≤ base)
         """
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")
@@ -832,7 +832,7 @@ class TestV8GradAccumAndMixup:
 
     def test_label_smoothing_loss(self):
         """CrossEntropyLoss with label_smoothing=0.10 must not produce NaN on valid inputs."""
-        from lib.analysis.breakout_cnn import _TORCH_AVAILABLE
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE
 
         if not _TORCH_AVAILABLE:
             pytest.skip("torch not available")

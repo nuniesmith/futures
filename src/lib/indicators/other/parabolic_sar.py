@@ -1,22 +1,23 @@
-import pandas as pd
 import numpy as np
-from typing import Optional
+import pandas as pd
 from loguru import logger
+
 
 class ParabolicSARIndicator:
     """
     Parabolic SAR (Stop and Reverse) Indicator.
-    
+
     This indicator calculates the Parabolic SAR values for a given series of high and low prices.
     It maintains an internal history of market data and provides methods to update the indicator
     with new data points as well as to apply the indicator to a complete DataFrame.
     """
+
     REQUIRED_COLUMNS = ["High", "Low"]
 
     def __init__(self, step: float = 0.02, max_step: float = 0.2):
         """
         Initialize the Parabolic SAR Indicator.
-        
+
         Args:
             step (float): The step increment for the acceleration factor.
             max_step (float): The maximum limit for the acceleration factor.
@@ -30,10 +31,10 @@ class ParabolicSARIndicator:
     def _calculate_sar(self, data: pd.DataFrame) -> pd.Series:
         """
         Calculate Parabolic SAR for the provided DataFrame.
-        
+
         Args:
             data (pd.DataFrame): DataFrame containing 'High' and 'Low' columns.
-        
+
         Returns:
             pd.Series: Series of calculated Parabolic SAR values.
         """
@@ -79,13 +80,13 @@ class ParabolicSARIndicator:
         self.logger.info("Parabolic SAR calculated successfully.")
         return pd.Series(sar, index=data.index)
 
-    def update(self, data_point: dict) -> Optional[float]:
+    def update(self, data_point: dict) -> float | None:
         """
         Update the Parabolic SAR indicator with a new market data point.
-        
+
         Args:
             data_point (dict): Market data containing 'high' and 'low'.
-        
+
         Returns:
             float or None: The latest Parabolic SAR value, or None if update fails.
         """
@@ -116,10 +117,10 @@ class ParabolicSARIndicator:
     def apply(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Apply the Parabolic SAR indicator to an entire DataFrame.
-        
+
         Args:
             data (pd.DataFrame): DataFrame containing 'High' and 'Low' columns.
-        
+
         Returns:
             pd.DataFrame: A new DataFrame with a 'ParabolicSAR' column added.
         """

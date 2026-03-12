@@ -1195,27 +1195,27 @@ class TestFeatureContractGeneration:
     """Tests for generate_feature_contract() in breakout_cnn."""
 
     def test_returns_dict(self):
-        from lib.analysis.breakout_cnn import generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import generate_feature_contract
 
         contract = generate_feature_contract()
         assert isinstance(contract, dict)
 
     def test_version_is_8(self):
-        from lib.analysis.breakout_cnn import FEATURE_CONTRACT_VERSION, generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import FEATURE_CONTRACT_VERSION, generate_feature_contract
 
         contract = generate_feature_contract()
         assert contract["version"] == FEATURE_CONTRACT_VERSION
         assert contract["version"] == 8
 
     def test_num_tabular_matches_constant(self):
-        from lib.analysis.breakout_cnn import NUM_TABULAR, generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import NUM_TABULAR, generate_feature_contract
 
         contract = generate_feature_contract()
         assert contract["num_tabular"] == NUM_TABULAR
         assert contract["num_tabular"] == 37
 
     def test_tabular_features_list(self):
-        from lib.analysis.breakout_cnn import TABULAR_FEATURES, generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import TABULAR_FEATURES, generate_feature_contract
 
         contract = generate_feature_contract()
         assert contract["tabular_features"] == TABULAR_FEATURES
@@ -1255,7 +1255,7 @@ class TestFeatureContractGeneration:
         assert "volume_profile_shape" in contract["tabular_features"]
 
     def test_all_13_breakout_types_present(self):
-        from lib.analysis.breakout_cnn import generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import generate_feature_contract
 
         contract = generate_feature_contract()
         bt = contract["breakout_types"]
@@ -1278,7 +1278,7 @@ class TestFeatureContractGeneration:
         assert set(bt.keys()) == expected_keys
 
     def test_breakout_type_ordinals_in_range(self):
-        from lib.analysis.breakout_cnn import generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import generate_feature_contract
 
         contract = generate_feature_contract()
         for name, info in contract["breakout_types"].items():
@@ -1290,14 +1290,14 @@ class TestFeatureContractGeneration:
             )
 
     def test_sessions_section_has_9_sessions(self):
-        from lib.analysis.breakout_cnn import generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import generate_feature_contract
 
         contract = generate_feature_contract()
         sess = contract["session_thresholds"]
         assert len(sess) == 9
 
     def test_sessions_have_required_fields(self):
-        from lib.analysis.breakout_cnn import generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import generate_feature_contract
 
         contract = generate_feature_contract()
         # session_thresholds maps session key → float threshold
@@ -1310,7 +1310,7 @@ class TestFeatureContractGeneration:
             assert 0.0 <= thresholds[key] <= 1.0, f"session_threshold out of range for {key}: {thresholds[key]}"
 
     def test_asset_volatility_section(self):
-        from lib.analysis.breakout_cnn import ASSET_VOLATILITY_CLASS, generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import ASSET_VOLATILITY_CLASS, generate_feature_contract
 
         contract = generate_feature_contract()
         av = contract["asset_volatility_classes"]
@@ -1320,14 +1320,14 @@ class TestFeatureContractGeneration:
             assert val in (0.0, 0.5, 1.0), f"Unexpected volatility class for {ticker}: {val}"
 
     def test_default_threshold_and_image_size(self):
-        from lib.analysis.breakout_cnn import DEFAULT_THRESHOLD, IMAGE_SIZE, generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import DEFAULT_THRESHOLD, IMAGE_SIZE, generate_feature_contract
 
         contract = generate_feature_contract()
         assert contract["default_threshold"] == DEFAULT_THRESHOLD
         assert contract["image_size"] == IMAGE_SIZE
 
     def test_imagenet_stats_present(self):
-        from lib.analysis.breakout_cnn import generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import generate_feature_contract
 
         contract = generate_feature_contract()
         assert "imagenet_mean" in contract
@@ -1338,7 +1338,7 @@ class TestFeatureContractGeneration:
     def test_generated_at_is_iso_timestamp(self):
         from datetime import datetime
 
-        from lib.analysis.breakout_cnn import generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import generate_feature_contract
 
         contract = generate_feature_contract()
         assert "generated_at" in contract
@@ -1349,7 +1349,7 @@ class TestFeatureContractGeneration:
     def test_write_to_file(self, tmp_path):
         import json
 
-        from lib.analysis.breakout_cnn import FEATURE_CONTRACT_VERSION, generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import FEATURE_CONTRACT_VERSION, generate_feature_contract
 
         output = str(tmp_path / "feature_contract.json")
         contract = generate_feature_contract(output_path=output)
@@ -1371,14 +1371,14 @@ class TestFeatureContractGeneration:
     def test_write_creates_parent_directories(self, tmp_path):
         import os
 
-        from lib.analysis.breakout_cnn import generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import generate_feature_contract
 
         nested = str(tmp_path / "subdir" / "nested" / "feature_contract.json")
         generate_feature_contract(output_path=nested)
         assert os.path.exists(nested)
 
     def test_output_path_none_returns_only_dict(self):
-        from lib.analysis.breakout_cnn import generate_feature_contract
+        from lib.analysis.ml.breakout_cnn import generate_feature_contract
 
         result = generate_feature_contract(output_path=None)
         assert isinstance(result, dict)

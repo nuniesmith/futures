@@ -1,23 +1,24 @@
 import pandas as pd
 from loguru import logger
-from typing import Optional
+
 
 class WilliamsRIndicator:
     """
     Williams %R Indicator.
-    
+
     Calculates Williams %R using the formula:
-    
+
         Williams %R = -100 * (Highest High - Close) / (Highest High - Lowest Low)
-    
+
     where Highest High and Lowest Low are computed over a specified look-back period.
     """
+
     REQUIRED_COLUMNS = ["High", "Low", "Close"]
 
     def __init__(self, period: int = 14):
         """
         Initialize the WilliamsRIndicator.
-        
+
         Args:
             period (int): Look-back period for calculating Williams %R.
         """
@@ -31,10 +32,10 @@ class WilliamsRIndicator:
     def _calculate_williams_r(self, data: pd.DataFrame) -> pd.Series:
         """
         Calculate Williams %R for the provided DataFrame.
-        
+
         Args:
             data (pd.DataFrame): DataFrame containing 'High', 'Low', and 'Close' columns.
-            
+
         Returns:
             pd.Series: Series representing the Williams %R values.
         """
@@ -46,17 +47,18 @@ class WilliamsRIndicator:
         highest_high = data["High"].rolling(window=self.period).max()
         lowest_low = data["Low"].rolling(window=self.period).min()
         # Compute Williams %R; note the multiplication by -100 to normalize
-        will_r = -100 * (highest_high - data["Close"]) / (highest_high - lowest_low)
-        will_r = will_r.rename(f"Williams_%R_{self.period}")
+        will_r_raw = -100 * (highest_high - data["Close"]) / (highest_high - lowest_low)
+        will_r = pd.Series(will_r_raw, index=data.index, name=f"Williams_%R_{self.period}")
         self.logger.info("Williams %R calculated successfully.")
         return will_r
-    def update(self, data_point: dict) -> Optional[float]:
+
+    def update(self, data_point: dict) -> float | None:
         """
         Update the Williams %R indicator with a new data point.
-        
+
         Args:
             data_point (dict): Market data containing 'high', 'low', and 'close'.
-            
+
         Returns:
             float or None: The latest Williams %R value, or None if there is insufficient data.
         """
@@ -86,10 +88,10 @@ class WilliamsRIndicator:
     def apply(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Apply the Williams %R indicator to an entire DataFrame.
-        
+
         Args:
             data (pd.DataFrame): DataFrame containing 'High', 'Low', and 'Close' columns.
-            
+
         Returns:
             pd.DataFrame: A new DataFrame with an added column for Williams %R.
         """
@@ -97,7 +99,7 @@ class WilliamsRIndicator:
             missing_cols = [col for col in self.REQUIRED_COLUMNS if col not in data.columns]
             if missing_cols:
                 raise ValueError(f"DataFrame is missing the following columns: {', '.join(missing_cols)}")
-            
+
             self.logger.info("Adding Williams %R to DataFrame.")
             data = data.copy()
             data[f"Williams_%R_{self.period}"] = self._calculate_williams_r(data)

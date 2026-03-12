@@ -53,6 +53,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from lib.indicators.helpers import awesome_oscillator, rsi_scalar
+
 logger = logging.getLogger("signal_quality")
 
 
@@ -290,29 +292,7 @@ def _determine_trend_context(
 # ---------------------------------------------------------------------------
 
 
-def _compute_rsi(close: np.ndarray, period: int = 14) -> float:
-    """Compute RSI(period) for the latest bar. Uses Wilder's smoothing."""
-    if len(close) < period + 1:
-        return 50.0
-
-    deltas = np.diff(close)
-    gains = np.where(deltas > 0, deltas, 0.0)
-    losses = np.where(deltas < 0, -deltas, 0.0)
-
-    # Seed with simple average
-    avg_gain = np.mean(gains[:period])
-    avg_loss = np.mean(losses[:period])
-
-    # Wilder's smoothing for remaining bars
-    for i in range(period, len(gains)):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-
-    if avg_loss == 0:
-        return 100.0
-
-    rs = avg_gain / avg_loss
-    return float(100.0 - (100.0 / (1.0 + rs)))
+_compute_rsi = rsi_scalar
 
 
 # ---------------------------------------------------------------------------
@@ -320,15 +300,7 @@ def _compute_rsi(close: np.ndarray, period: int = 14) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _compute_ao(high: np.ndarray, low: np.ndarray, fast: int = 5, slow: int = 34) -> float:
-    """Compute Awesome Oscillator: SMA(hl2, fast) - SMA(hl2, slow)."""
-    if len(high) < slow:
-        return 0.0
-
-    hl2 = (high + low) / 2.0
-    fast_sma = np.mean(hl2[-fast:])
-    slow_sma = np.mean(hl2[-slow:])
-    return float(fast_sma - slow_sma)
+_compute_ao = awesome_oscillator
 
 
 # ---------------------------------------------------------------------------

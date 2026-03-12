@@ -87,6 +87,7 @@ HIGH_IMPACT_DELAY_MAX = float(os.getenv("CT_HIGH_IMPACT_DELAY_MAX", "2.0"))
 RATE_LIMIT_WARN = int(os.getenv("CT_RATE_LIMIT_WARN", "3000"))
 RATE_LIMIT_HARD = int(os.getenv("CT_RATE_LIMIT_HARD", "4500"))
 REDIS_LOG_TTL = int(os.getenv("CT_REDIS_LOG_TTL", "86400"))  # 24 h
+RITHMIC_DEBUG_LOGGING = os.getenv("RITHMIC_DEBUG_LOGGING", "0") == "1"
 
 # Redis keys
 _REDIS_ORDER_LOG_KEY = "engine:copy_trader:order_log"
@@ -483,6 +484,10 @@ class CopyTrader:
         self._rate_counter: RollingRateCounter = RollingRateCounter()
         self._high_impact_mode: bool = False  # set True on NFP/FOMC days
         self._order_history: deque[dict[str, Any]] = deque(maxlen=500)
+        self._last_warn_logged_at: float = 0.0  # monotonic time of last warn log
+        self._warn_log_interval: float = 300.0  # re-log warn at most every 5 min
+        self._daily_actions: int = 0
+        self._daily_reset_day: str = ""  # YYYY-MM-DD
 
         # Front-month contract cache: product_code → security_code
         self._contract_cache: dict[str, str] = {}
@@ -516,6 +521,12 @@ class CopyTrader:
         Returns:
             Status dict with connection result.
         """
+        if RITHMIC_DEBUG_LOGGING:
+            import logging as _stdlib_logging
+
+            _stdlib_logging.getLogger("rithmic").setLevel(_stdlib_logging.DEBUG)
+            logger.info("Rithmic DEBUG logging enabled (RITHMIC_DEBUG_LOGGING=1)")
+
         try:
             from async_rithmic import RithmicClient  # type: ignore[import-untyped]  # noqa: PLC0415
         except ImportError:
@@ -625,6 +636,60 @@ class CopyTrader:
             )
         else:
             logger.info("High impact mode disabled — normal delays restored")
+
+    def _check_rate_and_warn(self) -> bool:
+        """Check the rolling rate counter and log warnings/errors.
+
+        Called before every order submission.  Returns ``True`` if the order
+        is allowed to proceed, ``False`` if the hard limit blocks it.
+
+        Warn threshold (3 000/hr): logs a WARNING every 5 min so the operator
+        knows the session is heavy but does not block orders.
+
+        Hard limit (4 500/hr): logs an ERROR and returns False — order is
+        rejected to prevent Rithmic account suspension.
+        """
+        status = self._rate_counter.status_dict()
+        count = status["actions_60min"]
+
+        if status["blocked"]:
+            logger.error(
+                "🚫 RATE LIMIT HARD STOP: %d actions in last 60 min (limit=%d) — ORDER REJECTED",
+                count,
+                RATE_LIMIT_HARD,
+            )
+            return False
+
+        if status["warn"]:
+            now = time.monotonic()
+            if now - self._last_warn_logged_at >= self._warn_log_interval:
+                self._last_warn_logged_at = now
+                headroom = status["headroom"]
+                logger.warning(
+                    "⚠️  RATE LIMIT WARNING: %d/%d actions in last 60 min — %d headroom remaining",
+                    count,
+                    RATE_LIMIT_WARN,
+                    headroom,
+                )
+
+        return True
+
+    @staticmethod
+    def _detect_rate_limit_error(exc: Exception) -> bool:
+        """Return True if *exc* looks like a Rithmic rate-limit or Consumer Slow error."""
+        msg = str(exc).lower()
+        return any(
+            kw in msg
+            for kw in (
+                "consumer slow",
+                "rate limit",
+                "too many",
+                "throttl",
+                "429",
+                "slow consumer",
+                "exceed",
+            )
+        )
 
     async def disconnect_all(self) -> None:
         """Disconnect all accounts gracefully."""
@@ -765,21 +830,10 @@ class CopyTrader:
         # --- Rate limit check ---
         enabled_slaves = self._get_enabled_slaves()
 
-        if self._rate_counter.is_hard_limit:
-            logger.error(
-                "🛑 RATE LIMIT BLOCKED: %d actions in 60 min (hard limit %d). Order rejected.",
-                self._rate_counter.count,
-                RATE_LIMIT_HARD,
-            )
-            result.compliance_log.append(f"🛑 BLOCKED: rate limit {self._rate_counter.count}/{RATE_LIMIT_HARD}")
+        if not self._check_rate_and_warn():
+            # Hard limit — return a failed batch result
+            result.compliance_log.append(f"🚫 BLOCKED: rate limit {self._rate_counter.count}/{RATE_LIMIT_HARD}")
             return result
-
-        if self._rate_counter.is_warn:
-            logger.warning(
-                "⚠ Rate limit warning: %d actions in 60 min (warn at %d)",
-                self._rate_counter.count,
-                RATE_LIMIT_WARN,
-            )
 
         # --- Determine delay range ---
         if self._high_impact_mode:
@@ -852,6 +906,13 @@ class CopyTrader:
 
         # Record rate-limit actions
         self._rate_counter.record(result.total_orders)
+
+        # Daily action counter (resets at midnight)
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        if today != self._daily_reset_day:
+            self._daily_actions = 0
+            self._daily_reset_day = today
+        self._daily_actions += result.total_orders
 
         # Persist to Redis
         self._persist_batch_result(result)
@@ -1464,6 +1525,13 @@ class CopyTrader:
                 tag=tag,
             )
         except Exception as exc:
+            if self._detect_rate_limit_error(exc):
+                logger.error(
+                    "🚫 RITHMIC RATE-LIMIT / CONSUMER SLOW detected on %s: %s — pausing 60s",
+                    security_code,
+                    exc,
+                )
+                await asyncio.sleep(60.0)
             logger.error("❌ copy_trader[%s] submit_order failed: %s", acct.key, exc)
             return CopyOrderResult(
                 account_key=acct.key,
@@ -1559,7 +1627,10 @@ class CopyTrader:
             "slaves": slaves_info,
             "enabled_slave_count": len(self._get_enabled_slaves()),
             "high_impact_mode": self._high_impact_mode,
-            "rate_limit": self._rate_counter.status_dict(),
+            "rate_limit": {
+                **self._rate_counter.status_dict(),
+                "daily_actions": self._daily_actions,
+            },
             "contract_cache_size": len(self._contract_cache),
             "recent_batches": list(self._order_history)[-10:],
         }
@@ -1570,7 +1641,39 @@ class CopyTrader:
 
     def get_rate_status(self) -> dict[str, Any]:
         """Return current rate-limit counter status."""
-        return self._rate_counter.status_dict()
+        return {
+            **self._rate_counter.status_dict(),
+            "daily_actions": self._daily_actions,
+        }
+
+    def get_rate_alert(self) -> dict[str, Any]:
+        """Return a simple alert dict for WebUI display.
+
+        Returns:
+            Dict with ``level`` ("ok" | "warn" | "critical"), ``message``, and
+            ``actions_60min`` / ``daily_actions`` counters.
+        """
+        status = self._rate_counter.status_dict()
+        count = status["actions_60min"]
+
+        if status["blocked"]:
+            level = "critical"
+            message = f"HARD LIMIT: {count}/{RATE_LIMIT_HARD} actions/60min — orders blocked"
+        elif status["warn"]:
+            level = "warn"
+            message = f"High activity: {count}/{RATE_LIMIT_WARN} actions/60min — {status['headroom']} headroom"
+        else:
+            level = "ok"
+            message = f"{count} actions in last 60min"
+
+        return {
+            "level": level,
+            "message": message,
+            "actions_60min": count,
+            "daily_actions": self._daily_actions,
+            "warn_threshold": RATE_LIMIT_WARN,
+            "hard_threshold": RATE_LIMIT_HARD,
+        }
 
     def __repr__(self) -> str:
         main_str = f"main={self._main.label}" if self._main else "main=None"

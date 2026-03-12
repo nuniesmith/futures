@@ -57,10 +57,11 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
+
+from lib.core.utils import safe_float as _safe_float
 
 if TYPE_CHECKING:
     from lib.services.engine.live_risk import LiveRiskState
@@ -74,19 +75,6 @@ DEFAULT_ACCOUNT_SIZE = 50_000
 DEFAULT_RISK_PCT = 0.0075  # 0.75% per trade
 MIN_QUALITY_THRESHOLD = 0.55  # 55% — below this, flag as NEUTRAL/skip
 EXTREME_VOL_THRESHOLD = 0.88  # 88th percentile — too volatile
-
-
-def _safe_float(val: Any, default: float = 0.0) -> float:
-    """Safely convert a value to float, returning default on failure."""
-    if val is None:
-        return default
-    try:
-        f = float(val)
-        if math.isnan(f) or math.isinf(f):
-            return default
-        return f
-    except (TypeError, ValueError):
-        return default
 
 
 def _price_decimals(tick_size: float) -> int:

@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from lib.analysis.orb_filters import (
+from lib.analysis.breakout_filters import (
     FilterVerdict,
     ORBFilterResult,
     apply_all_filters,

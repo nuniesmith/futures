@@ -40,6 +40,12 @@ Environment Variables:
     PM_EMA_TRAIL_USE_CLOSE      — Use bar close (not wick) for trail (default 1)
     PM_WINNING_REVERSAL_CNN     — CNN prob needed to reverse a winner (default 0.92)
     PM_MAX_POSITIONS            — Max simultaneous positions (default 5)
+    PM_FOCUS_LOCK               — Enable one-asset focus lock (default 1)
+    PM_PYRAMID_ENABLED          — Enable pyramiding into winning positions (default 1)
+    PM_PYRAMID_MIN_CNN          — Min CNN prob to pyramid (default 0.65)
+    PM_PYRAMID_MAX_LEVEL_LOW    — Max pyramid level for CNN 65–79% (default 2)
+    PM_PYRAMID_MAX_LEVEL_HIGH   — Max pyramid level for CNN ≥ 80% (default 3)
+    PM_PYRAMID_MAX_RISK_PCT     — Max total account risk for scaled position (default 0.015)
 """
 
 from __future__ import annotations
@@ -70,6 +76,12 @@ EMA_TRAIL_PERIOD = int(os.getenv("PM_EMA_TRAIL_PERIOD", "9"))
 EMA_TRAIL_USE_CLOSE = os.getenv("PM_EMA_TRAIL_USE_CLOSE", "1") == "1"
 WINNING_REVERSAL_CNN = float(os.getenv("PM_WINNING_REVERSAL_CNN", "0.92"))
 MAX_POSITIONS = int(os.getenv("PM_MAX_POSITIONS", "5"))
+FOCUS_LOCK_ENABLED = os.getenv("PM_FOCUS_LOCK", "1") == "1"
+PYRAMID_ENABLED = os.getenv("PM_PYRAMID_ENABLED", "1") == "1"
+PYRAMID_MIN_CNN_PROB = float(os.getenv("PM_PYRAMID_MIN_CNN", "0.65"))
+PYRAMID_MAX_LEVEL_LOW = int(os.getenv("PM_PYRAMID_MAX_LEVEL_LOW", "2"))  # CNN 65–79%
+PYRAMID_MAX_LEVEL_HIGH = int(os.getenv("PM_PYRAMID_MAX_LEVEL_HIGH", "3"))  # CNN ≥ 80%
+PYRAMID_MAX_RISK_PCT = float(os.getenv("PM_PYRAMID_MAX_RISK_PCT", "0.015"))  # 1.5%
 
 # Redis key prefix for persisting position state
 REDIS_KEY_PREFIX = "engine:position:"
@@ -212,6 +224,12 @@ class MicroPosition:
     reversal_count: int = 0
     last_reversal_time: str = ""
 
+    # --- Pyramid tracking ---
+    pyramid_level: int = 0  # 0=base position, 1=first add, 2=second add, 3=third add
+    pyramid_contracts: int = 0  # extra contracts added via pyramiding (total = contracts + pyramid_contracts)
+    pyramid_stop: float = 0.0  # stop loss level set by last pyramid level
+    last_pyramid_time: str = ""  # ISO timestamp of last pyramid add
+
     # --- Timestamps ---
     created_at: str = ""
     updated_at: str = ""
@@ -289,13 +307,25 @@ class MicroPosition:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> MicroPosition:
-        """Deserialise from a dict (e.g. loaded from Redis)."""
+        """Deserialise from a dict (e.g. loaded from Redis).
+
+        Tolerates both old states (missing new fields — defaults apply) and
+        future states (extra unknown fields — silently dropped) so that Redis
+        upgrades never crash the engine on restart.
+        """
+        import dataclasses as _dc
+
         d = dict(d)  # shallow copy
         phase_str = d.pop("phase", "initial")
         try:
             phase = BracketPhase(phase_str)
         except ValueError:
             phase = BracketPhase.INITIAL
+
+        # Drop keys that no longer exist as dataclass fields (forward-compat)
+        known = {f.name for f in _dc.fields(cls)}
+        d = {k: v for k, v in d.items() if k in known}
+
         return cls(phase=phase, **d)
 
     def update_price(self, price: float) -> None:
@@ -339,6 +369,7 @@ class PositionManager:
         self.account_size = account_size
         self._positions: dict[str, MicroPosition] = {}  # ticker → active position
         self._history: list[MicroPosition] = []  # closed positions (in-memory, flushed to DB)
+        self._focus_asset: str | None = None  # ticker currently under focus lock
 
         # Import core tickers from models if not provided
         if core_tickers is None:
@@ -368,6 +399,16 @@ class PositionManager:
         try:
             from lib.core.cache import cache_get
 
+            # Restore the manager-level state (focus lock, etc.)
+            mgr_key = f"{REDIS_KEY_PREFIX}_manager_state"
+            mgr_raw = cache_get(mgr_key)
+            if mgr_raw is not None:
+                mgr_raw_str = mgr_raw.decode("utf-8") if isinstance(mgr_raw, bytes) else mgr_raw
+                mgr_data = json.loads(mgr_raw_str)
+                self._focus_asset = mgr_data.get("focus_asset")
+                if self._focus_asset:
+                    logger.info("Restored focus lock: %s", self._focus_asset)
+
             for ticker in self._core_tickers:
                 key = f"{REDIS_KEY_PREFIX}{ticker}"
                 raw = cache_get(key)
@@ -396,9 +437,14 @@ class PositionManager:
         return loaded
 
     def save_state(self) -> None:
-        """Persist all active positions to Redis."""
+        """Persist all active positions and manager state to Redis."""
         try:
             from lib.core.cache import cache_set
+
+            # Persist manager-level state (focus lock, etc.)
+            mgr_key = f"{REDIS_KEY_PREFIX}_manager_state"
+            mgr_state = {"focus_asset": self._focus_asset}
+            cache_set(mgr_key, json.dumps(mgr_state).encode(), ttl=86400)
 
             for ticker, pos in self._positions.items():
                 key = f"{REDIS_KEY_PREFIX}{ticker}"
@@ -442,6 +488,42 @@ class PositionManager:
         return list(self._history)
 
     # ------------------------------------------------------------------
+    # Focus lock — one asset at a time
+    # ------------------------------------------------------------------
+
+    @property
+    def focus_asset(self) -> str | None:
+        """The ticker currently locked in focus, or None if no lock."""
+        return self._focus_asset
+
+    def can_trade(self, ticker: str) -> bool:
+        """Return True if the given ticker is allowed to trade right now.
+
+        When focus lock is disabled (PM_FOCUS_LOCK=0), always returns True.
+        When focus lock is enabled:
+          - If no position is open, any ticker can start a position.
+          - If a position is open, only the focused ticker is allowed
+            (signals for other tickers are rejected silently).
+        """
+        if not FOCUS_LOCK_ENABLED:
+            return True
+        if self._focus_asset is None:
+            return True
+        return ticker == self._focus_asset
+
+    def set_focus(self, ticker: str) -> None:
+        """Lock focus onto *ticker* — called when a new position is opened."""
+        if FOCUS_LOCK_ENABLED and self._focus_asset != ticker:
+            logger.info("🔒 Focus lock: %s (was: %s)", ticker, self._focus_asset or "none")
+            self._focus_asset = ticker
+
+    def clear_focus(self) -> None:
+        """Release focus lock — called when the focused position is closed."""
+        if self._focus_asset is not None:
+            logger.info("🔓 Focus lock released (was: %s)", self._focus_asset)
+        self._focus_asset = None
+
+    # ------------------------------------------------------------------
     # Signal processing
     # ------------------------------------------------------------------
 
@@ -477,17 +559,41 @@ class PositionManager:
             logger.debug("Signal for %s is not in core watchlist — ignoring for position management", ticker)
             return orders
 
+        # Focus lock — reject signals for non-focused assets while a position is open
+        if not self.can_trade(ticker):
+            logger.debug(
+                "Focus lock active (%s) — ignoring signal for %s",
+                self._focus_asset,
+                ticker,
+            )
+            return orders
+
         # Check if we already have a position for this ticker
         existing = self.get_position(ticker)
 
         if existing is not None:
-            # Same direction — hold, don't add
+            # Same direction — check for pyramid opportunity
             if existing.direction == direction:
-                logger.debug(
-                    "Signal confirms existing %s position in %s — holding",
-                    existing.direction,
-                    ticker,
+                current_price = self._get_current_price(bars_1m, trigger_price)
+                cnn_prob = getattr(signal, "cnn_prob", 0.0) or 0.0
+                regime = getattr(signal, "regime", "") or ""
+                wave_ratio = getattr(signal, "wave_ratio", 0.0) or 0.0
+
+                pyramid_action = self.get_next_pyramid_level(
+                    existing,
+                    current_price=current_price,
+                    cnn_prob=cnn_prob,
+                    regime=regime,
+                    wave_ratio=wave_ratio,
                 )
+                if pyramid_action is not None:
+                    orders.extend(self.apply_pyramid(existing, pyramid_action, current_price))
+                else:
+                    logger.debug(
+                        "Signal confirms existing %s position in %s — holding (pyramid gates not met)",
+                        existing.direction,
+                        ticker,
+                    )
                 return orders
 
             # Opposite direction — evaluate reversal
@@ -595,6 +701,7 @@ class PositionManager:
         )
 
         self._positions[ticker] = pos
+        self.set_focus(ticker)
 
         action = OrderAction.BUY if direction == "LONG" else OrderAction.SELL
 
@@ -715,6 +822,10 @@ class PositionManager:
             del self._positions[ticker]
 
         self._clear_position_from_redis(ticker)
+
+        # Release focus lock when last position closes
+        if not self._positions:
+            self.clear_focus()
 
         logger.info(
             "📉 CLOSED %s %s: entry=%.4f exit=%.4f pnl_ticks=%.4f R=%.2f reason=%s",
@@ -958,6 +1069,212 @@ class PositionManager:
             return None
 
     # ------------------------------------------------------------------
+    # Pyramiding
+    # ------------------------------------------------------------------
+
+    def get_next_pyramid_level(
+        self,
+        pos: MicroPosition,
+        current_price: float,
+        cnn_prob: float,
+        *,
+        regime: str = "",
+        wave_ratio: float = 0.0,
+    ) -> dict[str, Any] | None:
+        """Determine whether and how to pyramid into an existing winning position.
+
+        Called when a new confirming signal arrives for a ticker that already has
+        an open position in the same direction.
+
+        Args:
+            pos: The existing MicroPosition.
+            current_price: Latest price.
+            cnn_prob: CNN breakout probability from the new signal (0–1).
+            regime: Current regime string from RegimeDetector (e.g. "TRENDING_UP").
+            wave_ratio: Wave dominance ratio from wave_analysis (> 1.5 = trending).
+
+        Returns:
+            A dict with pyramid action details, or ``None`` if pyramiding is
+            not allowed right now.
+
+            Dict keys:
+                ``level``       — new pyramid level (1, 2, or 3)
+                ``add_qty``     — contracts to add (always 1)
+                ``new_stop``    — new stop loss price to set on all contracts
+                ``reason``      — human-readable reason string
+                ``r_at_entry``  — R-multiple at the time of the add
+
+            Returns ``None`` if any gate fails (level cap, quality, risk, cooldown).
+        """
+        if not PYRAMID_ENABLED:
+            return None
+
+        # Gate 1: CNN quality
+        if cnn_prob < PYRAMID_MIN_CNN_PROB:
+            logger.debug(
+                "Pyramid gate: CNN %.3f < %.3f (min required)",
+                cnn_prob,
+                PYRAMID_MIN_CNN_PROB,
+            )
+            return None
+
+        # Gate 2: Position must be winning and moving in our direction
+        r = pos.r_multiple
+        next_level = pos.pyramid_level + 1
+
+        # Minimum R needed for each pyramid level
+        r_thresholds = {1: 1.0, 2: 2.0, 3: 3.0}
+        min_r = r_thresholds.get(next_level, 99.0)
+        if r < min_r:
+            logger.debug(
+                "Pyramid gate: R=%.2f < %.1f (needed for level %d)",
+                r,
+                min_r,
+                next_level,
+            )
+            return None
+
+        # Gate 3: Level cap based on CNN quality
+        max_level = PYRAMID_MAX_LEVEL_HIGH if cnn_prob >= 0.80 else PYRAMID_MAX_LEVEL_LOW
+        if next_level > max_level:
+            logger.debug(
+                "Pyramid gate: already at max level %d (CNN=%.3f caps at %d)",
+                pos.pyramid_level,
+                cnn_prob,
+                max_level,
+            )
+            return None
+
+        # Gate 4: Level 3 requires TRENDING regime AND wave_ratio > 1.5
+        if next_level == 3:
+            regime_upper = regime.upper()
+            is_trending = "TRENDING" in regime_upper or "TREND" in regime_upper
+            if not is_trending:
+                logger.debug("Pyramid gate: L3 requires TRENDING regime (got '%s')", regime)
+                return None
+            if wave_ratio < 1.5:
+                logger.debug("Pyramid gate: L3 requires wave_ratio > 1.5 (got %.2f)", wave_ratio)
+                return None
+
+        # Gate 5: Max risk — total position cannot exceed 1.5% of account
+        # Each micro contract risk = distance_to_stop × tick_value
+        # We approximate: 1 contract risk ≈ entry_atr × sl_mult × tick_multiplier
+        # For simplicity, cap total contracts at 3
+        total_contracts = pos.contracts + pos.pyramid_contracts + 1
+        if total_contracts > 3:
+            logger.debug("Pyramid gate: total contracts %d would exceed max 3", total_contracts)
+            return None
+
+        # Gate 6: Cooldown — don't add more than once per 15 minutes
+        if pos.last_pyramid_time:
+            try:
+                last_dt = datetime.fromisoformat(pos.last_pyramid_time)
+                now = datetime.now(UTC)
+                if last_dt.tzinfo is None:
+                    elapsed = (now.replace(tzinfo=None) - last_dt).total_seconds()
+                else:
+                    elapsed = (now - last_dt).total_seconds()
+                if elapsed < 900:  # 15 minutes
+                    logger.debug("Pyramid gate: cooldown %.0fs elapsed (need 900s)", elapsed)
+                    return None
+            except (ValueError, TypeError):
+                pass
+
+        # All gates passed — compute new stop level
+        entry = pos.entry_price
+        atr = pos.entry_atr or abs(current_price - entry) * 0.01
+
+        if next_level == 1:
+            # Move SL to breakeven
+            new_stop = entry
+            reason = f"Pyramid L1: +1 contract @ {current_price:.4f}, SL → breakeven ({entry:.4f})"
+        elif next_level == 2:
+            # SL to entry + 0.5R
+            r_unit = abs(entry - pos.stop_loss) if pos.stop_loss else atr
+            new_stop = entry + 0.5 * r_unit if pos.is_long else entry - 0.5 * r_unit
+            reason = f"Pyramid L2: +1 contract @ {current_price:.4f}, SL → entry+0.5R ({new_stop:.4f})"
+        else:  # level 3
+            # SL to current − 1R
+            r_unit = abs(entry - pos.stop_loss) if pos.stop_loss else atr
+            new_stop = current_price - r_unit if pos.is_long else current_price + r_unit
+            reason = f"Pyramid L3: +1 contract @ {current_price:.4f}, SL → price-1R ({new_stop:.4f})"
+
+        logger.info(
+            "✅ PYRAMID L%d %s %s: add 1 @ %.4f, new_stop=%.4f (R=%.2f, CNN=%.3f)",
+            next_level,
+            pos.direction,
+            pos.ticker,
+            current_price,
+            new_stop,
+            r,
+            cnn_prob,
+        )
+
+        return {
+            "level": next_level,
+            "add_qty": 1,
+            "new_stop": new_stop,
+            "reason": reason,
+            "r_at_entry": round(r, 2),
+        }
+
+    def apply_pyramid(
+        self,
+        pos: MicroPosition,
+        pyramid_action: dict[str, Any],
+        current_price: float,
+    ) -> list[OrderCommand]:
+        """Apply a pyramid action returned by ``get_next_pyramid_level()``.
+
+        Updates the position's pyramid tracking fields and returns the
+        OrderCommands needed: one entry order + one stop-modify order.
+
+        Args:
+            pos: The existing MicroPosition to pyramid into.
+            pyramid_action: Dict returned by ``get_next_pyramid_level()``.
+            current_price: Price to use for the market entry order.
+
+        Returns:
+            List of OrderCommands: [market_entry, modify_stop].
+        """
+        level = pyramid_action["level"]
+        new_stop = pyramid_action["new_stop"]
+        reason = pyramid_action["reason"]
+
+        # Update position tracking
+        pos.pyramid_level = level
+        pos.pyramid_contracts += 1
+        pos.pyramid_stop = new_stop
+        pos.stop_loss = new_stop
+        pos.last_pyramid_time = datetime.now(UTC).isoformat()
+
+        # Entry order: add 1 contract at market
+        entry_action = OrderAction.BUY if pos.is_long else OrderAction.SELL
+        entry_order = OrderCommand(
+            symbol=pos.ticker,
+            action=entry_action,
+            order_type=OrderType.MARKET,
+            quantity=1,
+            price=0.0,
+            reason=reason,
+            position_id=pos.position_id,
+        )
+
+        # Stop-modify order: move the stop on ALL contracts to new_stop
+        stop_order = OrderCommand(
+            symbol=pos.ticker,
+            action=OrderAction.MODIFY_STOP,
+            order_type=OrderType.STOP,
+            quantity=pos.contracts + pos.pyramid_contracts,
+            stop_price=new_stop,
+            reason=f"Pyramid L{level} stop adjustment to {new_stop:.4f}",
+            position_id=pos.position_id,
+        )
+
+        self.save_state()
+        return [entry_order, stop_order]
+
+    # ------------------------------------------------------------------
     # Reversal gate
     # ------------------------------------------------------------------
 
@@ -1126,6 +1443,7 @@ class PositionManager:
             )
             self._close_position(pos, reason=reason, close_price=pos.current_price)
 
+        self.clear_focus()
         logger.info("Closed all positions: %d orders generated (%s)", len(orders), reason)
         return orders
 
@@ -1169,6 +1487,9 @@ class PositionManager:
 
         if orders:
             logger.info("Session end (%s): closed %d intraday positions", session_key, len(orders))
+            # Release focus if all positions are now closed
+            if not self._positions:
+                self.clear_focus()
 
         return orders
 
@@ -1230,6 +1551,9 @@ class PositionManager:
                     "session": pos.session_key,
                     "hold_secs": round(pos.hold_duration_seconds, 0),
                     "reversals": pos.reversal_count,
+                    "pyramid_level": pos.pyramid_level,
+                    "pyramid_contracts": pos.pyramid_contracts,
+                    "total_contracts": pos.contracts + pos.pyramid_contracts,
                 }
             )
             total_unrealized += pos.signed_pnl_ticks
@@ -1252,6 +1576,9 @@ class PositionManager:
             "today_losses": today_losses,
             "today_win_rate": round(today_wins / max(len(today_closed), 1), 2),
             "updated_at": datetime.now(UTC).isoformat(),
+            "focus_asset": self._focus_asset,
+            "focus_lock_enabled": FOCUS_LOCK_ENABLED,
+            "pyramid_enabled": PYRAMID_ENABLED,
         }
 
     def __repr__(self) -> str:

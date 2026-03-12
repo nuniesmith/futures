@@ -1,15 +1,16 @@
 import pandas as pd
 from loguru import logger
-from typing import Optional
+
 
 class ADLineIndicator:
     """
     Accumulation/Distribution Line (ADL) Indicator.
-    
+
     This indicator calculates the ADL using market data. It accepts new data points
-    via the update method, maintains an internal history, and computes the ADL using 
+    via the update method, maintains an internal history, and computes the ADL using
     a standardized parameter interface.
     """
+
     # Define required columns centrally for validation and future parameter flexibility.
     REQUIRED_COLUMNS = ["High", "Low", "Close", "Volume"]
 
@@ -21,13 +22,13 @@ class ADLineIndicator:
     def _calculate_adl(self, data: pd.DataFrame) -> pd.Series:
         """
         Calculate the Accumulation/Distribution Line (ADL) based on input DataFrame.
-        
+
         Args:
             data (pd.DataFrame): DataFrame with required columns.
-        
+
         Returns:
             pd.Series: Calculated ADL as a cumulative sum of Money Flow Volume.
-        
+
         Raises:
             ValueError: If the DataFrame is missing required columns.
             RuntimeError: For any unexpected error during calculation.
@@ -57,34 +58,30 @@ class ADLineIndicator:
         except Exception as e:
             self.logger.exception("An error occurred while calculating the ADL.")
             raise RuntimeError("Failed to calculate Accumulation/Distribution Line.") from e
-    def update(self, data_point: dict) -> Optional[float]:
+
+    def update(self, data_point: dict) -> float | None:
         """
         Update the indicator with a new data point.
-        
+
         Args:
             data_point (dict): Market data with keys 'high', 'low', 'close', and 'volume'.
-        
+
         Returns:
             float: The latest ADL value or None if update fails.
         """
         try:
             # Extract and validate data
-            high = data_point.get('high')
-            low = data_point.get('low')
-            close = data_point.get('close')
-            volume = data_point.get('volume')
+            high = data_point.get("high")
+            low = data_point.get("low")
+            close = data_point.get("close")
+            volume = data_point.get("volume")
 
             if None in (high, low, close, volume):
                 self.logger.warning("Data point missing one or more required keys: 'high', 'low', 'close', 'volume'.")
                 return None
 
             # Append new data point
-            new_row = pd.DataFrame([{
-                "High": high,
-                "Low": low,
-                "Close": close,
-                "Volume": volume
-            }])
+            new_row = pd.DataFrame([{"High": high, "Low": low, "Close": close, "Volume": volume}])
             self.history_df = pd.concat([self.history_df, new_row], ignore_index=True)
 
             # Calculate ADL using a copy of the history to avoid side effects
@@ -100,10 +97,10 @@ class ADLineIndicator:
     def apply(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Apply the ADL indicator calculation to an entire DataFrame.
-        
+
         Args:
             data (pd.DataFrame): Input DataFrame with required columns.
-        
+
         Returns:
             pd.DataFrame: DataFrame with an added 'ADL' column containing the computed values.
         """

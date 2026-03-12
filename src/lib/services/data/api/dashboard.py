@@ -6235,9 +6235,7 @@ _ORB_HISTORY_EXTRA_SCRIPT = """<script>
 
 def charts_page() -> str:
     """Render the Charts page — embeds the charting service in a full-height iframe."""
-    import os as _os
-
-    charting_url = _os.getenv("CHARTING_SERVICE_URL", "http://localhost:8003")
+    charting_proxy = "/charting-proxy/"
     body = f"""
     <style>
       /* Let the iframe fill the viewport below the nav bar */
@@ -6268,7 +6266,7 @@ def charts_page() -> str:
 
     <iframe
       id="charts-frame"
-      src="{charting_url}"
+      src="{charting_proxy}"
       title="Ruby Futures Charts"
       allow="fullscreen"
       loading="eager"
@@ -6277,7 +6275,7 @@ def charts_page() -> str:
     <div id="charts-offline">
       <span style="font-size:2rem">📡</span>
       <div style="font-weight:600;color:var(--text-primary,#e4e4e7)">Charting service unavailable</div>
-      <div>Make sure the <code>charting</code> container is running on <code>{charting_url}</code></div>
+      <div>Make sure the <code>charting</code> container is running (proxied via <code>{charting_proxy}</code>)</div>
       <button onclick="document.getElementById('charts-frame').src=document.getElementById('charts-frame').src"
               style="margin-top:8px;padding:6px 16px;background:#2563eb;color:#fff;
                      border:none;border-radius:6px;cursor:pointer;font-size:0.8rem">
@@ -6295,7 +6293,7 @@ def charts_page() -> str:
       }});
       // If the iframe loads a non-2xx page the error event won't fire in all
       // browsers, so we do a lightweight fetch probe as a belt-and-suspenders check.
-      fetch('{charting_url}', {{method:'HEAD', mode:'no-cors'}})
+      fetch('{charting_proxy}', {{method:'HEAD'}})
         .catch(function() {{
           frame.style.display = 'none';
           offline.style.display = 'flex';

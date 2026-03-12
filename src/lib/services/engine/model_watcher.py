@@ -73,7 +73,7 @@ def _find_model_dir() -> Path | None:
 def _invalidate_cache() -> None:
     """Call the breakout_cnn module's cache invalidation."""
     try:
-        from lib.analysis.breakout_cnn import invalidate_model_cache
+        from lib.analysis.ml.breakout_cnn import invalidate_model_cache
 
         evicted = invalidate_model_cache()
         if evicted:

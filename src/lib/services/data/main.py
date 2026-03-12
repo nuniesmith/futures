@@ -125,6 +125,7 @@ from lib.services.data.api.bars import (  # noqa: E402
 from lib.services.data.api.bars import (  # noqa: E402
     startup_warm_caches,
 )
+from lib.services.data.api.charting_proxy import router as charting_proxy_router  # noqa: E402
 from lib.services.data.api.chat import router as chat_router  # noqa: E402
 from lib.services.data.api.chat import set_engine as chat_set_engine  # noqa: E402
 from lib.services.data.api.cnn import router as cnn_router  # noqa: E402
@@ -330,7 +331,7 @@ async def lifespan(app: FastAPI):
 
     # 4b. Start Reddit watcher + aggregation job (non-fatal if credentials missing)
     try:
-        from lib.analysis.reddit_sentiment import get_full_snapshot as _reddit_snapshot
+        from lib.analysis.sentiment.reddit_sentiment import get_full_snapshot as _reddit_snapshot
         from lib.integrations.reddit_watcher import RedditWatcher
 
         _reddit_watcher = RedditWatcher(
@@ -581,6 +582,11 @@ setup_rate_limiting(app)
 # dashboard and /api/focus, /api/focus/html etc. are top-level paths.
 app.include_router(dashboard_router, tags=["Dashboard"])
 
+# Charting proxy: /charting-proxy/* → charting container (reverse proxy)
+# Allows the Charts iframe to work from any machine by proxying through the
+# data service instead of requiring direct access to charting:8003.
+app.include_router(charting_proxy_router, tags=["Charting Proxy"])
+
 # SSE: /sse/dashboard (live event stream), /sse/health
 # NOTE: sse_router is mounted WITHOUT a prefix so /sse/dashboard is top-level.
 app.include_router(sse_router, tags=["SSE"])
@@ -719,8 +725,17 @@ app.include_router(tasks_router, tags=["Tasks"])
 # RITHMIC-F: WebUI "SEND ALL" button + prop-firm compliant copy trading.
 # NOTE: copy_trade_router is mounted WITHOUT a prefix — routes use /api/copy-trade/ paths.
 from lib.services.data.api.copy_trade import router as copy_trade_router  # noqa: E402
+from lib.services.data.api.pine import router as pine_router  # noqa: E402
+from lib.services.data.api.ruby import router as ruby_router  # noqa: E402
 
 app.include_router(copy_trade_router, tags=["Copy Trade"])
+app.include_router(ruby_router, tags=["Ruby Signal Engine"])
+
+# Pine Script Generator: /pine (HTML page), /api/pine/modules, /api/pine/module/{name},
+#     /api/pine/params, /api/pine/generate, /api/pine/output, /api/pine/download/{name},
+#     /api/pine/stats, /api/pine/status/html
+# NOTE: pine_router is mounted WITHOUT a prefix — routes are defined with full paths.
+app.include_router(pine_router, tags=["Pine Script Generator"])
 
 
 # ---------------------------------------------------------------------------
@@ -787,6 +802,8 @@ def api_info():
             "bars_fill": "/bars/{symbol}/fill",
             "bars_fill_all": "/bars/fill/all",
             "bars_fill_status": "/bars/fill/status",
+            "pine": "/pine",
+            "pine_api": "/api/pine/modules",
         },
     }
 

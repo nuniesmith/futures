@@ -43,6 +43,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from lib.core.utils import atr as _atr
+from lib.core.utils import ema as _ema
+from lib.core.utils import rsi as _rsi
+
 logger = logging.getLogger("confluence")
 
 
@@ -69,36 +73,6 @@ DEFAULT_EMA_SLOW = 50
 DEFAULT_RSI_PERIOD = 14
 DEFAULT_RSI_BULLISH_THRESHOLD = 45  # above this → bullish ok
 DEFAULT_RSI_BEARISH_THRESHOLD = 55  # below this → bearish ok
-
-
-# ---------------------------------------------------------------------------
-# Indicator helpers
-# ---------------------------------------------------------------------------
-
-
-def _ema(series: pd.Series, length: int) -> pd.Series:
-    """Exponential Moving Average."""
-    return pd.Series(series.ewm(span=length, adjust=False).mean())
-
-
-def _rsi(series: pd.Series, length: int = 14) -> pd.Series:
-    """Relative Strength Index."""
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = (-delta).clip(lower=0)
-    avg_gain = gain.ewm(span=length, adjust=False).mean()
-    avg_loss = loss.ewm(span=length, adjust=False).mean()
-    rs = avg_gain / (avg_loss + 1e-10)
-    return pd.Series(100 - (100 / (1 + rs)))
-
-
-def _atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.Series:
-    """Average True Range."""
-    tr1 = high - low
-    tr2 = (high - close.shift(1)).abs()
-    tr3 = (low - close.shift(1)).abs()
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    return pd.Series(tr.ewm(span=length, adjust=False).mean())
 
 
 # ---------------------------------------------------------------------------

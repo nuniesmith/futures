@@ -1,7 +1,7 @@
 """
 Multi-channel alert dispatcher for futures trading signals.
 
-Sends alerts to Slack, Discord, and Telegram via webhooks/bot API.
+Sends alerts to Discord via http webhooks.
 Includes mandatory 5-minute deduplication cooldown per unique signal key
 to prevent alert spam during volatile markets.
 
@@ -9,13 +9,10 @@ Per the notes.md blueprint:
   - Simple requests.post() calls to webhook URLs
   - Alert deduplication is essential — 5-minute cooldown per unique signal key
   - Store sent alert timestamps in Redis (with fallback to in-memory dict)
-  - Channels: Slack webhooks, Discord webhooks, Telegram Bot API
+  - Channels: Discord webhooks
 
 Configuration via environment variables:
-  SLACK_WEBHOOK_URL    — Slack incoming webhook URL
   DISCORD_WEBHOOK_URL  — Discord webhook URL
-  TELEGRAM_BOT_TOKEN   — Telegram bot token
-  TELEGRAM_CHAT_ID     — Telegram chat ID to send messages to
   ALERT_COOLDOWN_SEC   — Cooldown period in seconds (default 300 = 5 min)
 
 Usage:
@@ -66,8 +63,8 @@ DEFAULT_COOLDOWN_SEC = 300
 def _get_config() -> dict[str, Any]:
     """Load alert channel configuration from environment variables."""
     return {
-        "slack_webhook": os.getenv("SLACK_WEBHOOK_URL", ""),
         "discord_webhook": os.getenv("DISCORD_WEBHOOK_URL", ""),
+        "slack_webhook": os.getenv("SLACK_WEBHOOK_URL", ""),
         "telegram_token": os.getenv("TELEGRAM_BOT_TOKEN", ""),
         "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", ""),
         "cooldown_sec": int(os.getenv("ALERT_COOLDOWN_SEC", str(DEFAULT_COOLDOWN_SEC))),
@@ -215,44 +212,15 @@ class _AlertStore:
 
 
 def _send_slack(webhook_url: str, title: str, message: str, fields: dict | None = None) -> bool:
-    """Send an alert to Slack via incoming webhook.
-
-    Uses Slack Block Kit for rich formatting.
-    """
+    """Send an alert to Slack via incoming webhook."""
     if not webhook_url:
         return False
 
-    blocks: list[dict[str, Any]] = [
-        {
-            "type": "header",
-            "text": {"type": "plain_text", "text": title[:150], "emoji": True},
-        },
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": message},
-        },
-    ]
-
+    text = f"*{title}*\n{message}"
     if fields:
-        field_blocks: list[dict[str, str]] = []
-        for k, v in fields.items():
-            field_blocks.append({"type": "mrkdwn", "text": f"*{k}*\n{v}"})
-        if field_blocks:
-            blocks.append({"type": "section", "fields": field_blocks[:10]})
+        text += "\n" + " | ".join(f"*{k}:* {v}" for k, v in fields.items())
 
-    blocks.append(
-        {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"Futures Dashboard • {datetime.now(_EST).strftime('%I:%M %p ET')}",
-                }
-            ],
-        }
-    )
-
-    payload = {"blocks": blocks, "text": title}
+    payload = {"text": text}
 
     try:
         resp = requests.post(
@@ -269,6 +237,28 @@ def _send_slack(webhook_url: str, title: str, message: str, fields: dict | None 
             return False
     except Exception as exc:
         logger.warning("Slack alert error: %s", exc)
+        return False
+
+
+def _send_telegram(token: str, chat_id: str, title: str, message: str) -> bool:
+    """Send an alert to Telegram via Bot API."""
+    if not token or not chat_id:
+        return False
+
+    text = f"<b>{title}</b>\n{message}"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            logger.debug("Telegram alert sent: %s", title)
+            return True
+        else:
+            logger.warning("Telegram alert failed: %s %s", resp.status_code, resp.text[:200])
+            return False
+    except Exception as exc:
+        logger.warning("Telegram alert error: %s", exc)
         return False
 
 
@@ -311,64 +301,6 @@ def _send_discord(webhook_url: str, title: str, message: str, fields: dict | Non
         return False
 
 
-def _send_telegram(
-    bot_token: str,
-    chat_id: str,
-    title: str,
-    message: str,
-    fields: dict | None = None,
-) -> bool:
-    """Send an alert to Telegram via Bot API.
-
-    Uses HTML parse mode for formatting.
-    """
-    if not bot_token or not chat_id:
-        return False
-
-    # Build HTML-formatted message
-    parts = [f"<b>{_escape_html(title)}</b>", "", _escape_html(message)]
-
-    if fields:
-        parts.append("")
-        for k, v in fields.items():
-            parts.append(f"<b>{_escape_html(str(k))}:</b> {_escape_html(str(v))}")
-
-    parts.append("")
-    parts.append(f"<i>Futures Dashboard • {datetime.now(_EST).strftime('%I:%M %p ET')}</i>")
-
-    text = "\n".join(parts)
-
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text[:4096],
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-
-    try:
-        resp = requests.post(url, json=payload, timeout=10)
-        if resp.status_code == 200:
-            result = resp.json()
-            if result.get("ok"):
-                logger.debug("Telegram alert sent: %s", title)
-                return True
-            else:
-                logger.warning("Telegram API error: %s", result.get("description", ""))
-                return False
-        else:
-            logger.warning("Telegram alert failed: %s %s", resp.status_code, resp.text[:200])
-            return False
-    except Exception as exc:
-        logger.warning("Telegram alert error: %s", exc)
-        return False
-
-
-def _escape_html(text: str) -> str:
-    """Escape HTML special characters for Telegram HTML parse mode."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
 # ---------------------------------------------------------------------------
 # Main dispatcher
 # ---------------------------------------------------------------------------
@@ -377,7 +309,7 @@ def _escape_html(text: str) -> str:
 class AlertDispatcher:
     """Multi-channel alert dispatcher with deduplication.
 
-    Sends alerts to all configured channels (Slack, Discord, Telegram).
+    Sends alerts to all configured channels (Discord).
     Signal alerts respect the cooldown period; risk alerts are always sent.
 
     Usage:
@@ -391,15 +323,15 @@ class AlertDispatcher:
 
     def __init__(
         self,
-        slack_webhook: str = "",
         discord_webhook: str = "",
+        slack_webhook: str = "",
         telegram_token: str = "",
         telegram_chat_id: str = "",
         cooldown_sec: int = DEFAULT_COOLDOWN_SEC,
         _disable_redis: bool = False,
     ):
-        self.slack_webhook = slack_webhook
         self.discord_webhook = discord_webhook
+        self.slack_webhook = slack_webhook
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
         self.cooldown_sec = cooldown_sec
@@ -410,9 +342,7 @@ class AlertDispatcher:
         self._stats = {
             "total_sent": 0,
             "total_suppressed": 0,
-            "slack_sent": 0,
             "discord_sent": 0,
-            "telegram_sent": 0,
             "errors": 0,
         }
 
@@ -420,10 +350,10 @@ class AlertDispatcher:
     def channels_configured(self) -> list[str]:
         """List of configured (non-empty) alert channels."""
         channels = []
-        if self.slack_webhook:
-            channels.append("Slack")
         if self.discord_webhook:
             channels.append("Discord")
+        if self.slack_webhook:
+            channels.append("Slack")
         if self.telegram_token and self.telegram_chat_id:
             channels.append("Telegram")
         return channels
@@ -596,25 +526,21 @@ class AlertDispatcher:
         """Send to all configured channels. Returns True if any succeeded."""
         any_success = False
 
-        if self.slack_webhook and _send_slack(self.slack_webhook, title, message, fields):
-            self._stats["slack_sent"] += 1
-            any_success = True
-
         if self.discord_webhook and _send_discord(self.discord_webhook, title, message, fields):
             self._stats["discord_sent"] += 1
+            any_success = True
+
+        if self.slack_webhook and _send_slack(self.slack_webhook, title, message, fields):
+            self._stats.setdefault("slack_sent", 0)
+            self._stats["slack_sent"] += 1
             any_success = True
 
         if (
             self.telegram_token
             and self.telegram_chat_id
-            and _send_telegram(
-                self.telegram_token,
-                self.telegram_chat_id,
-                title,
-                message,
-                fields,
-            )
+            and _send_telegram(self.telegram_token, self.telegram_chat_id, title, message)
         ):
+            self._stats.setdefault("telegram_sent", 0)
             self._stats["telegram_sent"] += 1
             any_success = True
 
@@ -657,8 +583,8 @@ def get_dispatcher() -> AlertDispatcher:
         config = _get_config()
         disable_redis = os.getenv("DISABLE_REDIS", "").lower() in ("1", "true", "yes")
         _dispatcher = AlertDispatcher(
-            slack_webhook=config["slack_webhook"],
             discord_webhook=config["discord_webhook"],
+            slack_webhook=config["slack_webhook"],
             telegram_token=config["telegram_token"],
             telegram_chat_id=config["telegram_chat_id"],
             cooldown_sec=config["cooldown_sec"],
@@ -672,9 +598,7 @@ def get_dispatcher() -> AlertDispatcher:
             )
         else:
             logger.info(
-                "Alert dispatcher initialized with no channels configured. "
-                "Set SLACK_WEBHOOK_URL, DISCORD_WEBHOOK_URL, or "
-                "TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID to enable alerts."
+                "Alert dispatcher initialized with no channels configured. Set DISCORD_WEBHOOK_URL to enable alerts."
             )
     return _dispatcher
 

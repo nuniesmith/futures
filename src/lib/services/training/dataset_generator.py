@@ -31,13 +31,13 @@ Public API:
     # stats.csv_path → "dataset/labels.csv"
 
 Dependencies:
-  - orb_simulator (auto-labeling)
+  - rb_simulator (auto-labeling)
   - chart_renderer (image generation)
   - pandas, numpy (already in project)
   - Massive client or cached bar data (for historical bars)
 
 Design:
-  - Pure orchestration — delegates to orb_simulator and chart_renderer.
+  - Pure orchestration — delegates to rb_simulator and chart_renderer.
   - Resumable: skips images that already exist on disk (by filename).
   - Thread-safe: each symbol can be processed independently.
   - Produces balanced datasets by capping over-represented labels.
@@ -68,7 +68,7 @@ except ImportError:
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from lib.services.training.orb_simulator import ORBSimResult
+    from lib.services.training.rb_simulator import ORBSimResult
 import pandas as pd
 
 logger = logging.getLogger("analysis.dataset_generator")
@@ -90,7 +90,7 @@ class DatasetConfig:
     image_dir: str = "dataset/images"
     csv_filename: str = "labels.csv"
 
-    # Window parameters (passed to orb_simulator.simulate_batch)
+    # Window parameters (passed to rb_simulator.simulate_batch)
     window_size: int = 240  # 4 hours of 1-min bars
     step_size: int = 30  # 30-minute steps between windows
     min_window_bars: int = 60  # minimum bars to attempt simulation
@@ -1080,7 +1080,7 @@ def _bracket_configs_for_session(
 
     Any unknown value falls back to ``"us"``.
     """
-    from lib.services.training.orb_simulator import BracketConfig
+    from lib.services.training.rb_simulator import BracketConfig
 
     session_params = _get_session_bracket_params()
 
@@ -1121,7 +1121,7 @@ def _run_simulators_for_breakout_type(
 ) -> list[Any]:
     """Dispatch to the correct simulator(s) based on *breakout_type_str*.
 
-    Returns a flat list of :class:`~orb_simulator.ORBSimResult` objects with
+    Returns a flat list of :class:`~rb_simulator.ORBSimResult` objects with
     ``_session_key`` and ``_breakout_type`` already set on each result.
 
     Args:
@@ -1141,7 +1141,7 @@ def _run_simulators_for_breakout_type(
         Combined list of simulation results tagged with breakout type.
     """
     from lib.core.breakout_types import BreakoutType
-    from lib.services.training.orb_simulator import (
+    from lib.services.training.rb_simulator import (
         BracketConfig,
         simulate_batch,
         simulate_batch_asian,
@@ -1622,7 +1622,7 @@ def generate_dataset_for_symbol(
 
     if _use_parity:
         try:
-            from lib.analysis.chart_renderer_parity import (
+            from lib.analysis.rendering.chart_renderer_parity import (
                 compute_vwap_from_bars,
                 dataframe_to_parity_bars,
                 render_parity_to_file,
@@ -1639,7 +1639,7 @@ def generate_dataset_for_symbol(
 
     if not _use_parity:
         try:
-            from lib.analysis.chart_renderer import RenderConfig, render_ruby_snapshot
+            from lib.analysis.rendering.chart_renderer import RenderConfig, render_ruby_snapshot
 
             _can_render = True
         except ImportError:
@@ -1992,7 +1992,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
 
     # ── [13] asset_class_id — ordinal / 4 matching C# GetAssetClassNorm() ─
     try:
-        from lib.analysis.breakout_cnn import get_asset_class_id as _get_cls
+        from lib.analysis.ml.breakout_cnn import get_asset_class_id as _get_cls
 
         asset_class_id = _get_cls(result.symbol)
     except Exception:
@@ -2000,7 +2000,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
 
     # ── [15] asset_volatility_class — low=0.0, med=0.5, high=1.0 ─────────
     try:
-        from lib.analysis.breakout_cnn import get_asset_volatility_class as _get_vol
+        from lib.analysis.ml.breakout_cnn import get_asset_volatility_class as _get_vol
 
         asset_vol_class = _get_vol(result.symbol)
     except Exception:
@@ -2071,7 +2071,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
 
         if _daily_bars is not None and not _daily_bars.empty:
             try:
-                from lib.analysis.breakout_cnn import (
+                from lib.analysis.ml.breakout_cnn import (
                     get_daily_bias_confidence,
                     get_daily_bias_direction,
                     get_monthly_trend_score,
@@ -2115,7 +2115,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     # [24] breakout_type_category — time-based=0, range-based=0.5, squeeze=1.0
     bt_category = 0.5
     try:
-        from lib.analysis.breakout_cnn import get_breakout_type_category
+        from lib.analysis.ml.breakout_cnn import get_breakout_type_category
 
         bt_category = get_breakout_type_category(_bt_name)
     except Exception:
@@ -2124,7 +2124,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     # [25] session_overlap_flag — 1.0 if London+NY overlap, else 0.0
     session_overlap = 0.0
     try:
-        from lib.analysis.breakout_cnn import get_session_overlap_flag
+        from lib.analysis.ml.breakout_cnn import get_session_overlap_flag
 
         _session_key = getattr(result, "_session_key", "us")
         # Also check the bar hour for overlap detection
@@ -2149,7 +2149,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     # [26] atr_trend — ATR expanding=1.0, contracting=0.0 (10-bar lookback)
     atr_trend_val = 0.5
     try:
-        from lib.analysis.breakout_cnn import get_atr_trend
+        from lib.analysis.ml.breakout_cnn import get_atr_trend
 
         _bars_1m = getattr(result, "_bars_1m", None)
         if _bars_1m is not None and not _bars_1m.empty:
@@ -2160,7 +2160,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     # [27] volume_trend — 5-bar volume slope, normalised [0, 1]
     vol_trend_val = 0.5
     try:
-        from lib.analysis.breakout_cnn import get_volume_trend
+        from lib.analysis.ml.breakout_cnn import get_volume_trend
 
         _bars_1m = getattr(result, "_bars_1m", None)
         if _bars_1m is not None and not _bars_1m.empty:

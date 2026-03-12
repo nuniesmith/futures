@@ -1,6 +1,6 @@
 import pandas as pd
 from loguru import logger
-from typing import Optional
+
 
 def vwap(data: pd.DataFrame) -> pd.Series:
     """
@@ -19,7 +19,7 @@ def vwap(data: pd.DataFrame) -> pd.Series:
     missing_cols = [col for col in required_columns if col not in data.columns]
     if missing_cols:
         raise ValueError(f"DataFrame is missing the following columns: {', '.join(missing_cols)}")
-    
+
     logger.info("Calculating Volume-Weighted Average Price (VWAP).")
     cum_volume = data["Volume"].cumsum()
     cum_vwap = (data["Close"] * data["Volume"]).cumsum()
@@ -48,19 +48,21 @@ def apply(data: pd.DataFrame) -> pd.DataFrame:
 class VWAPIndicator:
     """
     VWAP (Volume-Weighted Average Price) Indicator.
-    
+
     This indicator calculates VWAP based on the cumulative volume and price.
     It maintains an internal history of 'Close' and 'Volume' data and provides
     methods for updating with individual data points as well as applying the calculation
     to an entire DataFrame.
     """
+
     REQUIRED_COLUMNS = ["Close", "Volume"]
 
     def __init__(self):
         self.logger = logger
         self.history_df = pd.DataFrame(columns=self.REQUIRED_COLUMNS)
         self.current_value = None
-    def update(self, data_point: dict) -> Optional[float]:
+
+    def update(self, data_point: dict) -> float | None:
         """
         Update VWAP with a new data point.
 

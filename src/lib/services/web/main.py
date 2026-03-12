@@ -1075,6 +1075,60 @@ async def proxy_trading_app(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Copy Trade — explicit proxy routes for RITHMIC-F WebUI cards
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/copy-trade/rate-alert")
+async def proxy_copy_trade_rate_alert(request: Request):
+    return await _proxy_request(request, "/api/copy-trade/rate-alert")
+
+
+@app.get("/api/copy-trade/focus")
+async def proxy_copy_trade_focus(request: Request):
+    return await _proxy_request(request, "/api/copy-trade/focus")
+
+
+@app.post("/api/copy-trade/pyramid")
+async def proxy_copy_trade_pyramid(request: Request):
+    return await _proxy_request(request, "/api/copy-trade/pyramid")
+
+
+@app.get("/api/copy-trade/accounts/html", response_class=HTMLResponse)
+async def proxy_copy_trade_accounts_html(request: Request):
+    return await _proxy_request(request, "/api/copy-trade/accounts/html")
+
+
+# ---------------------------------------------------------------------------
+# Ruby Signal Engine — read-only signal data for the Live Trading page
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/ruby/signals")
+async def proxy_ruby_signals(request: Request):
+    """Proxy all latest Ruby signals map from data service."""
+    return await _proxy_request(request, "/api/ruby/signals")
+
+
+@app.get("/api/ruby/signal/{symbol}")
+async def proxy_ruby_signal(request: Request, symbol: str):
+    """Proxy single-symbol Ruby signal from data service."""
+    return await _proxy_request(request, f"/api/ruby/signal/{symbol}")
+
+
+@app.get("/api/ruby/status")
+async def proxy_ruby_status(request: Request):
+    """Proxy Ruby signal status summary from data service."""
+    return await _proxy_request(request, "/api/ruby/status")
+
+
+@app.get("/api/ruby/status/html", response_class=HTMLResponse)
+async def proxy_ruby_status_html(request: Request):
+    """Proxy Ruby signal HTMX fragment (signal cards) from data service."""
+    return await _proxy_request(request, "/api/ruby/status/html")
+
+
+# ---------------------------------------------------------------------------
 # Chat — RustAssistant-powered multi-turn chat with RA→Grok fallback
 # ---------------------------------------------------------------------------
 
@@ -1176,6 +1230,71 @@ async def proxy_task_delete(request: Request, task_id: int):
 async def proxy_task_push_github(request: Request, task_id: int):
     """Proxy task → GitHub push via RustAssistant."""
     return await _proxy_request(request, f"/api/tasks/{task_id}/github")
+
+
+# ---------------------------------------------------------------------------
+# Pine Script Generator — modular indicator assembly and download
+# ---------------------------------------------------------------------------
+
+
+@app.get("/pine", response_class=HTMLResponse)
+async def proxy_pine_page(request: Request):
+    """Proxy the Pine Script Generator dashboard page."""
+    return await _proxy_request(request, "/pine")
+
+
+@app.get("/api/pine/modules")
+async def proxy_pine_modules(request: Request):
+    """Proxy Pine module list."""
+    return await _proxy_request(request, "/api/pine/modules")
+
+
+@app.get("/api/pine/module/{name}")
+async def proxy_pine_module(request: Request, name: str):
+    """Proxy single Pine module content."""
+    return await _proxy_request(request, f"/api/pine/module/{name}")
+
+
+@app.get("/api/pine/params")
+async def proxy_pine_params(request: Request):
+    """Proxy Pine params.yaml content."""
+    return await _proxy_request(request, "/api/pine/params")
+
+
+@app.put("/api/pine/params")
+async def proxy_pine_params_update(request: Request):
+    """Proxy Pine params.yaml update."""
+    return await _proxy_request(request, "/api/pine/params")
+
+
+@app.post("/api/pine/generate")
+async def proxy_pine_generate(request: Request):
+    """Proxy Pine script generation."""
+    return await _proxy_request(request, "/api/pine/generate")
+
+
+@app.get("/api/pine/output")
+async def proxy_pine_output(request: Request):
+    """Proxy Pine output files list."""
+    return await _proxy_request(request, "/api/pine/output")
+
+
+@app.get("/api/pine/download/{name}")
+async def proxy_pine_download(request: Request, name: str):
+    """Proxy Pine file download."""
+    return await _proxy_request(request, f"/api/pine/download/{name}")
+
+
+@app.get("/api/pine/stats")
+async def proxy_pine_stats(request: Request):
+    """Proxy Pine indicator statistics."""
+    return await _proxy_request(request, "/api/pine/stats")
+
+
+@app.get("/api/pine/status/html", response_class=HTMLResponse)
+async def proxy_pine_status_html(request: Request):
+    """Proxy Pine status HTMX fragment."""
+    return await _proxy_request(request, "/api/pine/status/html")
 
 
 # ---------------------------------------------------------------------------

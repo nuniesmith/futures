@@ -346,9 +346,8 @@ body{font-family:ui-monospace,'Cascadia Code','Fira Code',monospace;background:v
 
 /* ── Layout ── */
 .page{padding:1rem;max-width:1600px;margin:0 auto}
-.grid-main{display:grid;grid-template-columns:340px 1fr 360px;gap:12px}
-@media(max-width:1200px){.grid-main{grid-template-columns:1fr 1fr}}
-@media(max-width:800px){.grid-main{grid-template-columns:1fr}}
+.grid-main{display:grid;grid-template-columns:340px 1fr;gap:12px}
+@media(max-width:900px){.grid-main{grid-template-columns:1fr}}
 
 /* ── Card ── */
 .card{background:var(--bg-panel);border:1px solid var(--border);border-radius:10px;padding:14px}
@@ -378,8 +377,8 @@ body{font-family:ui-monospace,'Cascadia Code','Fira Code',monospace;background:v
 
 /* ── Log box ── */
 #log-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;
-         height:320px;overflow-y:auto;padding:8px;font-size:0.7rem;line-height:1.6;
-         font-family:ui-monospace,'Cascadia Code',monospace}
+         min-height:400px;max-height:600px;overflow-y:auto;padding:10px;font-size:0.75rem;line-height:1.7;
+         font-family:ui-monospace,'Cascadia Code',monospace;user-select:text;white-space:pre-wrap;width:100%}
 .ll-INFO{color:#93c5fd}.ll-WARNING{color:#fbbf24}.ll-ERROR{color:#f87171}
 .ll-DEBUG{color:var(--faint)}.ll-ts{color:var(--faint);margin-right:5px}
 .ll-name{color:#818cf8;margin-right:5px}
@@ -405,6 +404,7 @@ input[type=checkbox]{accent-color:#3b82f6;width:13px;height:13px}
 .btn-danger{background:#dc2626;color:#fff}
 .btn-neutral{background:var(--bg-input);border:1px solid var(--border);color:var(--text)}
 .btn-success{background:#16a34a;color:#fff}
+.btn-outline-blue{background:var(--bg-input);border:1px solid #3b82f6;color:#60a5fa}
 .btn-sm{padding:4px 11px;font-size:0.74rem}
 .btn-row{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
 
@@ -537,7 +537,10 @@ tr:hover td{background:var(--bg-inner)}
         </div>
         <div id="last-result-info" style="font-size:0.72rem;color:var(--muted);min-height:18px"></div>
         <div class="btn-row">
-          <button class="btn btn-primary" id="btn-train" onclick="startTrain()">▶ Start Training</button>
+          <button class="btn btn-outline-blue" id="btn-load" onclick="loadData()">📥 Load Data</button>
+          <button class="btn btn-neutral" id="btn-gends" onclick="generateDataset()">🗃 Generate Dataset</button>
+          <button class="btn btn-primary" id="btn-train" onclick="trainModel()">🧠 Train Model</button>
+          <button class="btn btn-success" id="btn-pipeline" onclick="fullPipeline()">🚀 Full Pipeline</button>
           <button class="btn btn-danger" id="btn-cancel" onclick="cancelTrain()" disabled>✕ Cancel</button>
         </div>
         <div id="timing-info" style="font-size:0.67rem;color:var(--faint);margin-top:6px;min-height:14px"></div>
@@ -582,7 +585,7 @@ tr:hover td{background:var(--bg-inner)}
         <div class="grid-2">
           <div class="field-row">
             <label class="field-lbl">Epochs</label>
-            <input type="number" id="c-epochs" value="25" min="1" max="200"/>
+            <input type="number" id="c-epochs" value="60" min="1" max="200"/>
           </div>
           <div class="field-row">
             <label class="field-lbl">Batch Size</label>
@@ -590,15 +593,15 @@ tr:hover td{background:var(--bg-inner)}
           </div>
           <div class="field-row">
             <label class="field-lbl">Learning Rate</label>
-            <input type="number" id="c-lr" value="0.0002" step="0.00001" min="0.00001" max="0.1"/>
+            <input type="number" id="c-lr" value="0.0001" step="0.00001" min="0.00001" max="0.1"/>
           </div>
           <div class="field-row">
             <label class="field-lbl">Early Stop Patience</label>
-            <input type="number" id="c-patience" value="8" min="1" max="50"/>
+            <input type="number" id="c-patience" value="12" min="1" max="50"/>
           </div>
           <div class="field-row">
             <label class="field-lbl">Days Back</label>
-            <input type="number" id="c-days" value="90" min="7" max="365"/>
+            <input type="number" id="c-days" value="180" min="7" max="365"/>
           </div>
           <div class="field-row">
             <label class="field-lbl">Bars Source</label>
@@ -685,34 +688,30 @@ tr:hover td{background:var(--bg-inner)}
 
     </div>
 
-    <!-- RIGHT: Logs + Archive -->
-    <div style="display:flex;flex-direction:column;gap:10px">
-
-      <!-- Live logs -->
-      <div class="card" style="flex:1">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <div class="card-title" style="margin:0">Live Logs</div>
-          <div style="display:flex;gap:6px;align-items:center">
-            <label style="font-size:0.68rem;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
-              <input type="checkbox" id="log-auto" checked style="width:11px;height:11px"/> scroll
-            </label>
-            <button class="btn btn-neutral btn-sm" onclick="clearLogs()">clear</button>
-          </div>
-        </div>
-        <div id="log-box"></div>
-      </div>
-
-      <!-- Model archive -->
-      <div class="card">
-        <div class="card-title">Model Archive</div>
-        <div id="archive-table" style="overflow-x:auto">
-          <div style="color:var(--faint);font-size:0.78rem">Loading…</div>
-        </div>
-      </div>
-
-    </div>
-
   </div><!-- /grid-main -->
+
+  <!-- Full-width Logs section -->
+  <div class="card" style="margin-top:12px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div class="card-title" style="margin:0">Live Logs</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <label style="font-size:0.68rem;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
+          <input type="checkbox" id="log-auto" checked style="width:11px;height:11px"/> scroll
+        </label>
+        <button class="btn btn-neutral btn-sm" onclick="copyLogs()">📋 Copy All</button>
+        <button class="btn btn-neutral btn-sm" onclick="clearLogs()">clear</button>
+      </div>
+    </div>
+    <div id="log-box"></div>
+  </div>
+
+  <!-- Full-width Model Archive -->
+  <div class="card" style="margin-top:12px">
+    <div class="card-title">Model Archive</div>
+    <div id="archive-table" style="overflow-x:auto">
+      <div style="color:var(--faint);font-size:0.78rem">Loading…</div>
+    </div>
+  </div>
 
   <!-- Last run results (shown after training completes) -->
   <div id="results-detail" class="card" style="margin-top:12px;display:none">
@@ -880,8 +879,11 @@ function renderStatus(s) {
 
   // Buttons
   const busy = ['generating_dataset','training','evaluating','promoting'].includes(st);
-  document.getElementById('btn-train').disabled  = busy;
-  document.getElementById('btn-cancel').disabled = !busy;
+  document.getElementById('btn-load').disabled     = busy;
+  document.getElementById('btn-gends').disabled    = busy;
+  document.getElementById('btn-train').disabled    = busy;
+  document.getElementById('btn-pipeline').disabled = busy;
+  document.getElementById('btn-cancel').disabled   = !busy;
 
   // Metrics from last result
   if (s.last_result && s.last_result.metrics) {
@@ -922,8 +924,8 @@ function renderStatus(s) {
 
   // Config defaults (once)
   if (s.config && !document.getElementById('c-epochs').dataset.set) {
-    document.getElementById('c-epochs').value = s.config.default_epochs    || 25;
-    document.getElementById('c-days').value   = s.config.default_days_back || 90;
+    document.getElementById('c-epochs').value = s.config.default_epochs    || 60;
+    document.getElementById('c-days').value   = s.config.default_days_back || 180;
     if (s.config.default_session) document.getElementById('c-session').value = s.config.default_session;
     document.getElementById('c-epochs').dataset.set = '1';
   }
@@ -1099,11 +1101,7 @@ async function refreshModels() {
 // ═══════════════════════════════════════════════════════
 // Actions
 // ═══════════════════════════════════════════════════════
-async function startTrain() {
-  if (!_trainerOnline) {
-    addLog({ts:nowTs(), level:'ERROR', name:'ui', msg:'Trainer is offline — cannot start training'});
-    return;
-  }
+function buildPayload() {
   const symRaw = document.getElementById('c-symbols').value.trim();
   const symbols = symRaw ? symRaw.split(',').map(s=>s.trim()).filter(Boolean) : null;
 
@@ -1122,11 +1120,26 @@ async function startTrain() {
     force_promote: document.getElementById('c-force').checked,
   };
   if (symbols) payload.symbols = symbols;
+  return payload;
+}
 
-  document.getElementById('btn-train').disabled = true;
+function setStepButtonsBusy(busy) {
+  document.getElementById('btn-load').disabled     = busy;
+  document.getElementById('btn-gends').disabled    = busy;
+  document.getElementById('btn-train').disabled    = busy;
+  document.getElementById('btn-pipeline').disabled = busy;
+}
+
+async function submitJob(payload, logMsg) {
+  if (!_trainerOnline) {
+    addLog({ts:nowTs(), level:'ERROR', name:'ui', msg:'Trainer is offline — cannot start'});
+    return;
+  }
+
+  setStepButtonsBusy(true);
   document.getElementById('results-detail').style.display = 'none';
 
-  addLog({ts:nowTs(), level:'INFO', name:'ui', msg:'Submitting training job…'});
+  addLog({ts:nowTs(), level:'INFO', name:'ui', msg: logMsg});
 
   try {
     const r = await fetch('/trainer/api/train', {
@@ -1136,20 +1149,43 @@ async function startTrain() {
     });
     const d = await r.json();
     if (r.status === 202) {
-      addLog({ts:nowTs(), level:'INFO', name:'ui', msg:'Training started ✓'});
-      _logOffset = 0; // reset log tail so we see new logs from the start
+      addLog({ts:nowTs(), level:'INFO', name:'ui', msg:'Job accepted ✓'});
+      _logOffset = 0;
     } else if (r.status === 409) {
       addLog({ts:nowTs(), level:'WARNING', name:'ui', msg:'Training already in progress'});
-      document.getElementById('btn-train').disabled = false;
+      setStepButtonsBusy(false);
     } else {
       addLog({ts:nowTs(), level:'ERROR', name:'ui', msg:JSON.stringify(d)});
-      document.getElementById('btn-train').disabled = false;
+      setStepButtonsBusy(false);
     }
   } catch(e) {
     addLog({ts:nowTs(), level:'ERROR', name:'ui', msg:String(e)});
-    document.getElementById('btn-train').disabled = false;
+    setStepButtonsBusy(false);
   }
   pollTrainerStatus();
+}
+
+async function loadData() {
+  const payload = buildPayload();
+  payload.step = 'load_data';
+  await submitJob(payload, 'Loading data…');
+}
+
+async function generateDataset() {
+  const payload = buildPayload();
+  payload.step = 'generate_dataset';
+  await submitJob(payload, 'Generating dataset…');
+}
+
+async function trainModel() {
+  const payload = buildPayload();
+  payload.step = 'train';
+  await submitJob(payload, 'Training model…');
+}
+
+async function fullPipeline() {
+  const payload = buildPayload();
+  await submitJob(payload, 'Starting full pipeline…');
 }
 
 async function cancelTrain() {
@@ -1196,6 +1232,14 @@ function addLog(entry) {
 
 function clearLogs() {
   document.getElementById('log-box').innerHTML = '';
+}
+
+function copyLogs() {
+  const box = document.getElementById('log-box');
+  const text = box.innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    addLog({ts: nowTs(), level: 'INFO', name: 'ui', msg: 'Logs copied to clipboard ✓'});
+  });
 }
 
 // ═══════════════════════════════════════════════════════

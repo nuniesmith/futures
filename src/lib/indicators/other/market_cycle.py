@@ -1,21 +1,22 @@
 import pandas as pd
-from typing import Optional
 from loguru import logger
+
 
 class MarketCycleIndicator:
     """
     Market Cycle Indicator.
-    
+
     This indicator detects market cycles based on price momentum. It assigns phases such as 'Markup',
     'Markdown', 'Plateau', and applies rule-based adjustments to denote 'Accumulation' and 'Distribution'
     phases. The indicator maintains an internal history of closing prices for incremental updates.
     """
+
     REQUIRED_COLUMNS = ["Close"]
 
     def __init__(self, momentum_period: int = 1):
         """
         Initialize the MarketCycleIndicator.
-        
+
         Args:
             momentum_period (int): Period used for calculating momentum.
         """
@@ -27,53 +28,53 @@ class MarketCycleIndicator:
     def _detect(self, data: pd.DataFrame) -> pd.Series:
         """
         Detect market cycle phases based on the momentum of the 'Close' prices.
-        
+
         Args:
             data (pd.DataFrame): DataFrame containing a 'Close' column.
-            
+
         Returns:
             pd.Series: Series of market cycle phases.
         """
         self.logger.info("Detecting market cycles...")
-        
+
         # Validate that 'Close' exists
         if "Close" not in data.columns:
             self.logger.error("Data must contain a 'Close' column.")
             raise ValueError("Data must contain a 'Close' column.")
-        
+
         # Fill missing 'Close' values if any
-        if data["Close"].isnull().any():
+        if bool(data["Close"].isnull().any()):
             self.logger.warning("Missing values in 'Close' column detected. Filling with forward fill.")
             data["Close"].ffill(inplace=True)
-        
+
         # Calculate momentum
         momentum = data["Close"].diff(self.momentum_period).astype(float)
         self.logger.debug(f"Calculated momentum with period {self.momentum_period}.")
 
         # Initialize the cycle Series with object dtype for phase labels
         cycle = pd.Series(index=data.index, dtype="object")
-        
+
         # Basic phase assignment based on momentum
         cycle[momentum > 0] = "Markup"
         cycle[momentum < 0] = "Markdown"
         cycle[momentum == 0] = "Plateau"
-        
+
         # Rule-based adjustments for phase transitions:
         # If the previous phase was 'Markdown' but the current is not, mark as 'Accumulation'
         cycle.loc[(cycle.shift(1) == "Markdown") & (cycle != "Markdown")] = "Accumulation"
         # If the previous phase was 'Markup' but the current is not, mark as 'Distribution'
         cycle.loc[(cycle.shift(1) == "Markup") & (cycle != "Markup")] = "Distribution"
-        
+
         self.logger.debug(f"Market cycles detected: {cycle.value_counts(dropna=True).to_dict()}")
         return cycle
 
-    def update(self, data_point: dict) -> Optional[str]:
+    def update(self, data_point: dict) -> str | None:
         """
         Update the Market Cycle Indicator with a new data point.
-        
+
         Args:
             data_point (dict): Market data point containing the key 'close'.
-        
+
         Returns:
             str or None: The latest detected market cycle phase, or None if update fails.
         """
@@ -101,10 +102,10 @@ class MarketCycleIndicator:
     def apply(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Apply the Market Cycle Indicator to an entire DataFrame.
-        
+
         Args:
             data (pd.DataFrame): Input DataFrame containing a 'Close' column.
-        
+
         Returns:
             pd.DataFrame: A new DataFrame with an added 'MarketCycle' column.
         """

@@ -17,7 +17,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from lib.analysis.reddit_sentiment import (
+from lib.analysis.sentiment.reddit_sentiment import (
     WINDOWS_MINUTES,
     aggregate_asset,
     get_asset_signal,

@@ -889,7 +889,7 @@ def sessions_for_asset_class(asset_class: str) -> list[ORBSession]:
 def to_bracket_params(session: ORBSession) -> dict[str, Any]:
     """Serialise a session's bracket parameters to a plain dict.
 
-    This is the format consumed by ``orb_simulator.BracketConfig`` and the
+    This is the format consumed by ``rb_simulator.BracketConfig`` and the
     NT8 ``SessionBracket`` struct in ``BreakoutStrategy.cs``.
 
     Returns::

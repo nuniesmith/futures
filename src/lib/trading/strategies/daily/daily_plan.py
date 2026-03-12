@@ -45,6 +45,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from lib.core.utils import safe_float as _safe_float
 from lib.trading.strategies.daily.bias_analyzer import (
     BiasDirection,
     DailyBias,
@@ -375,22 +376,6 @@ class DailyPlan:
 
 
 # ---------------------------------------------------------------------------
-# Helper: safe float
-# ---------------------------------------------------------------------------
-def _safe_float(val: Any, default: float = 0.0) -> float:
-    """Safely convert a value to float, returning default on failure."""
-    if val is None:
-        return default
-    try:
-        f = float(val)
-        if math.isnan(f) or math.isinf(f):
-            return default
-        return f
-    except (TypeError, ValueError):
-        return default
-
-
-# ---------------------------------------------------------------------------
 # Scoring helpers
 # ---------------------------------------------------------------------------
 
@@ -624,8 +609,8 @@ def _fetch_asset_data(asset_name: str) -> tuple[float, float]:
 
     # ── Primary path: engine HTTP API ─────────────────────────────────────
     try:
-        from lib.analysis.engine_data_client import get_client
         from lib.analysis.volatility import kmeans_volatility_clusters
+        from lib.services.data.engine_data_client import get_client
 
         client = get_client()
         df = client.get_bars(symbol, interval="5m", days_back=5)

@@ -525,7 +525,7 @@ def _run_training_pipeline(params: TrainRequest) -> None:
 
         _state.set(TrainStatus.TRAINING, f"Training for up to {epochs} epochs")
 
-        from lib.analysis.breakout_cnn import evaluate_model, train_model
+        from lib.analysis.ml.breakout_cnn import evaluate_model, train_model
 
         if train_model is None:
             _state.finish(error="torch not available — cannot train (is the [gpu] extra installed?)")
@@ -691,7 +691,7 @@ def _run_training_pipeline(params: TrainRequest) -> None:
         # Always regenerate and write the contract after promotion so the
         # models/ directory has an up-to-date contract that the engine can load.
         try:
-            from lib.analysis.breakout_cnn import generate_feature_contract
+            from lib.analysis.ml.breakout_cnn import generate_feature_contract
 
             fc_path = MODELS_DIR / "feature_contract.json"
             contract = generate_feature_contract(output_path=str(fc_path))

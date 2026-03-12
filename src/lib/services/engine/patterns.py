@@ -35,12 +35,13 @@ Usage:
 import contextlib
 import json
 import logging
-import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from lib.core.utils import safe_float as _safe_float
 
 logger = logging.getLogger("engine.patterns")
 
@@ -120,19 +121,6 @@ class NoTradeResult:
 # ---------------------------------------------------------------------------
 # Individual condition checkers
 # ---------------------------------------------------------------------------
-
-
-def _safe_float(val: Any, default: float = 0.0) -> float:
-    """Safely convert a value to float."""
-    if val is None:
-        return default
-    try:
-        f = float(val)
-        if math.isnan(f) or math.isinf(f):
-            return default
-        return f
-    except (TypeError, ValueError):
-        return default
 
 
 def _check_no_market_data(

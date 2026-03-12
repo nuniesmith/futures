@@ -77,7 +77,7 @@ def _load_sentiment(symbol: str, redis: Any) -> dict | None:
     if redis is None:
         return None
     try:
-        from lib.analysis.news_sentiment import load_sentiment_from_cache
+        from lib.analysis.sentiment.news_sentiment import load_sentiment_from_cache
 
         ns = load_sentiment_from_cache(symbol, redis)
         if ns is None:
@@ -227,7 +227,7 @@ async def api_news_spike(request: Request):
         return {"spikes": {}, "error": "Redis unavailable"}
 
     try:
-        from lib.analysis.news_sentiment import REDIS_SPIKE_KEY
+        from lib.analysis.sentiment.news_sentiment import REDIS_SPIKE_KEY
 
         raw = redis.get(REDIS_SPIKE_KEY)
         if not raw:

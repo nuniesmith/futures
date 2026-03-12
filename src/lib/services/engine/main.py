@@ -315,6 +315,23 @@ def _handle_fks_recompute(engine) -> None:
     # and Prometheus metrics scrape can both read it.
     _publish_regime_states()
 
+    # Run the Ruby Signal Engine over all focus assets — port of ruby.pine.
+    # Feeds each new 1-minute bar through the stateful RubySignalEngine,
+    # publishes engine:ruby_signal:<symbol> to Redis (TTL 15 min), and
+    # forwards detected signals to the PositionManager.
+    try:
+        from lib.services.engine.handlers import handle_ruby_recompute
+
+        # Determine the current active session for asset list selection
+        from lib.services.engine.scheduler import ScheduleManager, SessionMode
+
+        _sm = ScheduleManager()
+        _session = _sm.current_session
+        _session_key = "london_ny" if _session in (SessionMode.ACTIVE,) else "us"
+        handle_ruby_recompute(engine, session_key=_session_key)
+    except Exception as exc:
+        logger.warning("Ruby Signal Engine recompute error (non-fatal): %s", exc)
+
 
 def _publish_regime_states() -> None:
     """Run HMM regime detection across all focus assets and publish to Redis.
@@ -1418,24 +1435,6 @@ def _persist_breakout_result(result: "BreakoutResult", session_key: str = "") ->
         return None
 
 
-def _run_mtf_on_result(result: "BreakoutResult", bars_htf: "pd.DataFrame | None") -> "BreakoutResult":
-    """Run the MTF analyzer on a BreakoutResult and enrich it in-place."""
-    if not result.breakout_detected or bars_htf is None or bars_htf.empty:
-        return result
-    try:
-        from lib.analysis.mtf_analyzer import analyze_mtf
-
-        mtf = analyze_mtf(bars_htf, direction=result.direction)
-        result.mtf_score = mtf.mtf_score
-        result.mtf_direction = mtf.ema_slope_direction
-        result.macd_slope = mtf.macd_histogram_slope
-        result.macd_divergence = mtf.divergence_detected
-        result.extra["mtf"] = mtf.to_dict()
-    except Exception as exc:
-        logger.debug("_run_mtf_on_result error (non-fatal): %s", exc)
-    return result
-
-
 def _handle_check_pdr(engine, session_key: str = "london_ny") -> None:
     """Check for Previous Day Range (PDR) breakouts across session assets.
 
@@ -1854,7 +1853,7 @@ def _handle_check_news_sentiment(engine, label: str = "morning") -> None:
     t0 = time.time()
 
     try:
-        from lib.analysis.news_sentiment import run_news_sentiment_pipeline
+        from lib.analysis.sentiment.news_sentiment import run_news_sentiment_pipeline
 
         # Resolve API keys from environment
         finnhub_key = os.getenv("FINNHUB_API_KEY")

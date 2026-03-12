@@ -456,7 +456,7 @@ def _fetch_chunk_kraken(ticker: str, start_dt: datetime, end_dt: datetime) -> pd
             # Normalise index to UTC
             try:
                 dti = pd.DatetimeIndex(df.index)
-                dti = dti.tz_localize("UTC") if dti.tzinfo is None else dti.tz_convert("UTC")
+                dti = dti.tz_localize("UTC") if getattr(dti, "tzinfo", None) is None else dti.tz_convert("UTC")
                 df.index = dti
             except Exception:
                 pass
@@ -464,17 +464,17 @@ def _fetch_chunk_kraken(ticker: str, start_dt: datetime, end_dt: datetime) -> pd
             # Trim anything beyond end_dt
             end_cutoff = pd.Timestamp(end_ts, unit="s", tz="UTC")
             with contextlib.suppress(Exception):
-                df = df[df.index <= end_cutoff]
+                df = pd.DataFrame(df[df.index <= end_cutoff])
 
             if not df.empty:
-                all_frames.append(df)
+                all_frames.append(df.copy())
 
             # Determine the next ``since`` timestamp
-            last_idx_raw = df.index[-1] if not df.empty else None
-            if last_idx_raw is None:
+            if df.empty:
                 break
+            last_idx_raw = df.index[-1]
             try:
-                last_ts_obj = pd.Timestamp(last_idx_raw)
+                last_ts_obj = pd.Timestamp(last_idx_raw)  # type: ignore[arg-type]
                 next_since = int(last_ts_obj.timestamp()) + 60  # +1 minute
             except Exception:
                 break

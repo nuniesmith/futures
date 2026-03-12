@@ -68,6 +68,8 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
+from lib.indicators.helpers import atr_scalar, ema_numpy, rsi_scalar
+
 logger = logging.getLogger("analysis.crypto_momentum")
 
 _EST = ZoneInfo("America/New_York")
@@ -305,67 +307,18 @@ class CryptoMomentumSignal:
 
 
 def compute_ema(values: np.ndarray, period: int) -> np.ndarray:
-    """Compute exponential moving average (Wilder-style seed with SMA)."""
-    n = len(values)
-    if n == 0:
-        return np.array([], dtype=np.float64)
-    result = np.full(n, np.nan, dtype=np.float64)
-    if n < period:
-        return result
-    # Seed with SMA
-    result[period - 1] = np.mean(values[:period])
-    k = 2.0 / (period + 1)
-    for i in range(period, n):
-        result[i] = values[i] * k + result[i - 1] * (1.0 - k)
-    return result
+    """Compute exponential moving average. Delegates to lib.indicators.helpers."""
+    return ema_numpy(values, period)
 
 
 def compute_rsi(closes: np.ndarray, period: int = RSI_PERIOD) -> float:
     """Compute RSI from a close price array. Returns the last RSI value."""
-    n = len(closes)
-    if n < period + 1:
-        return 50.0  # neutral when insufficient data
-
-    deltas = np.diff(closes)
-    gains = np.where(deltas > 0, deltas, 0.0)
-    losses = np.where(deltas < 0, -deltas, 0.0)
-
-    # Wilder smoothing
-    avg_gain = np.mean(gains[:period])
-    avg_loss = np.mean(losses[:period])
-
-    for i in range(period, len(deltas)):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return float(100.0 - (100.0 / (1.0 + rs)))
+    return rsi_scalar(closes, period)
 
 
 def compute_atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = ATR_PERIOD) -> float:
-    """Compute ATR (Wilder smoothing). Returns last ATR value."""
-    n = len(closes)
-    if n < 2:
-        return 0.0
-
-    tr = np.zeros(n)
-    tr[0] = highs[0] - lows[0]
-    for i in range(1, n):
-        hl = highs[i] - lows[i]
-        hc = abs(highs[i] - closes[i - 1])
-        lc = abs(lows[i] - closes[i - 1])
-        tr[i] = max(hl, hc, lc)
-
-    if n < period + 1:
-        return float(np.mean(tr))
-
-    # Wilder smoothing
-    atr_val = float(np.mean(tr[:period]))
-    for i in range(period, n):
-        atr_val = (atr_val * (period - 1) + tr[i]) / period
-    return atr_val
+    """Compute ATR (Wilder smoothing). Returns last ATR value as a scalar float."""
+    return atr_scalar(highs, lows, closes, period)
 
 
 def compute_volume_ratio(volumes: np.ndarray, avg_period: int = VOLUME_AVG_PERIOD) -> float:

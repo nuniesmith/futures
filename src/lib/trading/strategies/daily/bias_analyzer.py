@@ -35,12 +35,13 @@ Pure computation — no side effects, no Redis, no network calls, fully testable
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 import numpy as np
 import pandas as pd
+
+from lib.core.utils import safe_float as _safe_float
 
 logger = logging.getLogger("strategies.daily.bias_analyzer")
 
@@ -194,15 +195,6 @@ class DailyBias:
 # ---------------------------------------------------------------------------
 # Internal analysis functions
 # ---------------------------------------------------------------------------
-def _safe_float(val, default: float = 0.0) -> float:
-    """Safely convert to float."""
-    if val is None:
-        return default
-    try:
-        f = float(val)
-        return default if (math.isnan(f) or math.isinf(f)) else f
-    except (TypeError, ValueError):
-        return default
 
 
 def _classify_candle(

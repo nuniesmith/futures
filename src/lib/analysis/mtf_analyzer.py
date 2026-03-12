@@ -78,6 +78,9 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from lib.indicators.helpers import ema_numpy as _ema_series
+from lib.indicators.helpers import macd_numpy as _macd_numpy
+
 if TYPE_CHECKING:
     import pandas as pd
 
@@ -187,44 +190,8 @@ class MTFResult:
 # ===========================================================================
 
 
-def _ema_series(values: np.ndarray, span: int) -> np.ndarray:
-    """Vectorised EMA via the recursive formula with Wilder-style smoothing.
-
-    Uses ``alpha = 2 / (span + 1)`` (standard exponential smoothing).
-    Handles NaN seeds by forward-filling from the first finite value.
-    """
-    alpha = 2.0 / (span + 1)
-    out = np.empty(len(values), dtype=float)
-    # Seed with first finite value
-    seed_idx = 0
-    for i, v in enumerate(values):
-        if np.isfinite(v):
-            seed_idx = i
-            break
-    out[:seed_idx] = np.nan
-    out[seed_idx] = values[seed_idx]
-    for i in range(seed_idx + 1, len(values)):
-        v = values[i]
-        if np.isfinite(v):
-            out[i] = alpha * v + (1.0 - alpha) * out[i - 1]
-        else:
-            out[i] = out[i - 1]
-    return out
-
-
-def _macd(
-    closes: np.ndarray,
-    fast: int = MACD_FAST,
-    slow: int = MACD_SLOW,
-    signal: int = MACD_SIGNAL,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute MACD line, signal line, and histogram arrays."""
-    ema_fast = _ema_series(closes, fast)
-    ema_slow = _ema_series(closes, slow)
-    macd_line = ema_fast - ema_slow
-    signal_line = _ema_series(macd_line, signal)
-    histogram = macd_line - signal_line
-    return macd_line, signal_line, histogram
+# _ema_series and _macd_numpy are imported from lib.indicators.helpers above.
+# _ema_series = ema_numpy, _macd_numpy = macd_numpy (aliased at import time).
 
 
 def _detect_divergence(
@@ -431,7 +398,7 @@ def analyze_mtf(
         result.ema_slope_direction = "FLAT"
 
     # ── MACD computation ───────────────────────────────────────────────────
-    macd_line, signal_line, histogram = _macd(np.asarray(closes, dtype=float), macd_fast, macd_slow, macd_signal)
+    macd_line, signal_line, histogram = _macd_numpy(np.asarray(closes, dtype=float), macd_fast, macd_slow, macd_signal)
 
     macd_val = float(macd_line[-1])
     sig_val = float(signal_line[-1])
@@ -601,7 +568,7 @@ def mtf_to_filter_verdict(
     """
     # Local import to avoid circular dependency — orb_filters → mtf_analyzer
     # is safe because orb_filters only imports mtf_analyzer inside functions.
-    from lib.analysis.orb_filters import FilterVerdict  # noqa: PLC0415
+    from lib.analysis.breakout_filters import FilterVerdict  # noqa: PLC0415
 
     name = "MTF Analyzer"
 
@@ -730,7 +697,7 @@ class MTFAnalyzer:
             )
         except Exception as exc:
             logger.warning("MTFAnalyzer.evaluate error: %s", exc)
-            from lib.analysis.orb_filters import FilterVerdict  # noqa: PLC0415
+            from lib.analysis.breakout_filters import FilterVerdict  # noqa: PLC0415
 
             err_result = MTFResult(direction=direction, error=str(exc))
             err_result.cnn_features = [0.0] * 10

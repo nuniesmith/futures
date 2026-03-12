@@ -224,7 +224,7 @@ class TestAssetClassMapping:
         ],
     )
     def test_crypto_asset_class(self, symbol):
-        from lib.analysis.breakout_cnn import get_asset_class_id
+        from lib.analysis.ml.breakout_cnn import get_asset_class_id
 
         assert get_asset_class_id(symbol) == 1.0, f"{symbol} should be crypto (1.0)"
 
@@ -240,7 +240,7 @@ class TestAssetClassMapping:
         ],
     )
     def test_non_crypto_asset_class(self, symbol, expected):
-        from lib.analysis.breakout_cnn import get_asset_class_id
+        from lib.analysis.ml.breakout_cnn import get_asset_class_id
 
         assert get_asset_class_id(symbol) == expected, f"{symbol} should be {expected}"
 
@@ -272,17 +272,17 @@ class TestVolatilityClassMapping:
         ],
     )
     def test_crypto_high_volatility(self, symbol):
-        from lib.analysis.breakout_cnn import get_asset_volatility_class
+        from lib.analysis.ml.breakout_cnn import get_asset_volatility_class
 
         assert get_asset_volatility_class(symbol) == 1.0, f"{symbol} should be high vol (1.0)"
 
     def test_equity_medium_volatility(self):
-        from lib.analysis.breakout_cnn import get_asset_volatility_class
+        from lib.analysis.ml.breakout_cnn import get_asset_volatility_class
 
         assert get_asset_volatility_class("MES") == 0.5
 
     def test_fx_low_volatility(self):
-        from lib.analysis.breakout_cnn import get_asset_volatility_class
+        from lib.analysis.ml.breakout_cnn import get_asset_volatility_class
 
         assert get_asset_volatility_class("M6E") == 0.0
 
@@ -700,7 +700,7 @@ class TestChartRenderingCompatibility:
         """If parity renderer is available, verify it can convert crypto bars."""
         df = self._make_crypto_bars()
         try:
-            from lib.analysis.chart_renderer_parity import dataframe_to_parity_bars
+            from lib.analysis.rendering.chart_renderer_parity import dataframe_to_parity_bars
 
             bars = dataframe_to_parity_bars(df)
             assert len(bars) == len(df)
@@ -715,7 +715,7 @@ class TestChartRenderingCompatibility:
             # We pass save_path=None or a temp path to avoid writing files
             import tempfile
 
-            from lib.analysis.chart_renderer import render_ruby_snapshot
+            from lib.analysis.rendering.chart_renderer import render_ruby_snapshot
 
             with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmp:
                 render_ruby_snapshot(
@@ -749,7 +749,7 @@ class TestBreakoutCnnMappings:
 
     def test_ordinals_and_contract_in_sync(self):
         """ASSET_CLASS_ORDINALS should match feature_contract.json asset_class_map."""
-        from lib.analysis.breakout_cnn import ASSET_CLASS_ORDINALS
+        from lib.analysis.ml.breakout_cnn import ASSET_CLASS_ORDINALS
 
         contract_path = os.path.join(_PROJECT_ROOT, "models", "feature_contract.json")
         if not os.path.isfile(contract_path):
@@ -768,7 +768,7 @@ class TestBreakoutCnnMappings:
 
     def test_volatility_and_contract_in_sync(self):
         """ASSET_VOLATILITY_CLASS should match feature_contract.json asset_volatility_classes."""
-        from lib.analysis.breakout_cnn import ASSET_VOLATILITY_CLASS
+        from lib.analysis.ml.breakout_cnn import ASSET_VOLATILITY_CLASS
 
         contract_path = os.path.join(_PROJECT_ROOT, "models", "feature_contract.json")
         if not os.path.isfile(contract_path):
@@ -786,7 +786,7 @@ class TestBreakoutCnnMappings:
 
     def test_breakout_type_ordinals_match(self):
         """BREAKOUT_TYPE_ORDINALS should match feature_contract.json."""
-        from lib.analysis.breakout_cnn import BREAKOUT_TYPE_ORDINALS
+        from lib.analysis.ml.breakout_cnn import BREAKOUT_TYPE_ORDINALS
 
         contract_path = os.path.join(_PROJECT_ROOT, "models", "feature_contract.json")
         if not os.path.isfile(contract_path):
@@ -839,19 +839,19 @@ class TestTabularFeatureShape:
     """Verify that building a tabular row for a crypto symbol produces 18 features."""
 
     def test_asset_class_id_for_btc_is_crypto(self):
-        from lib.analysis.breakout_cnn import get_asset_class_id
+        from lib.analysis.ml.breakout_cnn import get_asset_class_id
 
         val = get_asset_class_id("BTC")
         assert val == 1.0
 
     def test_asset_class_id_for_kraken_ticker(self):
-        from lib.analysis.breakout_cnn import get_asset_class_id
+        from lib.analysis.ml.breakout_cnn import get_asset_class_id
 
         val = get_asset_class_id("KRAKEN:XBTUSD")
         assert val == 1.0
 
     def test_volatility_class_for_all_9_kraken_pairs(self):
-        from lib.analysis.breakout_cnn import get_asset_volatility_class
+        from lib.analysis.ml.breakout_cnn import get_asset_volatility_class
 
         pairs = ["BTC", "ETH", "SOL", "LINK", "AVAX", "DOT", "ADA", "MATIC", "XRP"]
         for p in pairs:

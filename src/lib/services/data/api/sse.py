@@ -972,6 +972,7 @@ async def _bars_event_generator(request: Request, symbol: str) -> AsyncGenerator
             except Exception:
                 ts_unix = int(datetime.now(tz=_EST).timestamp())
 
+            # TODO: replace with lib.core.utils.safe_float (nested closure — can't be a top-level import without restructuring)
             def _safe_float(v: Any) -> float:
                 try:
                     return round(float(v), 6)
