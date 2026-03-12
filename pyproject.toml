@@ -49,6 +49,7 @@ dependencies = [
     "sqlalchemy>=2.0.48",
 
     # --- Observability ---
+    "loguru>=0.7.0",
     "structlog>=25.5.0",
     "prometheus-client>=0.24.1",
 
