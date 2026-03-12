@@ -947,8 +947,17 @@ def load_bars(
     ``"engine"`` and ``"csv"`` are actively used; all other values resolve
     via the engine as well.
 
-    Fallback chain (only when engine is unavailable):
+    Fallback chain (only when engine is truly unreachable / offline):
         engine → legacy loaders → csv
+
+    IMPORTANT: The legacy fallback chain (db, massive, cache) is only
+    triggered when the EngineDataClient cannot contact the engine at all
+    (connection error, timeout, import failure).  If the engine *is*
+    reachable but simply has no data for a symbol, we stop here and return
+    None — we do NOT fall through to the local DB or local Massive client.
+    This prevents spurious "no such table: historical_bars" and
+    "MASSIVE_API_KEY not set" log noise on the GPU trainer machine, which
+    has no local database and no API keys (all data comes from the engine).
 
     Args:
         symbol: Short symbol ("MGC"), Yahoo-style ticker ("MGC=F"), or
@@ -966,19 +975,78 @@ def load_bars(
         return _load_bars_from_csv(symbol, csv_dir)
 
     # --- Primary path: EngineDataClient ----------------------------------
+    # We derive engine reachability from the HTTP call itself rather than
+    # issuing a separate is_available() health-check (which would add an
+    # extra round-trip for every symbol in the 26-symbol training list).
+    #
+    # The EngineDataClient._get() helper returns None for BOTH "connection
+    # error" AND "engine returned 0 bars".  We need to distinguish these two
+    # cases so we know whether to try local fallbacks.  We do this by
+    # patching a thin sentinel into the client call: we call the raw _get()
+    # ourselves so we can tell apart None-from-network-error vs
+    # None-from-empty-response.
+    #
+    # Sentinel logic:
+    #   _engine_responded = True  → engine is up, data just isn't available;
+    #                               skip local fallbacks (trainer has no DB /
+    #                               no API keys — they'd just log noise).
+    #   _engine_responded = False → engine unreachable; try local fallbacks
+    #                               so the trainer still works in offline /
+    #                               local-dev mode.
+    _engine_responded = False
     try:
         from lib.services.data.engine_data_client import get_client
 
         client = get_client()
-        df = client.get_bars(symbol, interval="1m", days_back=days, auto_fill=True)
-        if df is not None and not df.empty:
-            logger.debug("load_bars: %d bars for %s via EngineDataClient", len(df), symbol)
-            return df
+
+        # Use the client's internal _get() so we can inspect the raw payload
+        # and set _engine_responded before deciding what to return.  This is
+        # a single HTTP call — no extra health-check round-trip.
+        payload = client._get(
+            f"/bars/{symbol}",
+            params={
+                "interval": "1m",
+                "days_back": days,
+                "auto_fill": "true",
+            },
+        )
+
+        if payload is not None:
+            # The engine answered — regardless of bar count.
+            _engine_responded = True
+
+            bar_count = payload.get("bar_count", 0)
+            if bar_count > 0:
+                split = payload.get("data")
+                try:
+                    from lib.services.data.engine_data_client import _split_to_df
+
+                    df = _split_to_df(split)
+                except Exception:
+                    df = None
+
+                if df is not None and not df.empty:
+                    logger.debug("load_bars: %d bars for %s via EngineDataClient", len(df), symbol)
+                    return df
+
+            # Engine responded but returned 0 bars (or unparseable data).
+            # Do NOT attempt local fallbacks — the trainer machine has no
+            # local DB and no API keys; those paths would only log noise
+            # ("no such table: historical_bars", "MASSIVE_API_KEY not set").
+            logger.debug(
+                "load_bars: engine reachable but returned no bars for %s — skipping local fallbacks",
+                symbol,
+            )
+            return None
+
     except Exception as exc:
         logger.debug("EngineDataClient failed for %s: %s", symbol, exc)
+        _engine_responded = False
 
-    # --- Legacy fallback path (engine unavailable) -----------------------
-    # Keeps the trainer usable in local dev without a running data service.
+    # --- Legacy fallback path (engine unreachable / offline only) --------
+    # Only runs when the EngineDataClient raised an exception (connection
+    # refused, DNS failure, import error, etc.).  Keeps the trainer usable
+    # in local dev without a running data service.
     _is_kraken = _is_kraken_symbol(symbol)
 
     if _is_kraken:

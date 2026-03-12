@@ -514,7 +514,15 @@ def _fetch_stored_bars(
         return df
 
     except Exception as exc:
-        logger.error("Failed to fetch stored bars for %s: %s", symbol, exc)
+        # Downgrade "no such table" to DEBUG — this fires transiently on a
+        # fresh deployment before init_backfill_table() has run, or on the
+        # GPU trainer machine which has no local DB.  It is not a true error
+        # in those contexts; callers handle the empty return gracefully.
+        _exc_str = str(exc).lower()
+        if "no such table" in _exc_str or "does not exist" in _exc_str:
+            logger.debug("historical_bars table not present for %s: %s", symbol, exc)
+        else:
+            logger.error("Failed to fetch stored bars for %s: %s", symbol, exc)
         return pd.DataFrame()
     finally:
         if conn is not None:

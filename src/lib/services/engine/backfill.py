@@ -1066,7 +1066,15 @@ def get_stored_bars(
         return df
 
     except Exception as exc:
-        logger.error("Failed to fetch stored bars for %s: %s", symbol, exc)
+        # Downgrade "no such table" to DEBUG — this fires on the GPU trainer
+        # machine which has no local DB (all data comes from the engine over
+        # the network).  It is not an error in that context; the caller's
+        # fallback chain will handle it gracefully.
+        _exc_str = str(exc).lower()
+        if "no such table" in _exc_str or "does not exist" in _exc_str:
+            logger.debug("historical_bars table not present for %s: %s", symbol, exc)
+        else:
+            logger.error("Failed to fetch stored bars for %s: %s", symbol, exc)
         return pd.DataFrame()
     finally:
         if conn is not None:
