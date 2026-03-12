@@ -28,6 +28,7 @@ import json
 import logging
 import threading
 import time
+import warnings
 from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -330,7 +331,9 @@ def run_optimization(ticker: str, interval: str, period: str, account_size: int)
                         exclusive_orders=True,
                         finalize_trades=True,
                     )
-                    stats: Any = bt.run()
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", category=UserWarning, module="backtesting")
+                        stats: Any = bt.run()
                 except Exception:
                     return -100.0
                 return score_backtest(stats, min_trades=3)
@@ -360,7 +363,9 @@ def run_optimization(ticker: str, interval: str, period: str, account_size: int)
                     exclusive_orders=True,
                     finalize_trades=True,
                 )
-                test_stats = bt_test.run()
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning, module="backtesting")
+                    test_stats = bt_test.run()
                 test_score = score_backtest(test_stats, min_trades=1)
             except Exception:
                 test_score = -100.0
@@ -384,7 +389,9 @@ def run_optimization(ticker: str, interval: str, period: str, account_size: int)
                     exclusive_orders=True,
                     finalize_trades=True,
                 )
-                stats: Any = bt.run()
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning, module="backtesting")
+                    stats: Any = bt.run()
                 return_pct = round(float(stats["Return [%]"]), 2)
                 sharpe = _safe_float(stats["Sharpe Ratio"])
                 sortino = _safe_float(stats.get("Sortino Ratio", 0))
@@ -528,7 +535,9 @@ def run_backtest(
             exclusive_orders=True,
             finalize_trades=True,
         )
-        stats: Any = bt.run()
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning, module="backtesting")
+            stats: Any = bt.run()
     except Exception as exc:
         logger.warning("Backtest error for %s (%s): %s", name, used_strategy, exc)
         return None
