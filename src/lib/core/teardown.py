@@ -20,7 +20,7 @@ try:
 except ImportError:
     import logging
 
-    logger = logging.getLogger("core.teardown")
+    logger = logging.getLogger("core.teardown")  # type: ignore[no-redef]
 
 # Core components that require specific teardown procedures
 CORE_COMPONENTS = [

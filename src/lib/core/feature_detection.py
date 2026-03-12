@@ -17,7 +17,7 @@ try:
 except ImportError:
     import logging
 
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__)  # type: ignore[no-redef]
 
 # Registry of features with detection functions
 _FEATURE_REGISTRY: dict[str, Callable[[], bool]] = {}

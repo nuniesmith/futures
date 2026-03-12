@@ -19,7 +19,7 @@ logger: Any
 try:
     from loguru import logger
 except ImportError:
-    logger = logging.getLogger("lib.model")
+    logger = logging.getLogger("lib.model")  # type: ignore[no-redef]
 
 # ---------------------------------------------------------------------------
 # Exception stubs

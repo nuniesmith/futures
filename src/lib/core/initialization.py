@@ -30,7 +30,7 @@ try:
 except ImportError:
     import logging
 
-    logger = logging.getLogger("core.initialization")
+    logger = logging.getLogger("core.initialization")  # type: ignore[no-redef]
 
 # Default configuration values
 DEFAULT_CONFIG_PATH = "/app/config/fks/app.yaml"
