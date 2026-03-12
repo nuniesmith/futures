@@ -2355,6 +2355,7 @@ def generate_dataset(
     days_back: int = 90,
     config: DatasetConfig | None = None,
     bars_override: dict[str, pd.DataFrame] | None = None,
+    fetch_only: bool = False,
 ) -> DatasetStats:
     """Generate a complete labeled dataset for CNN training.
 
@@ -2366,6 +2367,11 @@ def generate_dataset(
         config: DatasetConfig (uses defaults if None).
         bars_override: Optional pre-loaded bars dict (symbol → DataFrame).
                        If provided, skips the data loading step.
+        fetch_only: If True, only fetch and cache bar data from the engine —
+                    no chart images are rendered and no labels.csv is written.
+                    This is the "Load Data" step: it does all the heavy network
+                    I/O on the cloud/engine side so the GPU trainer only needs
+                    to render images and train, without waiting on data fetches.
 
     Returns:
         DatasetStats with aggregate statistics.
@@ -2422,6 +2428,45 @@ def generate_dataset(
                 _bars_cache[peer_ticker] = None
 
     total_symbols = len(symbols)
+
+    # ── fetch_only mode: just warm the bar cache, skip all image rendering ──
+    # This is the "Load Data" step — it pulls all raw bars from the engine
+    # (the heavy network work) so subsequent "Generate Dataset" and "Train"
+    # steps only have to read local data.
+    if fetch_only:
+        total_bars_fetched = 0
+        all_fetch_symbols = list(symbols) + sorted(_peer_only_tickers)
+        for sym_idx, symbol in enumerate(all_fetch_symbols, 1):
+            logger.info("Fetching bars for %s [%d/%d]...", symbol, sym_idx, len(all_fetch_symbols))
+            try:
+                bars_1m = load_bars(
+                    symbol,
+                    source=cfg.bars_source,
+                    days=days_back,
+                    csv_dir=cfg.csv_bars_dir,
+                )
+                if bars_1m is not None and not bars_1m.empty:
+                    total_bars_fetched += len(bars_1m)
+                    aggregate_stats.symbols_processed.append(symbol)
+                    logger.info("  ✓ %s: %d bars fetched", symbol, len(bars_1m))
+                else:
+                    msg = f"No bar data returned for {symbol}"
+                    logger.warning("  ✗ %s", msg)
+                    aggregate_stats.errors.append(msg)
+            except Exception as exc:
+                msg = f"Bar fetch failed for {symbol}: {exc}"
+                logger.warning("  ✗ %s", msg)
+                aggregate_stats.errors.append(msg)
+
+        aggregate_stats.duration_seconds = time.monotonic() - start_time
+        logger.info(
+            "Load Data complete — %d symbols fetched, %d total bars in %.1fs",
+            len(aggregate_stats.symbols_processed),
+            total_bars_fetched,
+            aggregate_stats.duration_seconds,
+        )
+        return aggregate_stats
+
     for sym_idx, symbol in enumerate(symbols, 1):
         logger.info("Processing %s [%d/%d]...", symbol, sym_idx, total_symbols)
 

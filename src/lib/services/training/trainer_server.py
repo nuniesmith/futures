@@ -147,7 +147,7 @@ MIN_IMPROVEMENT = float(os.getenv("CNN_RETRAIN_IMPROVEMENT", "0.0"))
 
 # Training hyperparameters
 DEFAULT_EPOCHS = int(os.getenv("CNN_RETRAIN_EPOCHS", "60"))
-DEFAULT_BATCH_SIZE = int(os.getenv("CNN_RETRAIN_BATCH_SIZE", "64"))
+DEFAULT_BATCH_SIZE = int(os.getenv("CNN_RETRAIN_BATCH_SIZE", "32"))
 DEFAULT_LR = float(os.getenv("CNN_RETRAIN_LR", "0.0001"))
 DEFAULT_PATIENCE = int(os.getenv("CNN_RETRAIN_PATIENCE", "12"))
 
@@ -342,7 +342,18 @@ _boot_time = datetime.now(UTC)
 
 
 class TrainRequest(BaseModel):
-    """Parameters for a training run (all optional — env defaults used)."""
+    """Parameters for a training run (all optional — env defaults used).
+
+    The ``step`` field controls which stage of the pipeline to run:
+      - ``None`` / omitted : full pipeline (dataset → train → evaluate → promote)
+      - ``"load_data"``    : fetch raw bars from the engine and cache them locally
+                             (dataset_generator runs in data-fetch-only mode — no
+                             chart images rendered, no labels.csv written)
+      - ``"generate_dataset"`` : render chart images + write labels.csv only
+                                 (assumes bars are already cached)
+      - ``"train"``        : train → evaluate → promote only
+                             (assumes dataset/images/ and labels.csv already exist)
+    """
 
     symbols: list[str] | None = Field(None, description="Symbols to generate dataset for")
     days_back: int | None = Field(None, ge=1, le=365, description="Days of history")
@@ -357,6 +368,15 @@ class TrainRequest(BaseModel):
     min_precision: float | None = Field(None, ge=0, le=100, description="Min precision gate (%)")
     min_recall: float | None = Field(None, ge=0, le=100, description="Min recall gate (%)")
     force_promote: bool = Field(False, description="Promote even if gates fail (use with caution)")
+    step: str | None = Field(
+        None,
+        description=(
+            "Pipeline step to run: None=full pipeline, "
+            "'load_data'=fetch bars only, "
+            "'generate_dataset'=render images+CSV only, "
+            "'train'=train+evaluate+promote only"
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -406,14 +426,17 @@ def _write_meta(metrics: dict[str, Any], config: dict[str, Any]) -> None:
 
 
 def _run_training_pipeline(params: TrainRequest) -> None:
-    """Execute the full training pipeline in a background thread.
+    """Execute the full training pipeline (or a single stage) in a background thread.
 
-    Steps:
-        1. Generate dataset (chart images + labels.csv)
-        2. Train CNN model
-        3. Evaluate against validation set
-        4. Compare with champion model (if exists)
-        5. Promote if all gates pass (or force_promote=True)
+    Stages controlled by ``params.step``:
+        None / omitted   → full pipeline: load bars → generate dataset → train → evaluate → promote
+        "load_data"      → Step 1 only:  fetch raw bars from the engine and write them to the
+                           local bar cache so the cloud server does the heavy data work.
+                           No chart images are rendered; no labels.csv is written.
+        "generate_dataset" → Step 2 only: render chart images + write labels.csv from the cached
+                           bars.  Assumes load_data has already run.
+        "train"          → Steps 3–5 only: train → evaluate → promote.
+                           Assumes dataset/images/ and labels.csv already exist on disk.
     """
     try:
         # ----- Resolve parameters -----
@@ -469,56 +492,157 @@ def _run_training_pipeline(params: TrainRequest) -> None:
             "patience": patience,
             "gates": {"min_acc": min_acc, "min_prec": min_prec, "min_rec": min_rec},
         }
+        # Normalise step — None means full pipeline
+        step = (params.step or "").strip().lower() or "full"
+        run_config["step"] = step
         logger.info("Starting training pipeline", **run_config)
 
-        # ----- Step 1: Dataset generation -----
-        if _state.cancel_requested:
-            _state.finish(error="Cancelled before dataset generation")
-            return
+        # ── helpers shared across steps ───────────────────────────────────
+        labels_csv = DATASET_DIR / "labels.csv"
+        image_root = str(DATASET_DIR / "images")
+        ds_stats = None  # populated by load_data or generate_dataset steps
 
-        _state.set(TrainStatus.GENERATING, f"Generating dataset for {len(symbols)} symbols, {days_back} days")
+        def _make_ds_config():
+            from lib.services.training.dataset_generator import DatasetConfig
 
-        from lib.services.training.dataset_generator import DatasetConfig, generate_dataset
+            return DatasetConfig(
+                output_dir=str(DATASET_DIR),
+                image_dir=str(DATASET_DIR / "images"),
+                bars_source=bars_source,
+                orb_session=orb_session,
+                breakout_type=params.breakout_type,
+                use_parity_renderer=True,
+            )
 
-        ds_config = DatasetConfig(
-            output_dir=str(DATASET_DIR),
-            image_dir=str(DATASET_DIR / "images"),
-            bars_source=bars_source,
-            orb_session=orb_session,
-            breakout_type=params.breakout_type,
-            use_parity_renderer=True,
-        )
+        # ═══════════════════════════════════════════════════════════════════
+        # STEP: load_data  — fetch raw bars from engine, write to bar cache.
+        # Nothing is rendered here; no images, no labels.csv.  This step is
+        # designed to run on the cloud server (engine side) where the data
+        # lives, leaving the GPU trainer free from any I/O-heavy work.
+        # ═══════════════════════════════════════════════════════════════════
+        if step in ("load_data", "full"):
+            if _state.cancel_requested:
+                _state.finish(error="Cancelled before data load")
+                return
 
-        ds_stats = generate_dataset(
-            symbols=symbols,
-            days_back=days_back,
-            config=ds_config,
-        )
-        logger.info(
-            "Dataset generation complete",
-            total_images=ds_stats.total_images,
-            label_balance=ds_stats.label_distribution,
-        )
+            _state.set(TrainStatus.GENERATING, f"Loading bar data for {len(symbols)} symbols ({days_back} days)")
 
-        # Record dataset stats to Prometheus (best-effort — never block training).
-        try:
-            from lib.services.data.api.metrics import record_trainer_dataset_stats
+            from lib.services.training.dataset_generator import generate_dataset
 
-            record_trainer_dataset_stats(
+            ds_config = _make_ds_config()
+            # Pass fetch_only=True so generate_dataset downloads and caches
+            # bars without rendering any chart images.  Falls back gracefully
+            # if the dataset generator does not yet support fetch_only — the
+            # full generate will run instead (safe but slower).
+            try:
+                ds_stats = generate_dataset(
+                    symbols=symbols,
+                    days_back=days_back,
+                    config=ds_config,
+                    fetch_only=True,
+                )
+                logger.info(
+                    "Bar data load complete",
+                    total_bars=getattr(ds_stats, "total_bars", "?"),
+                    symbols=len(symbols),
+                )
+            except TypeError:
+                # generate_dataset does not support fetch_only yet — run full
+                # generation as a safe fallback so the button still does something useful.
+                logger.warning(
+                    "generate_dataset does not support fetch_only — running full dataset generation as fallback"
+                )
+                ds_stats = generate_dataset(
+                    symbols=symbols,
+                    days_back=days_back,
+                    config=ds_config,
+                )
+                logger.info(
+                    "Dataset generation complete (fallback)",
+                    total_images=ds_stats.total_images,
+                    label_balance=ds_stats.label_distribution,
+                )
+
+            if step == "load_data":
+                _state.finish(result={"step": "load_data", "symbols": len(symbols), "days_back": days_back})
+                return
+
+        # ═══════════════════════════════════════════════════════════════════
+        # STEP: generate_dataset  — render chart images + write labels.csv.
+        # Assumes bars are already cached (load_data already ran).
+        # ═══════════════════════════════════════════════════════════════════
+        if step in ("generate_dataset", "full"):
+            if _state.cancel_requested:
+                _state.finish(error="Cancelled before dataset generation")
+                return
+
+            _state.set(TrainStatus.GENERATING, f"Generating dataset for {len(symbols)} symbols, {days_back} days")
+
+            from lib.services.training.dataset_generator import generate_dataset
+
+            ds_config = _make_ds_config()
+            ds_stats = generate_dataset(
+                symbols=symbols,
+                days_back=days_back,
+                config=ds_config,
+            )
+            logger.info(
+                "Dataset generation complete",
                 total_images=ds_stats.total_images,
-                label_distribution=ds_stats.label_distribution,
-                render_time_seconds=ds_stats.duration_seconds,
+                label_balance=ds_stats.label_distribution,
             )
-        except Exception as _metrics_err:
-            logger.debug("Trainer metrics update failed (non-fatal)", error=str(_metrics_err))
 
-        if ds_stats.total_images < 100:
-            _state.finish(
-                error=f"Insufficient training data: only {ds_stats.total_images} images generated (need ≥100)"
-            )
-            return
+            # Record dataset stats to Prometheus (best-effort — never block training).
+            try:
+                from lib.services.data.api.metrics import record_trainer_dataset_stats
 
-        # ----- Step 2: Train model -----
+                record_trainer_dataset_stats(
+                    total_images=ds_stats.total_images,
+                    label_distribution=ds_stats.label_distribution,
+                    render_time_seconds=ds_stats.duration_seconds,
+                )
+            except Exception as _metrics_err:
+                logger.debug("Trainer metrics update failed (non-fatal)", error=str(_metrics_err))
+
+            if step == "generate_dataset":
+                _state.finish(
+                    result={
+                        "step": "generate_dataset",
+                        "total_images": ds_stats.total_images,
+                        "label_distribution": ds_stats.label_distribution,
+                    }
+                )
+                return
+
+            if ds_stats.total_images < 100:
+                _state.finish(
+                    error=f"Insufficient training data: only {ds_stats.total_images} images generated (need ≥100)"
+                )
+                return
+
+        # ═══════════════════════════════════════════════════════════════════
+        # STEP: train  — train → evaluate → promote.
+        # When step="train" the dataset must already exist on disk.
+        # When step="full" we fall through from the generate_dataset block above.
+        # ═══════════════════════════════════════════════════════════════════
+        if step == "train":
+            # Validate that the dataset exists before starting expensive training.
+            if not labels_csv.exists():
+                _state.finish(
+                    error=(
+                        f"labels.csv not found at {labels_csv} — "
+                        "run 'Load Data' + 'Generate Dataset' first, or use 'Full Pipeline'."
+                    )
+                )
+                return
+            images_dir = DATASET_DIR / "images"
+            if not images_dir.exists() or not any(images_dir.iterdir()):
+                _state.finish(
+                    error=(f"No images found in {images_dir} — run 'Generate Dataset' first, or use 'Full Pipeline'.")
+                )
+                return
+
+        # ----- Train model -----
         if _state.cancel_requested:
             _state.finish(error="Cancelled before training")
             return
@@ -533,16 +657,13 @@ def _run_training_pipeline(params: TrainRequest) -> None:
 
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-        # ----- Step 1b: Train/val split -----
+        # ----- Train/val split -----
         # Always regenerate a clean stratified split from the freshly written
         # labels.csv so that:
         #   - train_model uses a held-out val set (not its own random split)
         #   - evaluate_model runs against the *same* held-out val set
         #   - metrics in the result JSON reflect true out-of-sample performance
         from lib.services.training.dataset_generator import split_dataset
-
-        labels_csv = DATASET_DIR / "labels.csv"
-        image_root = str(DATASET_DIR / "images")
 
         logger.info("Splitting dataset into train/val sets (85/15 stratified)")
         try:
@@ -593,6 +714,27 @@ def _run_training_pipeline(params: TrainRequest) -> None:
         # the promotion step to move into place.
         candidate_path = MODELS_DIR / "breakout_cnn_candidate.pt"
         shutil.copy2(trained_result.model_path, str(candidate_path))
+
+        # ----- Flush GPU memory before evaluation -----
+        # train_model() keeps the model in scope until here.  Even though it
+        # goes out of scope now, PyTorch's CUDA caching allocator does NOT
+        # release reserved pages back to the OS automatically.  evaluate_model()
+        # will load a second copy of the model onto the same GPU, so we must
+        # explicitly release the training allocations first — otherwise the two
+        # model copies together exceed the 16 GB card limit.
+        try:
+            import gc
+
+            import torch as _torch
+
+            gc.collect()
+            if _torch.cuda.is_available():
+                _torch.cuda.empty_cache()
+                _torch.cuda.synchronize()
+                free_gb = _torch.cuda.mem_get_info()[0] / 1024**3
+                logger.info("GPU memory flushed before evaluation — %.2f GiB free", free_gb)
+        except Exception as _flush_err:
+            logger.debug("GPU flush skipped (non-fatal): %s", _flush_err)
 
         # ----- Step 3: Evaluate -----
         if _state.cancel_requested:
@@ -651,7 +793,7 @@ def _run_training_pipeline(params: TrainRequest) -> None:
                 "failures": gate_failures,
             },
             "dataset": {
-                "total_images": ds_stats.total_images,
+                "total_images": ds_stats.total_images if ds_stats is not None else 0,
             },
             "config": run_config,
         }
@@ -931,6 +1073,7 @@ async def train(params: TrainRequest | None = None) -> JSONResponse:
             min_precision=None,
             min_recall=None,
             force_promote=False,
+            step=None,
         )
     )
 

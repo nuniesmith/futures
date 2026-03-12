@@ -589,7 +589,7 @@ tr:hover td{background:var(--bg-inner)}
           </div>
           <div class="field-row">
             <label class="field-lbl">Batch Size</label>
-            <input type="number" id="c-batch" value="64" min="8" max="512"/>
+            <input type="number" id="c-batch" value="32" min="8" max="512"/>
           </div>
           <div class="field-row">
             <label class="field-lbl">Learning Rate</label>

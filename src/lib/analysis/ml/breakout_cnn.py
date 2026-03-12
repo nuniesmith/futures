@@ -1667,7 +1667,7 @@ def train_model(
     data_csv: str,
     val_csv: str | None = None,
     epochs: int = 80,
-    batch_size: int = 64,
+    batch_size: int = 32,
     lr: float = 2e-4,
     weight_decay: float = 1e-4,
     freeze_epochs: int = 5,
@@ -1676,7 +1676,7 @@ def train_model(
     num_workers: int = 4,
     save_best: bool = True,
     patience: int = 15,
-    grad_accum_steps: int = 2,
+    grad_accum_steps: int = 4,
     mixup_alpha: float = 0.2,
     warmup_epochs: int = 5,
 ) -> TrainResult | None:
@@ -1700,7 +1700,9 @@ def train_model(
         val_csv: Optional validation CSV.  If None, 15% of training data
                  is held out automatically.
         epochs: Total training epochs (default 80).
-        batch_size: Batch size (default 64).
+        batch_size: Batch size (default 32 — halved from v8 to keep VRAM under
+                    16 GiB when the EfficientNetV2-S backbone is unfrozen;
+                    effective batch stays 128 via grad_accum_steps=4).
         lr: Learning rate for backbone (default 2e-4).
         weight_decay: AdamW weight decay (default 1e-4).
         freeze_epochs: Number of epochs to freeze the CNN backbone (default 5).
@@ -1711,8 +1713,9 @@ def train_model(
                    validation accuracy instead of the final epoch.
         patience: Early stopping patience — stop if val acc doesn't improve
                   for this many epochs (default 15).
-        grad_accum_steps: Gradient accumulation steps (default 2, effective
-                          batch = 64×2 = 128).
+        grad_accum_steps: Gradient accumulation steps (default 4, effective
+                          batch = 32×4 = 128 — same effective batch as before
+                          but half the per-step activation memory).
         mixup_alpha: Mixup interpolation alpha for tabular features (default 0.2).
                      Set to 0.0 to disable mixup.
         warmup_epochs: Linear LR warmup epochs before cosine decay (default 5).
@@ -1758,12 +1761,15 @@ def train_model(
         drop_last=True,
         collate_fn=BreakoutDataset.skip_invalid_collate,
     )
+    # Val loader intentionally does NOT use pin_memory — it runs after the
+    # training loop so the pinned pages would sit idle on the GPU during
+    # training, wasting ~0.5–1 GiB of locked memory on a 16 GiB card.
     val_loader = DataLoader(
         val_dataset,  # type: ignore[arg-type]
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=(device.type == "cuda"),
+        pin_memory=False,
         collate_fn=BreakoutDataset.skip_invalid_collate,
     )
 
@@ -1776,6 +1782,13 @@ def train_model(
         ASSET_ID_EMBED_DIM,
     )
     model = model.to(device)  # type: ignore[union-attr]
+
+    # --- AMP GradScaler for mixed-precision training (FP16 forward pass) ---
+    # Cuts activation memory roughly in half during the forward pass with no
+    # accuracy loss.  Only active on CUDA; CPU/MPS training stays in FP32.
+    _use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=_use_amp)  # type: ignore[attr-defined]
+    logger.info("AMP mixed-precision training: %s", "enabled (FP16)" if _use_amp else "disabled (FP32)")
 
     # --- Optimizer with separate param groups (v8-E) ---
     # Backbone gets lower LR; tabular head + embeddings get higher LR
@@ -1821,6 +1834,18 @@ def train_model(
             if epoch == 0:
                 model.freeze_backbone()
         elif epoch == freeze_epochs:
+            # Flush the CUDA cache before unfreezing — the frozen epochs only
+            # trained the small head, so most backbone activation memory was
+            # never allocated.  Clearing the cache now gives the full fine-tune
+            # phase a clean VRAM slate and avoids OOM on the first unfrozen
+            # forward pass (where EfficientNetV2-S allocates all layer gradients).
+            if device.type == "cuda":
+                import gc as _gc
+
+                _gc.collect()
+                torch.cuda.empty_cache()
+                free_gb = torch.cuda.mem_get_info()[0] / 1024**3
+                logger.info("CUDA cache cleared before backbone unfreeze — %.2f GiB free", free_gb)
             model.unfreeze_backbone()
             logger.info("Backbone unfrozen at epoch %d — full fine-tuning begins", epoch + 1)
 
@@ -1851,21 +1876,24 @@ def train_model(
                 # Note: labels are NOT mixed — mixup on tabular only acts as
                 # a regulariser without requiring soft label loss.
 
-            outputs = model(imgs, tabs, asset_class_ids=asset_class_ids, asset_ids=asset_ids)
-            loss = criterion(outputs, labels) / grad_accum_steps
+            with torch.amp.autocast("cuda", enabled=_use_amp):  # type: ignore[attr-defined]
+                outputs = model(imgs, tabs, asset_class_ids=asset_class_ids, asset_ids=asset_ids)
+                loss = criterion(outputs, labels) / grad_accum_steps
 
             # NaN guard — skip batch if loss explodes
             if torch.isnan(loss) or torch.isinf(loss):
                 logger.warning("NaN/Inf loss at batch %d — skipping", batch_idx)
                 continue
 
-            loss.backward()
+            scaler.scale(loss).backward()  # type: ignore[union-attr]
 
             # ── v8-D: Gradient accumulation ───────────────────────────────
             if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(train_loader):
-                # Gradient clipping for stability
+                # Gradient clipping for stability (unscale first for AMP)
+                scaler.unscale_(optimizer)  # type: ignore[union-attr]
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
+                scaler.step(optimizer)  # type: ignore[union-attr]
+                scaler.update()  # type: ignore[union-attr]
                 optimizer.zero_grad(set_to_none=True)
 
             train_loss += loss.item() * grad_accum_steps * imgs.size(0)
@@ -1895,8 +1923,9 @@ def train_model(
                 asset_class_ids = asset_class_ids.to(device, non_blocking=True)
                 asset_ids = asset_ids.to(device, non_blocking=True)
 
-                outputs = model(imgs, tabs, asset_class_ids=asset_class_ids, asset_ids=asset_ids)
-                loss = criterion(outputs, labels)
+                with torch.amp.autocast("cuda", enabled=_use_amp):  # type: ignore[attr-defined]
+                    outputs = model(imgs, tabs, asset_class_ids=asset_class_ids, asset_ids=asset_ids)
+                    loss = criterion(outputs, labels)
 
                 val_loss += loss.item() * imgs.size(0)
                 _, predicted = outputs.max(1)
