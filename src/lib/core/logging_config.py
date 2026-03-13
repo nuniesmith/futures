@@ -25,6 +25,7 @@ import datetime
 import logging
 import os
 import sys
+from collections.abc import MutableMapping  # noqa: TC003
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -36,8 +37,8 @@ _ET = ZoneInfo("America/New_York")
 def _et_timestamper(
     logger: Any,
     method: str,
-    event_dict: dict[str, Any],
-) -> dict[str, Any]:
+    event_dict: MutableMapping[str, Any],
+) -> MutableMapping[str, Any]:
     """structlog processor that stamps log events with Eastern Time (ET).
 
     Automatically reflects EDT (UTC-4) or EST (UTC-5) based on DST.
