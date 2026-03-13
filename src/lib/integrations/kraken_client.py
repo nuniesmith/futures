@@ -48,7 +48,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-import datetime
 import hashlib
 import hmac
 import json
@@ -70,7 +69,7 @@ logger.setLevel(logging.INFO)
 if not logger.handlers:
     _h = logging.StreamHandler()
     _fmt = logging.Formatter("[KRAKEN] %(asctime)s  %(message)s", "%H:%M:%S")
-    _fmt.converter = lambda *_: datetime.datetime.now(_EST).timetuple()
+    _fmt.converter = lambda *_: datetime.now(_EST).timetuple()
     _h.setFormatter(_fmt)
     logger.addHandler(_h)
 
