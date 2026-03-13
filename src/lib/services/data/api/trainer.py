@@ -671,7 +671,7 @@ tr:hover td{background:var(--bg-inner)}
           <input type="text" id="c-symbols" placeholder="e.g. MES,MNQ,MGC  or leave blank for all"/>
         </div>
         <div style="font-size:0.68rem;color:var(--faint);margin-top:3px" id="sym-hint">
-          Defaults: MGC SIL MHG MCL MNG MES MNQ M2K MYM 6E 6B 6J 6A 6C 6S ZN ZB ZC ZS ZW MBT MET
+          Defaults: MGC SIL MES MNQ M2K MYM ZN ZB ZW
         </div>
 
         <hr class="section-sep"/>

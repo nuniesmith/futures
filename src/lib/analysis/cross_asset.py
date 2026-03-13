@@ -71,125 +71,79 @@ logger = logging.getLogger("analysis.cross_asset")
 #
 # These are the 10 core micro/mini tickers tracked by the engine.
 
+# Active training symbols: MGC, SIL, MES, MNQ, M2K, MYM, ZN, ZB, ZW
+# All peer references are restricted to this set so the dataset generator
+# never pre-loads dropped symbols (MCL, MNG, MHG, MBT, MET, BTC, ETH, SOL,
+# 6E, 6B, 6J, 6A, 6C, 6S, M6E, M6B, ZC, ZS) during training.
 PEER_MAP: dict[str, dict[str, Any]] = {
     # ── Metals ────────────────────────────────────────────────────────────
     "MGC": {
         "asset_name": "Gold",
-        "primary_peer": "SIL",
-        "cross_class_peers": ["MES", "M6E"],  # Gold↔S&P (risk), Gold↔Euro (DXY proxy)
+        "primary_peer": "SIL",  # Gold↔Silver: tightest metals correlation
+        "cross_class_peers": ["MES", "ZN"],  # Gold↔S&P (risk-off), Gold↔T-Note (safe haven)
     },
     "SIL": {
         "asset_name": "Silver",
-        "primary_peer": "MGC",
-        "cross_class_peers": ["MES", "MHG"],  # Silver↔S&P, Silver↔Copper (industrial)
-    },
-    "MHG": {
-        "asset_name": "Copper",
-        "primary_peer": "SIL",
-        "cross_class_peers": ["MES", "MCL"],  # Copper↔S&P (growth proxy), Copper↔Crude
-    },
-    # ── Energy ────────────────────────────────────────────────────────────
-    "MCL": {
-        "asset_name": "Crude Oil",
-        "primary_peer": "MNG",
-        "cross_class_peers": ["MES", "MGC"],  # Crude↔S&P (risk-on), Crude↔Gold
-    },
-    "MNG": {
-        "asset_name": "Natural Gas",
-        "primary_peer": "MCL",
-        "cross_class_peers": ["MES"],
+        "primary_peer": "MGC",  # Silver↔Gold: primary metals peer
+        "cross_class_peers": ["MES", "MNQ"],  # Silver↔S&P, Silver↔Nasdaq (risk appetite)
     },
     # ── Equity Index ──────────────────────────────────────────────────────
     "MES": {
         "asset_name": "S&P 500",
-        "primary_peer": "MNQ",
-        "cross_class_peers": ["MGC", "MCL", "MBT"],  # S&P↔Gold (risk-off), ↔Crude, ↔BTC
+        "primary_peer": "MNQ",  # S&P↔Nasdaq: highest index correlation
+        "cross_class_peers": ["MGC", "ZN"],  # S&P↔Gold (risk-off hedge), S&P↔T-Note (macro)
     },
     "MNQ": {
         "asset_name": "Nasdaq",
-        "primary_peer": "MES",
-        "cross_class_peers": ["MBT", "MGC"],  # NQ↔BTC (tech/risk-on), NQ↔Gold
+        "primary_peer": "MES",  # Nasdaq↔S&P: primary index peer
+        "cross_class_peers": ["MGC", "ZN"],  # NQ↔Gold, NQ↔T-Note (rate sensitivity)
     },
     "M2K": {
         "asset_name": "Russell 2000",
-        "primary_peer": "MES",
-        "cross_class_peers": ["MNQ", "MCL"],
+        "primary_peer": "MES",  # Russell↔S&P: broad market correlation
+        "cross_class_peers": ["MNQ", "ZN"],  # Russell↔Nasdaq, Russell↔T-Note
     },
     "MYM": {
         "asset_name": "Dow Jones",
-        "primary_peer": "MES",
-        "cross_class_peers": ["MNQ", "MGC"],
+        "primary_peer": "MES",  # Dow↔S&P: near-identical index correlation
+        "cross_class_peers": ["MNQ", "MGC"],  # Dow↔Nasdaq, Dow↔Gold
     },
-    # ── FX ────────────────────────────────────────────────────────────────
-    "M6E": {
-        "asset_name": "Euro FX",
-        "primary_peer": "M6B",
-        "cross_class_peers": ["MGC", "MES"],  # EUR↔Gold (DXY inverse), EUR↔S&P
+    # ── Interest Rate ─────────────────────────────────────────────────────
+    "ZN": {
+        "asset_name": "10Y T-Note",
+        "primary_peer": "ZB",  # 10Y↔30Y: duration curve correlation
+        "cross_class_peers": ["MGC", "MES"],  # T-Note↔Gold (safe haven), T-Note↔S&P (inverse)
     },
-    "M6B": {
-        "asset_name": "British Pound",
-        "primary_peer": "M6E",
-        "cross_class_peers": ["MES"],
+    "ZB": {
+        "asset_name": "30Y T-Bond",
+        "primary_peer": "ZN",  # 30Y↔10Y: primary rate peer
+        "cross_class_peers": ["MGC", "MES"],  # T-Bond↔Gold, T-Bond↔S&P
     },
-    "6E": {
-        "asset_name": "Euro FX (full)",
-        "primary_peer": "6B",
-        "cross_class_peers": ["MGC", "MES"],
-    },
-    "6B": {
-        "asset_name": "British Pound (full)",
-        "primary_peer": "6E",
-        "cross_class_peers": ["MES"],
-    },
-    "6J": {
-        "asset_name": "Japanese Yen",
-        "primary_peer": "6E",
-        "cross_class_peers": ["MGC", "MES"],  # JPY = safe haven like Gold
-    },
-    "6A": {
-        "asset_name": "Australian Dollar",
-        "primary_peer": "6E",
-        "cross_class_peers": ["MHG", "MCL"],  # AUD = commodity currency
-    },
-    # ── Crypto ────────────────────────────────────────────────────────────
-    "MBT": {
-        "asset_name": "Bitcoin",
-        "primary_peer": "MET",
-        "cross_class_peers": ["MES", "MNQ", "MGC"],  # BTC↔S&P, ↔NQ, ↔Gold
-    },
-    "MET": {
-        "asset_name": "Ethereum",
-        "primary_peer": "MBT",
-        "cross_class_peers": ["MNQ", "MES"],
-    },
-    # Crypto spot / Kraken aliases
-    "BTC": {
-        "asset_name": "Bitcoin",
-        "primary_peer": "ETH",
-        "cross_class_peers": ["MES", "MNQ"],
-    },
-    "ETH": {
-        "asset_name": "Ethereum",
-        "primary_peer": "BTC",
-        "cross_class_peers": ["MNQ", "MES"],
+    # ── Agricultural ──────────────────────────────────────────────────────
+    "ZW": {
+        "asset_name": "Wheat",
+        "primary_peer": "MGC",  # Wheat↔Gold: commodity complex (inflation/USD)
+        "cross_class_peers": ["MES", "ZN"],  # Wheat↔S&P (risk appetite), Wheat↔T-Note (macro)
     },
 }
 
 # Known correlation pairs and their expected baseline correlation
 # (approximate, based on historical analysis).  Used for anomaly detection.
+# Restricted to active training symbols only: MGC, SIL, MES, MNQ, M2K, MYM, ZN, ZB, ZW
 BASELINE_CORRELATIONS: dict[tuple[str, str], float] = {
     ("MGC", "SIL"): 0.75,  # Gold↔Silver: strongly correlated
     ("MGC", "MES"): 0.0,  # Gold↔S&P: near-zero (risk switch)
-    ("MGC", "M6E"): 0.40,  # Gold↔Euro: moderate (DXY inverse)
+    ("MGC", "ZN"): 0.45,  # Gold↔T-Note: moderate (safe-haven flow)
     ("MES", "MNQ"): 0.92,  # S&P↔Nasdaq: very strongly correlated
     ("MES", "M2K"): 0.85,  # S&P↔Russell: strongly correlated
-    ("MES", "MBT"): 0.50,  # S&P↔Bitcoin: moderate (varies by regime)
-    ("MCL", "MES"): 0.30,  # Crude↔S&P: weak positive
-    ("MCL", "MNG"): 0.25,  # Crude↔NatGas: weak (different supply drivers)
-    ("MBT", "MET"): 0.88,  # BTC↔ETH: strongly correlated
-    ("MNQ", "MBT"): 0.55,  # Nasdaq↔Bitcoin: moderate (tech/risk-on)
-    ("MHG", "MES"): 0.45,  # Copper↔S&P: moderate (growth proxy)
-    ("M6E", "M6B"): 0.70,  # EUR↔GBP: strongly correlated
+    ("MES", "MYM"): 0.97,  # S&P↔Dow: near-identical
+    ("MES", "ZN"): -0.40,  # S&P↔T-Note: moderate inverse (risk-on/off)
+    ("MNQ", "M2K"): 0.80,  # Nasdaq↔Russell: strong (broad risk-on)
+    ("MNQ", "ZN"): -0.45,  # Nasdaq↔T-Note: rate sensitivity
+    ("ZN", "ZB"): 0.92,  # 10Y↔30Y T-Bond: very strongly correlated
+    ("ZN", "MES"): -0.40,  # T-Note↔S&P: (duplicate for lookup symmetry)
+    ("SIL", "MES"): 0.35,  # Silver↔S&P: weak-moderate (risk appetite)
+    ("ZW", "MGC"): 0.30,  # Wheat↔Gold: commodity/inflation complex
 }
 
 

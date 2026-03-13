@@ -279,12 +279,13 @@ class ModelService:
             from statsmodels.tsa.arima.model import ARIMA
 
             class ARIMAModel:
-                def __init__(self, **kwargs):
-                    self.params = kwargs
+                def __init__(self, **_kwargs):
+                    self.params = _kwargs
                     self.model = None
-                    self.features = []
+                    self.features: list[str] = []
+                    self.results: Any = None
 
-                def fit(self, train_data, target_column, **kwargs):
+                def fit(self, train_data, target_column, **_kwargs):
                     self.features = [target_column]
                     # Extract time series
                     y = train_data[target_column]
@@ -293,7 +294,7 @@ class ModelService:
                     self.results = self.model.fit()
                     return {"status": "success"}
 
-                def predict(self, X, steps=1, **kwargs):
+                def predict(self, X=None, steps=1, **_kwargs):
                     if self.model is None:
                         raise ValueError("Model not trained")
                     # Create forecast
@@ -325,12 +326,12 @@ class ModelService:
             from prophet import Prophet
 
             class ProphetModel:
-                def __init__(self, **kwargs):
-                    self.params = kwargs
-                    self.model = Prophet(**kwargs)
-                    self.features = []
+                def __init__(self, **_kwargs):
+                    self.params = _kwargs
+                    self.model = Prophet(**_kwargs)
+                    self.features: list[str] = []
 
-                def fit(self, train_data, target_column, date_column="ds", **kwargs):
+                def fit(self, train_data, target_column, date_column="ds", **_kwargs):
                     # Prepare data - Prophet requires 'ds' (date) and 'y' (target) columns
                     df = train_data.copy()
                     if date_column != "ds":
@@ -343,12 +344,15 @@ class ModelService:
                     self.model.fit(df)
                     return {"status": "success"}
 
-                def predict(self, X, periods=1, **kwargs):
+                def predict(self, X=None, periods=1, **_kwargs):
                     if not hasattr(self.model, "params"):  # Check if model is fitted
                         raise ValueError("Model not trained")
 
                     # Create future dataframe
-                    future = X.copy() if "ds" in X.columns else self.model.make_future_dataframe(periods=periods)
+                    if X is not None and isinstance(X, pd.DataFrame) and "ds" in X.columns:
+                        future = X.copy()
+                    else:
+                        future = self.model.make_future_dataframe(periods=periods)
 
                     # Generate forecast
                     forecast = self.model.predict(future)
@@ -382,11 +386,11 @@ class ModelService:
             from sklearn.linear_model import LinearRegression
 
             class LinearRegressionModel:
-                def __init__(self, **kwargs):
-                    self.model = LinearRegression(**kwargs)
-                    self.features = []
+                def __init__(self, **_kwargs):
+                    self.model = LinearRegression(**_kwargs)
+                    self.features: list[str] = []
 
-                def fit(self, train_data, target_column, **kwargs):
+                def fit(self, train_data, target_column, **_kwargs):
                     # Extract features and target
                     self.features = [col for col in train_data.columns if col != target_column]
                     X = train_data[self.features]
@@ -396,9 +400,9 @@ class ModelService:
                     self.model.fit(X, y)
 
                     # Return metrics if validation data provided
-                    metrics = {}
-                    if "validation_data" in kwargs:
-                        val_data = kwargs["validation_data"]
+                    metrics: dict[str, float] = {}
+                    if "validation_data" in _kwargs:
+                        val_data = _kwargs["validation_data"]
                         val_pred = self.predict(val_data)
                         val_true = val_data[target_column]
                         from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -409,7 +413,7 @@ class ModelService:
 
                     return {"status": "success", "metrics": metrics}
 
-                def predict(self, X, **kwargs):
+                def predict(self, X, **_kwargs):
                     if not hasattr(self.model, "coef_"):
                         raise ValueError("Model not trained")
 
@@ -456,14 +460,14 @@ class ModelService:
             import xgboost as xgb
 
             class XGBoostRegressorModel:
-                def __init__(self, **kwargs):
-                    self.params = kwargs
-                    self.model = xgb.XGBRegressor(**kwargs)
-                    self.features = []
-                    self.is_gold_model = kwargs.get("is_gold_model", False)
-                    self.model_type = kwargs.get("model_type", "xgboost_regressor")
+                def __init__(self, **_kwargs):
+                    self.params = _kwargs
+                    self.model = xgb.XGBRegressor(**_kwargs)
+                    self.features: list[str] = []
+                    self.is_gold_model = _kwargs.get("is_gold_model", False)
+                    self.model_type = _kwargs.get("model_type", "xgboost_regressor")
 
-                def fit(self, train_data, target_column, validation_data=None, **kwargs):
+                def fit(self, train_data, target_column, validation_data=None, **_kwargs):
                     # Extract features and target
                     self.features = [col for col in train_data.columns if col != target_column]
                     X = train_data[self.features]
@@ -477,10 +481,10 @@ class ModelService:
                         eval_set = [(X, y), (X_val, y_val)]
 
                     # Fit model
-                    self.model.fit(X, y, eval_set=eval_set, **kwargs)
+                    self.model.fit(X, y, eval_set=eval_set, **_kwargs)
 
                     # Return metrics
-                    metrics = {}
+                    metrics: dict[str, Any] = {}
                     if hasattr(self.model, "evals_result_"):
                         results = self.model.evals_result_
                         # Add validation metrics if available
@@ -489,7 +493,7 @@ class ModelService:
 
                     return {"status": "success", "metrics": metrics}
 
-                def predict(self, X, **kwargs):
+                def predict(self, X, **_kwargs):
                     if not hasattr(self.model, "feature_importances_"):
                         raise ValueError("Model not trained")
 
@@ -556,11 +560,11 @@ class ModelService:
             from sklearn.ensemble import RandomForestRegressor
 
             class RandomForestModel:
-                def __init__(self, **kwargs):
-                    self.model = RandomForestRegressor(**kwargs)
-                    self.features = []
+                def __init__(self, **_kwargs):
+                    self.model = RandomForestRegressor(**_kwargs)
+                    self.features: list[str] = []
 
-                def fit(self, train_data, target_column, **kwargs):
+                def fit(self, train_data, target_column, **_kwargs):
                     # Extract features and target
                     self.features = [col for col in train_data.columns if col != target_column]
                     X = train_data[self.features]
@@ -570,9 +574,9 @@ class ModelService:
                     self.model.fit(X, y)
 
                     # Return metrics if validation data provided
-                    metrics = {}
-                    if "validation_data" in kwargs:
-                        val_data = kwargs["validation_data"]
+                    metrics: dict[str, float] = {}
+                    if "validation_data" in _kwargs:
+                        val_data = _kwargs["validation_data"]
                         val_pred = self.predict(val_data)
                         val_true = val_data[target_column]
                         from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -583,7 +587,7 @@ class ModelService:
 
                     return {"status": "success", "metrics": metrics}
 
-                def predict(self, X, **kwargs):
+                def predict(self, X, **_kwargs):
                     if not hasattr(self.model, "feature_importances_"):
                         raise ValueError("Model not trained")
 
@@ -638,17 +642,17 @@ class ModelService:
             import xgboost as xgb
 
             class GoldDirectionModel:
-                def __init__(self, **kwargs):
-                    self.params = kwargs
+                def __init__(self, **_kwargs):
+                    self.params = _kwargs
                     self.model = xgb.XGBClassifier(
                         objective="binary:logistic",
-                        **{k: v for k, v in kwargs.items() if k != "is_gold_model" and k != "model_type"},
+                        **{k: v for k, v in _kwargs.items() if k != "is_gold_model" and k != "model_type"},
                     )
-                    self.features = []
+                    self.features: list[str] = []
                     self.is_gold_model = True
                     self.model_type = "gold_direction"
 
-                def fit(self, train_data, target_column, validation_data=None, **kwargs):
+                def fit(self, train_data, target_column, validation_data=None, **_kwargs):
                     # Extract features and target
                     self.features = [col for col in train_data.columns if col != target_column]
                     X = train_data[self.features]
@@ -656,27 +660,29 @@ class ModelService:
 
                     # Prepare validation data if provided
                     eval_set = None
+                    X_val = None
+                    y_val = None
                     if validation_data is not None:
                         X_val = validation_data[self.features]
                         y_val = validation_data[target_column]
                         eval_set = [(X, y), (X_val, y_val)]
 
                     # Fit model
-                    self.model.fit(X, y, eval_set=eval_set, **kwargs)
+                    self.model.fit(X, y, eval_set=eval_set, **_kwargs)
 
                     # Return metrics
-                    metrics = {}
-                    if validation_data is not None:
+                    metrics: dict[str, float] = {}
+                    if validation_data is not None and X_val is not None and y_val is not None:
                         from sklearn.metrics import accuracy_score, roc_auc_score
 
                         y_pred = self.model.predict(X_val)
                         y_pred_proba = self.model.predict_proba(X_val)[:, 1]
-                        metrics["accuracy"] = accuracy_score(y_val, y_pred)
-                        metrics["roc_auc"] = roc_auc_score(y_val, y_pred_proba)
+                        metrics["accuracy"] = float(accuracy_score(y_val, y_pred))
+                        metrics["roc_auc"] = float(roc_auc_score(y_val, y_pred_proba))
 
                     return {"status": "success", "metrics": metrics}
 
-                def predict(self, X, **kwargs):
+                def predict(self, X, **_kwargs):
                     if not hasattr(self.model, "feature_importances_"):
                         raise ValueError("Model not trained")
 
@@ -684,7 +690,7 @@ class ModelService:
                     X_features = X[self.features] if isinstance(X, pd.DataFrame) else X
 
                     # Generate predictions
-                    if kwargs.get("return_proba", False):
+                    if _kwargs.get("return_proba", False):
                         return self.model.predict_proba(X_features)[:, 1]
                     else:
                         return self.model.predict(X_features)
@@ -755,17 +761,17 @@ class ModelService:
             import xgboost as xgb
 
             class GoldRegressionModel:
-                def __init__(self, **kwargs):
-                    self.params = kwargs
+                def __init__(self, **_kwargs):
+                    self.params = _kwargs
                     self.model = xgb.XGBRegressor(
                         objective="reg:squarederror",
-                        **{k: v for k, v in kwargs.items() if k != "is_gold_model" and k != "model_type"},
+                        **{k: v for k, v in _kwargs.items() if k != "is_gold_model" and k != "model_type"},
                     )
-                    self.features = []
+                    self.features: list[str] = []
                     self.is_gold_model = True
                     self.model_type = "gold_regression"
 
-                def fit(self, train_data, target_column, validation_data=None, **kwargs):
+                def fit(self, train_data, target_column, validation_data=None, **_kwargs):
                     # Extract features and target
                     self.features = [col for col in train_data.columns if col != target_column]
                     X = train_data[self.features]
@@ -773,29 +779,30 @@ class ModelService:
 
                     # Prepare validation data if provided
                     eval_set = None
+                    X_val = None
+                    y_val = None
                     if validation_data is not None:
                         X_val = validation_data[self.features]
                         y_val = validation_data[target_column]
                         eval_set = [(X, y), (X_val, y_val)]
 
                     # Fit model
-                    self.model.fit(X, y, eval_set=eval_set, **kwargs)
+                    self.model.fit(X, y, eval_set=eval_set, **_kwargs)
 
                     # Return metrics
-                    metrics = {}
-                    if validation_data is not None:
-                        import numpy as np
+                    metrics: dict[str, float] = {}
+                    if validation_data is not None and X_val is not None and y_val is not None:
                         from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
                         y_pred = self.model.predict(X_val)
                         metrics["mse"] = mean_squared_error(y_val, y_pred)
-                        metrics["rmse"] = np.sqrt(metrics["mse"])
+                        metrics["rmse"] = float(np.sqrt(metrics["mse"]))
                         metrics["mae"] = mean_absolute_error(y_val, y_pred)
                         metrics["r2"] = r2_score(y_val, y_pred)
 
                     return {"status": "success", "metrics": metrics}
 
-                def predict(self, X, **kwargs):
+                def predict(self, X, **_kwargs):
                     if not hasattr(self.model, "feature_importances_"):
                         raise ValueError("Model not trained")
 
@@ -871,80 +878,79 @@ class ModelService:
             import xgboost as xgb
 
             class GoldEnsembleModel:
-                def __init__(self, **kwargs):
-                    self.params = kwargs
-                    self.direction_model = self._create_direction_model(kwargs)
-                    self.regression_model = self._create_regression_model(kwargs)
-                    self.features = []
+                def __init__(self, **_kwargs):
+                    self.params = _kwargs
+                    self.direction_model = self._create_direction_model(_kwargs)
+                    self.regression_model = self._create_regression_model(_kwargs)
+                    self.features: list[str] = []
                     self.is_gold_model = True
                     self.model_type = "gold_ensemble"
 
-                def _create_direction_model(self, kwargs):
+                def _create_direction_model(self, _kwargs):
                     """Create the direction sub-model."""
-                    direction_params = kwargs.get("direction_params", {})
+                    direction_params = _kwargs.get("direction_params", {})
                     return xgb.XGBClassifier(objective="binary:logistic", **direction_params)
 
-                def _create_regression_model(self, kwargs):
+                def _create_regression_model(self, _kwargs):
                     """Create the regression sub-model."""
-                    regression_params = kwargs.get("regression_params", {})
+                    regression_params = _kwargs.get("regression_params", {})
                     return xgb.XGBRegressor(objective="reg:squarederror", **regression_params)
 
-                def fit(self, train_data, target_column, direction_column=None, **kwargs):
-                    # Extract common features
-                    self.features = [
-                        col
-                        for col in train_data.columns
-                        if col != target_column and (direction_column is None or col != direction_column)
-                    ]
+                def fit(self, train_data, target_column, direction_column=None, **_kwargs):
+                                    # Extract common features
+                                    self.features = [
+                                        col
+                                        for col in train_data.columns
+                                        if col != target_column and (direction_column is None or col != direction_column)
+                                    ]
 
-                    # Prepare direction target if provided
-                    if direction_column is None:
-                        # Create direction column (price goes up or down)
-                        direction_column = f"{target_column}_direction"
-                        train_data[direction_column] = (
-                            train_data[target_column].shift(-1) > train_data[target_column]
-                        ).astype(int)
+                                    # Prepare direction target if provided
+                                    if direction_column is None:
+                                        # Create direction column (price goes up or down)
+                                        direction_column = f"{target_column}_direction"
+                                        train_data[direction_column] = (
+                                            train_data[target_column].shift(-1) > train_data[target_column]
+                                        ).astype(int)
 
-                    # Extract features and targets
-                    X = train_data[self.features]
-                    y_reg = train_data[target_column]
-                    y_dir = train_data[direction_column]
+                                    # Extract features and targets
+                                    X = train_data[self.features]
+                                    y_reg = train_data[target_column]
+                                    y_dir = train_data[direction_column]
 
-                    # Fit direction model
-                    self.direction_model.fit(X, y_dir)
+                                    # Fit direction model
+                                    self.direction_model.fit(X, y_dir)
 
-                    # Fit regression model
-                    self.regression_model.fit(X, y_reg)
+                                    # Fit regression model
+                                    self.regression_model.fit(X, y_reg)
 
-                    # Return metrics
-                    metrics = {}
-                    if "validation_data" in kwargs:
-                        val_data = kwargs["validation_data"]
-                        X_val = val_data[self.features]
+                                    # Return metrics
+                                    metrics: dict[str, float] = {}
+                                    if "validation_data" in _kwargs:
+                                        val_data = _kwargs["validation_data"]
+                                        X_val = val_data[self.features]
 
-                        # Direction metrics
-                        from sklearn.metrics import accuracy_score, roc_auc_score
+                                        # Direction metrics
+                                        from sklearn.metrics import accuracy_score, roc_auc_score
 
-                        y_dir_val = val_data[direction_column]
-                        y_dir_pred = self.direction_model.predict(X_val)
-                        y_dir_prob = self.direction_model.predict_proba(X_val)[:, 1]
-                        metrics["dir_accuracy"] = accuracy_score(y_dir_val, y_dir_pred)
-                        metrics["dir_roc_auc"] = roc_auc_score(y_dir_val, y_dir_prob)
+                                        y_dir_val = val_data[direction_column]
+                                        y_dir_pred = self.direction_model.predict(X_val)
+                                        y_dir_prob = self.direction_model.predict_proba(X_val)[:, 1]
+                                        metrics["dir_accuracy"] = float(accuracy_score(y_dir_val, y_dir_pred))
+                                        metrics["dir_roc_auc"] = float(roc_auc_score(y_dir_val, y_dir_prob))
 
-                        # Regression metrics
-                        import numpy as np
-                        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+                                        # Regression metrics
+                                        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-                        y_reg_val = val_data[target_column]
-                        y_reg_pred = self.regression_model.predict(X_val)
-                        metrics["reg_mse"] = mean_squared_error(y_reg_val, y_reg_pred)
-                        metrics["reg_rmse"] = np.sqrt(metrics["reg_mse"])
-                        metrics["reg_mae"] = mean_absolute_error(y_reg_val, y_reg_pred)
-                        metrics["reg_r2"] = r2_score(y_reg_val, y_reg_pred)
+                                        y_reg_val = val_data[target_column]
+                                        y_reg_pred = self.regression_model.predict(X_val)
+                                        metrics["reg_mse"] = mean_squared_error(y_reg_val, y_reg_pred)
+                                        metrics["reg_rmse"] = float(np.sqrt(metrics["reg_mse"]))
+                                        metrics["reg_mae"] = mean_absolute_error(y_reg_val, y_reg_pred)
+                                        metrics["reg_r2"] = r2_score(y_reg_val, y_reg_pred)
 
-                    return {"status": "success", "metrics": metrics}
+                                    return {"status": "success", "metrics": metrics}
 
-                def predict(self, X, **kwargs):
+                def predict(self, X, **_kwargs):
                     if not hasattr(self.direction_model, "feature_importances_"):
                         raise ValueError("Models not trained")
 
@@ -957,7 +963,7 @@ class ModelService:
                     price_pred = self.regression_model.predict(X_features)
 
                     # Return different results based on mode
-                    mode = kwargs.get("mode", "price")
+                    mode = _kwargs.get("mode", "price")
                     if mode == "direction":
                         return direction_pred
                     elif mode == "direction_prob":
@@ -1045,16 +1051,18 @@ class ModelService:
     def _create_lstm_model(self, **kwargs) -> Any:
         """Create an LSTM model instance."""
         try:
-            import tensorflow as tf
+            import tensorflow as tf  # type: ignore[import-unresolved]
 
             class LSTMModel:
-                def __init__(self, **kwargs):
-                    self.units = kwargs.get("units", 50)
-                    self.dropout = kwargs.get("dropout", 0.2)
-                    self.sequence_length = kwargs.get("sequence_length", 10)
-                    self.model = None
-                    self.features = []
-                    self.scaler = None
+                def __init__(self, **_kwargs):
+                    self.units = _kwargs.get("units", 50)
+                    self.dropout = _kwargs.get("dropout", 0.2)
+                    self.sequence_length = _kwargs.get("sequence_length", 10)
+                    self.model: Any = None
+                    self.features: list[str] = []
+                    self.scaler: Any = None
+                    self.scaler_X: Any = None
+                    self.scaler_y: Any = None
 
                 def _build_model(self, input_shape):
                     """Build the LSTM model architecture."""
@@ -1078,7 +1086,7 @@ class ModelService:
                         y.append(data[i + seq_length])
                     return np.array(X), np.array(y)
 
-                def fit(self, train_data, target_column, **kwargs):
+                def fit(self, train_data, target_column, **_kwargs):
                     from sklearn.preprocessing import MinMaxScaler
 
                     # Extract features
@@ -1102,21 +1110,21 @@ class ModelService:
                     history = self.model.fit(
                         X_seq,
                         y_seq,
-                        epochs=kwargs.get("epochs", 50),
-                        batch_size=kwargs.get("batch_size", 32),
-                        validation_split=kwargs.get("validation_split", 0.2),
-                        verbose=kwargs.get("verbose", 0),
+                        epochs=_kwargs.get("epochs", 50),
+                        batch_size=_kwargs.get("batch_size", 32),
+                        validation_split=_kwargs.get("validation_split", 0.2),
+                        verbose=_kwargs.get("verbose", 0),
                     )
 
                     # Return metrics
-                    metrics = {
+                    metrics: dict[str, Any] = {
                         "loss": history.history["loss"][-1],
                         "val_loss": history.history["val_loss"][-1] if "val_loss" in history.history else None,
                     }
 
                     return {"status": "success", "metrics": metrics}
 
-                def predict(self, X, **kwargs):
+                def predict(self, X, **_kwargs):
                     if self.model is None:
                         raise ValueError("Model not trained")
 
@@ -1174,7 +1182,7 @@ class ModelService:
                 def load(self, path):
                     import pickle
 
-                    import tensorflow as tf
+                    import tensorflow as tf  # type: ignore[import-unresolved]
 
                     # Load keras model
                     self.model = tf.keras.models.load_model(f"{path}.h5")
@@ -1203,26 +1211,25 @@ class ModelService:
     def _create_neural_network(self, **kwargs) -> Any:
         """Create a neural network model instance."""
         try:
-            import tensorflow as tf
+            import tensorflow as tf  # type: ignore[import-unresolved]
 
             class NeuralNetworkModel:
-                def __init__(self, **kwargs):
-                    self.hidden_layers = kwargs.get("hidden_layers", [64, 32])
-                    self.activation = kwargs.get("activation", "relu")
-                    self.model = None
-                    self.features = []
-                    self.scaler = None
+                def __init__(self, **_kwargs):
+                    self.hidden_layers = _kwargs.get("hidden_layers", [64, 32])
+                    self.activation = _kwargs.get("activation", "relu")
+                    self.model: Any = None
+                    self.features: list[str] = []
+                    self.scaler: Any = None
+                    self.scaler_X: Any = None
+                    self.scaler_y: Any = None
 
                 def _build_model(self, input_shape):
                     """Build the neural network architecture."""
                     model = tf.keras.Sequential()
 
                     # Input layer
-                    model.add(
-                        tf.keras.layers.Dense(
-                            self.hidden_layers[0], activation=self.activation, input_shape=(input_shape,)
-                        )
-                    )
+                    model.add(tf.keras.layers.Input(shape=(input_shape,)))
+                    model.add(tf.keras.layers.Dense(self.hidden_layers[0], activation=self.activation))
 
                     # Hidden layers
                     for units in self.hidden_layers[1:]:
@@ -1234,7 +1241,7 @@ class ModelService:
                     model.compile(optimizer="adam", loss="mse")
                     return model
 
-                def fit(self, train_data, target_column, **kwargs):
+                def fit(self, train_data, target_column, **_kwargs):
                     from sklearn.preprocessing import StandardScaler
 
                     # Extract features
@@ -1255,21 +1262,21 @@ class ModelService:
                     history = self.model.fit(
                         X_scaled,
                         y_scaled,
-                        epochs=kwargs.get("epochs", 50),
-                        batch_size=kwargs.get("batch_size", 32),
-                        validation_split=kwargs.get("validation_split", 0.2),
-                        verbose=kwargs.get("verbose", 0),
+                        epochs=_kwargs.get("epochs", 50),
+                        batch_size=_kwargs.get("batch_size", 32),
+                        validation_split=_kwargs.get("validation_split", 0.2),
+                        verbose=_kwargs.get("verbose", 0),
                     )
 
                     # Return metrics
-                    metrics = {
+                    metrics: dict[str, Any] = {
                         "loss": history.history["loss"][-1],
                         "val_loss": history.history["val_loss"][-1] if "val_loss" in history.history else None,
                     }
 
                     return {"status": "success", "metrics": metrics}
 
-                def predict(self, X, **kwargs):
+                def predict(self, X, **_kwargs):
                     if self.model is None:
                         raise ValueError("Model not trained")
 
@@ -1316,7 +1323,7 @@ class ModelService:
                 def load(self, path):
                     import pickle
 
-                    import tensorflow as tf
+                    import tensorflow as tf  # type: ignore[import-unresolved]
 
                     # Load keras model
                     self.model = tf.keras.models.load_model(f"{path}.h5")
@@ -1347,28 +1354,26 @@ class ModelService:
         class StubModel:
             """Stub model implementation for when dependencies are missing."""
 
-            def __init__(self, model_type, **kwargs):
-                self.model_type = model_type
-                self.params = kwargs
-                self.features = []
+            def __init__(self, _model_type, **_kwargs):
+                self.model_type = _model_type
+                self.params = _kwargs
+                self.features: list[str] = []
                 self.is_trained = False
-                self.is_gold_model = kwargs.get("is_gold_model", False)
+                self.is_gold_model = _kwargs.get("is_gold_model", False)
 
-            def fit(self, train_data, target_column, **kwargs):
+            def fit(self, train_data, target_column, **_kwargs):
                 """Stub fit method."""
                 logger.warning(f"Using stub {self.model_type} model - no actual training performed")
                 self.features = [col for col in train_data.columns if col != target_column]
                 self.is_trained = True
                 return {"status": "warning", "message": f"Stub {self.model_type} model used"}
 
-            def predict(self, X, **kwargs):
+            def predict(self, X, **_kwargs):
                 """Stub predict method."""
                 if not self.is_trained:
                     raise ValueError("Model not trained")
 
                 # Return random predictions
-                import numpy as np
-
                 size = len(X) if isinstance(X, pd.DataFrame) else len(X) if hasattr(X, "__len__") else 1
 
                 # For classification, return 0/1
@@ -1418,9 +1423,7 @@ class ModelService:
                     raise ValueError("Model not trained")
 
                 # Return random importance scores
-                import numpy as np
-
-                return {feature: np.random.random() for feature in self.features}
+                return {feature: float(np.random.random()) for feature in self.features}
 
         return StubModel(model_type, **kwargs)
 
@@ -1611,9 +1614,9 @@ class ModelService:
         model = self._models[model_name]
         version_info = self._versions.get(model_name, ModelVersionInfo())
 
+        previous_active = self._active_model
         try:
             # Set as active model during operation
-            previous_active = self._active_model
             self._active_model = model_name
 
             yield model
@@ -1938,65 +1941,67 @@ class ModelService:
             return predictions
 
     def save_model(self, model_name: str, path: str | None = None) -> str:
-        """
-        Save a model to disk.
+            """
+            Save a model to disk.
 
-        Args:
-            model_name: Name of the model to save
-            path: Directory path (uses model_dir if None)
+            Args:
+                model_name: Name of the model to save
+                path: Directory path (uses model_dir if None)
 
-        Returns:
-            Path to the saved model
+            Returns:
+                Path to the saved model
 
-        Raises:
-            ValueError: If the model is not initialized
-        """
-        # Use model_dir as default path
-        if path is None:
-            if self.model_dir is None:
-                raise ValueError("No path specified and no model_dir configured")
-            path = str(self.model_dir / model_name)
+            Raises:
+                ValueError: If the model is not initialized
+            """
+            # Use model_dir as default path
+            if path is None:
+                if self.model_dir is None:
+                    raise ValueError("No path specified and no model_dir configured")
+                path = str(self.model_dir / model_name)
 
-        logger.info(f"Saving model {model_name} to {path}")
+            logger.info(f"Saving model {model_name} to {path}")
 
-        with self._model_operation(model_name, "save") as model:
-            # Create version-specific path
-            version_info = self._versions[model_name]
-            version_id = version_info.version_id
-            model_path = f"{path}/{model_name}_{version_id}"
+            with self._model_operation(model_name, "save") as model:
+                # Create version-specific path
+                version_info = self._versions[model_name]
+                version_id = version_info.version_id
+                model_path = f"{path}/{model_name}_{version_id}"
 
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                # Ensure directory exists
+                os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
-            # Run pre-save hooks
-            self._run_lifecycle_hooks("pre_save", model_name, path=model_path)
+                # Run pre-save hooks
+                self._run_lifecycle_hooks("pre_save", model_name, path=model_path)
 
-            # Try different save methods
-            save_path = None
-            if hasattr(model, "save") and callable(model.save):
-                save_path = model.save(model_path)
-            elif hasattr(model, "save_model") and callable(model.save_model):
-                save_path = model.save_model(model_path)
-            else:
-                # For models without a save method, try pickle
-                import pickle
+                # Try different save methods
+                save_path: str | None = None
+                if hasattr(model, "save") and callable(model.save):
+                    result = model.save(model_path)
+                    save_path = str(result) if result is not None else None
+                elif hasattr(model, "save_model") and callable(model.save_model):
+                    result = model.save_model(model_path)
+                    save_path = str(result) if result is not None else None
+                else:
+                    # For models without a save method, try pickle
+                    import pickle
 
-                try:
-                    with open(f"{model_path}.pkl", "wb") as f:
-                        pickle.dump(model, f)
-                    save_path = f"{model_path}.pkl"
-                except Exception as e:
-                    raise ValueError(f"Failed to save model {model_name} with pickle: {e}") from e
+                    try:
+                        with open(f"{model_path}.pkl", "wb") as f:
+                            pickle.dump(model, f)
+                        save_path = f"{model_path}.pkl"
+                    except Exception as e:
+                        raise ValueError(f"Failed to save model {model_name} with pickle: {e}") from e
 
-            # Save version info
-            version_path = f"{model_path}_info.json"
-            with open(version_path, "w") as f:
-                json.dump(version_info.to_dict(), f, indent=2)
+                # Save version info
+                version_path = f"{model_path}_info.json"
+                with open(version_path, "w") as f:
+                    json.dump(version_info.to_dict(), f, indent=2)
 
-            # Run post-save hooks
-            self._run_lifecycle_hooks("post_save", model_name, save_path=save_path)
+                # Run post-save hooks
+                self._run_lifecycle_hooks("post_save", model_name, save_path=save_path)
 
-            return save_path or model_path
+                return save_path if save_path is not None else model_path
 
     def load_model(self, model_name: str, path: str) -> None:
         """
@@ -2093,11 +2098,9 @@ class ModelService:
         Raises:
             ValueError: If the model is not trained
         """
-        if metrics is None:
-            metrics = []
         logger.info(f"Evaluating model {model_name} with {len(data)} samples")
 
-        metrics = metrics or ["mae", "mse", "rmse", "r2"]
+        metrics_list: list[str] = metrics if metrics else ["mae", "mse", "rmse", "r2"]
 
         # Check if model exists and is trained
         if model_name not in self._models:
@@ -2116,7 +2119,7 @@ class ModelService:
 
         # Adjust metrics for classification models
         if is_classification:
-            metrics = ["accuracy", "precision", "recall", "f1", "roc_auc"]
+            metrics_list = ["accuracy", "precision", "recall", "f1", "roc_auc"]
 
         # Get features list
         if features is None:
@@ -2129,7 +2132,7 @@ class ModelService:
         y_true = data[target_column].values
 
         # Calculate metrics
-        results = {}
+        results: dict[str, float] = {}
 
         # Classification metrics
         if is_classification:
@@ -2137,11 +2140,11 @@ class ModelService:
                 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 
                 # For binary classification
-                if "accuracy" in metrics:
+                if "accuracy" in metrics_list:
                     results["accuracy"] = float(accuracy_score(y_true, y_pred))
 
                 # Try to get probability predictions for ROC AUC
-                if "roc_auc" in metrics:
+                if "roc_auc" in metrics_list:
                     try:
                         y_pred_proba = self.predict(model_name, data, features, return_proba=True)
                         results["roc_auc"] = float(roc_auc_score(y_true, y_pred_proba))
@@ -2149,11 +2152,11 @@ class ModelService:
                         logger.warning(f"Could not calculate ROC AUC: {e}")
 
                 # Other classification metrics
-                if "precision" in metrics:
+                if "precision" in metrics_list:
                     results["precision"] = float(precision_score(y_true, y_pred, average="weighted"))
-                if "recall" in metrics:
+                if "recall" in metrics_list:
                     results["recall"] = float(recall_score(y_true, y_pred, average="weighted"))
-                if "f1" in metrics:
+                if "f1" in metrics_list:
                     results["f1"] = float(f1_score(y_true, y_pred, average="weighted"))
             except Exception as e:
                 logger.warning(f"Error calculating classification metrics: {e}")
@@ -2162,16 +2165,16 @@ class ModelService:
             try:
                 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-                if "mae" in metrics:
+                if "mae" in metrics_list:
                     results["mae"] = float(mean_absolute_error(y_true, y_pred))
 
-                if "mse" in metrics:
+                if "mse" in metrics_list:
                     results["mse"] = float(mean_squared_error(y_true, y_pred))
 
-                if "rmse" in metrics:
+                if "rmse" in metrics_list:
                     results["rmse"] = float(np.sqrt(mean_squared_error(y_true, y_pred)))
 
-                if "r2" in metrics:
+                if "r2" in metrics_list:
                     results["r2"] = float(r2_score(y_true, y_pred))
             except Exception as e:
                 logger.warning(f"Error calculating regression metrics: {e}")
