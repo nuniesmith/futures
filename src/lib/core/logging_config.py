@@ -23,12 +23,26 @@ human-friendly.  Set LOG_FORMAT=json for machine-parseable JSON lines
 
 from __future__ import annotations
 
+import datetime
 import logging
 import os
 import sys
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import structlog
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _et_timestamper(logger: Any, method: str, event_dict: dict) -> dict:
+    """structlog processor that stamps log events with Eastern Time (ET).
+
+    Automatically reflects EDT (UTC-4) or EST (UTC-5) based on DST.
+    Replaces the default UTC ``TimeStamper(fmt="iso")``.
+    """
+    event_dict["timestamp"] = datetime.datetime.now(_ET).strftime("%H:%M:%S")
+    return event_dict
 
 
 def setup_logging(
@@ -67,7 +81,7 @@ def setup_logging(
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.stdlib.ExtraAdder(),
-        structlog.processors.TimeStamper(fmt="iso"),
+        _et_timestamper,
         structlog.processors.StackInfoRenderer(),
         structlog.processors.UnicodeDecoder(),
     ]

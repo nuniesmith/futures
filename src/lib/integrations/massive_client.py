@@ -42,7 +42,11 @@ logger = logging.getLogger("massive_client")
 logger.setLevel(logging.INFO)
 if not logger.handlers:
     _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[MASSIVE] %(asctime)s  %(message)s", "%H:%M:%S"))
+    import datetime as _dt
+
+    _fmt = logging.Formatter("[MASSIVE] %(asctime)s  %(message)s", "%H:%M:%S")
+    _fmt.converter = lambda *_: _dt.datetime.now(_EST).timetuple()
+    _h.setFormatter(_fmt)
     logger.addHandler(_h)
 
 # ---------------------------------------------------------------------------
