@@ -341,7 +341,6 @@ def _compute_session_concentration(
     """
     result = SessionConcentration()
     if bars_1m is None or bars_1m.empty:
-        # Equal distribution as default
         result.overnight_pct = 0.25
         result.london_pct = 0.25
         result.us_pct = 0.40
@@ -353,60 +352,59 @@ def _compute_session_concentration(
 
         _ET = ZoneInfo("America/New_York")
 
-        df = bars_1m.copy()
-        # Ensure datetime index in ET
-        if df.index.tz is None:  # type: ignore[union-attr]
-            df.index = df.index.tz_localize("UTC")  # type: ignore[union-attr]
-        df.index = df.index.tz_convert(_ET)  # type: ignore[union-attr]
+        # Convert index to ET — work on a view, not a full copy of 50k rows.
+        idx = bars_1m.index
+        if idx.tz is None:  # type: ignore[union-attr]
+            idx = idx.tz_localize("UTC")  # type: ignore[union-attr]
+        idx_et = idx.tz_convert(_ET)  # type: ignore[union-attr]
 
-        # Group by trading date
-        df["hour"] = df.index.hour  # type: ignore[union-attr]
-        df["date"] = df.index.date  # type: ignore[union-attr]
+        # Pre-slice to only the last (lookback_days) trading days worth of
+        # bars before doing any column work — avoids copying the full 50k
+        # bar dataframe just to discard 98% of it.
+        dates_all = np.array(idx_et.date)  # type: ignore[union-attr]
+        unique_dates = sorted(set(dates_all))
+        if len(unique_dates) > lookback_days:
+            cutoff_date = unique_dates[-lookback_days]
+            mask = dates_all >= cutoff_date
+            bars_slice = bars_1m.iloc[mask]
+            idx_et = idx_et[mask]
+        else:
+            bars_slice = bars_1m
 
-        dates = sorted(df["date"].unique())
-        if len(dates) > lookback_days:
-            dates = dates[-lookback_days:]
+        high_col = "High" if "High" in bars_slice.columns else "high"
+        low_col = "Low" if "Low" in bars_slice.columns else "low"
 
-        overnight_ranges: list[float] = []
-        london_ranges: list[float] = []
-        us_ranges: list[float] = []
-        settle_ranges: list[float] = []
+        # Build a minimal working DataFrame — only the columns we need.
+        df = pd.DataFrame(
+            {
+                "high": bars_slice[high_col].values,
+                "low": bars_slice[low_col].values,
+                "hour": idx_et.hour,  # type: ignore[union-attr]
+                "date": idx_et.date,  # type: ignore[union-attr]
+            },
+            index=idx_et,
+        )
 
-        for date in dates:
-            day_bars = df[df["date"] == date]
-            if day_bars.empty:
-                continue
+        # Assign session label vectorially — no per-date loop.
+        hour = df["hour"]
+        conditions = [
+            (hour >= 18) | (hour < 3),  # overnight
+            (hour >= 3) & (hour < 8),  # london
+            (hour >= 8) & (hour < 16),  # us
+            (hour >= 16) & (hour < 17),  # settle
+        ]
+        session_labels = ["overnight", "london", "us", "settle"]
+        df["session"] = np.select(conditions, session_labels, default="other")
 
-            high_col = "High" if "High" in day_bars.columns else "high"
-            low_col = "Low" if "Low" in day_bars.columns else "low"
+        # Per (date × session): compute high-low range, then average across dates.
+        grp = df[df["session"] != "other"].groupby(["date", "session"])
+        session_ranges = grp["high"].max() - grp["low"].min()  # type: ignore[operator]
+        avg_by_session = session_ranges.groupby(level="session").mean()
 
-            # Overnight: hours 18–23 (prior day) and 0–2
-            overnight = day_bars[(day_bars["hour"] >= 18) | (day_bars["hour"] < 3)]
-            london = day_bars[(day_bars["hour"] >= 3) & (day_bars["hour"] < 8)]
-            us = day_bars[(day_bars["hour"] >= 8) & (day_bars["hour"] < 16)]
-            settle = day_bars[(day_bars["hour"] >= 16) & (day_bars["hour"] < 17)]
-
-            for session_bars, range_list in [
-                (overnight, overnight_ranges),
-                (london, london_ranges),
-                (us, us_ranges),
-                (settle, settle_ranges),
-            ]:
-                if not session_bars.empty:  # type: ignore[union-attr]
-                    try:
-                        h = float(session_bars[high_col].max())  # type: ignore[arg-type]
-                        lo = float(session_bars[low_col].min())  # type: ignore[arg-type]
-                        range_list.append(max(0.0, h - lo))
-                    except Exception:
-                        range_list.append(0.0)
-                else:
-                    range_list.append(0.0)
-
-        # Average ranges per session
-        avg_overnight = float(np.mean(overnight_ranges)) if overnight_ranges else 0.0
-        avg_london = float(np.mean(london_ranges)) if london_ranges else 0.0
-        avg_us = float(np.mean(us_ranges)) if us_ranges else 0.0
-        avg_settle = float(np.mean(settle_ranges)) if settle_ranges else 0.0
+        avg_overnight = float(avg_by_session.get("overnight", 0.0))
+        avg_london = float(avg_by_session.get("london", 0.0))
+        avg_us = float(avg_by_session.get("us", 0.0))
+        avg_settle = float(avg_by_session.get("settle", 0.0))
 
         total = avg_overnight + avg_london + avg_us + avg_settle
         if total > 0:
@@ -521,25 +519,33 @@ def _classify_volume_profile(
 
         _ET = ZoneInfo("America/New_York")
 
-        df = bars_1m.copy()
-        vol_col = "Volume" if "Volume" in df.columns else "volume"
-        if vol_col not in df.columns:
+        vol_col = "Volume" if "Volume" in bars_1m.columns else "volume"
+        if vol_col not in bars_1m.columns:
             return VolumeProfileShape.UNKNOWN
 
-        if df.index.tz is None:  # type: ignore[union-attr]
-            df.index = df.index.tz_localize("UTC")  # type: ignore[union-attr]
-        df.index = df.index.tz_convert(_ET)  # type: ignore[union-attr]
-        df["hour"] = df.index.hour  # type: ignore[union-attr]
+        # Convert index to ET without copying the full dataframe first.
+        idx = bars_1m.index
+        if idx.tz is None:  # type: ignore[union-attr]
+            idx = idx.tz_localize("UTC")  # type: ignore[union-attr]
+        idx_et = idx.tz_convert(_ET)  # type: ignore[union-attr]
 
-        # Use only the last N days
-        df["date"] = df.index.date  # type: ignore[union-attr]
-        dates = sorted(df["date"].unique())
-        if len(dates) > lookback_days:
-            dates = dates[-lookback_days:]
-            df = df[df["date"].isin(set(dates))]  # type: ignore[arg-type]
+        # Pre-slice to lookback_days before building any working frame.
+        dates_all = np.array(idx_et.date)  # type: ignore[union-attr]
+        unique_dates = sorted(set(dates_all))
+        if len(unique_dates) > lookback_days:
+            cutoff_date = unique_dates[-lookback_days]
+            mask = dates_all >= cutoff_date
+            vol_values = bars_1m[vol_col].values[mask]
+            hours = idx_et.hour[mask]  # type: ignore[union-attr]
+        else:
+            vol_values = bars_1m[vol_col].values
+            hours = idx_et.hour  # type: ignore[union-attr]
+
+        # Build minimal frame — only volume and hour.
+        df = pd.DataFrame({"vol": vol_values, "hour": hours})
 
         # Average volume per hour bucket
-        hourly_vol = df.groupby("hour")[vol_col].mean()
+        hourly_vol = df.groupby("hour")["vol"].mean()
         if hourly_vol.empty or hourly_vol.sum() == 0:  # type: ignore[union-attr]
             return VolumeProfileShape.UNKNOWN
 
@@ -738,6 +744,17 @@ def compute_asset_fingerprint(
 
     errors: list[str] = []
 
+    # Pre-slice bars_1m to only the rows needed for the lookback window.
+    # Each sub-function only uses the last (lookback_days) trading days,
+    # which is at most lookback_days * 1440 1-minute bars.  Passing the
+    # full 50 000-bar series into functions that do df.copy() or per-date
+    # groupby scans is the primary cause of the per-symbol hang.
+    bars_1m_sliced: pd.DataFrame | None = bars_1m
+    if bars_1m is not None and not bars_1m.empty:
+        _max_1m_bars = lookback_days * 1440
+        if len(bars_1m) > _max_1m_bars:
+            bars_1m_sliced = bars_1m.iloc[-_max_1m_bars:]
+
     # 1. Typical daily range / ATR
     try:
         fp.typical_daily_range_atr = _compute_typical_daily_range_atr(bars_daily, lookback_days)  # type: ignore[arg-type]
@@ -746,7 +763,7 @@ def compute_asset_fingerprint(
 
     # 2. Session concentration
     try:
-        fp.session_concentration = _compute_session_concentration(bars_1m, lookback_days)  # type: ignore[arg-type]
+        fp.session_concentration = _compute_session_concentration(bars_1m_sliced, lookback_days)  # type: ignore[arg-type]
     except Exception as exc:
         errors.append(f"session_conc: {exc}")
 
@@ -760,7 +777,7 @@ def compute_asset_fingerprint(
 
     # 4. Volume profile shape
     try:
-        fp.volume_profile_shape = _classify_volume_profile(bars_1m, lookback_days)  # type: ignore[arg-type]
+        fp.volume_profile_shape = _classify_volume_profile(bars_1m_sliced, lookback_days)  # type: ignore[arg-type]
     except Exception as exc:
         errors.append(f"vol_profile: {exc}")
 
