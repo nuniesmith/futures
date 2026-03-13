@@ -1836,7 +1836,19 @@ def generate_dataset_for_symbol(
     _renderable_count = sum(1 for r in sim_results if r.is_trade or cfg.include_no_trade)
     _render_t0 = time.monotonic()
     _rendered_count = 0
-    _progress_interval = max(25, _renderable_count // 20)  # log every 25 or ~5%
+    # Log every ~5% but cap the interval so the first message appears within
+    # a reasonable number of images even for very large runs (e.g. 5000+
+    # renderable results with breakout_type=all / orb_session=all).
+    # The old formula ``max(25, count // 20)`` could stay silent for 250+
+    # images, making the pipeline appear stuck.
+    _progress_interval = max(1, min(50, _renderable_count // 20))  # log every 1-50 or ~5%
+
+    logger.info(
+        "%s: starting image rendering — %d renderable results, progress every %d images",
+        symbol,
+        _renderable_count,
+        _progress_interval,
+    )
 
     for sim_idx, result in enumerate(sim_results):
         # Skip no_trade unless configured to include them

@@ -121,7 +121,14 @@ def setup_logging(
     handler.setFormatter(formatter)
 
     root_logger = logging.getLogger()
+    # Preserve handlers that are NOT StreamHandlers (e.g. _RingBufferHandler
+    # from trainer_server).  Without this, setup_logging() drops the ring
+    # buffer handler, which then gets re-added on the next import — stacking
+    # duplicates and causing every log line to appear multiple times.
+    _keep = [h for h in root_logger.handlers if not isinstance(h, logging.StreamHandler)]
     root_logger.handlers.clear()
+    for h in _keep:
+        root_logger.addHandler(h)
     root_logger.addHandler(handler)
     root_logger.setLevel(numeric_level)
 

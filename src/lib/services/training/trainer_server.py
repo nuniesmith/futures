@@ -98,7 +98,17 @@ _log_total_written: int = 0  # monotonically increasing count of all records eve
 
 
 class _RingBufferHandler(logging.Handler):
-    """Appends formatted log records to the in-memory ring buffer."""
+    """Appends formatted log records to the in-memory ring buffer.
+
+    References ``_log_buffer`` and ``_log_buffer_lock`` from whichever module
+    instance created *this* handler object.  When the trainer is started via
+    ``python -m lib.services.training.trainer_server``, the module executes
+    twice — once as ``__main__`` and once as the dotted import when uvicorn
+    loads the ASGI ``app``.  Each execution creates its own ``_log_buffer``
+    deque.  Only the *second* (dotted-import) module is visible to the
+    ``/logs`` endpoint, so we must ensure the handler on the root logger
+    writes to **that** module's buffer.  See the replacement logic below.
+    """
 
     def emit(self, record: logging.LogRecord) -> None:
         global _log_total_written
@@ -119,8 +129,37 @@ class _RingBufferHandler(logging.Handler):
 _ring_handler = _RingBufferHandler()
 _ring_handler.setFormatter(logging.Formatter("%(message)s"))
 _ring_handler.setLevel(logging.DEBUG)
-# Add ring buffer handler for the /logs endpoint
-logging.getLogger().addHandler(_ring_handler)
+
+# ── Attach ring-buffer handler to the root logger (de-duplicated) ─────────
+# When the trainer runs as ``python -m lib.services.training.trainer_server``
+# the module body executes TWICE:
+#   1. As ``__main__``  (the ``-m`` invocation)
+#   2. As ``lib.services.training.trainer_server`` (uvicorn's dotted import
+#      of the ``app`` object)
+#
+# Each execution creates its own ``_log_buffer`` deque **and** its own
+# ``_RingBufferHandler`` instance whose ``emit()`` closes over that deque.
+# The ``/logs`` HTTP endpoint reads from the *second* module's
+# ``_log_buffer``, so the handler on the root logger **must** be the one
+# created by the second execution — otherwise ``/logs`` returns an empty
+# buffer while the stale handler silently writes to a deque nobody reads.
+#
+# Strategy: remove any pre-existing ``_RingBufferHandler`` (stale, from the
+# ``__main__`` pass) and unconditionally add the current one.  This is safe
+# even when the module is only imported once — in that case the loop simply
+# finds nothing to remove.
+#
+# NOTE: We match by **class name** rather than ``isinstance`` because the
+# ``__main__`` and dotted-import executions define separate class objects.
+# ``isinstance(handler_from___main__, _RingBufferHandler_from_dotted)``
+# returns False since they are different classes — even though they share
+# the same source code.  Matching on ``type(h).__name__`` is safe here
+# because the name ``_RingBufferHandler`` is unique to this module.
+_root = logging.getLogger()
+for _h in list(_root.handlers):
+    if type(_h).__name__ == "_RingBufferHandler" and _h is not _ring_handler:
+        _root.removeHandler(_h)
+_root.addHandler(_ring_handler)
 
 logger = get_logger("trainer_server")
 
