@@ -51,6 +51,9 @@ dependencies = [
     "psycopg_pool>=3.0.0",
     "sqlalchemy>=2.0.48",
 
+    # --- Timezone data (required for ZoneInfo inside Docker/minimal OS images) ---
+    "tzdata>=2025.1",
+
     # --- Observability ---
     "loguru>=0.7.0",
     "structlog>=25.5.0",

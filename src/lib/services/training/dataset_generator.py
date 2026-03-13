@@ -1713,6 +1713,11 @@ def generate_dataset_for_symbol(
     # it to every result so _build_row() reads three plain floats.
     _cached_cross_asset: Any = None
     if _bars_by_ticker_safe:
+        logger.info(
+            "Pre-computing cross-asset features for %s (%d peer tickers)...",
+            symbol,
+            len(_bars_by_ticker_safe),
+        )
         try:
             from lib.analysis.cross_asset import compute_cross_asset_features as _compute_ca
 
@@ -1724,7 +1729,12 @@ def generate_dataset_for_symbol(
                 time.monotonic() - _ca_t0,
             )
         except Exception as _ca_exc:
-            logger.warning("Cross-asset pre-compute failed for %s: %s", symbol, _ca_exc)
+            logger.warning(
+                "Cross-asset pre-compute failed for %s: %s — features will default to 0.5",
+                symbol,
+                _ca_exc,
+                exc_info=True,
+            )
 
     for r in all_sim_results:
         if _cached_cross_asset is not None:
@@ -1737,14 +1747,20 @@ def generate_dataset_for_symbol(
     # it in, so the function never has to touch the full 50k-row series.
     # At 1 bar/min that is at most 20 × 1440 = 28 800 rows.
     _cached_fingerprint: Any = None
+    _fp_bars_count = len(bars_1m) if bars_1m is not None and not bars_1m.empty else 0
+    _fp_max_bars = 20 * 1440
+    logger.info(
+        "Pre-computing asset fingerprint for %s (%d bars → sliced to %d)...",
+        symbol,
+        _fp_bars_count,
+        min(_fp_bars_count, _fp_max_bars),
+    )
     try:
         from lib.analysis.asset_fingerprint import compute_asset_fingerprint as _compute_fp
 
         _fp_bars_1m = bars_1m
-        if bars_1m is not None and not bars_1m.empty:
-            _fp_max_bars = 20 * 1440
-            if len(bars_1m) > _fp_max_bars:
-                _fp_bars_1m = bars_1m.iloc[-_fp_max_bars:]
+        if bars_1m is not None and not bars_1m.empty and len(bars_1m) > _fp_max_bars:
+            _fp_bars_1m = bars_1m.iloc[-_fp_max_bars:]
 
         _fp_t0 = time.monotonic()
         _cached_fingerprint = _compute_fp(
@@ -1759,7 +1775,12 @@ def generate_dataset_for_symbol(
             time.monotonic() - _fp_t0,
         )
     except Exception as _fp_exc:
-        logger.warning("Asset fingerprint pre-compute failed for %s: %s", symbol, _fp_exc)
+        logger.warning(
+            "Asset fingerprint pre-compute failed for %s: %s — fingerprint features will default to 0.5",
+            symbol,
+            _fp_exc,
+            exc_info=True,
+        )
 
     for r in all_sim_results:
         if _cached_fingerprint is not None:

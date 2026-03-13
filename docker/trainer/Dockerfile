@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev \
         curl \
         ca-certificates \
+        tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Make python3.13 the default python
@@ -65,6 +66,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3.13-venv \
         libpq5 \
         libgomp1 \
+        tzdata \
     && apt-get purge -y --auto-remove software-properties-common gpg-agent \
     && rm -rf /var/lib/apt/lists/*
 
@@ -88,6 +90,10 @@ COPY scripts/ ./scripts/
 RUN mkdir -p /app/data /app/models /app/models/archive /app/dataset
 
 # NVIDIA runtime — exposes the full GPU to PyTorch inside the container
+# Set container timezone to UTC; ZoneInfo("America/New_York") converts correctly
+# at runtime via the installed tzdata package.
+ENV TZ=UTC
+
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
