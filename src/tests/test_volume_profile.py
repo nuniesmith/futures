@@ -269,7 +269,7 @@ class TestVolumeProfileEdgeCases:
     """Edge cases and error handling."""
 
     def test_empty_dataframe(self):
-        df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+        df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])  # type: ignore[call-overload]
         result = compute_volume_profile(df)
         assert result["poc"] == 0
         assert result["total_volume"] == 0

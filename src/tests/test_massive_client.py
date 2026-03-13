@@ -897,7 +897,7 @@ class TestResampling:
         assert len(result) == 5
 
     def test_empty_df_resample(self):
-        df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+        df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])  # type: ignore[call-overload]
         result = _resample_to_interval(df, "5m")
         assert result.empty
 

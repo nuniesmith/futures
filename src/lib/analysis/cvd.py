@@ -100,13 +100,13 @@ def build_tick_df_from_rithmic(raw_ticks: list[dict[str, Any]]) -> pd.DataFrame:
         Returns an empty DataFrame if ``raw_ticks`` is empty or malformed.
     """
     if not raw_ticks:
-        return pd.DataFrame(columns=["timestamp", "price", "size", "side"])
+        return pd.DataFrame(columns=["timestamp", "price", "size", "side"])  # type: ignore[call-overload]
 
     try:
         df = pd.DataFrame(raw_ticks)
     except Exception as exc:
         logger.warning("build_tick_df_from_rithmic: failed to create DataFrame — %s", exc)
-        return pd.DataFrame(columns=["timestamp", "price", "size", "side"])
+        return pd.DataFrame(columns=["timestamp", "price", "size", "side"])  # type: ignore[call-overload]
 
     # Normalise column names to lower-case
     df.columns = pd.Index([str(c).lower() for c in df.columns])

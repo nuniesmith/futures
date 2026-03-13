@@ -492,10 +492,12 @@ class TestNewDayReset:
     def test_orb_ready_after_formation_window(self):
         t = datetime(2025, 1, 15, 9, 30, tzinfo=UTC)
         # orb_minutes = 5, so bars 1-5 build ORB, bar 6 marks it ready
+        sig = None
         for i in range(7):
             sig = self.eng.update(self._bar_at(18000 + i, t + timedelta(minutes=i)))
 
         assert self.eng._orb_ready is True
+        assert sig is not None
         assert sig.orb_ready is True
 
     def test_ib_done_after_ib_window(self):

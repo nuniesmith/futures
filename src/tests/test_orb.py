@@ -191,7 +191,7 @@ class TestComputeOpeningRange:
     def test_empty_dataframe(self):
         from lib.trading.strategies.rb.open.detector import compute_opening_range
 
-        empty = pd.DataFrame(columns=["High", "Low", "Close"])
+        empty = pd.DataFrame(columns=["High", "Low", "Close"])  # type: ignore[call-overload]
         or_high, or_low, count, complete = compute_opening_range(empty)
         assert or_high == 0.0
         assert or_low == 0.0
@@ -310,7 +310,7 @@ class TestDetectOpeningRangeBreakout:
     def test_empty_bars(self):
         from lib.trading.strategies.rb.open.detector import detect_opening_range_breakout
 
-        empty = pd.DataFrame(columns=["High", "Low", "Close"])
+        empty = pd.DataFrame(columns=["High", "Low", "Close"])  # type: ignore[call-overload]
         result = detect_opening_range_breakout(empty, symbol="TEST")
         assert result.breakout_detected is False
         assert result.error != ""

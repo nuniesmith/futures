@@ -985,7 +985,7 @@ class TestGetDailyPlanHtmlEndpoint:
             response = get_daily_plan_html()
 
         assert response.status_code == 200
-        body = response.body.decode()
+        body = response.body.decode()  # type: ignore[union-attr]
         assert "No daily plan active" in body
 
     def test_returns_plan_header_when_available(self):
@@ -1009,7 +1009,7 @@ class TestGetDailyPlanHtmlEndpoint:
         ):
             response = get_daily_plan_html()
 
-        body = response.body.decode()
+        body = response.body.decode()  # type: ignore[union-attr]
         assert "daily-plan-panel" in body
         assert "Risk-on" in body
         assert "Grok Morning Brief" in body
@@ -1033,7 +1033,7 @@ class TestGetDailyPlanHtmlEndpoint:
         ):
             response = get_daily_plan_html()
 
-        body = response.body.decode()
+        body = response.body.decode()  # type: ignore[union-attr]
         assert "MGC" in body
         assert "Composite Scores" in body
 
@@ -1060,7 +1060,7 @@ class TestGetFocusHtmlFocusMode:
         ):
             response = get_focus_html(mock_request)
 
-        body = response.body.decode()
+        body = response.body.decode()  # type: ignore[union-attr]
         # Focus mode grid features
         assert "Scalp Focus" in body
         assert "Daily Swing Candidates" in body
@@ -1080,7 +1080,7 @@ class TestGetFocusHtmlFocusMode:
         ):
             response = get_focus_html(mock_request)
 
-        body = response.body.decode()
+        body = response.body.decode()  # type: ignore[union-attr]
         # Flat mode — no section headers
         assert "Scalp Focus" not in body
         # But asset cards are present

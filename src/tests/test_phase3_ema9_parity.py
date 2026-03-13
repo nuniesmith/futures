@@ -400,9 +400,9 @@ def run_parity(
     results: list[ParityResult] = []
 
     for i, row in enumerate(bars.itertuples()):
-        close = float(row.Close)
-        low = float(row.Low)
-        high = float(row.High)
+        close = float(row.Close)  # type: ignore[union-attr]
+        low = float(row.Low)  # type: ignore[union-attr]
+        high = float(row.High)  # type: ignore[union-attr]
 
         cs_exit = cs.process_bar(i, close)
         py_exit = py.process_bar(i, close, low, high)
@@ -657,8 +657,8 @@ class TestPhase3ExitParity:
         # The trailing stop will track below/above the close due to EMA lag.
         bars = make_bars(warm_closes, wick_pct=0.0)
         for i, row in enumerate(bars.itertuples()):
-            cs.process_bar(i, float(row.Close))
-            py.process_bar(i, float(row.Close), float(row.Low), float(row.High))
+            cs.process_bar(i, float(row.Close))  # type: ignore[union-attr]
+            py.process_bar(i, float(row.Close), float(row.Low), float(row.High))  # type: ignore[union-attr]
 
         return cs, py, warm_closes
 
@@ -823,8 +823,8 @@ class TestPhase3ExitParity:
         # EMA9 lags below rising close, so low > stop_loss throughout).
         warm_bars = make_bars(all_warm_closes, wick_pct=0.0)
         for i, row in enumerate(warm_bars.itertuples()):
-            cs_r = cs.process_bar(i, float(row.Close))
-            py_r = py.process_bar(i, float(row.Close), float(row.Low), float(row.High))
+            cs_r = cs.process_bar(i, float(row.Close))  # type: ignore[union-attr]
+            py_r = py.process_bar(i, float(row.Close), float(row.Low), float(row.High))  # type: ignore[union-attr]
             assert cs_r is None, f"C# fired unexpectedly on warm-up bar {i}: {cs_r}"
             assert py_r is None, f"Python fired unexpectedly on warm-up bar {i}: {py_r}"
 
@@ -1165,7 +1165,7 @@ class TestRatchetBehaviour:
         cs = CsPhase3State(direction="long", tp3_price=2500.0)
         bars = make_bars(warm_closes)
         for i, row in enumerate(bars.itertuples()):
-            cs.process_bar(i, float(row.Close))
+            cs.process_bar(i, float(row.Close))  # type: ignore[union-attr]
 
         ema9_after_warmup = cs.ema9_value()
         assert ema9_after_warmup is not None
@@ -1184,7 +1184,7 @@ class TestRatchetBehaviour:
         cs = CsPhase3State(direction="long", tp3_price=2500.0)
         bars = make_bars(warm_closes)
         for i, row in enumerate(bars.itertuples()):
-            cs.process_bar(i, float(row.Close))
+            cs.process_bar(i, float(row.Close))  # type: ignore[union-attr]
 
         ema9 = cs.ema9_value()
         assert ema9 is not None

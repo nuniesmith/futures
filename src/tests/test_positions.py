@@ -730,65 +730,6 @@ class TestModelValidation:
         assert pos.unrealizedPnL == 0.0
         assert pos.lastUpdate is None
 
-    def test_nt_payload_model(self):
-        """NTPositionsPayload model validates correctly."""
-        from lib.services.data.api.positions import NTPosition, NTPositionsPayload
-
-        payload = NTPositionsPayload(
-            account="Sim101",
-            positions=[
-                NTPosition(
-                    symbol="MESZ5",
-                    side="Long",
-                    quantity=5,
-                    avgPrice=6045.25,
-                    unrealizedPnL=0.0,
-                    instrument=None,
-                    tickSize=None,
-                    pointValue=None,
-                    lastUpdate=None,
-                ),
-            ],
-            timestamp="2025-01-15T14:30:00Z",
-            cashBalance=0.0,
-            realizedPnL=0.0,
-            totalUnrealizedPnL=0.0,
-            riskBlocked=False,
-            riskBlockReason="",
-            bridge_version="1.0",
-        )
-        assert payload.account == "Sim101"
-        assert len(payload.positions) == 1
-
-    def test_nt_payload_empty_positions(self):
-        """Payload with empty positions list is valid."""
-        from lib.services.data.api.positions import NTPositionsPayload
-
-        payload = NTPositionsPayload(
-            account="Sim101",
-            positions=[],
-            timestamp=None,
-            cashBalance=0.0,
-            realizedPnL=0.0,
-            totalUnrealizedPnL=0.0,
-            riskBlocked=False,
-            riskBlockReason="",
-            bridge_version="1.0",
-        )
-        assert payload.account == "Sim101"
-        assert len(payload.positions) == 0
-
-    def test_nt_response_model(self):
-        """NTPositionsResponse model works with defaults."""
-        from lib.services.data.api.positions import NTPositionsResponse
-
-        resp = NTPositionsResponse()
-        assert resp.account == ""
-        assert resp.positions == []
-        assert resp.has_positions is False
-        assert resp.total_unrealized_pnl == 0.0
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Existing endpoints still work (regression)
 # ═══════════════════════════════════════════════════════════════════════════

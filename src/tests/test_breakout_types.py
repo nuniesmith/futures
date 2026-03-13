@@ -386,7 +386,15 @@ class TestBuildWeeklyRange:
         assert not complete or (high > low > 0)
 
     def test_empty_bars(self):
-        bars = pd.DataFrame({"Open": pd.Series([], dtype=float), "High": pd.Series([], dtype=float), "Low": pd.Series([], dtype=float), "Close": pd.Series([], dtype=float), "Volume": pd.Series([], dtype=float)})
+        bars = pd.DataFrame(
+            {
+                "Open": pd.Series([], dtype=float),
+                "High": pd.Series([], dtype=float),
+                "Low": pd.Series([], dtype=float),
+                "Close": pd.Series([], dtype=float),
+                "Volume": pd.Series([], dtype=float),
+            }
+        )
         bars.index = pd.DatetimeIndex([], tz=_EST)
         config = DEFAULT_CONFIGS[BreakoutType.Weekly]
         high, low, _count, complete = _build_weekly_range(bars, config)
@@ -416,7 +424,15 @@ class TestBuildMonthlyRange:
         assert not complete or (high > low > 0)
 
     def test_empty_bars(self):
-        bars = pd.DataFrame({"Open": pd.Series([], dtype=float), "High": pd.Series([], dtype=float), "Low": pd.Series([], dtype=float), "Close": pd.Series([], dtype=float), "Volume": pd.Series([], dtype=float)})
+        bars = pd.DataFrame(
+            {
+                "Open": pd.Series([], dtype=float),
+                "High": pd.Series([], dtype=float),
+                "Low": pd.Series([], dtype=float),
+                "Close": pd.Series([], dtype=float),
+                "Volume": pd.Series([], dtype=float),
+            }
+        )
         bars.index = pd.DatetimeIndex([], tz=_EST)
         config = DEFAULT_CONFIGS[BreakoutType.Monthly]
         high, low, _count, complete = _build_monthly_range(bars, config)
@@ -461,13 +477,13 @@ class TestBuildAsianRange:
         config = DEFAULT_CONFIGS[BreakoutType.Asian]
         _high, _low, _count, complete = _build_asian_range(bars, config)
         # Bars end at ~01:00 ET which is still inside 19:00–02:00, so not complete
-        last_ts = pd.Timestamp(bars.index[-1])
+        last_ts = pd.Timestamp(bars.index[-1])  # type: ignore[arg-type]
         last_time = last_ts.to_pydatetime().time()
         if last_time < config.asian_end_time or last_time >= config.asian_start_time:
             assert not complete, "Should not be complete while inside Asian window"
 
     def test_empty_bars(self):
-        bars = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+        bars = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])  # type: ignore[call-overload]
         bars.index = pd.DatetimeIndex([], tz=_EST)
         config = DEFAULT_CONFIGS[BreakoutType.Asian]
         high, low, count, complete = _build_asian_range(bars, config)
@@ -835,7 +851,7 @@ class TestDetectRangeBreakoutNewTypes:
 
     def test_empty_bars_all_types(self):
         """All types should handle empty bars gracefully."""
-        empty = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+        empty = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])  # type: ignore[call-overload]
         empty.index = pd.DatetimeIndex([], tz=_EST)
 
         for btype in BreakoutType:
@@ -849,7 +865,7 @@ class TestDetectRangeBreakoutNewTypes:
         """All types should handle None bars gracefully."""
         for btype in BreakoutType:
             config = DEFAULT_CONFIGS[btype]
-            result = detect_range_breakout(None, "MES=F", config)
+            result = detect_range_breakout(None, "MES=F", config)  # type: ignore[arg-type]
             assert isinstance(result, BreakoutResult)
             assert result.error != ""
             assert not result.breakout_detected

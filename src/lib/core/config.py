@@ -44,7 +44,7 @@ def load_configuration(config_path: str) -> tuple[bool, dict[str, Any]]:
                     print(f"Warning: YAML configuration file specified but PyYAML not installed: {config_path}")
                     return False, {}
 
-                config_data = yaml.safe_load(f)
+                config_data = yaml.safe_load(f)  # type: ignore[possibly-undefined]
             elif file_extension == ".json":
                 config_data = json.load(f)
             else:
@@ -58,7 +58,7 @@ def load_configuration(config_path: str) -> tuple[bool, dict[str, Any]]:
                 else:
                     # Try as YAML if available
                     if YAML_AVAILABLE:
-                        config_data = yaml.safe_load(f)
+                        config_data = yaml.safe_load(f)  # type: ignore[possibly-undefined]
                     else:
                         print(f"Warning: Could not determine file format for {config_path} and PyYAML not installed")
                         return False, {}

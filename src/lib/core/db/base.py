@@ -167,7 +167,7 @@ class Database:
                 self._is_connected = connected
                 return connected
 
-            except Exception as e:
+            except Exception:
                 logger.error("database_connection_error", exc_info=True)
                 return False
             finally:
@@ -210,7 +210,7 @@ class Database:
                 self._is_connected = False
                 return success
 
-            except Exception as e:
+            except Exception:
                 logger.error("database_disconnection_error", exc_info=True)
                 return False
 
@@ -263,7 +263,7 @@ class Database:
             # Commit transaction on exit
             if hasattr(conn, "commit"):
                 conn.commit()
-        except Exception as e:
+        except Exception:
             # Rollback on exception
             if hasattr(conn, "rollback"):
                 conn.rollback()

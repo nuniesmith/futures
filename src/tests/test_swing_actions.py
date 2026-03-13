@@ -1151,7 +1151,7 @@ class TestRouterRegistration:
         """The router has the expected route paths."""
         from lib.services.data.api.swing_actions import router
 
-        paths = [route.path for route in router.routes]
+        paths = [route.path for route in router.routes]  # type: ignore[union-attr]
         assert "/api/swing/accept/{asset_name}" in paths
         assert "/api/swing/ignore/{asset_name}" in paths
         assert "/api/swing/close/{asset_name}" in paths

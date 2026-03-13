@@ -56,7 +56,7 @@ class FastApiService(BaseService):
 
             # Set up lifespan context for FastAPI
             try:
-                from lib.core.lifecycle.lifespan import setup_fastapi_lifespan
+                from lib.core.lifecycle.lifespan import setup_fastapi_lifespan  # type: ignore[import-not-found]
 
                 setup_fastapi_lifespan(app)
             except ImportError:
@@ -131,7 +131,7 @@ class FastApiService(BaseService):
             try:
                 import asyncio
 
-                import uvloop
+                import uvloop  # type: ignore[import-not-found]
 
                 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
                 self.logger.info("Using uvloop for performance")

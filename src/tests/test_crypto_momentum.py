@@ -264,15 +264,15 @@ class TestComputeAtr:
         h = df["High"].values
         lo = df["Low"].values
         c = df["Close"].values
-        atr = compute_atr(h, lo, c)
+        atr = compute_atr(h, lo, c)  # type: ignore[arg-type]
         assert atr > 0
 
     def test_atr_increases_with_volatility(self):
         df_calm = _make_ohlcv(n=50, volatility=0.005)
         df_wild = _make_ohlcv(n=50, volatility=0.05)
 
-        atr_calm = compute_atr(df_calm["High"].values, df_calm["Low"].values, df_calm["Close"].values)
-        atr_wild = compute_atr(df_wild["High"].values, df_wild["Low"].values, df_wild["Close"].values)
+        atr_calm = compute_atr(df_calm["High"].values, df_calm["Low"].values, df_calm["Close"].values)  # type: ignore[arg-type]
+        atr_wild = compute_atr(df_wild["High"].values, df_wild["Low"].values, df_wild["Close"].values)  # type: ignore[arg-type]
         assert atr_wild > atr_calm
 
 

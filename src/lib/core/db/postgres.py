@@ -158,7 +158,7 @@ class PostgresConnection:
             register_connection(self, "postgres")
 
             return True
-        except Exception as e:
+        except Exception:
             _logger.error("postgres_connect_failed", exc_info=True)
             self.conn = None
             return False
@@ -181,16 +181,16 @@ class PostgresConnection:
                 dsn_str = str(dsn_str)
 
             if self.cursor_factory:
-                return psycopg2.connect(dsn_str, cursor_factory=self.cursor_factory)
+                return psycopg2.connect(dsn_str, cursor_factory=self.cursor_factory)  # type: ignore[possibly-undefined]
             else:
-                return psycopg2.connect(dsn_str)
+                return psycopg2.connect(dsn_str)  # type: ignore[possibly-undefined]
         elif HAS_PSYCOPG3:
             # psycopg3 doesn't use cursor_factory the same way
             if self.dsn is not None:
                 if isinstance(self.dsn, dict):
-                    return psycopg.connect(**self.dsn)  # type: ignore[arg-type]
+                    return psycopg.connect(**self.dsn)  # type: ignore[arg-type, possibly-undefined]
                 else:
-                    return psycopg.connect(self.dsn)
+                    return psycopg.connect(self.dsn)  # type: ignore[possibly-undefined]
             return None
 
     def _get_from_pool(self) -> Any:
@@ -210,9 +210,9 @@ class PostgresConnection:
             pool = _connection_pools[self.pool_key]["pool"]
 
             if HAS_PSYCOPG2:
-                return pool.getconn()
+                return pool.getconn()  # type: ignore[possibly-undefined]
             elif HAS_PSYCOPG3:
-                return pool.connection()
+                return pool.connection()  # type: ignore[possibly-undefined]
 
     def _create_pool(self) -> None:
         """Create a new connection pool for this DSN."""
@@ -225,7 +225,7 @@ class PostgresConnection:
 
             if HAS_PSYCOPG2:
                 # Create psycopg2 pool
-                connection_pool = pool.ThreadedConnectionPool(min_conn, max_conn, self.dsn)
+                connection_pool = pool.ThreadedConnectionPool(min_conn, max_conn, self.dsn)  # type: ignore[possibly-undefined]
                 assert self.pool_key is not None, "Pool key cannot be None"
                 _connection_pools[self.pool_key] = {
                     "pool": connection_pool,
@@ -241,7 +241,7 @@ class PostgresConnection:
                     dsn_str = ""
                 else:
                     dsn_str = str(self.dsn)
-                connection_pool = ConnectionPool(dsn_str, min_size=min_conn, max_size=max_conn)
+                connection_pool = ConnectionPool(dsn_str, min_size=min_conn, max_size=max_conn)  # type: ignore[possibly-undefined]
                 assert self.pool_key is not None, "Pool key cannot be None"
                 _connection_pools[self.pool_key] = {
                     "pool": connection_pool,
@@ -274,7 +274,7 @@ class PostgresConnection:
 
             self.conn = None
             return True
-        except Exception as e:
+        except Exception:
             _logger.error("postgres_close_failed", exc_info=True)
             return False
 
@@ -285,7 +285,7 @@ class PostgresConnection:
 
         try:
             self.conn.close()
-        except Exception as e:
+        except Exception:
             _logger.error("direct_connection_close_failed", exc_info=True)
 
     def _return_to_pool(self) -> None:
@@ -307,7 +307,7 @@ class PostgresConnection:
                 # psycopg3 connections are automatically returned to pool when closed
                 elif pool_info["type"] == "psycopg3":
                     self.conn.close()
-            except Exception as e:
+            except Exception:
                 _logger.error("pool_return_failed", exc_info=True)
                 # Try to close it directly as a fallback
                 self._close_direct_connection()
@@ -384,7 +384,7 @@ def close_postgres_connections(connections: list[Any] | None = None) -> bool:
                 else:
                     # Direct connection object
                     conn.close()
-            except Exception as e:
+            except Exception:
                 _logger.error("postgres_connection_close_failed", exc_info=True)
                 success = False
 
@@ -400,7 +400,7 @@ def close_postgres_connections(connections: list[Any] | None = None) -> bool:
                     pool_info["pool"].close()
 
                 del _connection_pools[dsn]
-            except Exception as e:
+            except Exception:
                 _logger.error("connection_pool_close_failed", dsn=dsn, exc_info=True)
                 success = False
 

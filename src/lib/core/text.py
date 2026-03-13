@@ -23,14 +23,14 @@ from lib.core.logging_config import get_logger
 # Try to import language detection libraries
 # with fallback options
 try:
-    import langid
+    import langid  # noqa: F401
 
     LANGID_AVAILABLE = True
 except ImportError:
     LANGID_AVAILABLE = False
 
 try:
-    import langdetect
+    import langdetect  # noqa: F401
     from langdetect import DetectorFactory
 
     # Set seed for consistent results
@@ -40,7 +40,7 @@ except ImportError:
     LANGDETECT_AVAILABLE = False
 
 try:
-    import pycld2 as cld2
+    import pycld2 as cld2  # noqa: F401
 
     CLD2_AVAILABLE = True
 except ImportError:
@@ -716,6 +716,7 @@ def detect_language(text: str) -> str:
     if LANGID_AVAILABLE:
         try:
             import langid as langid_lib
+
             lang_id, _ = langid_lib.classify(sample_text)
             detected_langs.append(lang_id)
         except Exception as e:
@@ -725,6 +726,7 @@ def detect_language(text: str) -> str:
     if LANGDETECT_AVAILABLE:
         try:
             import langdetect as langdetect_lib
+
             lang_detect = langdetect_lib.detect(sample_text)
             detected_langs.append(lang_detect)
         except Exception as e:
@@ -734,6 +736,7 @@ def detect_language(text: str) -> str:
     if CLD2_AVAILABLE:
         try:
             import pycld2 as cld2_lib
+
             is_reliable, _, details = cld2_lib.detect(sample_text)
             if is_reliable:
                 cld2_lang = details[0][1]

@@ -461,14 +461,14 @@ def compute_correlation_matrix(
             continue
 
     if len(returns_dict) < 2:
-        return pd.DataFrame(index=tickers, columns=tickers, dtype=float)
+        return pd.DataFrame(index=tickers, columns=tickers, dtype=float)  # type: ignore[call-overload]
 
     returns_df = pd.DataFrame(returns_dict)
 
     # Use the tail *window* rows for correlation
     tail = returns_df.tail(window)
     if len(tail) < 5:
-        return pd.DataFrame(index=tickers, columns=tickers, dtype=float)
+        return pd.DataFrame(index=tickers, columns=tickers, dtype=float)  # type: ignore[call-overload]
 
     corr_matrix = tail.corr(method="pearson")
 

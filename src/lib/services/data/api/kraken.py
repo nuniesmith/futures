@@ -626,11 +626,11 @@ def _fetch_ohlcv_bars(internal_ticker: str, interval: str = "15m", period: str =
             records.append(
                 {
                     "ts": str(ts),
-                    "open": float(row.get("Open", row.get("open", 0))),
-                    "high": float(row.get("High", row.get("high", 0))),
-                    "low": float(row.get("Low", row.get("low", 0))),
-                    "close": float(row.get("Close", row.get("close", 0))),
-                    "volume": float(row.get("Volume", row.get("volume", 0))),
+                    "open": float(row.get("Open", row.get("open", 0))),  # type: ignore[arg-type]
+                    "high": float(row.get("High", row.get("high", 0))),  # type: ignore[arg-type]
+                    "low": float(row.get("Low", row.get("low", 0))),  # type: ignore[arg-type]
+                    "close": float(row.get("Close", row.get("close", 0))),  # type: ignore[arg-type]
+                    "volume": float(row.get("Volume", row.get("volume", 0))),  # type: ignore[arg-type]
                 }
             )
         return records

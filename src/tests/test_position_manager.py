@@ -587,7 +587,7 @@ class TestEMA9Trailing:
 
     def test_ema9_returns_none_for_none_bars(self):
         pm = _make_pm()
-        assert pm._compute_ema9(None) is None
+        assert pm._compute_ema9(None) is None  # type: ignore[arg-type]
 
     def test_trailing_stop_ratchets_up_for_long(self):
         pm = _make_pm()

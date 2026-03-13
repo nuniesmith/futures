@@ -160,7 +160,6 @@ class TestAlertDispatcherConstruction:
     def test_multiple_channels(self):
         d = _fresh_dispatcher(
             discord_webhook="https://discord.com/api/webhooks/test",
-
             telegram_chat_id="456",
         )
         channels = d.channels_configured
@@ -363,9 +362,9 @@ class TestAlertDispatcherStats:
         stats = d.get_stats()
         assert stats["total_sent"] == 0
 
-
     def test_suppressed_count_increments(self):
         """When dedup blocks a signal, total_suppressed should increment."""
+        d = _fresh_dispatcher()
         # Mark key as sent
 
         d.send_signal(signal_key="suppressed_key", title="X", message="Y")
@@ -441,7 +440,7 @@ class TestGetDispatcher:
     def test_dispatcher_reads_env_vars(self, monkeypatch):
         """get_dispatcher should pick up webhook URLs from environment."""
         reset_dispatcher()
-        d = get_dispatcher()
+        get_dispatcher()
 
     def test_dispatcher_reads_discord_env(self, monkeypatch):
         reset_dispatcher()
@@ -593,7 +592,6 @@ class TestAlertEdgeCases:
         """Empty string webhooks should not register as channels."""
         d = _fresh_dispatcher(
             discord_webhook="",
-
             telegram_chat_id="",
         )
         assert d.has_channels is False

@@ -110,7 +110,7 @@ def close_all_connections() -> bool:
                     success = False
             else:
                 _logger.debug("no_postgres_connections_to_close")
-        except Exception as e:
+        except Exception:
             _logger.error("postgres_connections_close_failed", exc_info=True)
             success = False
 
@@ -139,7 +139,7 @@ def close_all_connections() -> bool:
                         connection.shutdown()
                     connections.remove(connection)
                     _logger.debug("connection_closed", db_type=db_type)
-                except Exception as e:
+                except Exception:
                     _logger.error("connection_close_failed", db_type=db_type, exc_info=True)
                     success = False
 
