@@ -1706,6 +1706,48 @@ def generate_dataset_for_symbol(
         # Pre-computed crypto momentum score — avoids per-row Kraken REST calls.
         r._crypto_momentum_score = _crypto_mom_score
 
+    # ── Pre-compute cross-asset features once for this symbol ─────────────
+    # compute_cross_asset_features() does rolling Pearson correlations over
+    # the full 50k-bar peer DataFrames.  Calling it once per row (×4000+
+    # rows) dominates runtime on the skip path.  Cache the result and attach
+    # it to every result so _build_row() reads three plain floats.
+    _cached_cross_asset: Any = None
+    if _bars_by_ticker_safe:
+        try:
+            from lib.analysis.cross_asset import compute_cross_asset_features as _compute_ca
+
+            _cached_cross_asset = _compute_ca(symbol, _bars_by_ticker_safe)
+            logger.debug("Pre-computed cross-asset features for %s", symbol)
+        except Exception as _ca_exc:
+            logger.debug("Cross-asset pre-compute failed for %s: %s", symbol, _ca_exc)
+
+    for r in all_sim_results:
+        if _cached_cross_asset is not None:
+            r._cached_cross_asset = _cached_cross_asset
+
+    # ── Pre-compute asset fingerprint once for this symbol ────────────────
+    # compute_asset_fingerprint() calls df.copy() on the full 1m bars and
+    # runs Hurst exponent, session concentration, and volume profile
+    # classification — all expensive and fully deterministic per symbol.
+    # Attach the pre-built fingerprint so _build_row() reads plain floats.
+    _cached_fingerprint: Any = None
+    try:
+        from lib.analysis.asset_fingerprint import compute_asset_fingerprint as _compute_fp
+
+        _cached_fingerprint = _compute_fp(
+            symbol,
+            bars_daily=bars_daily,
+            bars_1m=bars_1m,
+            lookback_days=20,
+        )
+        logger.debug("Pre-computed asset fingerprint for %s", symbol)
+    except Exception as _fp_exc:
+        logger.debug("Asset fingerprint pre-compute failed for %s: %s", symbol, _fp_exc)
+
+    for r in all_sim_results:
+        if _cached_fingerprint is not None:
+            r._cached_fingerprint = _cached_fingerprint
+
     sim_results = all_sim_results
 
     # Try to import chart renderer (optional — dataset can be generated
@@ -2268,18 +2310,23 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
         pass
 
     # ── v8-B cross-asset correlation features [28–30] ─────────────────────
-    # Uses the cross_asset module to compute rolling correlations with peer
-    # assets.  Requires peer bars to be attached to the result by the
-    # simulator; falls back to neutral 0.5 when data is unavailable.
+    # Prefer the pre-computed cached result attached by generate_dataset_for_symbol()
+    # to avoid recomputing rolling Pearson correlations on the full 50k-bar
+    # peer DataFrames for every row.  Falls back to computing on-demand when
+    # the cache is not present (e.g. standalone _build_row() calls).
     primary_peer_corr = 0.5
     cross_class_corr = 0.5
     correlation_regime = 0.5
     try:
-        from lib.analysis.cross_asset import compute_cross_asset_features
+        _cross_feats = getattr(result, "_cached_cross_asset", None)
+        if _cross_feats is None:
+            # Fallback: compute on-demand (slower path, no cache available)
+            from lib.analysis.cross_asset import compute_cross_asset_features
 
-        _bars_by_ticker = getattr(result, "_bars_by_ticker", None)
-        if _bars_by_ticker is not None and isinstance(_bars_by_ticker, dict):
-            _cross_feats = compute_cross_asset_features(result.symbol, _bars_by_ticker)
+            _bars_by_ticker = getattr(result, "_bars_by_ticker", None)
+            if _bars_by_ticker is not None and isinstance(_bars_by_ticker, dict):
+                _cross_feats = compute_cross_asset_features(result.symbol, _bars_by_ticker)
+        if _cross_feats is not None:
             primary_peer_corr = _cross_feats.primary_peer_corr
             cross_class_corr = _cross_feats.cross_class_corr
             correlation_regime = _cross_feats.correlation_regime
@@ -2287,8 +2334,11 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
         pass
 
     # ── v8-C asset fingerprint features [31–36] ──────────────────────────
-    # Uses the asset_fingerprint module to compute per-asset behavioral
-    # profile.  Requires daily + 1m bars; falls back to neutral 0.5.
+    # Prefer the pre-computed cached fingerprint attached by
+    # generate_dataset_for_symbol() to avoid running Hurst exponent,
+    # session concentration, and volume profile classification (each doing
+    # a full df.copy() of the 50k-bar 1m series) on every row.
+    # Falls back to computing on-demand when the cache is absent.
     typical_daily_range_norm = 0.5
     session_concentration_val = 0.5
     breakout_follow_through_val = 0.5
@@ -2296,17 +2346,23 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     overnight_gap_tendency = 0.5
     volume_profile_shape_val = 0.5
     try:
-        from lib.analysis.asset_fingerprint import compute_asset_fingerprint
+        _fp = getattr(result, "_cached_fingerprint", None)
+        if _fp is None:
+            # Fallback: compute on-demand (slower path, no cache available)
+            from lib.analysis.asset_fingerprint import compute_asset_fingerprint
 
-        _daily_bars_fp = getattr(result, "_daily_bars", None)
-        _bars_1m_fp = getattr(result, "_bars_1m", None)
-        if _daily_bars_fp is not None and not _daily_bars_fp.empty:
-            _fp = compute_asset_fingerprint(
-                result.symbol,
-                bars_daily=_daily_bars_fp,
-                bars_1m=_bars_1m_fp,
-                lookback_days=20,
-            )
+            _daily_bars_fp = getattr(result, "_daily_bars", None)
+            _bars_1m_fp = getattr(result, "_bars_1m", None)
+            if _daily_bars_fp is not None and not _daily_bars_fp.empty:
+                _fp = compute_asset_fingerprint(
+                    result.symbol,
+                    bars_daily=_daily_bars_fp,
+                    bars_1m=_bars_1m_fp,
+                    lookback_days=20,
+                )
+        if _fp is not None:
+            from lib.analysis.asset_fingerprint import VolumeProfileShape as _VPS
+
             # [31] typical_daily_range_norm — clamp [0.5, 2.5] → [0, 1]
             typical_daily_range_norm = max(0.0, min(1.0, (_fp.typical_daily_range_atr - 0.5) / 2.0))
 
@@ -2328,8 +2384,6 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
             overnight_gap_tendency = max(0.0, min(1.0, _fp.overnight_gap.avg_gap_atr_ratio))
 
             # [36] volume_profile_shape — regularity score
-            from lib.analysis.asset_fingerprint import VolumeProfileShape as _VPS
-
             _shape_scores = {
                 _VPS.U_SHAPED: 0.9,
                 _VPS.L_SHAPED: 0.7,

@@ -455,28 +455,31 @@ def _compute_hurst_exponent(
         lags = range(2, max_lag + 1)
         rs_list = []
 
-        for lag in lags:
-            # Split into non-overlapping chunks of size lag
-            chunks = n // lag
-            if chunks < 1:
-                continue
-
-            rs_values = []
-            for i in range(chunks):
-                chunk = prices_arr[i * lag : (i + 1) * lag]
-                returns = np.diff(chunk)
-                if len(returns) == 0:
+        # Suppress divide-by-zero and invalid-value warnings that arise when
+        # a chunk has zero variance (flat prices / insufficient data).
+        with np.errstate(divide="ignore", invalid="ignore"):
+            for lag in lags:
+                # Split into non-overlapping chunks of size lag
+                chunks = n // lag
+                if chunks < 1:
                     continue
 
-                mean_ret = np.mean(returns)
-                deviations = np.cumsum(returns - mean_ret)
-                r = np.max(deviations) - np.min(deviations)
-                s = np.std(returns, ddof=1)
-                if s > 1e-12:
-                    rs_values.append(r / s)
+                rs_values = []
+                for i in range(chunks):
+                    chunk = prices_arr[i * lag : (i + 1) * lag]
+                    returns = np.diff(chunk)
+                    if len(returns) < 2:
+                        continue
 
-            if rs_values:
-                rs_list.append((np.log(lag), np.log(np.mean(rs_values))))
+                    mean_ret = np.mean(returns)
+                    deviations = np.cumsum(returns - mean_ret)
+                    r = np.max(deviations) - np.min(deviations)
+                    s = np.std(returns, ddof=1)
+                    if s > 1e-12:
+                        rs_values.append(r / s)
+
+                if rs_values:
+                    rs_list.append((np.log(lag), np.log(np.mean(rs_values))))
 
         if len(rs_list) < 3:
             return 0.5
@@ -485,10 +488,13 @@ def _compute_hurst_exponent(
         log_rs = np.array([x[1] for x in rs_list])
 
         # Linear regression: log(R/S) = H * log(lag) + c
-        coeffs = np.polyfit(log_lags, log_rs, 1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            coeffs = np.polyfit(log_lags, log_rs, 1)
         hurst = float(coeffs[0])
 
-        # Clamp to [0, 1]
+        # Clamp to [0, 1]; NaN/inf from degenerate input → neutral 0.5
+        if not np.isfinite(hurst):
+            return 0.5
         return max(0.0, min(1.0, hurst))
     except Exception:
         return 0.5
@@ -555,7 +561,8 @@ def _classify_volume_profile(
         eth_mean = float(eth_vol.mean()) if not eth_vol.empty else 0
 
         # Check for flatness (crypto-like)
-        cv = float(vol_norm.std() / vol_norm.mean()) if vol_norm.mean() > 0 else 0
+        # Guard against single-element series where ddof=1 yields NaN/warning
+        cv = float(vol_norm.std(ddof=0) / vol_norm.mean()) if (vol_norm.mean() > 0 and len(vol_norm) > 1) else 0
         if cv < 0.3:
             return VolumeProfileShape.FLAT
 
