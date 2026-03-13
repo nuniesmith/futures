@@ -730,6 +730,7 @@ class TestModelValidation:
         assert pos.unrealizedPnL == 0.0
         assert pos.lastUpdate is None
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Existing endpoints still work (regression)
 # ═══════════════════════════════════════════════════════════════════════════
