@@ -186,6 +186,7 @@ class RithmicAccountConfig:
         enabled: bool = True,
         app_name: str = "ruby_futures",
         app_version: str = "1.0",
+        account_size: int = 150_000,
     ) -> None:
         self.key = key
         self.label = label
@@ -194,6 +195,7 @@ class RithmicAccountConfig:
         self.app_name = app_name
         self.app_version = app_version
         self.enabled = enabled
+        self.account_size = account_size
 
         # Resolve system_name: explicit override > preset > empty
         preset = PROP_FIRM_PRESETS.get(prop_firm, {})
@@ -235,6 +237,7 @@ class RithmicAccountConfig:
             "enabled": self.enabled,
             "app_name": self.app_name,
             "app_version": self.app_version,
+            "account_size": self.account_size,
         }
 
     def to_ui_dict(self) -> dict[str, Any]:
@@ -249,6 +252,7 @@ class RithmicAccountConfig:
             "enabled": self.enabled,
             "app_name": self.app_name,
             "app_version": self.app_version,
+            "account_size": self.account_size,
             # Never expose plaintext — show only whether credentials are configured
             "username_set": bool(self._username_enc),
             "password_set": bool(self._password_enc),
@@ -277,6 +281,7 @@ class RithmicAccountConfig:
             enabled=d.get("enabled", True),
             app_name=d.get("app_name", "ruby_futures"),
             app_version=d.get("app_version", "1.0"),
+            account_size=d.get("account_size", 150_000),
         )
         # Overwrite with pre-encrypted values from storage
         obj._username_enc = d.get("username_enc", "")
@@ -862,6 +867,11 @@ def _render_settings_panel(configs_ui: list[dict[str, Any]]) -> str:
             f'<option value="{g}"{" selected" if g == cfg["gateway"] else ""}>{g}</option>'
             for g in ["Chicago", "Sydney", "Sao Paulo", "test"]
         )
+        acct_size = cfg.get("account_size", 150_000)
+        account_size_options = "".join(
+            f'<option value="{v}"{" selected" if v == acct_size else ""}>${v:,}</option>'
+            for v in [25_000, 50_000, 100_000, 150_000, 200_000, 300_000]
+        )
         enabled_checked = "checked" if cfg.get("enabled", True) else ""
         username_hint = cfg.get("username_hint", "")
         placeholder_user = f"Current: {username_hint}" if username_hint else "Rithmic username"
@@ -932,6 +942,17 @@ def _render_settings_panel(configs_ui: list[dict[str, Any]]) -> str:
                            border-radius:4px;padding:4px 8px;font-size:0.75rem;color:var(--text);
                            font-family:inherit">
                 {gateway_options}
+            </select>
+        </div>
+        <div>
+            <label style="font-size:0.68rem;color:var(--muted);display:block;margin-bottom:3px">
+                Account Size
+            </label>
+            <select id="rith-{key}-acctsize"
+                    style="width:100%;background:var(--bg-input);border:1px solid var(--border);
+                           border-radius:4px;padding:4px 8px;font-size:0.75rem;color:var(--text);
+                           font-family:inherit">
+                {account_size_options}
             </select>
         </div>
         <div>
@@ -1016,6 +1037,7 @@ window.saveRithmicAccount = function(key) {{
         prop_firm:   (document.getElementById('rith-' + key + '-propfirm') || {{}}).value || 'tpt',
         system_name: (document.getElementById('rith-' + key + '-sysname')  || {{}}).value || '',
         gateway:     (document.getElementById('rith-' + key + '-gateway')  || {{}}).value || 'Chicago',
+        account_size: parseInt((document.getElementById('rith-' + key + '-acctsize') || {{}}).value) || 150000,
         username:    (document.getElementById('rith-' + key + '-user')     || {{}}).value || '',
         password:    (document.getElementById('rith-' + key + '-pass')     || {{}}).value || '',
         enabled:     (document.getElementById('rith-' + key + '-enabled')  || {{checked:true}}).checked,
@@ -1289,6 +1311,7 @@ async def save_account_ui(key: str, req: _FastAPIRequest):
     existing.prop_firm = body.get("prop_firm", existing.prop_firm)
     existing.gateway = body.get("gateway", existing.gateway)
     existing.enabled = bool(body.get("enabled", existing.enabled))
+    existing.account_size = int(body.get("account_size", existing.account_size))
 
     sys_override = body.get("system_name", "").strip()
     preset = PROP_FIRM_PRESETS.get(existing.prop_firm, {})
@@ -1339,6 +1362,7 @@ async def save_account_config(key: str, req: _FastAPIRequest):
     existing.enabled = bool(body.get("enabled", existing.enabled))
     existing.app_name = body.get("app_name", existing.app_name)
     existing.app_version = body.get("app_version", existing.app_version)
+    existing.account_size = int(body.get("account_size", existing.account_size))
 
     # Resolve system_name: explicit > preset > existing
     sys_override = body.get("system_name", "").strip()

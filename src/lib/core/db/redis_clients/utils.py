@@ -3,9 +3,10 @@ from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import pandas as pd
-from loguru import logger
 
-_log_prefix_base = "[redis_client - utils]"
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # --- Custom JSON Encoder ---
@@ -25,21 +26,17 @@ class CustomJSONEncoder(json.JSONEncoder):
     ```
     """
 
-    _log_prefix_class = f"{_log_prefix_base} - CustomJSONEncoder"
-
     def default(self, obj: Any) -> Any:  # type: ignore[override]
         """Override default method to handle pandas Timestamp."""
-        log_prefix = f"{CustomJSONEncoder._log_prefix_class} - default"
-        logger.debug(f"{log_prefix} START - Attempting to encode object of type: {type(obj)}.")
+        logger.debug("encoding_object", obj_type=str(type(obj)))
         if isinstance(obj, pd.Timestamp):
             iso_format = obj.isoformat()
-            logger.debug(f"{log_prefix} Object is pd.Timestamp. Returning ISO format: {iso_format}.")
-            logger.debug(f"{log_prefix} END - Encoding pd.Timestamp SUCCESS.")
+            logger.debug("encoded_pd_timestamp", iso_format=iso_format)
             return iso_format
         else:
-            logger.debug(f"{log_prefix} Object is not pd.Timestamp. Delegating encoding to super().")
+            logger.debug("delegating_encoding_to_super", obj_type=str(type(obj)))
             default_encoded = super().default(obj)
-            logger.debug(f"{log_prefix} END - Encoding delegated. Result type: {type(default_encoded)}.")
+            logger.debug("encoding_delegated", result_type=str(type(default_encoded)))
             return default_encoded
 
 
@@ -72,12 +69,16 @@ def construct_redis_url(
     Returns:
         str: The constructed Redis connection URL.
     """
-    log_prefix = f"{_log_prefix_base} - construct_redis_url"
     logger.debug(
-        f"{log_prefix} START - Constructing Redis URL. TLS enabled: {use_tls}, "
-        f"Sentinel enabled: {use_sentinel}, Cluster enabled: {use_cluster}, "
-        f"Host: {host}, Port: {port}, DB: {db}, User provided: {bool(user)}, "
-        f"Password provided: {bool(password)}."
+        "constructing_redis_url",
+        use_tls=use_tls,
+        use_sentinel=use_sentinel,
+        use_cluster=use_cluster,
+        host=host,
+        port=port,
+        db=db,
+        user_provided=bool(user),
+        password_provided=bool(password),
     )
 
     protocol = "rediss" if use_tls else "redis"
@@ -86,20 +87,20 @@ def construct_redis_url(
 
     if user and password:
         url = f"{protocol}://{user}:{password}@{host}:{port}/{db}"
-        logger.debug(f"{log_prefix} Constructed URL with user & password: {clean_redis_url(url)}")
+        logger.debug("redis_url_constructed", variant="user_and_password", clean_url=clean_redis_url(url))
     elif password:
         url = f"{protocol}://:{password}@{host}:{port}/{db}"
-        logger.debug(f"{log_prefix} Constructed URL with only password: {clean_redis_url(url)}")
+        logger.debug("redis_url_constructed", variant="password_only", clean_url=clean_redis_url(url))
     else:
         url = f"{protocol}://{host}:{port}/{db}"
-        logger.debug(f"{log_prefix} Constructed URL without user/password: {clean_redis_url(url)}")
+        logger.debug("redis_url_constructed", variant="no_auth", clean_url=clean_redis_url(url))
 
     # Note: Additional Sentinel-specific logic would go here if needed
     # Note: Additional Cluster-specific logic would go here if needed
     # This implementation just accepts the parameters but doesn't modify behavior
 
     cleaned_url = clean_redis_url(url)
-    logger.debug(f"{log_prefix} END - Redis URL construction SUCCESS. Clean URL: {cleaned_url}")
+    logger.debug("redis_url_construction_success", clean_url=cleaned_url)
     return url
 
 
@@ -115,13 +116,11 @@ def clean_redis_url(redis_url: str) -> str:
     Returns:
         str: The cleaned Redis URL with sensitive information removed.
     """
-    log_prefix = f"{_log_prefix_base} - clean_redis_url"
-    logger.debug(f"{log_prefix} START - Cleaning Redis URL for logging.")
+    logger.debug("cleaning_redis_url")
     parsed = urlparse(redis_url)
     clean_netloc = parsed.hostname or ""
     if parsed.port:
         clean_netloc += f":{parsed.port}"
     cleaned = urlunparse((parsed.scheme, clean_netloc, parsed.path or "", "", "", ""))
-    logger.debug(f"{log_prefix} Cleaned URL: {cleaned}")
-    logger.debug(f"{log_prefix} END - Redis URL cleaning SUCCESS. Clean URL: {cleaned}")
+    logger.debug("redis_url_cleaned", clean_url=cleaned)
     return cleaned

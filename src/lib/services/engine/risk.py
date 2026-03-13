@@ -347,7 +347,7 @@ class RiskManager:
     ) -> None:
         """Register a newly opened position.
 
-        Called when NT8 bridge reports a new position, or when the engine
+        Called when Rithmic reports a new fill, or when the engine
         opens a simulated position.
         """
         self._ensure_day_reset()
@@ -430,20 +430,33 @@ class RiskManager:
             self._consecutive_losses,
         )
 
+    def update_account_size(self, new_size: int) -> None:
+        """Update account size and recalculate derived risk parameters."""
+        self.account_size = new_size
+        self.max_risk_per_trade = new_size * self.risk_pct_per_trade
+        # Scale daily loss limit proportionally (1% of account)
+        self.max_daily_loss = -(new_size * 0.01)
+        logger.info(
+            "risk_manager_account_size_updated, account_size=%d, max_risk=%.2f, max_daily_loss=%.2f",
+            new_size,
+            self.max_risk_per_trade,
+            self.max_daily_loss,
+        )
+
     def update_unrealized(self, symbol: str, unrealized_pnl: float) -> None:
         """Update the unrealized P&L for an open position.
 
-        Called when NT8 bridge pushes updated position data.
+        Called when Rithmic pushes updated position data.
         """
         if symbol in self._open_positions:
             self._open_positions[symbol]["unrealized_pnl"] = unrealized_pnl
 
     def sync_positions(self, positions: list[dict[str, Any]]) -> None:
-        """Sync open positions from NT8 bridge snapshot.
+        """Sync open positions from Rithmic snapshot.
 
         This replaces the internal position state with the latest from
-        NinjaTrader, handling any positions that were opened/closed
-        outside the engine's knowledge.
+        Rithmic, handling any positions that were opened/closed outside
+        the engine's knowledge.
         """
         self._ensure_day_reset()
         now = self._now_fn()

@@ -149,7 +149,6 @@ This gives you exactly what you asked for: a repeatable, data-driven way to pick
 
 Want me to:
 - Add overnight gap % change?
-- Auto-email/Slack the report?
 - Expand the full 22-row universe table?
 - Or run a live example right now with today’s actual sentiment (March 10 2026 macro quiet day)?
 

@@ -16,9 +16,9 @@ Labels produced:
   - ``bad_short``   — Short breakout hit SL first (or timed out without TP).
   - ``no_trade``    — No valid breakout was detected in the window.
 
-The simulator is intentionally conservative — it mirrors Bridge.cs bracket
-sizing (ATR-based SL/TP) so that CNN training data reflects *real* execution
-outcomes, not theoretical ones.
+The simulator is intentionally conservative — it mirrors the original Ruby bridge
+bracket sizing (ATR-based SL/TP) so that CNN training data reflects *real*
+execution outcomes, not theoretical ones.
 
 Public API:
     from lib.services.training.rb_simulator import (
@@ -83,13 +83,13 @@ _EST = ZoneInfo("America/New_York")
 
 @dataclass
 class BracketConfig:
-    """Bracket parameters matching Bridge.cs risk logic.
+    """Bracket parameters matching the original Ruby bridge risk logic.
 
-    These map directly to the Bridge properties:
-      - sl_atr_mult → StopLossATRMultiplier  (default 1.5)
-      - tp1_atr_mult → Target1ATRMultiplier   (default 2.0)
-      - tp2_atr_mult → Target2ATRMultiplier   (default 3.0, optional)
-      - tp3_atr_mult → Target3ATRMultiplier   (default 4.5, optional)
+    These map directly to the bridge properties:
+      - sl_atr_mult → stop-loss ATR multiplier  (default 1.5)
+      - tp1_atr_mult → target 1 ATR multiplier   (default 2.0)
+      - tp2_atr_mult → target 2 ATR multiplier   (default 3.0, optional)
+      - tp3_atr_mult → target 3 ATR multiplier   (default 4.5, optional)
       - max_hold_bars → maximum bars to hold before labelling timeout
     """
 
@@ -325,14 +325,14 @@ def simulate_orb_outcome(
 ) -> ORBSimResult:
     """Simulate an ORB trade on a window of 1-minute bars.
 
-    This replays the exact logic used by Ruby.cs (ORB detection) and
-    Bridge.cs (bracket sizing) to produce a ground-truth label.
+    This replays the exact logic used by the Ruby indicator logic (ORB detection)
+    and the original Ruby bridge (bracket sizing) to produce a ground-truth label.
 
     Algorithm:
       1. Identify the opening range (OR) from bars in [or_start, or_end).
       2. Compute ATR from all available bars.
       3. Scan post-OR bars for the first close beyond OR high/low.
-      4. Set entry, SL, TP1, TP2 using Bridge-style ATR multiples.
+      4. Set entry, SL, TP1, TP2 using bridge-style ATR multiples.
       5. Walk forward bar-by-bar to determine outcome.
       6. Assign label: good_long, bad_long, good_short, bad_short, no_trade.
 

@@ -1,6 +1,9 @@
 import numpy as np
 import pandas as pd
-from loguru import logger
+
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class ParabolicSARIndicator:
@@ -25,7 +28,7 @@ class ParabolicSARIndicator:
         self.logger = logger
         self.step = step
         self.max_step = max_step
-        self.history_df = pd.DataFrame(columns=self.REQUIRED_COLUMNS)
+        self.history_df = pd.DataFrame(columns=pd.Index(self.REQUIRED_COLUMNS))
         self.current_value = None
 
     def _calculate_sar(self, data: pd.DataFrame) -> pd.Series:
@@ -43,7 +46,7 @@ class ParabolicSARIndicator:
         if missing_cols:
             raise ValueError(f"DataFrame is missing the following columns: {', '.join(missing_cols)}")
 
-        self.logger.info(f"Calculating Parabolic SAR with step={self.step} and max_step={self.max_step}.")
+        self.logger.info("calculating_parabolic_sar", step=self.step, max_step=self.max_step)
 
         # Initialize SAR array and key variables
         sar = np.zeros(len(data))
@@ -77,7 +80,7 @@ class ParabolicSARIndicator:
                     ep = data["High"].iloc[i]
                     af = self.step
 
-        self.logger.info("Parabolic SAR calculated successfully.")
+        self.logger.info("parabolic_sar_calculated_successfully")
         return pd.Series(sar, index=data.index)
 
     def update(self, data_point: dict) -> float | None:
@@ -95,7 +98,7 @@ class ParabolicSARIndicator:
             low = data_point.get("low")
 
             if high is None or low is None:
-                self.logger.warning("Data point missing required 'high' or 'low' for Parabolic SAR update.")
+                self.logger.warning("missing_required_fields", indicator="parabolic_sar", required=["high", "low"])
                 return None
 
             # Append new data point
@@ -111,7 +114,7 @@ class ParabolicSARIndicator:
             return self.current_value
 
         except Exception as e:
-            self.logger.error(f"Parabolic SAR Indicator update failed: {e}", exc_info=True)
+            self.logger.error("parabolic_sar_update_failed", error=str(e), exc_info=True)
             return None
 
     def apply(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -129,12 +132,12 @@ class ParabolicSARIndicator:
             if missing_cols:
                 raise ValueError(f"DataFrame is missing required columns: {', '.join(missing_cols)}")
 
-            self.logger.info("Adding Parabolic SAR to DataFrame.")
+            self.logger.info("applying_parabolic_sar_to_dataframe")
             data = data.copy()
             data["ParabolicSAR"] = self._calculate_sar(data)
-            self.logger.info("Parabolic SAR added successfully.")
+            self.logger.info("parabolic_sar_added_successfully")
             return data
 
         except Exception as e:
-            self.logger.error(f"Error applying Parabolic SAR to DataFrame: {e}", exc_info=True)
+            self.logger.error("error_applying_parabolic_sar", error=str(e), exc_info=True)
             raise

@@ -13,8 +13,8 @@ import traceback
 from pathlib import Path
 
 from lib.core.config import load_configuration
+from lib.core.logging_config import get_logger, setup_logging
 from lib.utils.discover import find_config_file
-from lib.utils.setup_logging import setup_logging
 
 
 class ServiceRunner:
@@ -97,8 +97,9 @@ class ServiceRunner:
                         self.service.logger.set_level(args.log_level.upper())
                         self.logger.info(f"Updated log level to: {args.log_level.upper()}")
                     else:
-                        # Otherwise recreate the logger
-                        self.service.logger = setup_logging(self.service.service_name, log_level=args.log_level)
+                        # Otherwise reconfigure logging with the new level and get a fresh logger
+                        setup_logging(service=self.service.service_name, level=args.log_level)
+                        self.service.logger = get_logger(self.service.service_name)
                         self.logger = self.service.logger
                 except Exception as e:
                     self.logger.warning(f"Failed to update log level: {e}")

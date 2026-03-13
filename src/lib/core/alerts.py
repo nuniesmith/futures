@@ -64,9 +64,6 @@ def _get_config() -> dict[str, Any]:
     """Load alert channel configuration from environment variables."""
     return {
         "discord_webhook": os.getenv("DISCORD_WEBHOOK_URL", ""),
-        "slack_webhook": os.getenv("SLACK_WEBHOOK_URL", ""),
-        "telegram_token": os.getenv("TELEGRAM_BOT_TOKEN", ""),
-        "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", ""),
         "cooldown_sec": int(os.getenv("ALERT_COOLDOWN_SEC", str(DEFAULT_COOLDOWN_SEC))),
     }
 
@@ -211,57 +208,6 @@ class _AlertStore:
 # ---------------------------------------------------------------------------
 
 
-def _send_slack(webhook_url: str, title: str, message: str, fields: dict | None = None) -> bool:
-    """Send an alert to Slack via incoming webhook."""
-    if not webhook_url:
-        return False
-
-    text = f"*{title}*\n{message}"
-    if fields:
-        text += "\n" + " | ".join(f"*{k}:* {v}" for k, v in fields.items())
-
-    payload = {"text": text}
-
-    try:
-        resp = requests.post(
-            webhook_url,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            logger.debug("Slack alert sent: %s", title)
-            return True
-        else:
-            logger.warning("Slack alert failed: %s %s", resp.status_code, resp.text[:200])
-            return False
-    except Exception as exc:
-        logger.warning("Slack alert error: %s", exc)
-        return False
-
-
-def _send_telegram(token: str, chat_id: str, title: str, message: str) -> bool:
-    """Send an alert to Telegram via Bot API."""
-    if not token or not chat_id:
-        return False
-
-    text = f"<b>{title}</b>\n{message}"
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-
-    try:
-        resp = requests.post(url, json=payload, timeout=10)
-        if resp.status_code == 200:
-            logger.debug("Telegram alert sent: %s", title)
-            return True
-        else:
-            logger.warning("Telegram alert failed: %s %s", resp.status_code, resp.text[:200])
-            return False
-    except Exception as exc:
-        logger.warning("Telegram alert error: %s", exc)
-        return False
-
-
 def _send_discord(webhook_url: str, title: str, message: str, fields: dict | None = None) -> bool:
     """Send an alert to Discord via webhook.
 
@@ -324,16 +270,10 @@ class AlertDispatcher:
     def __init__(
         self,
         discord_webhook: str = "",
-        slack_webhook: str = "",
-        telegram_token: str = "",
-        telegram_chat_id: str = "",
         cooldown_sec: int = DEFAULT_COOLDOWN_SEC,
         _disable_redis: bool = False,
     ):
         self.discord_webhook = discord_webhook
-        self.slack_webhook = slack_webhook
-        self.telegram_token = telegram_token
-        self.telegram_chat_id = telegram_chat_id
         self.cooldown_sec = cooldown_sec
 
         self._store = _AlertStore(cooldown_sec, _disable_redis=_disable_redis)
@@ -352,10 +292,6 @@ class AlertDispatcher:
         channels = []
         if self.discord_webhook:
             channels.append("Discord")
-        if self.slack_webhook:
-            channels.append("Slack")
-        if self.telegram_token and self.telegram_chat_id:
-            channels.append("Telegram")
         return channels
 
     @property
@@ -530,20 +466,6 @@ class AlertDispatcher:
             self._stats["discord_sent"] += 1
             any_success = True
 
-        if self.slack_webhook and _send_slack(self.slack_webhook, title, message, fields):
-            self._stats.setdefault("slack_sent", 0)
-            self._stats["slack_sent"] += 1
-            any_success = True
-
-        if (
-            self.telegram_token
-            and self.telegram_chat_id
-            and _send_telegram(self.telegram_token, self.telegram_chat_id, title, message)
-        ):
-            self._stats.setdefault("telegram_sent", 0)
-            self._stats["telegram_sent"] += 1
-            any_success = True
-
         return any_success
 
     def get_stats(self) -> dict[str, Any]:
@@ -584,9 +506,6 @@ def get_dispatcher() -> AlertDispatcher:
         disable_redis = os.getenv("DISABLE_REDIS", "").lower() in ("1", "true", "yes")
         _dispatcher = AlertDispatcher(
             discord_webhook=config["discord_webhook"],
-            slack_webhook=config["slack_webhook"],
-            telegram_token=config["telegram_token"],
-            telegram_chat_id=config["telegram_chat_id"],
             cooldown_sec=config["cooldown_sec"],
             _disable_redis=disable_redis,
         )

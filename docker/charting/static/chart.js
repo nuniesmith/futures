@@ -2113,7 +2113,7 @@ function applyLiveBar(raw) {
 //   2. ?data_url= query param    — useful when iframed from any host
 //   3. GET /config               — nginx renders {data_service_url, port}
 //      → if the URL contains a docker-internal hostname, substitute real hostname
-//   4. Same host, port 8001      — last-resort fallback
+//   4. Same host, port 8050      — last-resort fallback
 
 async function resolveDataServiceUrl() {
     if (window.DATA_SERVICE_URL)

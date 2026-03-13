@@ -108,9 +108,9 @@ except ImportError:
 # asset_class_idx and asset_idx as separate integer IDs routed to nn.Embedding
 # layers.
 #
-# Aligns with NinjaTrader BreakoutStrategy PrepareCnnTabular() and
-# OrbCnnPredictor.NormaliseTabular() in C#.
-# This is the canonical contract for Python training and NT8 inference.
+# Aligns with the Ruby breakout engine's tabular preparation and
+# original normalisation logic.
+# This is the canonical contract for Python training and inference.
 #
 # Index  Feature                  Raw source / notes
 # ─────  ───────────────────────  ──────────────────────────────────────────
@@ -203,13 +203,13 @@ TABULAR_FEATURES: list[str] = [
 
 NUM_TABULAR = len(TABULAR_FEATURES)
 
-# Feature contract version — must match NinjaTrader BreakoutStrategy.
+# Feature contract version — must match the Ruby breakout engine.
 # v8 adds hierarchical asset embeddings, 3 cross-asset
 # correlation features, 6 asset fingerprint features
 # , and architecture upgrades .
 FEATURE_CONTRACT_VERSION = 8
 
-# Asset class ordinal map — mirrors GetAssetClassNorm() in BreakoutStrategy.cs.
+# Asset class ordinal map — mirrors asset class normalisation logic.
 # 0=equity_index, 1=fx, 2=metals_energy, 3=treasuries_ags, 4=crypto
 # Normalised as ordinal / 4.0 so the value sits in [0, 1].
 ASSET_CLASS_ORDINALS: dict[str, float] = {
@@ -722,7 +722,7 @@ def get_crypto_momentum_score(
 
 
 def get_asset_class_id(ticker: str) -> float:
-    """Return the asset class ordinal / 4 for *ticker*, matching C# GetAssetClassNorm().
+    """Return the asset class ordinal / 4 for *ticker*, matching asset class normalisation.
 
     Classes:
         0.00 — equity index (MES, MNQ, M2K, MYM)
@@ -731,7 +731,7 @@ def get_asset_class_id(ticker: str) -> float:
         0.75 — treasuries/ags (ZN, ZB, ZC, ZS, ZW)
         1.00 — crypto      (MBT, MET, BTC, ETH, …)
 
-    Falls back to 0.0 (equity index) for unknown tickers, matching C#.
+    Falls back to 0.0 (equity index) for unknown tickers.
     """
     return ASSET_CLASS_ORDINALS.get(str(ticker).upper().strip(), 0.0)
 
@@ -863,31 +863,84 @@ def get_session_ordinal(session_key: str | None) -> float:
 DEFAULT_MODEL_DIR = "models"
 MODEL_PREFIX = "breakout_cnn_"
 
+# Asset groups for per-group model selection.
+# When a per-asset model (breakout_cnn_best_{SYMBOL}.pt) doesn't exist,
+# _resolve_model_name() falls back to a per-group model
+# (breakout_cnn_best_{group}.pt) before using the combined champion.
+ASSET_GROUPS: dict[str, str] = {
+    "MGC": "metals",
+    "SIL": "metals",
+    "MES": "equity_micros",
+    "MNQ": "equity_micros",
+    "M2K": "equity_micros",
+    "MYM": "equity_micros",
+    "ZN": "treasuries",
+    "ZB": "treasuries",
+    "ZW": "agriculture",
+}
+
+
+def _resolve_model_name(symbol: str | None = None) -> str | None:
+    """Resolve which model file to use for a given symbol.
+
+    Priority:
+      1. Per-asset model:  ``breakout_cnn_best_{symbol}.pt``
+      2. Per-group model:  ``breakout_cnn_best_{group}.pt``
+      3. Combined model:   ``breakout_cnn_best.pt`` (returned as ``None``
+         to let the caller fall through to the default discovery logic).
+
+    Args:
+        symbol: Ticker string (e.g. ``"MGC"``, ``"MNQ"``).  ``None`` or
+                empty string returns ``None`` immediately.
+
+    Returns:
+        Absolute-ish path to the specialised model file if one exists on
+        disk, or ``None`` to signal "use the combined champion".
+    """
+    if not symbol:
+        return None
+
+    model_dir = os.getenv("MODELS_DIR", DEFAULT_MODEL_DIR)
+
+    # 1. Check per-asset model
+    asset_path = os.path.join(model_dir, f"breakout_cnn_best_{symbol}.pt")
+    if os.path.isfile(asset_path):
+        return asset_path
+
+    # 2. Check per-group model
+    group = ASSET_GROUPS.get(symbol.upper().strip())
+    if group:
+        group_path = os.path.join(model_dir, f"breakout_cnn_best_{group}.pt")
+        if os.path.isfile(group_path):
+            return group_path
+
+    # 3. Fall back to combined model
+    return None
+
+
 # Thread lock for model loading
 _model_lock = threading.Lock()
-_cached_model: Any | None = None
-_cached_model_path: str | None = None
-_cached_model_mtime: float = 0.0
+# Dict-based cache keyed by resolved model path so that per-asset,
+# per-group, and combined models can coexist in memory simultaneously.
+_model_cache: dict[str, tuple[Any, str]] = {}  # path -> (model, device_str)
 
 
 def invalidate_model_cache() -> bool:
-    """Invalidate the cached CNN model so the next inference reloads from disk.
+    """Invalidate all cached CNN models so the next inference reloads from disk.
 
-    Thread-safe.  Returns True if a cached model was actually evicted,
+    Thread-safe.  Returns True if any cached model was actually evicted,
     False if the cache was already empty.
 
-    Called by the engine's hot-reload watcher when it detects that the
-    champion model file has changed on disk (new ``st_mtime``).
+    Called by the engine's hot-reload watcher when it detects that a
+    model file has changed on disk (new ``st_mtime``).
     """
-    global _cached_model, _cached_model_path, _cached_model_mtime
+    global _model_cache
     with _model_lock:
-        had_model = _cached_model is not None
-        _cached_model = None
-        _cached_model_path = None
-        _cached_model_mtime = 0.0
-    if had_model:
+        had_models = len(_model_cache) > 0
+        _model_cache.clear()
+    if had_models:
         logger.info("CNN model cache invalidated — next inference will reload from disk")
-    return had_model
+    return had_models
 
 
 # ---------------------------------------------------------------------------
@@ -909,38 +962,35 @@ def get_inference_transform():
 
 
 def get_training_transform():
-    """Image transform for training with mild augmentation.
+    """Image transform for training with moderate augmentation.
 
-    Augmentations are intentionally light — we want the CNN to learn from
-    the chart structure (candlestick bodies, ORB box, overlays), not from
-    random crops or heavy colour jitter that would destroy that information.
+    Augmentations are moderate — we want the CNN to learn from the chart
+    structure (candlestick bodies, ORB box, overlays) while building
+    robustness against minor visual variations to reduce overfitting.
 
     Augmentation strategy:
-      - Mild random crop (±16 px): simulates slight chart zoom variation
+      - Random crop (±32 px): simulates chart zoom variation
       - No horizontal flip: chart direction (left→right time) must be preserved
-      - Mild brightness/contrast jitter (±8%): handles monitor calibration
+      - Brightness/contrast jitter (±12%): handles monitor calibration
         differences and theme variations (dark vs light dashboard)
-      - Mild saturation jitter (±5%): Kraken/crypto pairs use different
+      - Saturation jitter (±8%): Kraken/crypto pairs use different
         colour palettes from futures charts
-      - Random rotation (±1.5°): simulates slight chart panel tilt in screenshots
-      - Random erasing (p=0.05, max 10% area): simulates minor UI overlays
+      - Random rotation (±2.0°): simulates slight chart panel tilt in screenshots
+      - Random erasing (p=0.15, max 15% area): simulates UI overlays
         or partial occlusions on the dashboard
     """
     if not _TORCH_AVAILABLE:
         return None
     return T.Compose(
         [
-            T.Resize((IMAGE_SIZE + 16, IMAGE_SIZE + 16)),
+            T.Resize((IMAGE_SIZE + 32, IMAGE_SIZE + 32)),
             T.RandomCrop((IMAGE_SIZE, IMAGE_SIZE)),
             T.RandomHorizontalFlip(p=0.0),  # disabled — chart direction matters
-            T.RandomRotation(degrees=1.5, fill=0),  # tiny tilt only
-            T.ColorJitter(brightness=0.08, contrast=0.08, saturation=0.05, hue=0.0),
+            T.RandomRotation(degrees=2.0, fill=0),
+            T.ColorJitter(brightness=0.12, contrast=0.12, saturation=0.08, hue=0.0),
             T.ToTensor(),
             T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-            # Random erasing AFTER ToTensor (operates on tensor, not PIL)
-            # Simulates minor UI overlays / partial occlusion.
-            # p=0.05: only 5% of images affected; scale capped at 10% area.
-            T.RandomErasing(p=0.05, scale=(0.01, 0.10), ratio=(0.3, 3.3), value=0),
+            T.RandomErasing(p=0.15, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0),
         ]
     )
 
@@ -1067,8 +1117,8 @@ if _TORCH_AVAILABLE:
             # ── Tabular features v8 — 37 features matching feature_contract v8 ──
             #
             # Raw values are normalised here using the same transforms as
-            # OrbCnnPredictor.NormaliseTabular() in BreakoutStrategy.cs so that
-            # Python training and NT8 inference are byte-for-byte identical.
+            # the original normalisation logic so that
+            # Python training and inference are byte-for-byte identical.
 
             # [0] quality_pct_norm — quality / 100, clamp [0, 1]
             _qual = max(0.0, min(1.0, float(row.get("quality_pct", 50)) / 100.0))
@@ -1136,7 +1186,7 @@ if _TORCH_AVAILABLE:
             _vwap_dist_raw = float(row.get("vwap_distance", 0.0))
             _vwap_dist = max(-3.0, min(3.0, _vwap_dist_raw)) / 3.0
 
-            # [13] asset_class_id — ordinal / 4 matching C# GetAssetClassNorm()
+            # [13] asset_class_id — ordinal / 4 matching asset class normalisation
             _ticker = str(row.get("ticker", row.get("symbol", ""))).upper().strip()
             _asset_cls = get_asset_class_id(_ticker)
 
@@ -1478,7 +1528,7 @@ if _TORCH_AVAILABLE:
         def __init__(
             self,
             num_tabular: int = NUM_TABULAR,
-            dropout: float = 0.4,
+            dropout: float = 0.5,
             pretrained: bool = True,
             use_type_embedding: bool = False,  # kept for backward compat (ignored in v8)
             use_asset_embeddings: bool = True,
@@ -1509,7 +1559,7 @@ if _TORCH_AVAILABLE:
                 nn.Linear(num_tabular, 256),
                 nn.BatchNorm1d(256),
                 nn.GELU(),
-                nn.Dropout(0.3),
+                nn.Dropout(0.4),  # was 0.3
                 nn.Linear(256, 128),
                 nn.BatchNorm1d(128),
                 nn.GELU(),
@@ -1525,7 +1575,7 @@ if _TORCH_AVAILABLE:
                 nn.Dropout(dropout),
                 nn.Linear(512, 128),
                 nn.GELU(),
-                nn.Dropout(dropout * 0.5),
+                nn.Dropout(dropout * 0.75),
                 nn.Linear(128, 2),
             )
 
@@ -1669,13 +1719,13 @@ def train_model(
     epochs: int = 80,
     batch_size: int = 32,
     lr: float = 2e-4,
-    weight_decay: float = 1e-4,
+    weight_decay: float = 2e-4,
     freeze_epochs: int = 5,
     model_dir: str = DEFAULT_MODEL_DIR,
     image_root: str | None = None,
     num_workers: int = 4,
     save_best: bool = True,
-    patience: int = 15,
+    patience: int = 12,
     grad_accum_steps: int = 4,
     mixup_alpha: float = 0.2,
     warmup_epochs: int = 5,
@@ -1690,7 +1740,7 @@ def train_model(
     v8 training recipe additions:
       - Gradient accumulation (effective batch = batch_size × grad_accum_steps)
       - Mixup augmentation on tabular features (α=0.2)
-      - Label smoothing 0.10 (up from 0.05)
+      - Label smoothing 0.15 (up from 0.10)
       - Cosine warmup (warmup_epochs linear warmup before cosine decay)
       - Separate param groups: backbone LR vs tabular head + embeddings LR
       - Early stopping with patience
@@ -1817,8 +1867,8 @@ def train_model(
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
 
-    # --- Loss (v8-D: label smoothing 0.10) ---
-    criterion: Any = nn.CrossEntropyLoss(label_smoothing=0.10)
+    # --- Loss (v8-D: label smoothing 0.15) ---
+    criterion: Any = nn.CrossEntropyLoss(label_smoothing=0.15)
 
     # --- Training loop ---
     best_val_acc = 0.0
@@ -2243,21 +2293,25 @@ def _load_model(
 ) -> Any | None:
     """Load a HybridBreakoutCNN model from disk.
 
-    Uses a module-level cache to avoid reloading on every inference call.
-    Thread-safe via _model_lock.  Automatically detects v6/v7.1/v8
+    Uses the module-level ``_model_cache`` dict (keyed by resolved path) to
+    avoid reloading on every inference call.  Multiple models (per-asset,
+    per-group, combined) can coexist in the cache simultaneously.
+
+    Thread-safe via ``_model_lock``.  Automatically detects v6/v7.1/v8
     architecture from the checkpoint weights.
 
     Args:
-        model_path: Explicit path to a .pt file.  If None, finds the latest.
-        device: Device to load onto.  If None, auto-detects.
+        model_path: Explicit path to a ``.pt`` file.  If ``None``, finds
+                    the best/latest model via :func:`_find_best_model`.
+        device: Device to load onto.  If ``None``, auto-detects.
 
     Returns:
-        The loaded model in eval mode, or None if loading failed.
+        The loaded model in eval mode, or ``None`` if loading failed.
     """
     if not _TORCH_AVAILABLE:
         return None
 
-    global _cached_model, _cached_model_path
+    global _model_cache
 
     if model_path is None:
         model_path = _find_latest_model()
@@ -2267,9 +2321,9 @@ def _load_model(
         return None
 
     with _model_lock:
-        # Return cached model if same path
-        if _cached_model is not None and _cached_model_path == model_path:
-            return _cached_model
+        # Return cached model if we already loaded this exact path
+        if model_path in _model_cache:
+            return _model_cache[model_path][0]
 
         dev = torch.device(device or get_device())
 
@@ -2284,8 +2338,7 @@ def _load_model(
                 return None
             model = model.to(dev)
 
-            _cached_model = model
-            _cached_model_path = model_path
+            _model_cache[model_path] = (model, str(dev))
 
             logger.info(
                 "Model loaded: %s → %s (tabular=%d, asset_emb=%s)",
@@ -2309,8 +2362,8 @@ def _load_model(
 def _normalise_tabular_for_inference(raw_features: Sequence[float]) -> list[float]:
     """Normalise a raw tabular feature vector for inference.
 
-    Applies the same transforms as OrbCnnPredictor.NormaliseTabular() in C#
-    so that Python inference and NT8 inference are identical.
+    Applies the same transforms as the original normalisation logic
+    so that Python inference is identical to the canonical contract.
 
     v8 input order (37 features — must match TABULAR_FEATURES exactly):
         [0]  quality_pct_norm      — quality / 100, already in [0, 1]
@@ -2573,7 +2626,9 @@ def predict_breakout(
                      Used to look up the per-session threshold and for
                      logging.  Ignored if *threshold* is explicitly set.
         ticker: Symbol ticker (e.g. "MGC", "MNQ") for v8 asset embedding
-                lookup.  If None, embedding IDs default to 0.
+                lookup **and** per-asset / per-group model selection.
+                If None, embedding IDs default to 0 and the combined
+                champion model is used.
 
     Returns:
         Dict with:
@@ -2589,7 +2644,12 @@ def predict_breakout(
         logger.warning("PyTorch not available — cannot run inference")
         return None
 
-    model = _load_model(model_path)
+    # Resolve per-asset / per-group model when no explicit path is given.
+    effective_model_path = model_path
+    if effective_model_path is None:
+        effective_model_path = _resolve_model_name(ticker)
+
+    model = _load_model(effective_model_path)
     if model is None:
         return None
 
@@ -2645,13 +2705,21 @@ def predict_breakout(
         else:
             confidence = "low"
 
+        # Determine the actual model path used for reporting.
+        used_model_path = effective_model_path or ""
+        if not used_model_path:
+            for path, (cached_m, _dev) in _model_cache.items():
+                if cached_m is model:
+                    used_model_path = path
+                    break
+
         return {
             "prob": round(prob_good, 4),
             "signal": prob_good >= effective_threshold,
             "confidence": confidence,
             "threshold": effective_threshold,
             "session_key": session_key or "",
-            "model_path": _cached_model_path or "",
+            "model_path": used_model_path,
         }
 
     except Exception as exc:
@@ -2673,10 +2741,18 @@ def predict_breakout_batch(
     More efficient than calling ``predict_breakout`` in a loop because it
     batches the GPU forward passes.
 
+    When *model_path* is ``None`` and all items in *tickers* resolve to the
+    same per-asset or per-group model, that specialised model is used for
+    the whole batch.  If tickers map to different models (or a mix of
+    specific and combined), the function falls back to the combined champion
+    model so the batch can be processed in a single forward pass.
+
     Args:
         image_paths: List of PNG paths.
         tabular_features_batch: List of tabular feature vectors (one per image).
-        model_path: Explicit model path (default: latest).
+        model_path: Explicit model path (default: latest).  When ``None``,
+                    per-asset / per-group model resolution is attempted via
+                    *tickers* (see above).
         threshold: Signal threshold.  When None (default), the per-session
                    threshold from ``SESSION_THRESHOLDS`` is used via
                    ``session_key``.  Passing an explicit float overrides it.
@@ -2685,7 +2761,9 @@ def predict_breakout_batch(
                      *threshold* is explicitly set.
         batch_size: Max images per GPU forward pass.
         tickers: Optional list of symbol tickers (one per image) for v8
-                 asset embedding lookup.  If None, all default to ID 0.
+                 asset embedding lookup **and** per-asset / per-group model
+                 selection.  If None, all default to ID 0 and the combined
+                 champion model is used.
 
     Returns:
         List of result dicts (same format as predict_breakout), or None entries
@@ -2698,7 +2776,19 @@ def predict_breakout_batch(
         logger.error("Mismatched lengths: %d images vs %d tabular", len(image_paths), len(tabular_features_batch))
         return [None] * len(image_paths)
 
-    model = _load_model(model_path)
+    # Resolve per-asset / per-group model for the batch when no explicit
+    # path is given.  If all tickers resolve to the same specialised model,
+    # use it; otherwise fall back to the combined champion.
+    effective_model_path = model_path
+    if effective_model_path is None and tickers:
+        resolved_paths = {_resolve_model_name(t) for t in tickers}
+        # Remove None (combined fallback) — if only one non-None path remains
+        # and *every* ticker resolved to it, use the specific model.
+        resolved_paths.discard(None)
+        if len(resolved_paths) == 1 and all(_resolve_model_name(t) is not None for t in tickers):
+            effective_model_path = resolved_paths.pop()
+
+    model = _load_model(effective_model_path)
     if model is None:
         return [None] * len(image_paths)
 
@@ -2773,13 +2863,21 @@ def predict_breakout_batch(
             else:
                 confidence = "low"
 
+            # Determine the actual model path used for reporting.
+            used_model_path = effective_model_path or ""
+            if not used_model_path:
+                for _cached_path, (_cached_m, _cached_dev) in _model_cache.items():
+                    if _cached_m is model:
+                        used_model_path = _cached_path
+                        break
+
             results[global_idx] = {
                 "prob": round(prob_good, 4),
                 "signal": prob_good >= effective_threshold,
                 "confidence": confidence,
                 "threshold": effective_threshold,
                 "session_key": session_key or "",
-                "model_path": _cached_model_path or "",
+                "model_path": used_model_path,
             }
 
     return results
@@ -2793,8 +2891,8 @@ def predict_breakout_batch(
 def generate_feature_contract(output_path: str | None = None) -> dict[str, Any]:
     """Generate and optionally write the ``feature_contract.json`` v8 file.
 
-    The contract encodes every parameter needed by consumers (engine, NT8
-    C# OrbCnnPredictor, rb trainer) to correctly prepare the tabular feature
+    The contract encodes every parameter needed by consumers (engine,
+    inference pipeline, rb trainer) to correctly prepare the tabular feature
     vector and interpret model outputs.
 
     v8 additions over v7.1:
@@ -2830,15 +2928,15 @@ def generate_feature_contract(output_path: str | None = None) -> dict[str, Any]:
         "image_size": IMAGE_SIZE,
         "imagenet_mean": IMAGENET_MEAN,
         "imagenet_std": IMAGENET_STD,
-        # Per-session CNN thresholds — must match C# CnnSessionThresholds
+        # Per-session CNN thresholds — must match session threshold config
         "session_thresholds": SESSION_THRESHOLDS,
-        # Per-session ordinals — must match C# CnnSessionThresholds._ordinals
+        # Per-session ordinals — must match session ordinal config
         "session_ordinals": SESSION_ORDINAL,
-        # Asset class map — must match C# GetAssetClassNorm()
+        # Asset class map — must match asset class normalisation
         "asset_class_map": ASSET_CLASS_ORDINALS,
-        # v6: breakout type ordinals — must match C# BreakoutType enum
+        # v6: breakout type ordinals — must match BreakoutType enum
         "breakout_type_ordinals": BREAKOUT_TYPE_ORDINALS,
-        # v6: asset volatility classes — must match C# GetVolatilityClass()
+        # v6: asset volatility classes — must match volatility class config
         "asset_volatility_classes": ASSET_VOLATILITY_CLASS,
         # v6: full breakout type configs (ordinals, bracket params, box styles)
         "breakout_types": _breakout_types_section,

@@ -2,8 +2,8 @@
 Multi-Session Support — All 9 Globex Sessions with Bracket Parameters
 =======================================================================
 Single source of truth for every session used by the ``rb`` platform.
-Both the Python dataset generator / CNN pipeline **and** the C# NinjaTrader
-strategy read from this contract.
+Both the Python dataset generator / CNN pipeline **and** the
+trading strategy read from this contract.
 
 .. note::
 
@@ -56,8 +56,8 @@ Design:
     ``get_session()`` for safe lookup with a clear error message.
   - All times are ``datetime.time`` objects in US/Eastern (ET) — callers are
     responsible for attaching the correct tzinfo when building full datetimes.
-  - The ordering in ``ALL_SESSION_KEYS`` mirrors the C# ``ORBSession`` list
-    in ``orb.py`` / ``BreakoutStrategy.cs`` exactly.
+  - The ordering in ``ALL_SESSION_KEYS`` mirrors the canonical session list
+    in ``orb.py`` exactly.
 """
 
 from __future__ import annotations
@@ -98,8 +98,8 @@ class ORBSession:
        ``ORBSession`` is kept as a backward-compatible alias.
 
     Attributes:
-        key:                 Short identifier used everywhere in Python and C#
-                             code (e.g. ``"london"``, ``"us"``).
+        key:                 Short identifier used everywhere in code
+                             (e.g. ``"london"``, ``"us"``).
         display_name:        Human-readable label for logs and the dashboard.
         or_start:            Opening-range window start (ET).
         or_end:              Opening-range window end (ET).
@@ -158,7 +158,7 @@ RBSession = ORBSession
 #
 # Bracket parameters (SL/TP/max_hold) are the *default* values used by
 # ``_bracket_configs_for_session()`` in ``dataset_generator.py`` and by the
-# NT8 strategy when no per-symbol override is configured.
+# trading strategy when no per-symbol override is configured.
 #
 # CNN thresholds match ``breakout_cnn.SESSION_THRESHOLDS`` exactly — keep
 # them in sync if you tune one side.
@@ -890,7 +890,7 @@ def to_bracket_params(session: ORBSession) -> dict[str, Any]:
     """Serialise a session's bracket parameters to a plain dict.
 
     This is the format consumed by ``rb_simulator.BracketConfig`` and the
-    NT8 ``SessionBracket`` struct in ``BreakoutStrategy.cs``.
+    session bracket structure used by the trading strategy.
 
     Returns::
 
@@ -920,7 +920,7 @@ def to_bracket_params(session: ORBSession) -> dict[str, Any]:
 def to_feature_contract_dict() -> dict[str, Any]:
     """Serialise all sessions to a dict for ``feature_contract.json``.
 
-    Inserted under the ``"sessions"`` key so the C# consumer can verify
+    Inserted under the ``"sessions"`` key so consumers can verify
     ordinals and thresholds at load time.
 
     Example output::

@@ -54,9 +54,6 @@ GITHUB_BRANCH="main"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/models"
 LFS_API="https://github.com/${GITHUB_REPO}.git/info/lfs/objects/batch"
 
-# src/ninja paths (CS source + DLLs) — pulled for the --ninja flag
-NINJA_RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/src/ninja"
-
 # Optional auth token (for private repos or rate-limit avoidance)
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 
@@ -71,14 +68,6 @@ ALL_FILES=(
 META_FILES=(
     "breakout_cnn_best_meta.json"
     "feature_contract.json"
-)
-
-# NinjaTrader CS source files (relative to src/ninja in repo)
-NINJA_CS_FILES=(
-    "BreakoutStrategy.cs"
-    "RubyIndicator.cs"
-    "addons/Bridge.cs"
-    "addons/DataPreloader.cs"
 )
 
 # Minimum size (bytes) for a file to be considered "real" (not an LFS pointer)

@@ -4,8 +4,7 @@ CNN Model Management API Router
 Provides endpoints for CNN model status, per-session gate management,
 model sync from the rb repo, and a dashboard HTML panel for the web frontend.
 
-CNN training lives in the rb repo (github.com/nuniesmith/orb).
-Models are pulled into this repo via scripts/sync_models.sh.
+CNN inference itself is handled in the engine service (lib.analysis.ml.breakout_cnn),
 This service only runs inference on CPU from the synced .pt checkpoint.
 
 Endpoints:
@@ -50,11 +49,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[5]  # futures/
 MODEL_DIR = PROJECT_ROOT / "models"
 CHAMPION_PATH = MODEL_DIR / "breakout_cnn_best.pt"
 META_PATH = MODEL_DIR / "breakout_cnn_best_meta.json"
-
+_DOCHUB_MODEL_DIR = Path("/app/models")  # Docker container path
+_DOCKER_SYNC_SCRIPT = _DOCHUB_MODEL_DIR / "sync_models.sh"
 SYNC_SCRIPT = PROJECT_ROOT / "scripts" / "sync_models.sh"
 
 # Docker paths (when running inside the engine container)
-_DOCKER_SYNC_SCRIPT = Path("/app/scripts/sync_models.sh")
 
 # Sync state — shared across requests (single-process)
 _sync_lock = asyncio.Lock()
@@ -831,9 +830,6 @@ def cnn_status_html():
     sync_btn = """
         <div style="margin-top:8px">
             <div style="font-size:9px;color:#52525b;margin-bottom:4px">
-                Training runs on the <a href="https://github.com/nuniesmith/orb" target="_blank"
-                style="color:#60a5fa;text-decoration:underline">rb repo</a> (GPU).
-                Sync the latest champion model here for CPU inference.
             </div>
         </div>
     """

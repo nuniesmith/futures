@@ -24,19 +24,9 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from lib.core.logging_config import get_logger
 
-def _get_logger() -> Any:
-    try:
-        from loguru import logger as _l
-
-        return _l
-    except ImportError:
-        import logging
-
-        return logging.getLogger("core.initialization")
-
-
-logger: Any = _get_logger()
+logger = get_logger(__name__)
 
 # Default configuration values
 DEFAULT_CONFIG_PATH = "/app/config/fks/app.yaml"
@@ -65,7 +55,7 @@ def validate_environment() -> tuple[bool, dict[str, Any]]:
     Returns:
         Tuple[bool, Dict[str, Any]]: (success, environment_info)
     """
-    logger.info("Validating execution environment")
+    logger.info("validating execution environment")
 
     environment_info = {
         "start_time": datetime.now(),
@@ -78,26 +68,26 @@ def validate_environment() -> tuple[bool, dict[str, Any]]:
     missing_vars = [var for var in critical_vars if not os.environ.get(var)]
 
     if missing_vars:
-        logger.warning(f"Missing environment variables: {', '.join(missing_vars)}")
+        logger.warning("missing environment variables", missing_vars=missing_vars)
         # Set defaults for missing variables
         for var in missing_vars:
             if var == "APP_LOG_LEVEL":
                 os.environ["APP_LOG_LEVEL"] = DEFAULT_LOG_LEVEL
-                logger.info(f"Setting default APP_LOG_LEVEL to {DEFAULT_LOG_LEVEL}")
+                logger.info("setting default APP_LOG_LEVEL", log_level=DEFAULT_LOG_LEVEL)
 
     # Check for recommended environment variables
     recommended_vars = ["DATA_DIR", "CONFIG_DIR"]
     missing_recommended = [var for var in recommended_vars if not os.environ.get(var)]
 
     if missing_recommended:
-        logger.debug(f"Missing recommended environment variables: {', '.join(missing_recommended)}")
+        logger.debug("missing recommended environment variables", missing_vars=missing_recommended)
         # Set defaults for commonly used variables
         if "DATA_DIR" not in os.environ:
             os.environ["DATA_DIR"] = "data"
         if "CONFIG_DIR" not in os.environ:
             os.environ["CONFIG_DIR"] = "config"
 
-    logger.info(f"Environment validation complete: {environment_info['environment']} mode")
+    logger.info("environment validation complete", environment=environment_info["environment"])
     return True, environment_info
 
 
@@ -115,10 +105,10 @@ def load_configuration(config_path: str | None = None) -> tuple[bool, dict[str, 
     if config_path is None:
         config_path = os.environ.get("CONFIG_PATH", DEFAULT_CONFIG_PATH)
 
-    logger.info(f"Loading configuration from {config_path}")
+    logger.info("loading configuration", config_path=config_path)
 
     if not os.path.exists(config_path):
-        logger.error(f"Configuration file not found: {config_path}")
+        logger.error("configuration file not found", config_path=config_path)
         return False, {}
 
     try:
@@ -134,12 +124,12 @@ def load_configuration(config_path: str | None = None) -> tuple[bool, dict[str, 
                 # Default to YAML
                 config = yaml.safe_load(f)
 
-        logger.info(f"Configuration loaded successfully ({len(config.keys()) if config else 0} sections)")
+        logger.info("configuration loaded successfully", sections=len(config.keys()) if config else 0)
         return True, config
 
     except Exception as e:
-        logger.error(f"Error loading configuration: {str(e)}")
-        logger.exception("Configuration load failure")
+        logger.error("error loading configuration", error=str(e))
+        logger.exception("configuration load failure")
         return False, {}
 
 
@@ -156,7 +146,7 @@ def check_dependencies(required_modules: list[str] | None = None) -> tuple[bool,
     if required_modules is None:
         required_modules = ["loguru", "pyyaml", "sqlalchemy"]
 
-    logger.info("Checking system dependencies")
+    logger.info("checking system dependencies")
 
     missing = []
     for module in required_modules:
@@ -166,11 +156,11 @@ def check_dependencies(required_modules: list[str] | None = None) -> tuple[bool,
             missing.append(module)
 
     if missing:
-        logger.warning(f"Missing dependencies: {', '.join(missing)}")
-        logger.warning("Some functionality may be limited")
+        logger.warning("missing dependencies", missing=missing)
+        logger.warning("some functionality may be limited")
         return False, missing
 
-    logger.info("All required dependencies available")
+    logger.info("all required dependencies available")
     return True, []
 
 
@@ -184,18 +174,18 @@ def setup_database_connections(config: dict[str, Any] | None) -> tuple[bool, dic
     Returns:
         Tuple[bool, Dict[str, Any]]: (success, database_connections)
     """
-    logger.info("Setting up database connections")
+    logger.info("setting up database connections")
 
     db_connections: dict[str, Any] = {}
 
     # Handle None config gracefully
     if config is None:
-        logger.warning("Configuration is None, skipping database connections")
+        logger.warning("configuration is None, skipping database connections")
         return True, db_connections
 
     # Skip if database config is not available
     if not config.get("databases"):
-        logger.info("No database configuration found, skipping")
+        logger.info("no database configuration found, skipping")
         return True, db_connections
 
     try:
@@ -204,7 +194,7 @@ def setup_database_connections(config: dict[str, Any] | None) -> tuple[bool, dic
             from sqlalchemy import create_engine
             from sqlalchemy.exc import SQLAlchemyError
         except ImportError:
-            logger.warning("SQLAlchemy not available, database connections skipped")
+            logger.warning("sqlalchemy not available, database connections skipped")
             return True, db_connections
 
         for db_name, db_config in config.get("databases", {}).items():
@@ -233,10 +223,10 @@ def setup_database_connections(config: dict[str, Any] | None) -> tuple[bool, dic
                     # Add support for more drivers as needed
 
                 if not connection_string:
-                    logger.warning(f"Unable to create connection string for database {db_name}, skipping")
+                    logger.warning("unable to create connection string for database, skipping", db_name=db_name)
                     continue
 
-                logger.debug(f"Connecting to database: {db_name} ({connection_string.split('@')[-1]})")
+                logger.debug("connecting to database", db_name=db_name, host=connection_string.split("@")[-1])
 
                 # Set pool recycle to avoid connection timeouts
                 engine = create_engine(
@@ -252,11 +242,13 @@ def setup_database_connections(config: dict[str, Any] | None) -> tuple[bool, dic
                     connection.close()
 
                     db_connections[db_name] = {"engine": engine, "config": db_config, "status": "connected"}
-                    logger.debug(f"Connected to database: {db_name}")
+                    logger.debug("connected to database", db_name=db_name)
                 except SQLAlchemyError as e:
                     error_msg = f"Failed to connect to database {db_name}: {str(e)}"
                     if is_optional:
-                        logger.warning(f"{error_msg} (optional - continuing)")
+                        logger.warning(
+                            "database connection failed (optional - continuing)", db_name=db_name, error=str(e)
+                        )
                         db_connections[db_name] = {
                             "engine": engine,
                             "config": db_config,
@@ -273,10 +265,10 @@ def setup_database_connections(config: dict[str, Any] | None) -> tuple[bool, dic
                 if db_config.get("optional", False):
                     logger.warning(f"{error_msg} (optional - continuing)")
                 else:
-                    logger.error(error_msg)
+                    logger.error("database connection failed", db_name=db_name, error=str(e))
 
     except Exception as e:
-        logger.error(f"Unexpected error in database setup: {str(e)}")
+        logger.error("unexpected error in database setup", error=str(e))
 
     # Success if we have connections for all non-optional databases or no databases configured
     required_dbs = [name for name, config in config.get("databases", {}).items() if not config.get("optional", False)]
@@ -286,7 +278,7 @@ def setup_database_connections(config: dict[str, Any] | None) -> tuple[bool, dic
 
     success = len(required_dbs) == 0 or len(connected_required_dbs) == len(required_dbs)
 
-    logger.info(f"Database setup complete: {len(db_connections)} connections established")
+    logger.info("database setup complete", connections=len(db_connections))
     return success, db_connections
 
 
@@ -301,7 +293,7 @@ def _initialize_component(component_name: str, config: dict[str, Any]) -> tuple[
     Returns:
         Tuple[bool, Any]: (success, component_instance)
     """
-    logger.debug(f"Initializing component: {component_name}")
+    logger.debug("initializing component", component=component_name)
 
     # Check if component is marked as optional
     component_config = config.get(component_name, {})
@@ -349,24 +341,24 @@ def _initialize_component(component_name: str, config: dict[str, Any]) -> tuple[
                 continue
 
         if component_instance is not None:
-            logger.debug(f"Component {component_name} initialized successfully")
+            logger.debug("component initialized successfully", component=component_name)
             return True, component_instance
         else:
-            msg = f"No initialization function found for {component_name}"
             if is_optional:
-                logger.warning(f"{msg} (optional - continuing)")
+                logger.warning("no initialization function found (optional - continuing)", component=component_name)
                 return True, None  # Return success for optional components
             else:
-                logger.error(msg)
+                logger.error("no initialization function found", component=component_name)
                 return False, None
 
     except Exception as e:
-        msg = f"Error initializing {component_name}: {str(e)}"
         if is_optional:
-            logger.warning(f"{msg} (optional - continuing)")
+            logger.warning(
+                "error initializing component (optional - continuing)", component=component_name, error=str(e)
+            )
             return True, None  # Return success for optional components
         else:
-            logger.error(msg)
+            logger.error("error initializing component", component=component_name, error=str(e))
             return False, None
 
 
@@ -387,7 +379,7 @@ def initialize(
     Returns:
         Tuple[bool, Dict[str, Any]]: (success, context)
     """
-    logger.info("Beginning system initialization")
+    logger.info("beginning system initialization")
 
     try:
         # Track initialization timing
@@ -396,13 +388,13 @@ def initialize(
         # Step 1: Validate environment
         env_valid, env_info = validate_environment()
         if not env_valid:
-            logger.error("Environment validation failed")
+            logger.error("environment validation failed")
             return False, {"error": "Environment validation failed"}
 
         # Step 2: Load configuration
         config_success, config = load_configuration(config_path)
         if not config_success:
-            logger.warning("Configuration loading failed, using empty configuration")
+            logger.warning("configuration loading failed, using empty configuration")
             config = {}  # Use empty config instead of failing
 
         # Merge with additional config if provided
@@ -421,7 +413,7 @@ def initialize(
         # Step 3: Check dependencies
         deps_ok, missing_deps = check_dependencies()
         if not deps_ok and len(missing_deps) > 0:
-            logger.warning(f"Some dependencies missing: {', '.join(missing_deps)}")
+            logger.warning("some dependencies missing", missing=missing_deps)
             # Continue but note the limitations
 
         # Step 4: Set up database connections if needed
@@ -430,10 +422,10 @@ def initialize(
             # Only fail if there are required databases that failed
             required_dbs = [name for name, cfg in config.get("databases", {}).items() if not cfg.get("optional", False)]
             if required_dbs:
-                logger.error("Required database connection setup failed")
+                logger.error("required database connection setup failed")
                 return False, {"error": "Required database connection setup failed"}
             else:
-                logger.warning("Some optional database connections failed")
+                logger.warning("some optional database connections failed")
 
         # Determine which components to initialize
         init_components = list(components) if components is not None else list(CORE_COMPONENTS)
@@ -456,12 +448,12 @@ def initialize(
                     initialized_components[component_name] = instance
                 else:
                     if is_optional:
-                        logger.warning(f"Optional component {component_name} failed to initialize - continuing")
+                        logger.warning("optional component failed to initialize - continuing", component=component_name)
                         initialized_components[component_name] = None
                     else:
                         failed_components[component_name] = "Failed to initialize"
             except Exception as e:
-                logger.error(f"Error initializing {component_name}: {str(e)}")
+                logger.error("error initializing component", component=component_name, error=str(e))
                 failed_components[component_name] = str(e)
 
         # Step 6: Create context with all initialized components
@@ -488,13 +480,15 @@ def initialize(
         success = all(component not in failed_components for component in required_components)
 
         logger.info(
-            f"System initialization {'completed successfully' if success else 'completed with some failures'} in {context['state']['initialization_time']:.2f}s"
+            "system initialization complete",
+            success=success,
+            duration_s=round(context["state"]["initialization_time"], 2),
         )
         return success, context
 
     except Exception as e:
-        logger.error(f"Initialization failed with exception: {str(e)}")
-        logger.exception("Initialization exception details")
+        logger.error("initialization failed with exception", error=str(e))
+        logger.exception("initialization exception details")
 
         # Return failure with error information
         return False, {"error": f"Initialization exception: {str(e)}", "traceback": traceback.format_exc()}

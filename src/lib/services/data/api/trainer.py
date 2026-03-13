@@ -472,9 +472,10 @@ tr:hover td{background:var(--bg-inner)}
 <nav class="nav">
   <a class="nav-brand" href="/">💎 Ruby Futures</a>
   <a class="nav-tab" href="/">📊 Dashboard</a>
+  <a class="nav-tab" href="/trading">🚀 Trading</a>
   <a class="nav-tab" href="/charts">📈 Charts</a>
   <a class="nav-tab" href="/account">💰 Account</a>
-  <a class="nav-tab" href="/rb-history">📅 RB History</a>
+  <a class="nav-tab" href="/signals">📡 Signals</a>
   <a class="nav-tab" href="/journal/page">📓 Journal</a>
   <a class="nav-tab" href="/connections">🔌 Connections</a>
   <a class="nav-tab active" href="/trainer">🧠 Trainer</a>
@@ -777,13 +778,6 @@ async function pollServiceStatus() {
     _trainerOnline = false;
     setDot('dot-trainer', 'red');
   }
-
-  // Bridge — read from system health endpoint
-  try {
-    const r = await fetch('/api/health', {signal: AbortSignal.timeout(4000)});
-    const d = await r.json();
-    setDot('dot-bridge', d.bridge_connected ? 'green' : 'red');
-  } catch { setDot('dot-bridge', 'gray'); }
 
   // CNN model on disk
   try {
@@ -1237,9 +1231,27 @@ function clearLogs() {
 function copyLogs() {
   const box = document.getElementById('log-box');
   const text = box.innerText;
-  navigator.clipboard.writeText(text).then(() => {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => {
+      addLog({ts: nowTs(), level: 'INFO', name: 'ui', msg: 'Logs copied to clipboard ✓'});
+    }).catch(() => { _copyFallback(text); });
+  } else {
+    _copyFallback(text);
+  }
+}
+function _copyFallback(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
     addLog({ts: nowTs(), level: 'INFO', name: 'ui', msg: 'Logs copied to clipboard ✓'});
-  });
+  } catch(e) {
+    addLog({ts: nowTs(), level: 'ERROR', name: 'ui', msg: 'Copy failed — please select & copy manually'});
+  }
+  document.body.removeChild(ta);
 }
 
 // ═══════════════════════════════════════════════════════

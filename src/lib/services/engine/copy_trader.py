@@ -455,6 +455,7 @@ class _ConnectedAccount:
     connected: bool = False
     last_order_at: str = ""
     order_count: int = 0
+    account_size: int = 150_000
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +576,7 @@ class CopyTrader:
                 client=client,
                 account_ids=account_ids,
                 connected=True,
+                account_size=getattr(config, "account_size", 150_000),
             )
 
             if is_main:
@@ -796,6 +798,7 @@ class CopyTrader:
         target_ticks: int | None = None,
         tag_prefix: str = "RUBY",
         reason: str = "",  # included in compliance log & order tag
+        scale_qty_by_account: bool = False,
     ) -> CopyBatchResult:
         """Place an order on the main account and copy to all enabled slaves.
 
@@ -887,12 +890,21 @@ class CopyTrader:
                 delay_ms = int(delay * 1000)
                 await asyncio.sleep(delay)
 
+                # Per-account qty scaling
+                slave_qty = qty
+                if scale_qty_by_account and self._main and self._main.account_size > 0:
+                    ratio = slave_acct.account_size / self._main.account_size
+                    slave_qty = max(1, round(qty * ratio))
+                    result.compliance_log.append(
+                        f"📊 Qty scaled for {slave_acct.label}: {qty}→{slave_qty} (ratio {ratio:.2f})"
+                    )
+
                 slave_result = await self._submit_single_order(
                     acct=slave_acct,
                     security_code=security_code,
                     exchange=exchange,
                     side=side,
-                    qty=qty,
+                    qty=slave_qty,
                     order_type=order_type,
                     price=price,
                     stop_ticks=stop_ticks,
@@ -1201,9 +1213,8 @@ class CopyTrader:
         """Translate PositionManager OrderCommands into Rithmic orders + copies.
 
         This is the bridge between ``PositionManager.process_signal()`` /
-        ``PositionManager.update_all()`` output (``OrderCommand`` objects that
-        previously targeted the NinjaTrader bridge) and the Rithmic copy-trading
-        path.
+        ``PositionManager.update_all()`` output (``OrderCommand`` objects) and
+        the Rithmic copy-trading path.
 
         Routing:
             * ``BUY`` / ``SELL`` with ``MARKET`` or ``LIMIT`` type →
@@ -1556,6 +1567,15 @@ class CopyTrader:
         """Return list of connected, enabled slave accounts."""
         return [acct for key, acct in self._slaves.items() if key in self._enabled_slave_keys and acct.connected]
 
+    def get_account_sizes(self) -> dict[str, int]:
+        """Return a mapping of account key → account_size for all connected accounts."""
+        sizes: dict[str, int] = {}
+        if self._main:
+            sizes[self._main.key] = self._main.account_size
+        for key, acct in self._slaves.items():
+            sizes[key] = acct.account_size
+        return sizes
+
     def _persist_batch_result(self, batch: CopyBatchResult) -> None:
         """Write batch result to Redis for dashboard display and audit trail."""
         try:
@@ -1606,6 +1626,7 @@ class CopyTrader:
                 "account_ids": self._main.account_ids,
                 "last_order_at": self._main.last_order_at,
                 "order_count": self._main.order_count,
+                "account_size": self._main.account_size,
             }
 
         slaves_info = []
@@ -1619,6 +1640,7 @@ class CopyTrader:
                     "account_ids": acct.account_ids,
                     "last_order_at": acct.last_order_at,
                     "order_count": acct.order_count,
+                    "account_size": acct.account_size,
                 }
             )
 
@@ -1632,6 +1654,7 @@ class CopyTrader:
                 "daily_actions": self._daily_actions,
             },
             "contract_cache_size": len(self._contract_cache),
+            "account_sizes": self.get_account_sizes(),
             "recent_batches": list(self._order_history)[-10:],
         }
 

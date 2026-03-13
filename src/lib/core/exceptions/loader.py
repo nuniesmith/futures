@@ -3,10 +3,13 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 from jsonschema import ValidationError, validate
-from loguru import logger
+
+from lib.core.logging_config import get_logger
 
 from .classes import ConfigError
 from .general_error import GeneralError
+
+logger = get_logger(__name__)
 
 
 class ExceptionLoader:
@@ -40,9 +43,9 @@ class ExceptionLoader:
             ConfigError: If the file does not exist or is not readable.
         """
         if not path.is_file() or not path.exists():
-            logger.error(f"{name} file not found or inaccessible: {path}")
+            logger.error("file_not_found", file_type=name, path=str(path))
             raise ConfigError(f"{name} file not found or inaccessible: {path}")
-        logger.info(f"{name} file validated: {path}")
+        logger.info("file_validated", file_type=name, path=str(path))
         return path
 
     def load_exceptions(self) -> dict[str, type[GeneralError]]:
@@ -65,14 +68,14 @@ class ExceptionLoader:
                 raise ConfigError(f"Malformed or empty configuration file: {self.config_path}")
 
             exceptions = self._create_exceptions(data["exceptions"])
-            logger.info(f"Successfully loaded {len(exceptions)} exception classes.")
+            logger.info("exceptions_loaded", count=len(exceptions))
             return exceptions
 
         except (yaml.YAMLError, ValidationError) as e:
-            logger.error(f"Error loading exceptions: {e}")
+            logger.error("exceptions_load_error", error=str(e))
             raise ConfigError(f"Error loading exceptions: {e}") from e
         except Exception as e:
-            logger.exception(f"Unexpected error while loading exceptions: {e}")
+            logger.exception("exceptions_load_unexpected_error", error=str(e))
             raise ConfigError(f"Unexpected error: {e}") from e
 
     def _validate_schema(self, data: dict):
@@ -86,19 +89,19 @@ class ExceptionLoader:
             ConfigError: If the schema file is missing or the data does not comply with the schema.
         """
         if not self.schema_path.is_file():
-            logger.error(f"Schema file not found at: {self.schema_path}")
+            logger.error("schema_file_not_found", path=str(self.schema_path))
             raise ConfigError(f"Schema file not found at: {self.schema_path}")
 
         try:
             with self.schema_path.open("r") as schema_file:
                 schema = json.load(schema_file)
             validate(instance=data, schema=schema)
-            logger.info("Exceptions configuration schema validation passed.")
+            logger.info("schema_validation_passed")
         except ValidationError as e:
-            logger.error(f"Validation error in exceptions configuration: {e.message}")
+            logger.error("schema_validation_error", error=e.message)
             raise ConfigError(f"Validation error: {e.message}") from e
         except json.JSONDecodeError as e:
-            logger.error(f"Error decoding schema JSON file: {e}")
+            logger.error("schema_json_decode_error", error=str(e))
             raise ConfigError(f"Error decoding schema JSON file: {e}") from e
 
     @staticmethod
@@ -118,12 +121,12 @@ class ExceptionLoader:
         exceptions = {}
         for category, category_exceptions in data.items():
             if not isinstance(category_exceptions, dict):
-                logger.error(f"Invalid structure for category '{category}': {category_exceptions}")
+                logger.error("invalid_category_structure", category=category, value=str(category_exceptions))
                 raise ConfigError(f"Invalid structure for category '{category}'")
 
             for name, config in category_exceptions.items():
                 if not all(key in config for key in ["message", "code"]):
-                    logger.error(f"Invalid exception configuration for '{name}': {config}")
+                    logger.error("invalid_exception_config", exception_name=name, config=str(config))
                     raise ConfigError(f"Invalid exception configuration for '{name}'")
 
                 # Dynamically create exception classes
@@ -135,7 +138,7 @@ class ExceptionLoader:
                         "__init__": ExceptionLoader._generate_init(config["message"], config["code"]),
                     },
                 )
-        logger.info(f"Created {len(exceptions)} exceptions dynamically.")
+        logger.info("exceptions_created_dynamically", count=len(exceptions))
         return exceptions
 
     @staticmethod
@@ -152,7 +155,7 @@ class ExceptionLoader:
         """
 
         def __init__(self, details=None, **kwargs):
-            logger.debug(f"Initializing exception with message: '{message}' and code: {code}")
+            logger.debug("initializing_exception", message=message, code=code)
             super(self.__class__, self).__init__(message=message, code=code, details=details, **kwargs)
 
         return __init__

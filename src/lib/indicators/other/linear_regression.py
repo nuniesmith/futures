@@ -1,6 +1,9 @@
 import numpy as np
 import pandas as pd
-from loguru import logger
+
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class LinearRegressionIndicator:
@@ -25,7 +28,7 @@ class LinearRegressionIndicator:
             raise ValueError("Period must be a positive integer.")
         self.logger = logger
         self.period = period
-        self.history_df = pd.DataFrame(columns=self.REQUIRED_COLUMNS)
+        self.history_df = pd.DataFrame(columns=pd.Index(self.REQUIRED_COLUMNS))
         self.current_value = None
 
     def _calculate_lr_slope(self, data: pd.Series) -> pd.Series:  # type: ignore[type-arg]
@@ -44,16 +47,20 @@ class LinearRegressionIndicator:
         if not isinstance(data, pd.Series):
             raise ValueError("Input data must be a pandas Series.")
         if len(data) < self.period:
-            self.logger.warning(f"Data length ({len(data)}) is less than the regression window ({self.period}).")
+            self.logger.warning(
+                "insufficient_data_for_regression",
+                data_length=len(data),
+                regression_window=self.period,
+            )
             return pd.Series([np.nan] * len(data), index=data.index)
 
-        self.logger.info(f"Calculating linear regression slopes over a {self.period}-day window.")
+        self.logger.info("calculating_linear_regression_slopes", window=self.period)
         X = np.arange(self.period)
         # Rolling apply to compute slope using numpy polyfit
         slopes = data.rolling(window=self.period).apply(
             lambda y: np.polyfit(X, y, 1)[0] if len(y) == self.period else np.nan, raw=True
         )
-        self.logger.info("Linear regression slopes calculated successfully.")
+        self.logger.info("linear_regression_slopes_calculated")
         return slopes  # type: ignore[return-value]
 
     def update(self, data_point: dict) -> float | None:
@@ -69,7 +76,7 @@ class LinearRegressionIndicator:
         try:
             close = data_point.get("close")
             if close is None:
-                self.logger.warning("Data point missing required 'close' for Linear Regression Slope update.")
+                self.logger.warning("missing_close_for_linear_regression_update")
                 return None
 
             new_row = pd.DataFrame([{"Close": close}])
@@ -79,13 +86,13 @@ class LinearRegressionIndicator:
                 lr_slope_series = self._calculate_lr_slope(self.history_df["Close"].copy())  # type: ignore[arg-type]
                 self.current_value = lr_slope_series.iloc[-1]
             else:
-                self.logger.debug("Not enough data to calculate Linear Regression Slope.")
+                self.logger.debug("insufficient_data_for_linear_regression_slope")
                 self.current_value = None
 
             return self.current_value
 
         except Exception as e:
-            self.logger.error(f"Linear Regression Slope Indicator update failed: {e}", exc_info=True)
+            self.logger.error("linear_regression_slope_update_failed", error=str(e), exc_info=True)
             return None
 
     def apply(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -104,12 +111,12 @@ class LinearRegressionIndicator:
         try:
             if "Close" not in data.columns:
                 raise ValueError("DataFrame must contain a 'Close' column.")
-            self.logger.info("Adding Linear Regression Slope to DataFrame.")
+            self.logger.info("adding_linear_regression_slope_to_dataframe")
             data = data.copy()
             data["LinearRegressionSlope"] = self._calculate_lr_slope(data["Close"])  # type: ignore[arg-type]
-            self.logger.info("Linear Regression Slope added successfully.")
+            self.logger.info("linear_regression_slope_added_successfully")
             return data
 
         except Exception as e:
-            self.logger.error(f"Error applying Linear Regression Slope: {e}", exc_info=True)
+            self.logger.error("error_applying_linear_regression_slope", error=str(e), exc_info=True)
             raise

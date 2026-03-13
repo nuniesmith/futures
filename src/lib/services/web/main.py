@@ -36,7 +36,6 @@ Docker:
 """
 
 import asyncio
-import logging
 import os
 from contextlib import asynccontextmanager
 from urllib.parse import urlencode
@@ -46,11 +45,14 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
+from lib.core.logging_config import get_logger, setup_logging
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data:8000").rstrip("/")
+CHARTING_SERVICE_URL = os.getenv("CHARTING_SERVICE_URL", "http://charting:8003").rstrip("/")
 
 # Shared secret for authenticating with the data service.
 # Must match the API_KEY set on the data service container.
@@ -70,12 +72,8 @@ PROXY_CONNECT_TIMEOUT = 5.0  # seconds to establish connection
 # 90s gives us 3x headroom before considering the upstream dead.
 SSE_READ_TIMEOUT = 90.0
 
-logger = logging.getLogger("web_service")
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
-    format="[WEB] %(asctime)s  %(levelname)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
+setup_logging(service="web")
+logger = get_logger("web")
 
 # ---------------------------------------------------------------------------
 # HTTP client — shared async httpx client for proxying to data service
@@ -108,6 +106,33 @@ def _get_client() -> httpx.AsyncClient:
             ),
         )
     return _http_client
+
+
+# ---------------------------------------------------------------------------
+# Charting HTTP client — separate pool for the charting service (port 8003)
+# ---------------------------------------------------------------------------
+
+_charting_client: httpx.AsyncClient | None = None
+
+
+def _get_charting_client() -> httpx.AsyncClient:
+    """Return the shared async HTTP client for charting service proxying."""
+    global _charting_client
+    if _charting_client is None or _charting_client.is_closed:
+        _charting_client = httpx.AsyncClient(
+            base_url=CHARTING_SERVICE_URL,
+            timeout=httpx.Timeout(
+                PROXY_TIMEOUT_DEFAULT,
+                connect=PROXY_CONNECT_TIMEOUT,
+            ),
+            follow_redirects=True,
+            limits=httpx.Limits(
+                max_connections=10,
+                max_keepalive_connections=5,
+                keepalive_expiry=30.0,
+            ),
+        )
+    return _charting_client
 
 
 def _get_sse_client() -> httpx.AsyncClient:
@@ -146,24 +171,29 @@ async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle for the web service."""
     logger.info("=" * 60)
     logger.info("  Web Service starting up")
-    logger.info("  Data service backend: %s", DATA_SERVICE_URL)
-    logger.info("  Trainer routed via:   data service /trainer/*")
+    logger.info("  Data service backend:     %s", DATA_SERVICE_URL)
+    logger.info("  Charting service backend: %s", CHARTING_SERVICE_URL)
+    logger.info("  Trainer routed via:       data service /trainer/*")
     logger.info("=" * 60)
 
     # Pre-warm the HTTP clients
     _get_client()
+    _get_charting_client()
 
     yield
 
     # Shutdown
     logger.info("Web Service shutting down...")
-    global _http_client, _sse_client
+    global _http_client, _sse_client, _charting_client
     if _http_client is not None and not _http_client.is_closed:
         await _http_client.aclose()
         _http_client = None
     if _sse_client is not None and not _sse_client.is_closed:
         await _sse_client.aclose()
         _sse_client = None
+    if _charting_client is not None and not _charting_client.is_closed:
+        await _charting_client.aclose()
+        _charting_client = None
     logger.info("Web Service stopped")
 
 
@@ -590,21 +620,6 @@ async def proxy_bars(request: Request, path: str):
 
 
 @app.api_route(
-    "/sar/{path:path}",
-    methods=["GET", "POST"],
-)
-async def proxy_sar(request: Request, path: str):
-    """Proxy all /sar/* requests to the data service (SAR sync).
-
-    Endpoints:
-        POST /sar/sync          — Receive SAR reversal events from NinjaTrader
-        GET  /sar/state         — Current SAR direction for all instruments
-        GET  /sar/state/{asset} — Current SAR direction for a single instrument
-    """
-    return await _proxy_request(request, f"/sar/{path}")
-
-
-@app.api_route(
     "/data/{path:path}",
     methods=["GET"],
 )
@@ -779,11 +794,6 @@ async def settings_services_update(request: Request):
 @app.get("/settings/services/probe")
 async def settings_services_probe(request: Request):
     return await _proxy_request(request, "/settings/services/probe")
-
-
-@app.get("/settings/services/bridge_status")
-async def settings_services_bridge_status(request: Request):
-    return await _proxy_request(request, "/settings/services/bridge_status")
 
 
 @app.get("/settings/features/config")
@@ -1298,8 +1308,130 @@ async def proxy_pine_status_html(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Generic proxy helper
+# Charting proxy — forwards /charting-proxy/* and /charting/* to charting
+#   service (nginx + chart.js on port 8003)
+#
+# The charting container serves static TradingView Lightweight Charts assets
+# (HTML, JS, CSS, images) via Nginx.  These routes let the browser access
+# charting assets through the web proxy instead of connecting directly to
+# port 8003.
+#
+# Route map (web → charting service):
+#   GET /charting-proxy/                → charting /
+#   GET /charting-proxy/{path}          → charting /{path}
+#   GET /charting/{path}                → charting /{path}
+#   Any method /charting-proxy/api/*    → charting /api/*
 # ---------------------------------------------------------------------------
+
+
+async def _proxy_charting_request(request: Request, upstream_path: str) -> Response:
+    """Forward an HTTP request to the charting service and return the response."""
+    client = _get_charting_client()
+
+    url = upstream_path
+    if request.query_params:
+        url = f"{upstream_path}?{urlencode(dict(request.query_params))}"
+
+    body = None
+    if request.method in ("POST", "PUT", "PATCH"):
+        body = await request.body()
+
+    # Forward only safe headers — strip hop-by-hop and host headers
+    skip = {
+        "host",
+        "connection",
+        "keep-alive",
+        "transfer-encoding",
+        "te",
+        "trailer",
+        "upgrade",
+        "content-length",
+    }
+    fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
+    if request.client:
+        fwd_headers["X-Forwarded-For"] = request.client.host
+    fwd_headers["X-Forwarded-Proto"] = request.url.scheme
+    fwd_headers["X-Forwarded-Host"] = request.headers.get("host", "")
+
+    try:
+        resp = await client.request(
+            method=request.method,
+            url=url,
+            headers=fwd_headers,
+            content=body,
+        )
+
+        excluded_resp = {"transfer-encoding", "connection", "keep-alive", "server"}
+        resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded_resp}
+
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=resp_headers,
+            media_type=resp.headers.get("content-type"),
+        )
+
+    except httpx.ConnectError:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Charting service unavailable",
+                "detail": f"Cannot connect to {CHARTING_SERVICE_URL}",
+                "hint": "Make sure the charting container is running: docker compose up -d charting",
+            },
+        )
+    except httpx.TimeoutException:
+        return JSONResponse(
+            status_code=504,
+            content={
+                "error": "Charting service timeout",
+                "detail": "Request to charting service timed out",
+            },
+        )
+    except Exception as exc:
+        logger.error("Charting proxy error for %s %s: %s", request.method, upstream_path, exc)
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": "Charting proxy error",
+                "detail": str(exc),
+            },
+        )
+
+
+@app.get("/charting-proxy/")
+async def proxy_charting_root(request: Request):
+    """Proxy charting root (index.html) from the charting service."""
+    return await _proxy_charting_request(request, "/")
+
+
+@app.api_route(
+    "/charting-proxy/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+async def proxy_charting_path(request: Request, path: str):
+    """Proxy all /charting-proxy/* requests to the charting service.
+
+    Strips the ``/charting-proxy`` prefix before forwarding:
+        GET  /charting-proxy/index.html  → charting GET /index.html
+        GET  /charting-proxy/js/app.js   → charting GET /js/app.js
+        GET  /charting-proxy/api/bars    → charting GET /api/bars
+    """
+    return await _proxy_charting_request(request, f"/{path}")
+
+
+@app.api_route(
+    "/charting/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+async def proxy_charting_assets(request: Request, path: str):
+    """Proxy /charting/* for direct access to charting static assets.
+
+    Strips the ``/charting`` prefix before forwarding:
+        GET  /charting/index.html  → charting GET /index.html
+        GET  /charting/js/app.js   → charting GET /js/app.js
+    """
+    return await _proxy_charting_request(request, f"/{path}")
 
 
 # ---------------------------------------------------------------------------

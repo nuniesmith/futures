@@ -1,8 +1,11 @@
 import traceback
 from typing import Any
 
-from loguru import logger
 from prometheus_client import CollectorRegistry, Counter
+
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # Custom Prometheus registry to avoid global duplication
 REGISTRY = CollectorRegistry()
@@ -84,14 +87,20 @@ class GeneralError(BaseException):
 
     def log_error(self):
         """
-        Log the error message and details using Loguru.
+        Log the error message and details using structlog.
         """
-        log_message = self._build_log_message()
-        logger.error(log_message)
+        log_kwargs = {"error_code": self.code, "message": self.message}
+        if self.details:
+            log_kwargs["details"] = self.details
+        if self.context:
+            log_kwargs["context"] = self.context
+
+        logger.error("general_error_raised", **log_kwargs)
+
         if self.log_traceback:
             formatted_traceback = self._format_traceback()
             if formatted_traceback:
-                logger.error(formatted_traceback)
+                logger.error("general_error_traceback", traceback=formatted_traceback)
 
     def _build_log_message(self) -> str:
         """

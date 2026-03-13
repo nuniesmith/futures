@@ -5,7 +5,7 @@ Covers:
   - RiskManager initialization and day-reset logic
   - can_enter_trade() — all 7 rule checks
   - register_open() / register_close() position tracking
-  - sync_positions() from NT8 bridge
+  - sync_positions() from Rithmic trading connection
   - check_overnight_risk() time-based warning
   - get_status() comprehensive status dict
   - publish_to_redis() serialization
@@ -359,7 +359,7 @@ class TestPositionTracking:
 
 
 # ===========================================================================
-# Test: sync_positions() — NT8 bridge integration
+# Test: sync_positions() — Rithmic integration
 # ===========================================================================
 
 

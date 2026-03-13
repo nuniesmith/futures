@@ -99,42 +99,6 @@ def _probe_service(url: str, timeout: float = 3.0) -> dict:
         return {"ok": False, "latency_ms": -1, "status": 0, "error": str(exc)[:120]}
 
 
-def _get_bridge_heartbeat() -> dict:
-    """Read Bridge heartbeat from cache."""
-    try:
-        from lib.core.cache import _cache_key, cache_get
-
-        key = _cache_key("bridge_heartbeat", "current")
-        raw = cache_get(key)
-        if raw:
-            hb = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
-            received = hb.get("received_at", "")
-            age = -1.0
-            connected = False
-            if received:
-                dt = datetime.fromisoformat(received)
-                age = (datetime.now(tz=_EST) - dt).total_seconds()
-                connected = age < 60.0
-            return {
-                "connected": connected,
-                "age_seconds": round(age, 1),
-                "account": hb.get("account", ""),
-                "bridge_version": hb.get("bridge_version", ""),
-                "port": hb.get("listenerPort", 0),
-                "risk_blocked": hb.get("riskBlocked", False),
-            }
-    except Exception:
-        pass
-    return {
-        "connected": False,
-        "age_seconds": -1,
-        "account": "",
-        "bridge_version": "",
-        "port": 0,
-        "risk_blocked": False,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Settings page HTML
 # ---------------------------------------------------------------------------
@@ -320,9 +284,10 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
 <nav class="nav">
   <a class="nav-brand" href="/">💎 Ruby Futures</a>
   <a class="nav-tab" href="/">📊 Dashboard</a>
+  <a class="nav-tab" href="/trading">🚀 Trading</a>
   <a class="nav-tab" href="/charts">📈 Charts</a>
   <a class="nav-tab" href="/account">💰 Account</a>
-  <a class="nav-tab" href="/rb-history">📅 RB History</a>
+  <a class="nav-tab" href="/signals">📡 Signals</a>
   <a class="nav-tab" href="/journal/page">📓 Journal</a>
   <a class="nav-tab" href="/connections">🔌 Connections</a>
   <a class="nav-tab" href="/trainer">🧠 Trainer</a>
@@ -506,7 +471,7 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════ -->
-  <!-- SERVICES SECTION — connectivity, URLs, Tailscale, Bridge  -->
+  <!-- SERVICES SECTION — connectivity, URLs, Tailscale           -->
   <!-- ═══════════════════════════════════════════════════════════ -->
   <div id="section-services" class="section-content">
     <div class="grid-2">
@@ -524,16 +489,7 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
             <input type="text" id="svc-trainer-url" placeholder="http://100.122.184.58:8200"/>
             <div class="field-hint">GPU training server</div>
           </div>
-          <div class="field">
-            <label class="lbl">Broker Bridge Host</label>
-            <input type="text" id="svc-bridge-host" placeholder="localhost"/>
-            <div class="field-hint">Tradovate bridge machine (Tailscale IP or localhost)</div>
-          </div>
-          <div class="field">
-            <label class="lbl">Broker Bridge Port</label>
-            <input type="number" id="svc-bridge-port" value="5681" min="1024" max="65535"/>
-            <div class="field-hint">Bridge HTTP listener port (default: 5681 for Tradovate bridge)</div>
-          </div>
+
           <div class="btn-row">
             <button class="btn btn-primary btn-sm" onclick="saveServiceUrls()">💾 Save URLs</button>
             <button class="btn btn-neutral btn-sm" onclick="probeAllServices()">🔍 Test Connectivity</button>
@@ -554,13 +510,7 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
           </div>
         </div>
 
-        <!-- Broker Bridge status -->
-        <div class="card">
-          <div class="card-title">Broker Bridge (Tradovate)</div>
-          <div id="bridge-status-panel">
-            <div style="color:var(--faint);font-size:0.8rem;text-align:center;padding:20px 0">Loading…</div>
-          </div>
-        </div>
+
       </div>
     </div>
   </div>
@@ -577,7 +527,7 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
           <div class="toggle-row">
             <div>
               <div class="toggle-label">Live Positions Panel</div>
-              <div class="toggle-desc">Show live positions, P&L, and broker status on dashboard. Requires Tradovate bridge connection.</div>
+              <div class="toggle-desc">Show live positions, P&L, and broker status on dashboard. Requires Rithmic broker connection.</div>
             </div>
             <label class="toggle-switch">
               <input type="checkbox" id="feat-live-positions" onchange="saveFeatures()"/>
@@ -723,7 +673,7 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
           <div style="font-size:0.68rem;color:var(--faint)">
             Toggle changes are saved to Redis immediately. Engine-side toggles
             (CNN gate, ORB filter, TPT mode) are read by the engine on next refresh cycle.
-            Live Positions panel is hidden until the Tradovate bridge is connected and the toggle is enabled.
+            Live Positions panel is hidden until the Rithmic broker is connected and the toggle is enabled.
           </div>
         </div>
       </div>
@@ -1091,7 +1041,7 @@ function showSection(name) {
   });
   localStorage.setItem('settingsTab', name);
   // Load section-specific data
-  if (name === 'services') { loadServiceUrls(); loadBridgeStatus(); }
+  if (name === 'services') { loadServiceUrls(); }
   if (name === 'features') loadFeatures();
   if (name === 'risk') loadRiskSettings();
   if (name === 'keys') loadApiKeyStatus();
@@ -1343,8 +1293,7 @@ async function loadServiceUrls() {
     const d = await r.json();
     if (d.data_service_url) document.getElementById('svc-data-url').value = d.data_service_url;
     if (d.trainer_service_url) document.getElementById('svc-trainer-url').value = d.trainer_service_url;
-    if (d.bridge_host) document.getElementById('svc-bridge-host').value = d.bridge_host;
-    if (d.bridge_port) document.getElementById('svc-bridge-port').value = d.bridge_port;
+
   } catch {}
 }
 
@@ -1352,8 +1301,7 @@ async function saveServiceUrls() {
   const body = {
     data_service_url: document.getElementById('svc-data-url').value.trim(),
     trainer_service_url: document.getElementById('svc-trainer-url').value.trim(),
-    bridge_host: document.getElementById('svc-bridge-host').value.trim(),
-    bridge_port: parseInt(document.getElementById('svc-bridge-port').value) || 5680,
+
   };
   const msg = document.getElementById('svc-urls-msg');
   msg.style.color = 'var(--muted)';
@@ -1416,30 +1364,7 @@ async function probeAllServices() {
   }
 }
 
-async function loadBridgeStatus() {
-  try {
-    const r = await fetch('/settings/services/bridge_status', { signal: AbortSignal.timeout(5000) });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const d = await r.json();
-    const panel = document.getElementById('bridge-status-panel');
-    const dot = d.connected ? 'dot-green' : 'dot-gray';
-    const stateText = d.connected ? 'Connected' : 'Offline';
-    let html = '<div class="status-row">' +
-      '<span class="status-key">Status</span>' +
-      '<span class="status-val" style="display:flex;align-items:center;gap:6px">' +
-        '<span class="dot ' + dot + '"></span>' + stateText +
-      '</span></div>';
-    if (d.account) html += _statusRow('Account', d.account);
-    if (d.bridge_version) html += _statusRow('Bridge Version', 'v' + d.bridge_version);
-    if (d.port) html += _statusRow('Listener Port', d.port);
-    if (d.age_seconds >= 0) html += _statusRow('Last Heartbeat', Math.round(d.age_seconds) + 's ago');
-    if (d.risk_blocked) html += '<div class="status-row" style="border-color:#450a0a"><span class="status-key" style="color:#f87171">⚠ Risk Blocked</span><span class="status-val" style="color:#f87171">Yes</span></div>';
-    panel.innerHTML = html;
-  } catch (e) {
-    document.getElementById('bridge-status-panel').innerHTML =
-      '<div style="color:var(--faint);font-size:0.78rem">Bridge status unavailable: ' + e.message + '</div>';
-  }
-}
+
 
 // ═══════════════════════════════════════════════════════
 // Feature toggles — load / save
@@ -1660,13 +1585,28 @@ document.addEventListener('DOMContentLoaded', () => {
 // Prop Accounts (Rithmic)
 // ═══════════════════════════════════════════════════════
 
+// Defensive stubs — these are overwritten when the Rithmic panel fragment loads
+window.addRithmicAccount = window.addRithmicAccount || function() { loadRithmicPanel(); };
+window.saveRithmicAccount = window.saveRithmicAccount || function() { loadRithmicPanel(); };
+window.removeRithmicAccount = window.removeRithmicAccount || function() {};
+window.applyPropFirmPreset = window.applyPropFirmPreset || function() {};
+
 function loadRithmicPanel() {
   const panel = document.getElementById('rithmic-settings-panel');
   if (!panel) return;
   panel.innerHTML = '<div style="color:var(--faint);font-size:0.8rem;text-align:center;padding:16px 0">Loading…</div>';
   fetch('/settings/rithmic/panel')
     .then(r => r.text())
-    .then(html => { panel.innerHTML = html; })
+    .then(html => {
+      panel.innerHTML = html;
+      // innerHTML doesn't execute <script> tags — extract and eval them
+      panel.querySelectorAll('script').forEach(old => {
+        const s = document.createElement('script');
+        if (old.src) { s.src = old.src; }
+        else { s.textContent = old.textContent; }
+        old.parentNode.replaceChild(s, old);
+      });
+    })
     .catch(() => { panel.innerHTML = '<div style="color:#f87171;font-size:0.8rem;text-align:center;padding:8px">Failed to load account config.</div>'; });
 }
 
@@ -1765,8 +1705,6 @@ async def get_service_config():
         "trainer_service_url": svc.get(
             "trainer_service_url", os.getenv("TRAINER_SERVICE_URL", "http://100.122.184.58:8200")
         ),
-        "bridge_host": svc.get("bridge_host", os.getenv("NT_BRIDGE_HOST", "100.127.182.112")),
-        "bridge_port": svc.get("bridge_port", int(os.getenv("NT_BRIDGE_PORT", "5680"))),
     }
 
 
@@ -1780,11 +1718,6 @@ async def update_service_config(body: dict):
         svc["data_service_url"] = body["data_service_url"]
     if "trainer_service_url" in body:
         svc["trainer_service_url"] = body["trainer_service_url"]
-    if "bridge_host" in body:
-        svc["bridge_host"] = body["bridge_host"]
-    if "bridge_port" in body:
-        svc["bridge_port"] = int(body.get("bridge_port", 5680))
-
     overrides["services"] = svc
     _save_persisted_settings(overrides)
 
@@ -1800,8 +1733,8 @@ async def probe_services():
     the same health functions the /health endpoint uses — no external HTTP
     round-trips needed and no risk of firewall / NAT false negatives.
 
-    External services (Trainer, NT8 Bridge) are probed via HTTP because
-    they run in separate processes / machines.
+    External services (Trainer) are probed via HTTP because they run in
+    separate processes / machines.
     """
     import time
 
@@ -1811,8 +1744,6 @@ async def probe_services():
     svc = overrides.get("services", {})
 
     trainer_url = svc.get("trainer_service_url", os.getenv("TRAINER_SERVICE_URL", "http://100.122.184.58:8200"))
-    bridge_host = svc.get("bridge_host", os.getenv("NT_BRIDGE_HOST", "100.127.182.112"))
-    bridge_port = svc.get("bridge_port", int(os.getenv("NT_BRIDGE_PORT", "5680")))
 
     # Displayed URL for the engine — whatever the operator configured, for
     # reference only (we don't HTTP-probe it since we *are* it).
@@ -1861,13 +1792,6 @@ async def probe_services():
     result["url"] = trainer_url
     services.append(result)
 
-    # ── NT8 Bridge — external HTTP probe ─────────────────────────────────
-    bridge_url = f"http://{bridge_host}:{bridge_port}"
-    result = _probe_service(bridge_url, timeout=3.0)
-    result["name"] = "NT8 Bridge"
-    result["url"] = bridge_url
-    services.append(result)
-
     # ── Redis — in-process check (ping) ──────────────────────────────────
     t0 = time.monotonic()
     redis_result = _check_redis()
@@ -1905,12 +1829,6 @@ async def probe_services():
     )
 
     return {"services": services}
-
-
-@router.get("/settings/services/bridge_status")
-async def get_bridge_status():
-    """Return NT8 Bridge heartbeat status."""
-    return _get_bridge_heartbeat()
 
 
 # ---------------------------------------------------------------------------

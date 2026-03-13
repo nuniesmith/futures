@@ -4,10 +4,11 @@ Factory for creating technical indicators.
 
 from typing import Any
 
-from loguru import logger
-
+from lib.core.logging_config import get_logger
 from lib.indicators.base import Indicator
 from lib.indicators.registry import indicator_registry
+
+logger = get_logger(__name__)
 
 
 class IndicatorFactory:
@@ -18,7 +19,7 @@ class IndicatorFactory:
     """
 
     # Add a logger for the factory
-    logger = logger.bind(name="indicator.factory")
+    _logger = get_logger(__name__)
 
     def __init__(self):
         """Private constructor to prevent instantiation."""
@@ -36,10 +37,10 @@ class IndicatorFactory:
         Raises:
             ValueError: If the indicator is not found.
         """
-        IndicatorFactory.logger.debug(f"Creating indicator: {name} with params: {params}")
+        IndicatorFactory._logger.debug("creating_indicator", name=name, params=params)
         indicator = indicator_registry.create(name, **params)
         if indicator is None:
-            IndicatorFactory.logger.error(f"Indicator not found: {name}")
+            IndicatorFactory._logger.error("indicator_not_found", name=name)
             raise ValueError(f"Indicator not found: {name}")
         return indicator
 
@@ -111,7 +112,7 @@ class IndicatorFactory:
                 indicators.append(indicator)
             except ValueError as e:
                 if ignore_errors:
-                    IndicatorFactory.logger.warning(f"Skipping invalid config at index {i}: {e}")
+                    IndicatorFactory._logger.warning("skipping_invalid_config", index=i, error=str(e))
                     continue
                 else:
                     raise ValueError(f"Error in configuration at index {i}: {str(e)}") from e
@@ -140,5 +141,5 @@ class IndicatorFactory:
         try:
             return indicator_class(name=indicator_class.__name__.lower(), params=params)
         except Exception as e:
-            IndicatorFactory.logger.error(f"Failed to create custom indicator: {str(e)}")
+            IndicatorFactory._logger.error("custom_indicator_creation_failed", error=str(e))
             raise ValueError(f"Failed to create custom indicator: {str(e)}") from e

@@ -1,5 +1,8 @@
 import pandas as pd
-from loguru import logger
+
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class WilliamsRIndicator:
@@ -26,7 +29,7 @@ class WilliamsRIndicator:
             raise ValueError("Period must be a positive integer.")
         self.logger = logger
         self.period = period
-        self.history_df = pd.DataFrame(columns=self.REQUIRED_COLUMNS)
+        self.history_df = pd.DataFrame(columns=pd.Index(self.REQUIRED_COLUMNS))
         self.current_value = None
 
     def _calculate_williams_r(self, data: pd.DataFrame) -> pd.Series:
@@ -43,13 +46,13 @@ class WilliamsRIndicator:
         if missing_cols:
             raise ValueError(f"DataFrame is missing the following columns: {', '.join(missing_cols)}")
 
-        self.logger.info(f"Calculating Williams %R with period={self.period}.")
+        self.logger.info("calculating_williams_r", period=self.period)
         highest_high = data["High"].rolling(window=self.period).max()
         lowest_low = data["Low"].rolling(window=self.period).min()
         # Compute Williams %R; note the multiplication by -100 to normalize
         will_r_raw = -100 * (highest_high - data["Close"]) / (highest_high - lowest_low)
         will_r = pd.Series(will_r_raw, index=data.index, name=f"Williams_%R_{self.period}")
-        self.logger.info("Williams %R calculated successfully.")
+        self.logger.info("williams_r_calculated_successfully")
         return will_r
 
     def update(self, data_point: dict) -> float | None:
@@ -67,7 +70,9 @@ class WilliamsRIndicator:
             low = data_point.get("low")
             close = data_point.get("close")
             if high is None or low is None or close is None:
-                self.logger.warning("Data point missing required 'high', 'low', or 'close' for Williams %R update.")
+                self.logger.warning(
+                    "missing_required_fields", indicator="Williams %R", required=["high", "low", "close"]
+                )
                 return None
 
             new_row = pd.DataFrame([{"High": high, "Low": low, "Close": close}])
@@ -82,7 +87,7 @@ class WilliamsRIndicator:
             return self.current_value
 
         except Exception as e:
-            self.logger.error(f"Williams %R Indicator update failed: {e}", exc_info=True)
+            self.logger.error("williams_r_update_failed", error=str(e), exc_info=True)
             return None
 
     def apply(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -100,12 +105,12 @@ class WilliamsRIndicator:
             if missing_cols:
                 raise ValueError(f"DataFrame is missing the following columns: {', '.join(missing_cols)}")
 
-            self.logger.info("Adding Williams %R to DataFrame.")
+            self.logger.info("applying_williams_r_to_dataframe")
             data = data.copy()
             data[f"Williams_%R_{self.period}"] = self._calculate_williams_r(data)
-            self.logger.info("Williams %R added successfully.")
+            self.logger.info("williams_r_added_successfully")
             return data
 
         except Exception as e:
-            self.logger.error(f"Error applying Williams %R to DataFrame: {e}", exc_info=True)
+            self.logger.error("williams_r_apply_failed", error=str(e), exc_info=True)
             raise

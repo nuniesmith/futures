@@ -139,11 +139,6 @@ class TestAlertDispatcherConstruction:
         assert d.has_channels is False
         assert d.channels_configured == []
 
-    def test_slack_channel_detected(self):
-        d = _fresh_dispatcher(slack_webhook="https://hooks.slack.com/test")
-        assert "Slack" in d.channels_configured
-        assert d.has_channels is True
-
     def test_discord_channel_detected(self):
         d = _fresh_dispatcher(discord_webhook="https://discord.com/api/webhooks/test")
         assert "Discord" in d.channels_configured
@@ -164,15 +159,13 @@ class TestAlertDispatcherConstruction:
 
     def test_multiple_channels(self):
         d = _fresh_dispatcher(
-            slack_webhook="https://hooks.slack.com/test",
             discord_webhook="https://discord.com/api/webhooks/test",
-            telegram_token="bot123",
+
             telegram_chat_id="456",
         )
         channels = d.channels_configured
-        assert "Slack" in channels
         assert "Discord" in channels
-        assert "Telegram" in channels
+
         assert len(channels) == 3
 
     def test_custom_cooldown(self):
@@ -204,7 +197,6 @@ class TestAlertDispatcherSendSignal:
     def test_send_signal_dedup_blocks_repeat(self):
         """Second call with same key within cooldown should be suppressed."""
         d = _fresh_dispatcher(
-            slack_webhook="https://fake.invalid/webhook",
             cooldown_sec=300,
         )
         # Mark key as already sent
@@ -371,16 +363,11 @@ class TestAlertDispatcherStats:
         stats = d.get_stats()
         assert stats["total_sent"] == 0
 
-    def test_channels_list_in_stats(self):
-        d = _fresh_dispatcher(slack_webhook="https://hooks.slack.com/test")
-        stats = d.get_stats()
-        assert "Slack" in stats["channels"]
 
     def test_suppressed_count_increments(self):
         """When dedup blocks a signal, total_suppressed should increment."""
-        d = _fresh_dispatcher(slack_webhook="https://fake.invalid/webhook")
         # Mark key as sent
-        d._store.mark_sent("suppressed_key")
+
         d.send_signal(signal_key="suppressed_key", title="X", message="Y")
         stats = d.get_stats()
         assert stats.get("total_suppressed", 0) >= 1
@@ -454,9 +441,7 @@ class TestGetDispatcher:
     def test_dispatcher_reads_env_vars(self, monkeypatch):
         """get_dispatcher should pick up webhook URLs from environment."""
         reset_dispatcher()
-        monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/env_test")
         d = get_dispatcher()
-        assert "Slack" in d.channels_configured
 
     def test_dispatcher_reads_discord_env(self, monkeypatch):
         reset_dispatcher()
@@ -594,7 +579,6 @@ class TestAlertEdgeCases:
     def test_dispatcher_stats_structure(self):
         """Verify stats dict has a consistent structure."""
         d = _fresh_dispatcher(
-            slack_webhook="https://fake.invalid/test",
             cooldown_sec=120,
         )
         stats = d.get_stats()
@@ -608,9 +592,8 @@ class TestAlertEdgeCases:
     def test_empty_webhook_not_treated_as_channel(self):
         """Empty string webhooks should not register as channels."""
         d = _fresh_dispatcher(
-            slack_webhook="",
             discord_webhook="",
-            telegram_token="",
+
             telegram_chat_id="",
         )
         assert d.has_channels is False

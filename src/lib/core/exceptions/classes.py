@@ -11,8 +11,11 @@ from datetime import datetime
 from enum import Enum, auto
 from typing import Any, TypeVar
 
-from loguru import logger
 from prometheus_client import CollectorRegistry, Counter
+
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 T = TypeVar("T", bound="BaseException")
 
@@ -45,7 +48,7 @@ def _increment_error_counter(exception_name: str):
         )
         counter.labels(exception_type=exception_name).inc()
     except Exception as e:
-        logger.error(f"Error incrementing error counter: {e}")
+        logger.error("error_incrementing_counter", error=str(e), exception_name=exception_name)
 
 
 class BaseException(Exception):
@@ -146,16 +149,17 @@ class BaseException(Exception):
 
     def _log_exception(self) -> None:
         """
-        Log the exception details using Loguru with appropriate log level.
+        Log the exception details using structlog with appropriate log level.
         """
         level_map = {
-            ErrorSeverity.INFO: "INFO",
-            ErrorSeverity.WARNING: "WARNING",
-            ErrorSeverity.ERROR: "ERROR",
-            ErrorSeverity.CRITICAL: "CRITICAL",
+            ErrorSeverity.INFO: "info",
+            ErrorSeverity.WARNING: "warning",
+            ErrorSeverity.ERROR: "error",
+            ErrorSeverity.CRITICAL: "critical",
         }
-        log_level = level_map.get(self.severity, "ERROR")
-        logger.log(log_level, f"Exception raised: {self.to_dict()}")
+        log_level = level_map.get(self.severity, "error")
+        log_method = getattr(logger, log_level, logger.error)
+        log_method("exception_raised", **self.to_dict()["error"])
 
     @classmethod
     def create(cls: type[T], message: str | None = None, code: int | None = None, **kwargs) -> T:
@@ -232,7 +236,7 @@ class ErrorRegistry:
             exception_class: Exception class to register
         """
         cls._registry[exception_class.__name__] = exception_class
-        logger.info(f"Registered exception: {exception_class.__name__}")
+        logger.info("exception_registered", exception_name=exception_class.__name__)
 
     @classmethod
     def get(cls, exception_name: str) -> type[BaseException] | None:

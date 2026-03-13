@@ -1,7 +1,10 @@
 from typing import Any
 
 import pandas as pd
-from loguru import logger
+
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class ElderRayIndexIndicator:
@@ -26,7 +29,7 @@ class ElderRayIndexIndicator:
         """
         self.logger = logger
         self.fast_period = fast_period if fast_period > 0 else 14
-        self.history_df = pd.DataFrame(columns=self.REQUIRED_COLUMNS)
+        self.history_df = pd.DataFrame(columns=pd.Index(self.REQUIRED_COLUMNS))
         # current_value holds the most recent calculation results as a dictionary:
         # {'bull_power': <value>, 'bear_power': <value>}
         self.current_value: dict[str, Any] = {}
@@ -49,14 +52,14 @@ class ElderRayIndexIndicator:
         if missing_cols:
             raise ValueError(f"DataFrame is missing the following columns: {', '.join(missing_cols)}")
 
-        self.logger.info(f"Calculating Elder Ray Index using EMA period: {self.fast_period}.")
+        self.logger.info("calculating_elder_ray_index", ema_period=self.fast_period)
         # Calculate the EMA of the closing prices
         ema = data["Close"].ewm(span=self.fast_period, adjust=False).mean()
         # Calculate Bull Power and Bear Power
         bull_power = data["High"] - ema
         bear_power = data["Low"] - ema
 
-        self.logger.info("Elder Ray Index calculated successfully.")
+        self.logger.info("elder_ray_index_calculated")
         return pd.DataFrame({"BullPower": bull_power, "BearPower": bear_power})
 
     def update(self, data_point: dict) -> dict | None:
@@ -77,7 +80,9 @@ class ElderRayIndexIndicator:
             close = data_point.get("close")
 
             if high is None or low is None or close is None:
-                self.logger.warning("Data point missing required 'high', 'low', or 'close' for Elder Ray Index update.")
+                self.logger.warning(
+                    "missing_required_fields", indicator="elder_ray_index", required_fields=["high", "low", "close"]
+                )
                 return None
 
             # Append the new data point to the history DataFrame
@@ -97,7 +102,7 @@ class ElderRayIndexIndicator:
             return self.current_value
 
         except Exception as e:
-            self.logger.error(f"Elder Ray Index Indicator update failed: {e}", exc_info=True)
+            self.logger.error("elder_ray_index_update_failed", error=str(e), exc_info=True)
             return None
 
     def apply(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -120,5 +125,5 @@ class ElderRayIndexIndicator:
             data["BearPower"] = eri_df["BearPower"]
             return data
         except Exception as e:
-            self.logger.error(f"Error applying Elder Ray Index: {e}", exc_info=True)
+            self.logger.error("elder_ray_index_apply_failed", error=str(e), exc_info=True)
             raise RuntimeError("Failed to apply Elder Ray Index indicator.") from e

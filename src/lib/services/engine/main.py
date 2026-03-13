@@ -101,8 +101,7 @@ def _get_copy_trader():
     """Lazy-init and return the global CopyTrader singleton.
 
     Returns ``None`` (and logs a debug message) when
-    ``RITHMIC_COPY_TRADING=1`` is not set, so the rest of the engine
-    degrades gracefully to NT8-bridge-only mode.
+    ``RITHMIC_COPY_TRADING=1`` is not set.
     """
     global _copy_trader
     if not _COPY_TRADING_ENABLED:
@@ -180,9 +179,31 @@ _risk_manager = None
 
 
 def _get_risk_manager(account_size: int = 50_000):
-    """Lazy-init and return the global RiskManager singleton."""
+    """Lazy-init and return the global RiskManager singleton.
+
+    Tries to read the main Rithmic account's ``account_size`` from Redis
+    so the risk engine uses the per-account value instead of the env-var
+    default.
+    """
     global _risk_manager
     if _risk_manager is None:
+        # Try to get account size from Rithmic main account config in Redis
+        try:
+            from lib.core.cache import REDIS_AVAILABLE, _r
+
+            if REDIS_AVAILABLE and _r is not None:
+                accounts_raw = _r.hgetall("rithmic:accounts")
+                if accounts_raw:
+                    for raw in accounts_raw.values():
+                        data = json.loads(raw if isinstance(raw, str) else raw.decode())
+                        # Use the first account's size (or one marked as main)
+                        acct_size = data.get("account_size", 150_000)
+                        if acct_size:
+                            account_size = int(acct_size)
+                            break
+        except Exception:
+            pass  # Fall back to env var / default
+
         from lib.services.engine.risk import RiskManager
 
         _risk_manager = RiskManager(account_size=account_size)
@@ -733,15 +754,15 @@ def _handle_prep_alerts(engine) -> None:
 def _handle_check_risk_rules(engine, account_size: int = 50_000) -> None:
     """Check risk rules using the RiskManager.
 
-    Syncs positions from NT8 bridge cache, evaluates all risk rules,
-    publishes status to Redis, logs any warnings, and persists notable
-    events to the database for permanent audit trail.
+    Syncs positions from cache, evaluates all risk rules, publishes
+    status to Redis, logs any warnings, and persists notable events
+    to the database for permanent audit trail.
     """
     logger.debug("▶ Risk rules check...")
     try:
         rm = _get_risk_manager(account_size)
 
-        # Sync positions from NT8 bridge (if available)
+        # Sync positions from cache (if available)
         try:
             from lib.core.cache import cache_get
 
@@ -758,7 +779,7 @@ def _handle_check_risk_rules(engine, account_size: int = 50_000) -> None:
                 positions = data.get("positions", [])
                 if positions:
                     rm.sync_positions(positions)
-                    logger.debug("Synced %d positions from NT8 bridge", len(positions))
+                    logger.debug("Synced %d positions from cache", len(positions))
         except Exception as exc:
             logger.debug("Position sync skipped (non-fatal): %s", exc)
 
@@ -1115,16 +1136,13 @@ def _publish_breakout_result(result: "BreakoutResult", orb_session_key: str = "u
 
 
 def _publish_pm_orders(orders: list) -> None:  # type: ignore[type-arg]
-    """Publish PositionManager OrderCommands to the NT8 Bridge, dashboard, and CopyTrader.
+    """Publish PositionManager OrderCommands to Redis, the dashboard, and CopyTrader.
 
     Each order is written to:
       - ``engine:pm:orders`` — a list (RPUSH) of JSON-serialised commands (TTL 60s)
       - ``dashboard:pm_orders`` — Redis pub/sub channel for real-time SSE streaming
 
-    The NT8 Bridge subscribes to ``dashboard:pm_orders`` and translates each
-    command into a NinjaScript order submission.
-
-    When ``RITHMIC_COPY_TRADING=1`` the same orders are also forwarded to the
+    When ``RITHMIC_COPY_TRADING=1`` the orders are also forwarded to the
     :class:`~lib.services.engine.copy_trader.CopyTrader` via
     ``execute_order_commands()``.  The CopyTrader runs in a fire-and-forget
     asyncio task so it never blocks the synchronous engine loop.
@@ -1194,7 +1212,7 @@ def _publish_pm_orders(orders: list) -> None:  # type: ignore[type-arg]
             pass
 
         logger.info(
-            "📤 PositionManager: %d order(s) dispatched → NT8 Bridge",
+            "📤 PositionManager: %d order(s) dispatched → Redis + CopyTrader",
             len(orders),
         )
     except Exception as exc:
@@ -1329,7 +1347,7 @@ def _handle_update_positions(engine) -> None:
 
     Fetches the latest 1-minute bars for every core watchlist ticker,
     calls ``update_all()``, then dispatches any resulting bracket / EMA9
-    trailing orders to the NT8 Bridge via Redis.
+    trailing orders via Redis and CopyTrader.
 
     Safe to call frequently — exits immediately if no positions are active.
     """

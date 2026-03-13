@@ -271,7 +271,7 @@ _SHARED_NAV_LINKS = [
     ("/trading", "🚀 Trading"),
     ("/charts", "📈 Charts"),
     ("/account", "💰 Account"),
-    ("/rb-history", "📅 RB History"),
+    ("/signals", "📡 Signals"),
     ("/journal/page", "📓 Journal"),
     ("/connections", "🔌 Connections"),
     ("/trainer", "🧠 Trainer"),
@@ -878,11 +878,8 @@ def _get_positions() -> list[dict[str, Any]]:
     return []
 
 
-def _get_bridge_info() -> dict[str, Any]:
+def _get_broker_info() -> dict[str, Any]:
     """Read broker liveness from the heartbeat cache key.
-
-    Checks the new ``broker_heartbeat`` key first, then falls back to the
-    legacy ``bridge_heartbeat`` key for backward compatibility.
 
     Returns a dict with: connected (bool), age_seconds (float), account (str).
     Safe to call even when Redis is unavailable — returns disconnected state.
@@ -890,12 +887,8 @@ def _get_bridge_info() -> dict[str, Any]:
     try:
         from lib.core.cache import _cache_key, cache_get
 
-        # Try new broker key first, fall back to legacy bridge key
         key = _cache_key("broker_heartbeat", "current")
         raw = cache_get(key)
-        if raw is None:
-            key = _cache_key("bridge_heartbeat", "current")
-            raw = cache_get(key)
         if raw is None:
             return {"connected": False, "age_seconds": -1.0, "account": ""}
         hb = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
@@ -1740,7 +1733,7 @@ def _render_dual_sizing_row(asset: dict[str, Any]) -> str:
     """Render the dual micro/full contract sizing row (Phase 5C).
 
     Shows side-by-side sizing for micro and full contracts so the trader
-    knows exactly what to type into TradingView/Tradovate.
+    knows exactly what to type into TradingView.
     """
     dual = asset.get("dual_sizing", {})
     if not dual:
@@ -2179,9 +2172,6 @@ def _render_positions_disabled_placeholder() -> str:
             <div style="margin-top:4px;color:var(--muted, #71717a)">
                 Enable in <a href="/settings" style="color:#3b82f6;text-decoration:underline">⚙️ Settings</a> → Features → Live Positions Panel
             </div>
-            <div style="margin-top:6px;font-size:0.65rem;color:var(--faint, #52525b)">
-                Requires Tradovate bridge connection (Bridge.js)
-            </div>
         </div>
     </div>
     """
@@ -2190,9 +2180,9 @@ def _render_positions_disabled_placeholder() -> str:
 def _render_positions_panel(
     positions: list[dict[str, Any]],
     risk_status: dict[str, Any] | None = None,
-    bridge_connected: bool = False,
-    bridge_age_seconds: float = -1,
-    bridge_account: str = "",
+    broker_connected: bool = False,
+    broker_age_seconds: float = -1,
+    broker_account: str = "",
 ) -> str:
     """Render condensed live positions + daily P&L panel with broker status and action buttons."""
     daily_pnl = 0.0
@@ -2226,17 +2216,19 @@ def _render_positions_panel(
     streak_color = "text-red-400" if consecutive > 1 else "text-zinc-400"
 
     # Broker status dot + age
-    if bridge_connected:
-        age_str = f"{bridge_age_seconds:.0f}s ago" if bridge_age_seconds >= 0 else ""
-        acct_str = f" · {bridge_account}" if bridge_account else ""
-        bridge_dot_html = f'<span style="color:#22c55e;font-size:9px" title="Broker connected{acct_str} · last heartbeat {age_str}">● TV</span>'
+    if broker_connected:
+        age_str = f"{broker_age_seconds:.0f}s ago" if broker_age_seconds >= 0 else ""
+        acct_str = f" · {broker_account}" if broker_account else ""
+        broker_dot_html = f'<span style="color:#22c55e;font-size:9px" title="Broker connected{acct_str} · last heartbeat {age_str}">● Broker</span>'
     else:
-        bridge_dot_html = '<span style="color:#71717a;font-size:9px" title="Broker offline — no heartbeat">○ TV</span>'
+        broker_dot_html = (
+            '<span style="color:#71717a;font-size:9px" title="Broker offline — no heartbeat">○ Broker</span>'
+        )
 
     # Action buttons (disabled when broker is offline)
-    btn_disabled = "" if bridge_connected else ' style="opacity:0.4;pointer-events:none" disabled'
-    btn_title_flatten = "Flatten all positions via broker" if bridge_connected else "Broker offline"
-    btn_title_cancel = "Cancel all working orders via broker" if bridge_connected else "Broker offline"
+    btn_disabled = "" if broker_connected else ' style="opacity:0.4;pointer-events:none" disabled'
+    btn_title_flatten = "Flatten all positions via broker" if broker_connected else "Broker offline"
+    btn_title_cancel = "Cancel all working orders via broker" if broker_connected else "Broker offline"
     action_buttons_html = f"""
     <div class="flex items-center gap-1 mt-1 mb-2">
         <button
@@ -2292,7 +2284,7 @@ def _render_positions_panel(
              hx-swap-oob="true">
             <div class="flex items-center justify-between mb-2">
                 <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">Positions &amp; P&amp;L</h3>
-                {bridge_dot_html}
+                {broker_dot_html}
             </div>
             {block_html}{stats_html}{action_buttons_html}
             <div class="text-xs t-text-faint flex items-center gap-1.5">
@@ -2329,7 +2321,7 @@ def _render_positions_panel(
         <div class="flex items-center justify-between mb-2">
             <h3 class="text-xs font-semibold t-text-muted uppercase tracking-wide">Positions &amp; P&amp;L</h3>
             <div class="flex items-center gap-2">
-                {bridge_dot_html}
+                {broker_dot_html}
                 <span class="{total_color} font-mono text-xs font-bold">Open: ${total_pnl:,.2f}</span>
             </div>
         </div>
@@ -3752,13 +3744,13 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
 
     if _live_positions_enabled:
         positions = _get_positions()
-        _bridge_info = _get_bridge_info()
+        _broker_info = _get_broker_info()
         positions_html = _render_positions_panel(
             positions,
             risk_status=risk_status,
-            bridge_connected=_bridge_info["connected"],
-            bridge_age_seconds=_bridge_info["age_seconds"],
-            bridge_account=_bridge_info["account"],
+            broker_connected=_broker_info["connected"],
+            broker_age_seconds=_broker_info["age_seconds"],
+            broker_account=_broker_info["account"],
         )
     else:
         positions_html = _render_positions_disabled_placeholder()
@@ -4327,7 +4319,7 @@ def _render_full_dashboard(focus_data: dict[str, Any] | None, session: dict[str,
     <a class="co-nav-tab" href="/trading">🚀 Trading</a>
     <a class="co-nav-tab" href="/charts">📈 Charts</a>
     <a class="co-nav-tab" href="/account">💰 Account</a>
-    <a class="co-nav-tab" href="/rb-history">📅 RB History</a>
+    <a class="co-nav-tab" href="/signals">📡 Signals</a>
     <a class="co-nav-tab" href="/journal/page">📓 Journal</a>
     <a class="co-nav-tab" href="/connections">🔌 Connections</a>
     <a class="co-nav-tab" href="/trainer">🧠 Trainer</a>
@@ -5181,14 +5173,14 @@ def get_positions_html():
 
     positions = _get_positions()
     risk_status = _get_risk_status()
-    bridge_info = _get_bridge_info()
+    broker_info = _get_broker_info()
     return HTMLResponse(
         content=_render_positions_panel(
             positions,
             risk_status=risk_status,
-            bridge_connected=bridge_info["connected"],
-            bridge_age_seconds=bridge_info["age_seconds"],
-            bridge_account=bridge_info["account"],
+            broker_connected=broker_info["connected"],
+            broker_age_seconds=broker_info["age_seconds"],
+            broker_account=broker_info["account"],
         )
     )
 
@@ -6084,7 +6076,7 @@ def get_no_trade():
 
 
 # ---------------------------------------------------------------------------
-# RB History — standalone full-page view
+# Signal History — standalone full-page view
 # ---------------------------------------------------------------------------
 
 _ORB_HISTORY_BODY = """
@@ -6095,7 +6087,7 @@ _ORB_HISTORY_BODY = """
   <div>
     <h1 style="font-size:1.25rem;font-weight:700;color:var(--text-primary);
                letter-spacing:-.02em;margin-bottom:.15rem">
-      📅 ORB Signal History
+      📡 Signal History
     </h1>
     <p style="font-size:.75rem;color:var(--text-muted)">
       Per-session opening range breakout events across all tracked instruments
@@ -6456,10 +6448,10 @@ def charts_page_route():
 
 @router.get("/rb-history", response_class=HTMLResponse)
 def rb_history_redirect():
-    """Serve RB History under the canonical /rb-history path."""
+    """Redirect legacy /rb-history to canonical /signals path."""
     from fastapi.responses import RedirectResponse
 
-    return RedirectResponse(url="/orb-history", status_code=301)
+    return RedirectResponse(url="/signals", status_code=301)
 
 
 @router.get("/account", response_class=HTMLResponse)
@@ -6475,17 +6467,24 @@ def connections_page_route():
 
 
 @router.get("/orb-history", response_class=HTMLResponse)
-def orb_history_page():
-    """Serve the standalone ORB Signal History full-page view."""
-    # Widen the page container slightly so the table has room to breathe
+def orb_history_redirect():
+    """Redirect legacy /orb-history to canonical /signals path."""
+    from fastapi.responses import RedirectResponse
+
+    return RedirectResponse(url="/signals", status_code=301)
+
+
+@router.get("/signals", response_class=HTMLResponse)
+def signals_page():
+    """Serve the standalone Signal History full-page view."""
     extra_head = """<style>
 .co-page { max-width: 1400px; }
 </style>"""
     return HTMLResponse(
         content=_build_page_shell(
-            title="ORB Signal History — Ruby Futures",
-            favicon_emoji="📅",
-            active_path="/orb-history",
+            title="Signal History — Ruby Futures",
+            favicon_emoji="📡",
+            active_path="/signals",
             body_content=_ORB_HISTORY_BODY,
             extra_head=extra_head,
             extra_scripts=_ORB_HISTORY_EXTRA_SCRIPT,

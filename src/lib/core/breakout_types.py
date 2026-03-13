@@ -3,7 +3,7 @@ Breakout Types — BreakoutType enum + RangeConfig dataclass
 ===========================================================
 Single source of truth for every range-breakout variant supported by the
 platform.  Both the Python dataset generator / CNN pipeline **and**
-the C# NinjaTrader consumer read from this contract.
+external consumers read from this contract.
 
 Canonical location: ``lib.core.breakout_types``
 
@@ -29,7 +29,7 @@ Researched non-exchange range breakouts:
 Design
 ------
 - ``BreakoutType`` is an ``IntEnum`` so values survive JSON round-trips and
-  map directly to the C# ``BreakoutType`` enum in ``BreakoutStrategy.cs``.
+  map directly to the ``BreakoutType`` enum used by external consumers.
 - **Do not reorder** existing values after training begins — they are embedded
   in saved CSV datasets.  New types are appended at the end.
 - ``RangeConfig`` captures everything that varies per type: OR duration,
@@ -77,13 +77,13 @@ class BreakoutType(IntEnum):
     Values are stable integer ordinals — **do not reorder** after training
     begins, as they are embedded in saved CSV datasets.
 
-    These mirror the C# ``BreakoutType`` enum in ``BreakoutStrategy.cs``:
-        public enum BreakoutType {
-            ORB = 0, PrevDay = 1, InitialBalance = 2, Consolidation = 3,
-            Weekly = 4, Monthly = 5, Asian = 6, BollingerSqueeze = 7,
-            ValueArea = 8, InsideDay = 9, GapRejection = 10,
-            PivotPoints = 11, Fibonacci = 12
-        }
+    These mirror the canonical ``BreakoutType`` ordinals used across the
+    platform::
+
+        ORB = 0, PrevDay = 1, InitialBalance = 2, Consolidation = 3,
+        Weekly = 4, Monthly = 5, Asian = 6, BollingerSqueeze = 7,
+        ValueArea = 8, InsideDay = 9, GapRejection = 10,
+        PivotPoints = 11, Fibonacci = 12
     """
 
     ORB = 0
@@ -835,7 +835,7 @@ def get_range_config(breakout_type: BreakoutType) -> RangeConfig:
     """Return the canonical ``RangeConfig`` for *breakout_type*.
 
     This is the single authoritative lookup used by the dataset generator,
-    CNN training loop, and C# NinjaTrader consumer.
+    CNN training loop, and external consumers.
 
     Args:
         breakout_type: A ``BreakoutType`` enum member.
@@ -986,7 +986,7 @@ def to_feature_contract_dict() -> dict[str, Any]:
     """Serialise all ``RangeConfig`` objects to a dict for ``feature_contract.json``.
 
     The returned dict is inserted under the ``"breakout_types"`` key in the
-    contract so the C# consumer can verify the ordinal mapping at load time.
+    contract so consumers can verify the ordinal mapping at load time.
 
     Example output::
 

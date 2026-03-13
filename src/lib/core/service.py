@@ -18,9 +18,9 @@ from typing import Any
 from lib.core.config import load_configuration
 from lib.core.initialization import initialize
 from lib.core.lifespan import ApplicationLifecycle, get_app_lifecycle
+from lib.core.logging_config import get_logger, setup_logging
 from lib.core.teardown import emergency_shutdown, teardown
 from lib.utils.discover import find_config_file
-from lib.utils.setup_logging import setup_logging
 from lib.utils.system import detect_container_environment
 
 # Define defaults
@@ -47,8 +47,9 @@ class BaseService(abc.ABC):
             service_name: The name of the service, used for configuration and logging
         """
         self.service_name = service_name
-        # setup_logging now returns either a loguru logger or a standard logger
-        self.logger: Any = setup_logging(service_name)
+        # Configure structured logging for this service, then get a bound logger
+        setup_logging(service=service_name)
+        self.logger: Any = get_logger(service_name)
 
         # Set up default port based on service name
         self.default_port = int(os.environ.get(f"{service_name.upper()}_PORT", 8000))

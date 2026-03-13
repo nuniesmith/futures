@@ -386,10 +386,10 @@ class TestBuildWeeklyRange:
         assert not complete or (high > low > 0)
 
     def test_empty_bars(self):
-        bars = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+        bars = pd.DataFrame({"Open": pd.Series([], dtype=float), "High": pd.Series([], dtype=float), "Low": pd.Series([], dtype=float), "Close": pd.Series([], dtype=float), "Volume": pd.Series([], dtype=float)})
         bars.index = pd.DatetimeIndex([], tz=_EST)
         config = DEFAULT_CONFIGS[BreakoutType.Weekly]
-        high, low, count, complete = _build_weekly_range(bars, config)
+        high, low, _count, complete = _build_weekly_range(bars, config)
         assert high == 0.0 and low == 0.0 and not complete
 
 
@@ -416,10 +416,10 @@ class TestBuildMonthlyRange:
         assert not complete or (high > low > 0)
 
     def test_empty_bars(self):
-        bars = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+        bars = pd.DataFrame({"Open": pd.Series([], dtype=float), "High": pd.Series([], dtype=float), "Low": pd.Series([], dtype=float), "Close": pd.Series([], dtype=float), "Volume": pd.Series([], dtype=float)})
         bars.index = pd.DatetimeIndex([], tz=_EST)
         config = DEFAULT_CONFIGS[BreakoutType.Monthly]
-        high, low, count, complete = _build_monthly_range(bars, config)
+        high, low, _count, complete = _build_monthly_range(bars, config)
         assert high == 0.0 and low == 0.0 and not complete
 
 
@@ -459,9 +459,10 @@ class TestBuildAsianRange:
             seed=42,
         )
         config = DEFAULT_CONFIGS[BreakoutType.Asian]
-        high, low, count, complete = _build_asian_range(bars, config)
+        _high, _low, _count, complete = _build_asian_range(bars, config)
         # Bars end at ~01:00 ET which is still inside 19:00–02:00, so not complete
-        last_time = bars.index[-1].to_pydatetime().time()
+        last_ts = pd.Timestamp(bars.index[-1])
+        last_time = last_ts.to_pydatetime().time()
         if last_time < config.asian_end_time or last_time >= config.asian_start_time:
             assert not complete, "Should not be complete while inside Asian window"
 
@@ -1012,7 +1013,7 @@ class TestBreakoutResultExtra:
 class TestBreakoutTypeMapping:
     """Verify BreakoutType enum is a single source of truth (Phase 1A).
 
-    The old bridge functions ``to_training_type()``, ``from_training_type()``,
+    The old helper functions ``to_training_type()``, ``from_training_type()``,
     and ``breakout_type_ordinal()`` have been removed.  Engine and training
     share the same ``BreakoutType`` IntEnum from ``lib.core.breakout_types``.
     """

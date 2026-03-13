@@ -20,7 +20,8 @@ futures/
 │   │   ├── services/
 │   │   │   ├── engine/    # main, handlers, scheduler, position_manager, backfill, risk, focus, live_risk, …
 │   │   │   ├── web/       # HTMX dashboard, FastAPI reverse-proxy (port 8080)
-│   │   │   └── data/      # FastAPI REST + SSE API (port 8000) — bars, journal, positions, kraken, sse, …
+│   │   │   ├── data/      # FastAPI REST + SSE API (port 8000) — bars, journal, positions, kraken, sse, …
+│   │   │   └── training/  # GPU CNN training server (port 8501)
 │   │   └── integrations/  # kraken_client, massive_client, grok_helper, rithmic_client
 │   ├── entrypoints/
 │   │   ├── data/main.py   # python -m entrypoints.data.main  → lib.services.data.main:app
@@ -39,6 +40,7 @@ futures/
 │   ├── engine/            # Dockerfile + entrypoint.sh  (:engine image)
 │   ├── web/               # Dockerfile + entrypoint.sh  (:web image)
 │   ├── trainer/           # Dockerfile                  (:trainer image)
+│   ├── charting/          # Dockerfile                  (:charting image)
 │   └── monitoring/        # prometheus/ + grafana/
 └── docker-compose.yml
 ```
@@ -48,59 +50,68 @@ futures/
 ## Infrastructure Topology
 
 ```
-Ubuntu Server (100.122.184.58)                          Home Laptop (100.113.72.63)
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐   ┌──────────────┐
-│    :data     │  │   :engine    │  │    :web      │   │   :trainer   │
-│  FastAPI     │  │  main.py     │  │  FastAPI     │   │  FastAPI     │
-│  REST + SSE  │  │  scheduler   │  │  reverse-    │   │  dataset gen │
-│  bar cache   │  │  risk mgr    │  │  proxy only  │   │  CNN train   │
-│  Kraken feed │  │  position mgr│  │  port 8180   │   │  promote .pt │
-│  Reddit poll │  │  all handlers│  │              │   │  CUDA GPU    │
-│  Rithmic mgr │  │  (no HTTP)   │  │              │   │  port 8200   │
-│  port 8050   │  │              │  │              │   │              │
-└──────┬───────┘  └──────┬───────┘  └──────┬───────┘   └──────┬───────┘
-       │    publishes     │   reads          │ proxies          │
-       │    Redis state ←─┘   Redis          │ → :data          │
-       ↓                                     ↓                  │
-┌──────────┐  ┌──────────┐           Browser (8180)            │
-│  Redis   │  │ Postgres │                                      │
-└──────────┘  └──────────┘                                      │
-┌─────────────┐  ┌──────────┐                                   │
-│ Prometheus  │  │ Grafana  │                                   │
-└──────┬──────┘  └──────────┘                                   │
-       └──────────────────────── Tailscale mesh ────────────────┘
+Ubuntu Server (100.122.184.58)                                        Home Laptop (100.113.72.63)
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐  ┌──────────────┐
+│    :data     │  │   :engine    │  │    :web      │  │  :charting │  │   :trainer   │
+│  FastAPI     │  │  main.py     │  │  FastAPI     │  │  ApexCharts│  │  FastAPI     │
+│  REST + SSE  │  │  scheduler   │  │  reverse-    │  │  + nginx   │  │  dataset gen │
+│  bar cache   │  │  risk mgr    │  │  proxy only  │  │  port 8003 │  │  CNN train   │
+│  Kraken feed │  │  position mgr│  │  port 8080   │  │            │  │  promote .pt │
+│  Reddit poll │  │  all handlers│  │              │  │            │  │  CUDA GPU    │
+│  Rithmic mgr │  │  (no HTTP)   │  │              │  │            │  │  port 8501   │
+│  port 8000   │  │              │  │              │  │            │  │              │
+└──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └─────┬──────┘  └──────┬───────┘
+       │    publishes     │   reads          │ proxies        │                │
+       │    Redis state ←─┘   Redis          │ → :data        │                │
+       ↓                                     ↓                ↓                │
+┌──────────┐  ┌──────────┐           Browser (8080)                           │
+│  Redis   │  │ Postgres │                                                    │
+└──────────┘  └──────────┘                                                    │
+┌─────────────┐  ┌──────────┐                                                 │
+│ Prometheus  │  │ Grafana  │                                                 │
+└──────┬──────┘  └──────────┘                                                 │
+       └──────────────────────── Tailscale mesh ──────────────────────────────┘
+
+Rithmic (async_rithmic)
+  └─ CME Gateway connection from :data service
+     ├─ Live ticks + time bars (when creds active)
+     ├─ Order book data
+     └─ Order execution (CopyTrader across prop-firm accounts)
 ```
 
 **Service responsibilities:**
 
-| Service   | Responsibility |
-|-----------|---------------|
-| `:data`   | All REST/SSE endpoints, bar cache (Postgres + Redis), Kraken WS feed, Reddit sentiment polling, `/bars/{symbol}` auto-fill, `/api/charts/*`, Rithmic account manager (EOD close endpoint) |
-| `:engine` | `DashboardEngine`, `ScheduleManager`, `RiskManager`, `PositionManager`, breakout detection, CNN inference, Grok briefs, Redis publish, EOD safety scheduler (15:45 warning + 16:00 hard-close). Writes `/tmp/engine_health.json` as heartbeat — no HTTP port |
-| `:web`    | Stateless reverse-proxy; proxies all `/api/*` and `/sse/*` to `:data` |
-| `:trainer`| Dataset generation, CNN training, gate check, model promotion|
+| Service    | Responsibility |
+|------------|---------------|
+| `:data`    | All REST/SSE endpoints, bar cache (Postgres + Redis), Kraken WS feed, Reddit sentiment polling, `/bars/{symbol}` auto-fill, `/api/charts/*`, Rithmic account manager (EOD close endpoint, CopyTrader) |
+| `:engine`  | `DashboardEngine`, `ScheduleManager`, `RiskManager`, `PositionManager`, breakout detection, CNN inference, Grok briefs, Redis publish, EOD safety scheduler (15:45 warning + 16:00 hard-close). Writes `/tmp/engine_health.json` as heartbeat — no HTTP port |
+| `:web`     | Stateless reverse-proxy; proxies all `/api/*` and `/sse/*` to `:data` |
+| `:charting`| ApexCharts-based charting UI served via nginx |
+| `:trainer` | Dataset generation, CNN training, gate check, model promotion |
 
 **Port map:**
 
 | Port | Service | Internal |
 |------|---------|----------|
-| 8050 | `:data` | 8000 |
-| 8180 | `:web` | 8080 |
-| 8200 | `:trainer` | 8200 |
+| 8000 | `:data` | 8000 |
+| 8080 | `:web` | 8080 |
+| 8003 | `:charting` | 8003 |
+| 8501 | `:trainer` | 8501 |
 | 9095 | Prometheus | — |
 | 3010 | Grafana | — |
 
 **Tailscale mesh:**
-- Ubuntu Server → data + engine + web + postgres + redis + monitoring (always on, 24/7)
-- Home Laptop → trainer (on-demand, CUDA GPU, port 8200)
+- Ubuntu Server → data + engine + web + charting + postgres + redis + monitoring (always on, 24/7)
+- Home Laptop → trainer (on-demand, CUDA GPU, port 8501)
 
-**CI/CD (6-image matrix — `nuniesmith/futures`):**
+**CI/CD (7-image matrix — `nuniesmith/futures`):**
 
 | Image | Platforms | Notes |
 |-------|-----------|-------|
 | `:data` | amd64 + arm64 | `is_default: true` → `:latest` alias |
 | `:engine` | amd64 + arm64 | |
 | `:web` | amd64 + arm64 | |
+| `:charting` | amd64 + arm64 | ApexCharts + nginx |
 | `:trainer` | amd64 only | GPU build |
 | `:prometheus` | amd64 + arm64 | |
 | `:grafana` | amd64 + arm64 | |
@@ -115,9 +126,10 @@ Pipeline: Lint → Test → Build & push → Deploy (Ubuntu Server via Tailscale
 
 ```
 External Sources
-  ├─ Yahoo Finance (yfinance)    ← primary for CME futures (1m, 5m, 15m, daily)
-  ├─ Kraken REST / WebSocket     ← crypto spot via kraken_client.py
-  └─ MassiveAPI (massive_client) ← alternative / historical bars
+  ├─ Rithmic (async_rithmic)     ← primary for CME futures (when creds active): live ticks, time bars, order book
+  ├─ MassiveAPI (massive_client) ← current primary for CME futures (REST + WebSocket, futures beta)
+  ├─ Kraken REST / WebSocket     ← crypto spot only via kraken_client.py (personal account)
+  └─ Yahoo Finance (yfinance)    ← last-resort fallback (delayed data)
 
          ↓
   lib/core/cache.py → get_data(ticker, interval, period)
@@ -159,7 +171,7 @@ DashboardEngine._loop() — runs every 10s, checks ET wall-clock time
   15:45–15:59 ET  (once per calendar day)
     → _eod_warning()
          ├─ logs WARNING: "automated close fires in 15 minutes"
-         └─ AlertDispatcher.send_risk_alert() → Slack / Discord / Telegram
+         └─ AlertDispatcher.send_risk_alert() → Discord 
 
   16:00–16:14 ET  (once per calendar day, catch-up guard for restarts)
     → _eod_close_positions()
@@ -278,15 +290,18 @@ Engine fires CNN-gated signal
   ├─ Dashboard (primary decision surface)
   │    → Focus cards with CNN probability, entry/stop/TP, dual sizing, risk strip
   │    → Reddit sentiment badge + spike alerts
-  │    → Trader decides whether to execute manually in Tradovate
+  │    → Trader decides whether to execute
+  │
+  ├─ Rithmic CopyTrader (automated execution)
+  │    → RithmicAccountManager places order on leader account
+  │    → CopyTrader replicates to all enabled follower accounts
   │
   ├─ TradingView (reference overlay — no position sendback)
   │    → Ruby Futures indicator shows levels on chart for visual confirmation
   │    → NOT used for order execution or position management
   │
-  └─ Tradovate JS Bridge (future — Phase TBRIDGE)
-       → Direct API execution on leader account
-       → PickMyTrade copies to follower accounts
+  └─ EOD Safety Net
+       → 15:45 ET warning → 16:00 ET auto-close via Rithmic
 ```
 
 ### 9. Training Pipeline
@@ -350,7 +365,6 @@ Engine Scheduler (every 15 min during ACTIVE + EVENING)
 | `engine:reddit_sentiment:<SYMBOL>` | data (future) | dashboard | 30 min |
 | `rithmic:account_configs` | rithmic_client | rithmic_client | permanent |
 | `rithmic:account_status:<KEY>` | rithmic_client | dashboard | 5 min |
-| `broker_heartbeat` | Tradovate bridge | positions.py | 30 s |
 | `settings:overrides` | settings API | engine, data | permanent |
 
 ---
@@ -362,30 +376,9 @@ Stage 1 — TPT:   5 × $150K accounts  =  $750K total buying power
 Stage 2 — Apex: 20 × $300K accounts  =  ~$6M total buying power
 
 Copy layer:
-  Tradovate JS bridge (leader account, Phase TBRIDGE)
-    → PickMyTrade webhook
-      → all follower accounts simultaneously
+  Rithmic CopyTrader (leader account)
+    → replicates orders to all enabled follower accounts
+    → same Rithmic gateway, per-account credentials
 
 Own-accounts-only copy trading explicitly permitted by both TPT and Apex.
-```
-
----
-
-## Future Sidecar: Tradovate JS Bridge
-
-```
-(Future) Tradovate JS Bridge — Phase TBRIDGE
-┌────────────────────┐
-│  Node.js sidecar   │ ← runs alongside :engine on Ubuntu Server
-│  Tradovate REST+WS │ ← leader account execution only
-│  → PickMyTrade     │ ← follower accounts via webhook
-└────────────────────┘
-
-Communication:
-  Python engine → OrderCommand → Redis pub/sub → Node.js bridge → Tradovate API
-  Tradovate fill → bridge → Redis engine:live_positions → PositionManager
-
-Health:
-  bridge heartbeat → broker_heartbeat Redis key (30s TTL)
-  positions.py already reads this key for dashboard broker-connected indicator
 ```

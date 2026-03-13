@@ -18,7 +18,7 @@ from collections import Counter
 from functools import lru_cache
 from typing import Any
 
-from loguru import logger
+from lib.core.logging_config import get_logger
 
 # Try to import language detection libraries
 # with fallback options
@@ -47,7 +47,7 @@ except ImportError:
     CLD2_AVAILABLE = False
 
 # Configure logging
-logger = logger.opt(colors=True)
+logger = get_logger(__name__)
 # Constants
 MAX_TEXT_LENGTH = 50000
 MIN_TEXT_LENGTH_FOR_LANGDETECT = 10
@@ -715,28 +715,31 @@ def detect_language(text: str) -> str:
     # Method 1: langid
     if LANGID_AVAILABLE:
         try:
-            lang_id, _ = langid.classify(sample_text)
+            import langid as langid_lib
+            lang_id, _ = langid_lib.classify(sample_text)
             detected_langs.append(lang_id)
         except Exception as e:
-            logger.debug(f"langid detection failed: {str(e)}")
+            logger.debug("langid detection failed", error=str(e))
 
     # Method 2: langdetect
     if LANGDETECT_AVAILABLE:
         try:
-            lang_detect = langdetect.detect(sample_text)
+            import langdetect as langdetect_lib
+            lang_detect = langdetect_lib.detect(sample_text)
             detected_langs.append(lang_detect)
         except Exception as e:
-            logger.debug(f"langdetect detection failed: {str(e)}")
+            logger.debug("langdetect detection failed", error=str(e))
 
     # Method 3: cld2
     if CLD2_AVAILABLE:
         try:
-            is_reliable, _, details = cld2.detect(sample_text)
+            import pycld2 as cld2_lib
+            is_reliable, _, details = cld2_lib.detect(sample_text)
             if is_reliable:
                 cld2_lang = details[0][1]
                 detected_langs.append(cld2_lang)
         except Exception as e:
-            logger.debug(f"cld2 detection failed: {str(e)}")
+            logger.debug("cld2 detection failed", error=str(e))
 
     # If no languages detected, fall back to default
     if not detected_langs:

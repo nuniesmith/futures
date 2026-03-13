@@ -1,9 +1,8 @@
 """
 Pine Script Generator — package entry point.
 
-The NiceGUI dashboard (app.py) has been replaced with an HTMX-based
-page served by the data service.  This module provides the generator
-for use by the API router.
+This module provides the PineScriptGenerator for use by the API router.
+The generator is served via the HTMX-based page in the data service.
 """
 
 from __future__ import annotations

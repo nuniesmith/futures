@@ -2,7 +2,9 @@
 
 from typing import Any
 
-from loguru import logger
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class ErrorBoundary:
@@ -26,7 +28,7 @@ class ErrorBoundary:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit with error handling."""
         if exc_type is not None:
-            logger.error(f"Error in {self.name}: {exc_val}")
+            logger.error("error_boundary_caught", boundary=self.name, error=str(exc_val))
             return True  # Suppress the exception
         return False
 
@@ -37,6 +39,6 @@ class ErrorBoundary:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Sync context manager exit with error handling."""
         if exc_type is not None:
-            logger.error(f"Error in {self.name}: {exc_val}")
+            logger.error("error_boundary_caught", boundary=self.name, error=str(exc_val))
             return True  # Suppress the exception
         return False

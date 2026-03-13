@@ -10,7 +10,10 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from loguru import logger
+
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def identify_manipulation_candles(df: pd.DataFrame, enhanced_detection: bool = True) -> pd.DataFrame:
@@ -156,7 +159,7 @@ def identify_manipulation_candles(df: pd.DataFrame, enhanced_detection: bool = T
     bullish_count = result["bullish_mc"].sum()
     bearish_count = result["bearish_mc"].sum()
 
-    logger.info(f"Identified {bullish_count} bullish and {bearish_count} bearish manipulation candles")
+    logger.info("identified_manipulation_candles", bullish_count=bullish_count, bearish_count=bearish_count)
 
     return result
 
@@ -269,7 +272,7 @@ def identify_advanced_patterns(df: pd.DataFrame) -> pd.DataFrame:
         "flash_crash_recovery": result["flash_crash_recovery"].sum(),
     }
 
-    logger.info(f"Identified advanced patterns: {pattern_counts}")
+    logger.info("identified_advanced_patterns", pattern_counts=pattern_counts)
 
     return result
 
@@ -297,8 +300,8 @@ def get_valid_signals(
     missing_cols = [col for col in required_cols if col not in result.columns]
 
     if missing_cols:
-        logger.error(f"Missing required columns: {missing_cols}")
-        logger.info("Attempting to generate manipulation candle indicators")
+        logger.error("missing_required_columns", missing_columns=missing_cols)
+        logger.info("attempting_to_generate_manipulation_candle_indicators")
         result = identify_manipulation_candles(result, enhanced_detection=enhanced_filtering)
 
     # Initialize signal columns
@@ -387,7 +390,10 @@ def get_valid_signals(
     bearish_count = result["valid_bearish_signal"].sum()
 
     logger.info(
-        f"Generated {bullish_count} valid bullish and {bearish_count} valid bearish signals for {timeframe} timeframe"
+        "generated_valid_signals",
+        bullish_count=bullish_count,
+        bearish_count=bearish_count,
+        timeframe=timeframe,
     )
 
     return result
@@ -413,7 +419,7 @@ def generate_entry_signals(df: pd.DataFrame, atr_multiplier: float = 1.0, dynami
     missing_cols = [col for col in required_cols if col not in result.columns]
 
     if missing_cols:
-        logger.error(f"Missing required columns: {missing_cols}")
+        logger.error("missing_required_columns", missing_columns=missing_cols)
         return df
 
     # Calculate ATR if not present (for stop-loss calculation)
@@ -529,7 +535,7 @@ def generate_entry_signals(df: pd.DataFrame, atr_multiplier: float = 1.0, dynami
     # Count final entry signals
     entry_count = result["entry_signal"].sum()
 
-    logger.info(f"Generated {entry_count} entry signals with risk parameters")
+    logger.info("generated_entry_signals", entry_count=entry_count)
 
     return result
 
@@ -553,7 +559,7 @@ def filter_signals_for_crypto(
 
     # Verify we have the necessary columns
     if "entry_signal" not in result.columns:
-        logger.error("Missing 'entry_signal' column")
+        logger.error("missing_entry_signal_column")
         return df
 
     # Apply strength threshold if signal_strength column exists
@@ -563,7 +569,7 @@ def filter_signals_for_crypto(
 
         filtered_count = weak_signals.sum()
         if filtered_count > 0:
-            logger.info(f"Filtered {filtered_count} signals below strength threshold {min_strength}")
+            logger.info("filtered_weak_signals", filtered_count=filtered_count, min_strength=min_strength)
 
     # Respect key levels if requested and available
     if respect_key_levels:
@@ -584,7 +590,7 @@ def filter_signals_for_crypto(
 
             filtered_count = not_at_level.sum()
             if filtered_count > 0:
-                logger.info(f"Filtered {filtered_count} signals not at key levels")
+                logger.info("filtered_non_key_level_signals", filtered_count=filtered_count)
 
     # Filter signals near high volatility events if we have volatility data
     if "volatility_pct" in result.columns:
@@ -602,7 +608,7 @@ def filter_signals_for_crypto(
 
             filtered_count = avoid_signals.sum()
             if filtered_count > 0:
-                logger.info(f"Filtered {filtered_count} signals ahead of extreme volatility")
+                logger.info("filtered_extreme_volatility_signals", filtered_count=filtered_count)
 
     # Filter signals during weekend low volume periods if we have session data
     weekend_columns = [col for col in result.columns if "weekend" in col.lower()]
@@ -615,12 +621,12 @@ def filter_signals_for_crypto(
 
                 filtered_count = avoid_signals.sum()
                 if filtered_count > 0:
-                    logger.info(f"Filtered {filtered_count} signals during {col}")
+                    logger.info("filtered_signals_during_period", filtered_count=filtered_count, period=col)
 
     # Count final signals after filtering
     final_count = result["entry_signal"].sum()
 
-    logger.info(f"Final count of filtered crypto signals: {final_count}")
+    logger.info("crypto_signal_filtering_complete", final_count=final_count)
 
     return result
 
@@ -650,7 +656,7 @@ def identify_fair_value_gaps(df: pd.DataFrame, gap_threshold: float = 0.001) -> 
 
     # Need at least 3 candles to identify gaps
     if len(result) < 3:
-        logger.warning("Not enough data to identify fair value gaps")
+        logger.warning("insufficient_data_for_fair_value_gaps")
         return result
 
     # Crypto tends to have mitigated gaps due to 24/7 trading
@@ -741,7 +747,7 @@ def identify_fair_value_gaps(df: pd.DataFrame, gap_threshold: float = 0.001) -> 
     bullish_count = result["bullish_fvg"].sum()
     bearish_count = result["bearish_fvg"].sum()
 
-    logger.info(f"Identified {bullish_count} bullish and {bearish_count} bearish fair value gaps")
+    logger.info("identified_fair_value_gaps", bullish_count=bullish_count, bearish_count=bearish_count)
 
     return result
 
@@ -768,7 +774,7 @@ def identify_supply_demand_zones(df: pd.DataFrame, zone_strength_threshold: int 
 
     # Need sufficient data to identify zones
     if len(result) < 50:
-        logger.warning("Not enough data to identify supply/demand zones")
+        logger.warning("insufficient_data_for_supply_demand_zones")
         return result
 
     # Identify swing highs and lows
@@ -892,7 +898,7 @@ def identify_supply_demand_zones(df: pd.DataFrame, zone_strength_threshold: int 
     supply_count = len(supply_zones)
     demand_count = len(demand_zones)
 
-    logger.info(f"Identified {supply_count} supply zones and {demand_count} demand zones")
+    logger.info("identified_supply_demand_zones", supply_count=supply_count, demand_count=demand_count)
 
     return result
 
@@ -917,7 +923,7 @@ def identify_key_levels(df: pd.DataFrame, round_digits: int = 0) -> pd.DataFrame
 
     # Need price data
     if "close" not in result.columns:
-        logger.error("Missing 'close' column")
+        logger.error("missing_close_column")
         return result
 
     # 1. Identify psychological levels based on round numbers
@@ -1019,7 +1025,7 @@ def identify_key_levels(df: pd.DataFrame, round_digits: int = 0) -> pd.DataFrame
     # Count key levels
     key_level_count = result["at_key_level"].sum()
 
-    logger.info(f"Identified {key_level_count} candles at key psychological levels")
+    logger.info("identified_key_levels", key_level_count=key_level_count)
 
     return result
 
@@ -1047,7 +1053,7 @@ def identify_session_levels(df: pd.DataFrame) -> pd.DataFrame:
         try:
             result.index = pd.to_datetime(result.index)
         except Exception:
-            logger.error("DataFrame does not have DatetimeIndex and cannot be converted")
+            logger.error("dataframe_missing_datetime_index")
             return result
 
     # Extract date for grouping
@@ -1097,9 +1103,10 @@ def identify_session_levels(df: pd.DataFrame) -> pd.DataFrame:
     daily_open_count = result["near_daily_open"].sum()
 
     logger.info(
-        f"Identified {session_high_count} candles at session highs, "
-        f"{session_low_count} at session lows, and "
-        f"{daily_open_count} near daily opens"
+        "identified_session_levels",
+        session_high_count=session_high_count,
+        session_low_count=session_low_count,
+        daily_open_count=daily_open_count,
     )
 
     return result
@@ -1217,8 +1224,9 @@ def identify_bitcoin_specific_levels(df: pd.DataFrame, fibonacci_base: float | N
     accumulation_count = result["in_btc_accumulation_zone"].sum()
 
     logger.info(
-        f"Identified {btc_level_count} candles at BTC-specific key levels and "
-        f"{accumulation_count} candles in BTC accumulation zones"
+        "identified_bitcoin_specific_levels",
+        btc_level_count=btc_level_count,
+        accumulation_count=accumulation_count,
     )
 
     return result
@@ -1243,7 +1251,7 @@ def is_price_in_area_of_interest(price: float, df: pd.DataFrame, threshold: floa
     required_cols = [col for col in df.columns if col.startswith(("at_", "in_")) and col != "at_key_level"]
 
     if not required_cols:
-        logger.warning("No area of interest columns found in DataFrame")
+        logger.warning("no_area_of_interest_columns_found")
         return result
 
     # Find the closest candle to the given price

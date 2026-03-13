@@ -239,7 +239,7 @@ def check_trade_risk(req: RiskCheckRequest):
 
     Evaluates all risk rules against the proposed trade without
     actually creating it.  Use this before sending an order to
-    NinjaTrader to verify the trade won't violate risk limits.
+    the broker to verify the trade won't violate risk limits.
 
     Returns allowed=True if the trade passes all checks, or
     allowed=False with a reason string explaining which rule(s) blocked it.

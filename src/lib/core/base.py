@@ -46,12 +46,12 @@ except ImportError:
 # Re-export lifecycle components
 from lib.core.initialization import initialize, load_configuration
 from lib.core.lifespan import get_app_lifecycle
+
+# Direct use of the comprehensive logging system
+from lib.core.logging_config import get_logger, setup_logging
 from lib.core.teardown import emergency_shutdown, teardown
 from lib.utils.discover import find_config_file, try_import
 from lib.utils.permissions import verify_permissions
-
-# Direct use of the comprehensive logging system
-from lib.utils.setup_logging import get_module_logger, setup_logging
 
 # Re-export system utilities
 from lib.utils.system import detect_container_environment, get_system_info
@@ -87,7 +87,7 @@ __all__ = [
     "FastApiService",
     # Functions
     "setup_logging",
-    "get_module_logger",
+    "get_logger",
     "get_system_info",
     "verify_permissions",
     "try_import",

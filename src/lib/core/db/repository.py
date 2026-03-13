@@ -9,18 +9,18 @@ from datetime import datetime
 from typing import Any, Generic, TypeVar
 from uuid import UUID
 
-from loguru import logger
 from pydantic import BaseModel
 
 from lib.core.db.base import Database
 from lib.core.exceptions.data import DatabaseError, DatabaseQueryError, DataNotFoundError, DataValidationException
+from lib.core.logging_config import get_logger
 
 # Generic type for models
 T = TypeVar("T", bound=BaseModel)
 ID = TypeVar("ID", str, int, UUID)
 
 # Module logger
-_logger = logger.bind(name="core.data.db.repository")
+_logger = get_logger("lib.core.db.repository")
 
 
 class QueryFilter:
@@ -239,7 +239,7 @@ class BaseRepository(Generic[T, ID]):
         # Get model fields
         self.model_fields = set(model_cls.__annotations__.keys())
 
-        _logger.debug(f"Initialized repository for {self.table_name}")
+        _logger.debug("repository_initialized", table=self.table_name, model=model_cls.__name__)
 
     async def get_by_id(self, id: ID) -> T | None:
         """
@@ -267,7 +267,7 @@ class BaseRepository(Generic[T, ID]):
                 return self._row_to_model(dict(row))
 
         except Exception as e:
-            _logger.error(f"Error getting record by ID {id}: {str(e)}")
+            _logger.error("get_by_id_failed", table=self.table_name, id=id, exc_info=True)
             raise DatabaseError(
                 message=f"Failed to get {self.model_cls.__name__} with ID {id}", details={"id": id, "error": str(e)}
             ) from e
@@ -300,7 +300,7 @@ class BaseRepository(Generic[T, ID]):
                 return self._row_to_model(dict(row))
 
         except Exception as e:
-            _logger.error(f"Error finding record with filter: {str(e)}")
+            _logger.error("find_one_failed", table=self.table_name, exc_info=True)
             raise DatabaseQueryError(
                 message=f"Failed to find {self.model_cls.__name__}", details={"error": str(e)}
             ) from e
@@ -350,7 +350,7 @@ class BaseRepository(Generic[T, ID]):
                 return PaginatedResult(items=items, total=total, page=pagination.page, page_size=pagination.page_size)
 
         except Exception as e:
-            _logger.error(f"Error finding records with filter: {str(e)}")
+            _logger.error("find_all_failed", table=self.table_name, exc_info=True)
             raise DatabaseQueryError(
                 message=f"Failed to find {self.model_cls.__name__} records", details={"error": str(e)}
             ) from e
@@ -412,7 +412,7 @@ class BaseRepository(Generic[T, ID]):
                 return self._row_to_model(dict(row))
 
         except Exception as e:
-            _logger.error(f"Error creating record: {str(e)}")
+            _logger.error("create_failed", table=self.table_name, exc_info=True)
             if isinstance(e, (ValueError, TypeError)):
                 raise DataValidationException(
                     message=f"Invalid data for {self.model_cls.__name__}", details={"error": str(e)}
@@ -500,7 +500,7 @@ class BaseRepository(Generic[T, ID]):
             # Re-raise not found errors
             raise
         except Exception as e:
-            _logger.error(f"Error updating record with ID {id}: {str(e)}")
+            _logger.error("update_failed", table=self.table_name, id=id, exc_info=True)
             if isinstance(e, (ValueError, TypeError)):
                 raise DataValidationException(
                     message=f"Invalid data for {self.model_cls.__name__}", details={"error": str(e)}
@@ -534,7 +534,7 @@ class BaseRepository(Generic[T, ID]):
                 return result is not None
 
         except Exception as e:
-            _logger.error(f"Error deleting record with ID {id}: {str(e)}")
+            _logger.error("delete_failed", table=self.table_name, id=id, exc_info=True)
             raise DatabaseError(
                 message=f"Failed to delete {self.model_cls.__name__} with ID {id}", details={"id": id, "error": str(e)}
             ) from e
@@ -564,7 +564,7 @@ class BaseRepository(Generic[T, ID]):
                 return result[0] if result else 0
 
         except Exception as e:
-            _logger.error(f"Error counting records: {str(e)}")
+            _logger.error("count_failed", table=self.table_name, exc_info=True)
             raise DatabaseQueryError(
                 message=f"Failed to count {self.model_cls.__name__} records", details={"error": str(e)}
             ) from e
@@ -592,7 +592,7 @@ class BaseRepository(Generic[T, ID]):
                 return result is not None
 
         except Exception as e:
-            _logger.error(f"Error checking if record exists with ID {id}: {str(e)}")
+            _logger.error("exists_check_failed", table=self.table_name, id=id, exc_info=True)
             raise DatabaseQueryError(
                 message=f"Failed to check if {self.model_cls.__name__} exists with ID {id}",
                 details={"id": id, "error": str(e)},
@@ -630,7 +630,7 @@ class BaseRepository(Generic[T, ID]):
                 return []
 
         except Exception as e:
-            _logger.error(f"Error executing raw query: {str(e)}")
+            _logger.error("raw_query_failed", table=self.table_name, exc_info=True)
             raise DatabaseQueryError(
                 message="Failed to execute raw SQL query", details={"error": str(e)}, sql=query
             ) from e
@@ -650,7 +650,7 @@ class BaseRepository(Generic[T, ID]):
             filtered_data = {k: v for k, v in row.items() if k in self.model_fields}
             return self.model_cls(**filtered_data)
         except Exception as e:
-            _logger.error(f"Error converting row to model: {str(e)}")
+            _logger.error("row_to_model_failed", table=self.table_name, model=self.model_cls.__name__, exc_info=True)
             raise DataValidationException(
                 message=f"Failed to convert database row to {self.model_cls.__name__}",
                 details={"error": str(e), "row": row},

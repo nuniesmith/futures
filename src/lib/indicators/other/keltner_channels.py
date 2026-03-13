@@ -1,7 +1,10 @@
 from typing import Any
 
 import pandas as pd
-from loguru import logger
+
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class KeltnerChannelsIndicator:
@@ -35,7 +38,7 @@ class KeltnerChannelsIndicator:
         self.logger = logger
         self.period_ema = period_ema
         self.multiplier_atr = multiplier_atr
-        self.history_df = pd.DataFrame(columns=self.REQUIRED_COLUMNS)
+        self.history_df = pd.DataFrame(columns=pd.Index(self.REQUIRED_COLUMNS))
         # current_value will hold the latest channels as a dictionary:
         # {'upper': value, 'lower': value, 'middle': value}
         self.current_value: dict[str, Any] = {}
@@ -59,7 +62,9 @@ class KeltnerChannelsIndicator:
             raise ValueError(f"DataFrame is missing the following columns: {', '.join(missing_cols)}")
 
         self.logger.info(
-            f"Calculating Keltner Channels with period_ema={self.period_ema} and multiplier_atr={self.multiplier_atr}."
+            "calculating_keltner_channels",
+            period_ema=self.period_ema,
+            multiplier_atr=self.multiplier_atr,
         )
 
         # Calculate the Exponential Moving Average (EMA) for the 'Close' prices
@@ -79,7 +84,7 @@ class KeltnerChannelsIndicator:
         upper_band = ema + (atr * self.multiplier_atr)
         lower_band = ema - (atr * self.multiplier_atr)
 
-        self.logger.info("Keltner Channels calculated successfully.")
+        self.logger.info("keltner_channels_calculated")
         return pd.DataFrame(
             {
                 "UpperBand": upper_band,
@@ -107,7 +112,9 @@ class KeltnerChannelsIndicator:
 
             if high is None or low is None or close is None:
                 self.logger.warning(
-                    "Data point missing required 'high', 'low', or 'close' for Keltner Channels update."
+                    "missing_required_fields",
+                    indicator="keltner_channels",
+                    required=["high", "low", "close"],
                 )
                 return None
 
@@ -124,13 +131,13 @@ class KeltnerChannelsIndicator:
                     "middle": kc_df["EMA"].iloc[-1],
                 }
             else:
-                self.logger.debug("Not enough data to calculate Keltner Channels.")
+                self.logger.debug("insufficient_data", indicator="keltner_channels")
                 self.current_value = {}
 
             return self.current_value
 
         except Exception as e:
-            self.logger.error(f"Keltner Channels Indicator update failed: {e}", exc_info=True)
+            self.logger.error("keltner_channels_update_failed", error=str(e), exc_info=True)
             return None
 
     def apply(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -152,15 +159,15 @@ class KeltnerChannelsIndicator:
             if missing_cols:
                 raise ValueError(f"DataFrame is missing required columns: {', '.join(missing_cols)}")
 
-            self.logger.info("Applying Keltner Channels to DataFrame.")
+            self.logger.info("applying_keltner_channels")
             data = data.copy()
             kc_df = self._calculate_keltner_channels(data)
             data["UpperBand"] = kc_df["UpperBand"]
             data["LowerBand"] = kc_df["LowerBand"]
             data["EMA"] = kc_df["EMA"]
-            self.logger.info("Keltner Channels added successfully.")
+            self.logger.info("keltner_channels_applied")
             return data
 
         except Exception as e:
-            self.logger.error(f"Error applying Keltner Channels: {e}", exc_info=True)
+            self.logger.error("keltner_channels_apply_failed", error=str(e), exc_info=True)
             raise RuntimeError("Failed to apply Keltner Channels indicator.") from e

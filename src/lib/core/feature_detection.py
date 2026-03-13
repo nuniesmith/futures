@@ -7,22 +7,12 @@ degradation when optional dependencies are not installed.
 """
 
 import importlib
-import logging
 from collections.abc import Callable
 from functools import lru_cache
-from typing import Any
 
+from lib.core.logging_config import get_logger
 
-def _get_logger() -> Any:
-    try:
-        from loguru import logger as _l
-
-        return _l
-    except ImportError:
-        return logging.getLogger(__name__)
-
-
-logger: Any = _get_logger()
+logger = get_logger(__name__)
 
 # Registry of features with detection functions
 _FEATURE_REGISTRY: dict[str, Callable[[], bool]] = {}
@@ -71,14 +61,18 @@ def _scan_all_features() -> None:
         try:
             if detection_func():
                 _DETECTED_FEATURES.add(name)
-                logger.debug(f"Feature '{name}' is available")
+                logger.debug("Feature is available", feature=name)
             else:
-                logger.debug(f"Feature '{name}' is not available")
+                logger.debug("Feature is not available", feature=name)
         except Exception as e:
-            logger.debug(f"Error detecting feature '{name}': {str(e)}")
+            logger.debug("Error detecting feature", feature=name, error=str(e))
 
     _FEATURES_SCANNED = True
-    logger.debug(f"Feature detection complete. Available: {len(_DETECTED_FEATURES)}/{len(_FEATURE_REGISTRY)}")
+    logger.debug(
+        "Feature detection complete",
+        available=len(_DETECTED_FEATURES),
+        total=len(_FEATURE_REGISTRY),
+    )
 
 
 def get_available_features() -> set[str]:
@@ -164,7 +158,7 @@ def _has_gpu_support() -> bool:
     # First try tensorflow
     if _module_exists("tensorflow"):
         try:
-            import tf
+            import tensorflow as tf
 
             return len(tf.config.list_physical_devices("GPU")) > 0
         except Exception:

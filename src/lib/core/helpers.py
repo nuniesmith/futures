@@ -12,8 +12,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
-# Import logger
-from loguru import logger
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -57,7 +58,7 @@ def timing_decorator(func: Callable[..., R]) -> Callable[..., R]:
         start_time = time.time()
         result = func(*args, **kwargs)
         end_time = time.time()
-        logger.debug(f"Function '{func.__name__}' executed in {end_time - start_time:.4f} seconds")
+        logger.debug("Function executed", function=func.__name__, elapsed_seconds=round(end_time - start_time, 4))
         return result
 
     return wrapper
@@ -87,7 +88,7 @@ def safe_json_serialize(obj: Any) -> dict[str, Any]:
     try:
         return json.loads(json.dumps(obj, default=default_handler))
     except (TypeError, ValueError) as e:
-        logger.warning(f"Failed to fully serialize object to JSON: {e}")
+        logger.warning("Failed to fully serialize object to JSON", error=str(e))
         return {"error": "Object could not be fully serialized", "type": str(type(obj))}
 
 
@@ -108,7 +109,7 @@ def error_handler(default_value: T | None = None) -> Callable[[Callable[..., R]]
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                logger.error(f"Error in {func.__name__}: {str(e)}", exc_info=True)
+                logger.error("Error in function", function=func.__name__, error=str(e), exc_info=True)
                 return default_value
 
         return wrapper
@@ -178,7 +179,7 @@ def parse_timestamp(timestamp: str, formats: list[str] | None = None) -> datetim
         except ValueError:
             continue
 
-    logger.warning(f"Failed to parse timestamp: {timestamp}")
+    logger.warning("Failed to parse timestamp", timestamp=timestamp)
     return None
 
 
@@ -229,8 +230,7 @@ def retry(
                 try:
                     return func(*args, **kwargs)
                 except exceptions as e:
-                    msg = f"{str(e)}, Retrying in {mdelay} seconds..."
-                    logger.warning(msg)
+                    logger.warning("Retrying after error", error=str(e), retry_in_seconds=mdelay)
                     time.sleep(mdelay)
                     mtries -= 1
                     mdelay *= backoff

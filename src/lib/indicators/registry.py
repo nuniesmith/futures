@@ -4,10 +4,11 @@ Registry for technical indicators.
 
 from typing import Any
 
-from loguru import logger
-
+from lib.core.logging_config import get_logger
 from lib.indicators._shims import Registry
 from lib.indicators.base import Indicator
+
+logger = get_logger(__name__)
 
 
 class IndicatorRegistry(Registry):
@@ -24,7 +25,7 @@ class IndicatorRegistry(Registry):
 
         # Ensure logger is initialized
         if not hasattr(self, "logger"):
-            self.logger = logger
+            self.logger = get_logger(__name__)
 
     def register(self, indicator_cls: type[Indicator]) -> None:
         """
@@ -36,7 +37,7 @@ class IndicatorRegistry(Registry):
         self._indicators[indicator_name] = indicator_cls
 
         try:
-            self.logger.debug(f"Registered indicator: {indicator_name}")
+            self.logger.debug("registered_indicator", indicator_name=indicator_name)
         except AttributeError:
             # Fallback if logger is still not available
             print(f"Registered indicator: {indicator_name}")
@@ -54,7 +55,7 @@ class IndicatorRegistry(Registry):
 
         if indicator_cls is None:
             try:
-                self.logger.warning(f"Indicator not found: {indicator_name}")
+                self.logger.warning("indicator_not_found", indicator_name=indicator_name)
             except AttributeError:
                 print(f"Warning: Indicator not found: {indicator_name}")
 

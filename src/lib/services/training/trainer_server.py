@@ -59,26 +59,21 @@ import json
 import logging
 import os
 import shutil
-import sys
 import threading
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-import structlog
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(name)s %(levelname)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[logging.StreamHandler(sys.stdout)],
-    force=True,
-)
+from lib.core.logging_config import get_logger, setup_logging
+
+setup_logging(service="trainer")
+
 # Quieten noisy third-party loggers that flood docker logs at INFO level
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -115,20 +110,10 @@ class _RingBufferHandler(logging.Handler):
 _ring_handler = _RingBufferHandler()
 _ring_handler.setFormatter(logging.Formatter("%(message)s"))
 _ring_handler.setLevel(logging.DEBUG)
+# Add ring buffer handler for the /logs endpoint
 logging.getLogger().addHandler(_ring_handler)
 
-
-structlog.configure(
-    processors=[
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.add_logger_name,
-        structlog.dev.ConsoleRenderer(),
-    ],
-    wrapper_class=structlog.stdlib.BoundLogger,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-)
-
-logger = structlog.get_logger("trainer_server")
+logger = get_logger("trainer_server")
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +165,30 @@ _FALLBACK_SYMBOLS: list[str] = [
     # ETH  (7.2%),  SOL  (2.0%),
     # ZS   (90.2%), ZC   (95.1%)  — borderline; excluded until data deepens
 ]
+
+# Asset groups for per-group training mode
+ASSET_GROUPS: dict[str, list[str]] = {
+    "metals": ["MGC", "SIL"],
+    "equity_micros": ["MES", "MNQ", "M2K", "MYM"],
+    "treasuries": ["ZN", "ZB"],
+    "agriculture": ["ZW"],
+}
+
+
+def _symbols_to_groups(symbols: list[str]) -> dict[str, list[str]]:
+    """Map a symbol list into asset groups. Ungrouped symbols go into 'other'."""
+    groups: dict[str, list[str]] = {}
+    grouped: set[str] = set()
+    for group_name, group_symbols in ASSET_GROUPS.items():
+        matched = [s for s in symbols if s in group_symbols]
+        if matched:
+            groups[group_name] = matched
+            grouped.update(matched)
+    remaining = [s for s in symbols if s not in grouped]
+    if remaining:
+        groups["other"] = remaining
+    return groups
+
 
 DEFAULT_SYMBOLS: list[str] = (
     os.getenv("CNN_RETRAIN_SYMBOLS", "").split(",") if os.getenv("CNN_RETRAIN_SYMBOLS") else _FALLBACK_SYMBOLS
@@ -370,6 +379,15 @@ class TrainRequest(BaseModel):
             "'load_data'=fetch bars only, "
             "'generate_dataset'=render images+CSV only, "
             "'train'=train+evaluate+promote only"
+        ),
+    )
+    train_mode: str = Field(
+        "combined",
+        description=(
+            "Training mode: "
+            "'combined' = single model for all symbols (default), "
+            "'per_asset' = train separate model per symbol, "
+            "'per_group' = train per asset group (equity_micros, treasuries, agriculture, metals)"
         ),
     )
 
@@ -710,6 +728,116 @@ def _run_training_pipeline(params: TrainRequest) -> None:
             train_csv_path = str(labels_csv)
             val_csv_path = None
 
+        # ----- Helper: filter CSV by symbols for per-asset / per-group modes -----
+        def _filter_csv_by_symbols(csv_path: str, filter_symbols: list[str], output_path: str) -> str:
+            """Filter a CSV to only rows matching the given symbols and write to output_path."""
+            import pandas as pd
+
+            df = pd.read_csv(csv_path)
+            # The 'symbol' column contains the asset ticker
+            if "symbol" in df.columns:
+                filtered = df[df["symbol"].isin(filter_symbols)]
+            else:
+                # Fallback: try to extract symbol from image_path (images are under symbol dirs)
+                filtered = df[
+                    df["image_path"].apply(
+                        lambda p: any(f"/{s}/" in str(p) or str(p).startswith(f"{s}/") for s in filter_symbols)
+                    )
+                ]
+            filtered.to_csv(output_path, index=False)
+            return output_path
+
+        # ---------------------------------------------------------------
+        # Per-asset / per-group training mode
+        # ---------------------------------------------------------------
+        if params.train_mode in ("per_asset", "per_group"):
+            # Determine training units
+            if params.train_mode == "per_asset":
+                training_units = {s: [s] for s in symbols}
+            else:
+                training_units = _symbols_to_groups(symbols)
+
+            all_results: dict[str, Any] = {}
+            for unit_name, unit_symbols in training_units.items():
+                if _state.cancel_requested:
+                    _state.finish(error="Cancelled during per-unit training")
+                    return
+
+                _state.set(TrainStatus.TRAINING, f"Training {unit_name} model ({', '.join(unit_symbols)})")
+
+                # Filter CSVs
+                unit_train = str(DATASET_DIR / f"train_{unit_name}.csv")
+                unit_val = str(DATASET_DIR / f"val_{unit_name}.csv")
+                _filter_csv_by_symbols(train_csv_path, unit_symbols, unit_train)
+                if val_csv_path:
+                    _filter_csv_by_symbols(val_csv_path, unit_symbols, unit_val)
+
+                # Check we have enough data
+                import pandas as pd
+
+                train_count = len(pd.read_csv(unit_train))
+                if train_count < 100:
+                    logger.warning("Skipping %s — only %d training samples", unit_name, train_count)
+                    all_results[unit_name] = {"skipped": True, "reason": f"Only {train_count} samples"}
+                    continue
+
+                unit_result = train_model(
+                    data_csv=unit_train,
+                    val_csv=unit_val if val_csv_path else None,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                    lr=lr,
+                    model_dir=str(MODELS_DIR),
+                    image_root=image_root,
+                )
+
+                if unit_result:
+                    # Save with group/asset name
+                    unit_champion = MODELS_DIR / f"breakout_cnn_best_{unit_name}.pt"
+                    shutil.copy2(unit_result.model_path, str(unit_champion))
+
+                    # Evaluate
+                    eval_unit_csv = unit_val if val_csv_path else unit_train
+                    unit_metrics = evaluate_model(
+                        model_path=str(unit_champion),
+                        val_csv=eval_unit_csv,
+                        image_root=image_root,
+                        batch_size=batch_size,
+                    )
+
+                    all_results[unit_name] = {
+                        "model_path": str(unit_champion),
+                        "metrics": unit_metrics,
+                        "symbols": unit_symbols,
+                        "train_samples": train_count,
+                    }
+                    logger.info("Completed %s model: %s", unit_name, unit_metrics)
+                else:
+                    all_results[unit_name] = {"skipped": True, "reason": "train_model returned None"}
+                    logger.warning("Training failed for %s — train_model returned None", unit_name)
+
+                # Flush GPU between models
+                try:
+                    import gc
+
+                    import torch as _torch
+
+                    gc.collect()
+                    if _torch.cuda.is_available():
+                        _torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
+            # Build combined result
+            result: dict[str, Any] = {
+                "train_mode": params.train_mode,
+                "models": all_results,
+                "config": run_config,
+            }
+            _state.finish(result=result)
+            return
+
+        # ── Combined training (default) ───────────────────────────────────
         trained_result = train_model(
             data_csv=train_csv_path,
             val_csv=val_csv_path,
@@ -801,7 +929,7 @@ def _run_training_pipeline(params: TrainRequest) -> None:
             gates_passed = False
             gate_failures.append(f"recall {val_rec:.1f}% < {min_rec:.1f}%")
 
-        result: dict[str, Any] = {
+        result = {
             "metrics": {
                 "val_accuracy": round(val_acc, 2),
                 "val_precision": round(val_prec, 2),

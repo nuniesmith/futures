@@ -834,8 +834,8 @@ _TRAINING_SHORT_ALIASES: dict[str, str] = {
 }
 _TICKER_TO_NAME.update(_TRAINING_SHORT_ALIASES)
 
-# Tradovate symbol aliases (used by TradingView + Tradovate connector)
-_TRADOVATE_ALIASES: dict[str, str] = {
+# Legacy contract-month aliases (used by data connectors)
+_LEGACY_ALIASES: dict[str, str] = {
     "MGCZ4": "Gold",
     "MGCH5": "Gold",
     "MGCM5": "Gold",
@@ -865,7 +865,7 @@ _TRADOVATE_ALIASES: dict[str, str] = {
     "6BZ4": "British Pound",
     "6BH5": "British Pound",
 }
-_TICKER_TO_NAME.update(_TRADOVATE_ALIASES)
+_TICKER_TO_NAME.update(_LEGACY_ALIASES)
 
 
 # ---------------------------------------------------------------------------

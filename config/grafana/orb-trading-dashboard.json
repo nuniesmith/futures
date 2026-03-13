@@ -764,95 +764,7 @@
 
         {
             "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-            "description": "Unrealized P&L on open positions, sourced from the NinjaTrader Bridge. Updates every 15s.",
-            "fieldConfig": {
-                "defaults": {
-                    "color": { "mode": "thresholds" },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            { "color": "red", "value": null },
-                            { "color": "yellow", "value": -100 },
-                            { "color": "green", "value": 0 }
-                        ]
-                    },
-                    "unit": "currencyUSD",
-                    "mappings": []
-                },
-                "overrides": []
-            },
-            "gridPos": { "h": 4, "w": 6, "x": 0, "y": 31 },
-            "id": 3001,
-            "options": {
-                "colorMode": "background",
-                "graphMode": "area",
-                "justifyMode": "center",
-                "orientation": "auto",
-                "reduceOptions": {
-                    "calcs": ["lastNotNull"],
-                    "fields": "",
-                    "values": false
-                },
-                "textMode": "auto"
-            },
-            "title": "Unrealized P&L",
-            "type": "stat",
-            "targets": [
-                {
-                    "expr": "bridge_unrealized_pnl{job=\"ninjatrader-bridge\"} or vector(0)",
-                    "legendFormat": "Unrealized",
-                    "refId": "A"
-                }
-            ]
-        },
-
-        {
-            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-            "description": "Realized P&L for the session from the NinjaTrader Bridge.",
-            "fieldConfig": {
-                "defaults": {
-                    "color": { "mode": "thresholds" },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            { "color": "red", "value": null },
-                            { "color": "yellow", "value": -200 },
-                            { "color": "green", "value": 0 }
-                        ]
-                    },
-                    "unit": "currencyUSD",
-                    "mappings": []
-                },
-                "overrides": []
-            },
-            "gridPos": { "h": 4, "w": 6, "x": 6, "y": 31 },
-            "id": 3002,
-            "options": {
-                "colorMode": "background",
-                "graphMode": "area",
-                "justifyMode": "center",
-                "orientation": "auto",
-                "reduceOptions": {
-                    "calcs": ["lastNotNull"],
-                    "fields": "",
-                    "values": false
-                },
-                "textMode": "auto"
-            },
-            "title": "Realized P&L",
-            "type": "stat",
-            "targets": [
-                {
-                    "expr": "bridge_realized_pnl{job=\"ninjatrader-bridge\"} or vector(0)",
-                    "legendFormat": "Realized",
-                    "refId": "A"
-                }
-            ]
-        },
-
-        {
-            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-            "description": "Number of open positions on the Sim100 account.",
+            "description": "Number of open positions tracked by the data service.",
             "fieldConfig": {
                 "defaults": {
                     "color": { "mode": "thresholds" },
@@ -869,7 +781,7 @@
                 },
                 "overrides": []
             },
-            "gridPos": { "h": 4, "w": 4, "x": 12, "y": 31 },
+            "gridPos": { "h": 4, "w": 6, "x": 0, "y": 31 },
             "id": 3003,
             "options": {
                 "colorMode": "background",
@@ -887,197 +799,9 @@
             "type": "stat",
             "targets": [
                 {
-                    "expr": "positions_open_count{job=\"data-service\"} or bridge_positions_count{job=\"ninjatrader-bridge\"} or vector(0)",
+                    "expr": "positions_open_count{job=\"data-service\"} or vector(0)",
                     "legendFormat": "Positions",
                     "refId": "A"
-                }
-            ]
-        },
-
-        {
-            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-            "description": "Cash balance on Sim100 account. Starting balance: $150,000.",
-            "fieldConfig": {
-                "defaults": {
-                    "color": { "mode": "thresholds" },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            { "color": "red", "value": null },
-                            { "color": "yellow", "value": 138000 },
-                            { "color": "green", "value": 150000 }
-                        ]
-                    },
-                    "unit": "currencyUSD",
-                    "mappings": []
-                },
-                "overrides": []
-            },
-            "gridPos": { "h": 4, "w": 4, "x": 16, "y": 31 },
-            "id": 3004,
-            "options": {
-                "colorMode": "background",
-                "graphMode": "area",
-                "justifyMode": "center",
-                "orientation": "auto",
-                "reduceOptions": {
-                    "calcs": ["lastNotNull"],
-                    "fields": "",
-                    "values": false
-                },
-                "textMode": "auto"
-            },
-            "title": "Cash Balance",
-            "type": "stat",
-            "targets": [
-                {
-                    "expr": "bridge_cash_balance{job=\"ninjatrader-bridge\"} or vector(150000)",
-                    "legendFormat": "Balance",
-                    "refId": "A"
-                }
-            ]
-        },
-
-        {
-            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-            "description": "NinjaTrader Bridge connectivity status. Should be UP during market hours. Prometheus marks DOWN during off-hours (expected).",
-            "fieldConfig": {
-                "defaults": {
-                    "color": { "mode": "thresholds" },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            { "color": "yellow", "value": null },
-                            { "color": "green", "value": 1 }
-                        ]
-                    },
-                    "mappings": [
-                        {
-                            "options": {
-                                "0": {
-                                    "color": "yellow",
-                                    "index": 0,
-                                    "text": "OFF"
-                                },
-                                "1": {
-                                    "color": "green",
-                                    "index": 1,
-                                    "text": "UP"
-                                }
-                            },
-                            "type": "value"
-                        }
-                    ]
-                },
-                "overrides": []
-            },
-            "gridPos": { "h": 4, "w": 4, "x": 20, "y": 31 },
-            "id": 3005,
-            "options": {
-                "colorMode": "background",
-                "graphMode": "none",
-                "justifyMode": "center",
-                "orientation": "auto",
-                "reduceOptions": {
-                    "calcs": ["lastNotNull"],
-                    "fields": "",
-                    "values": false
-                },
-                "textMode": "auto"
-            },
-            "title": "NT Bridge",
-            "type": "stat",
-            "targets": [
-                {
-                    "expr": "bridge_up{job=\"ninjatrader-bridge\"} or vector(0)",
-                    "legendFormat": "Bridge",
-                    "refId": "A"
-                }
-            ]
-        },
-
-        {
-            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-            "description": "Rolling P&L curve for the paper trading session. Each point is the instantaneous realized + unrealized P&L.",
-            "fieldConfig": {
-                "defaults": {
-                    "color": { "mode": "thresholds" },
-                    "custom": {
-                        "axisBorderShow": false,
-                        "axisCenteredZero": true,
-                        "axisLabel": "USD",
-                        "drawStyle": "line",
-                        "fillOpacity": 20,
-                        "lineInterpolation": "smooth",
-                        "lineWidth": 2,
-                        "pointSize": 4,
-                        "showPoints": "auto",
-                        "stacking": { "group": "A", "mode": "none" }
-                    },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            { "color": "red", "value": null },
-                            { "color": "green", "value": 0 }
-                        ]
-                    },
-                    "unit": "currencyUSD"
-                },
-                "overrides": [
-                    {
-                        "matcher": {
-                            "id": "byName",
-                            "options": "Realized P&L"
-                        },
-                        "properties": [
-                            {
-                                "id": "color",
-                                "value": {
-                                    "fixedColor": "#73BF69",
-                                    "mode": "fixed"
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        "matcher": {
-                            "id": "byName",
-                            "options": "Unrealized P&L"
-                        },
-                        "properties": [
-                            {
-                                "id": "color",
-                                "value": {
-                                    "fixedColor": "#5794F2",
-                                    "mode": "fixed"
-                                }
-                            }
-                        ]
-                    }
-                ]
-            },
-            "gridPos": { "h": 9, "w": 16, "x": 0, "y": 35 },
-            "id": 3010,
-            "options": {
-                "legend": {
-                    "calcs": ["last", "min", "max"],
-                    "displayMode": "table",
-                    "placement": "bottom"
-                },
-                "tooltip": { "mode": "multi", "sort": "none" }
-            },
-            "title": "P&L Curve (paper session)",
-            "type": "timeseries",
-            "targets": [
-                {
-                    "expr": "bridge_realized_pnl{job=\"ninjatrader-bridge\"} or vector(0)",
-                    "legendFormat": "Realized P&L",
-                    "refId": "A"
-                },
-                {
-                    "expr": "bridge_unrealized_pnl{job=\"ninjatrader-bridge\"} or vector(0)",
-                    "legendFormat": "Unrealized P&L",
-                    "refId": "B"
                 }
             ]
         },
@@ -1137,7 +861,7 @@
                     }
                 ]
             },
-            "gridPos": { "h": 9, "w": 8, "x": 16, "y": 35 },
+            "gridPos": { "h": 9, "w": 18, "x": 6, "y": 31 },
             "id": 3011,
             "options": {
                 "legend": {
@@ -1163,94 +887,6 @@
                 {
                     "expr": "increase(risk_checks_total{result=\"advisory\"}[5m])",
                     "legendFormat": "advisory",
-                    "refId": "C"
-                }
-            ]
-        },
-
-        {
-            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-            "description": "Signals received by the NT Bridge, how many were executed, and how many were rejected. A healthy session shows received = executed.",
-            "fieldConfig": {
-                "defaults": {
-                    "color": { "mode": "palette-classic" },
-                    "custom": {
-                        "axisBorderShow": false,
-                        "axisCenteredZero": false,
-                        "drawStyle": "line",
-                        "fillOpacity": 10,
-                        "lineWidth": 2,
-                        "pointSize": 6,
-                        "showPoints": "auto",
-                        "stacking": { "group": "A", "mode": "none" }
-                    },
-                    "unit": "none"
-                },
-                "overrides": [
-                    {
-                        "matcher": { "id": "byName", "options": "received" },
-                        "properties": [
-                            {
-                                "id": "color",
-                                "value": {
-                                    "fixedColor": "#5794F2",
-                                    "mode": "fixed"
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        "matcher": { "id": "byName", "options": "executed" },
-                        "properties": [
-                            {
-                                "id": "color",
-                                "value": {
-                                    "fixedColor": "#73BF69",
-                                    "mode": "fixed"
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        "matcher": { "id": "byName", "options": "rejected" },
-                        "properties": [
-                            {
-                                "id": "color",
-                                "value": {
-                                    "fixedColor": "#F2495C",
-                                    "mode": "fixed"
-                                }
-                            }
-                        ]
-                    }
-                ]
-            },
-            "gridPos": { "h": 8, "w": 24, "x": 0, "y": 44 },
-            "id": 3020,
-            "options": {
-                "legend": {
-                    "calcs": ["sum"],
-                    "displayMode": "table",
-                    "placement": "bottom"
-                },
-                "tooltip": { "mode": "multi", "sort": "none" }
-            },
-            "title": "NT Bridge Signal Flow (received → executed → rejected)",
-            "type": "timeseries",
-            "targets": [
-                {
-                    "expr": "increase(bridge_signals_received_total{job=\"ninjatrader-bridge\"}[5m]) or vector(0)",
-                    "legendFormat": "received",
-                    "refId": "A"
-                },
-                {
-                    "expr": "increase(bridge_signals_executed_total{job=\"ninjatrader-bridge\"}[5m]) or vector(0)",
-                    "legendFormat": "executed",
-                    "refId": "B"
-                },
-                {
-                    "expr": "increase(bridge_signals_rejected_total{job=\"ninjatrader-bridge\"}[5m]) or vector(0)",
-                    "legendFormat": "rejected",
                     "refId": "C"
                 }
             ]

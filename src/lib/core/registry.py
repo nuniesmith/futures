@@ -5,10 +5,11 @@ from collections.abc import Callable
 from enum import Enum
 from typing import Any, Generic, TypeVar
 
-from loguru import logger
-
 from lib.core.base import BaseComponent as Component
 from lib.core.exceptions.validation import ValidationException
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # Type variables
 T = TypeVar("T")
@@ -119,7 +120,7 @@ class BaseRegistry(Generic[T]):
 
         # Register the class
         self._registry[name] = cls
-        logger.debug(f"[{self._name}] Registered '{name}' in registry: {cls.__name__}")
+        logger.debug("Registered item in registry", registry=self._name, name=name, cls=cls.__name__)
 
     def unregister(self, name: str) -> None:
         """
@@ -137,7 +138,7 @@ class BaseRegistry(Generic[T]):
         if name in self._registry:
             cls = self._registry[name]
             del self._registry[name]
-            logger.debug(f"[{self._name}] Unregistered '{name}' from registry: {cls.__name__}")
+            logger.debug("Unregistered item from registry", registry=self._name, name=name, cls=cls.__name__)
         else:
             raise KeyError(f"'{name}' is not registered in the registry")
 
@@ -180,7 +181,7 @@ class BaseRegistry(Generic[T]):
         if name not in self._instances:
             cls = self.get(name)
             self._instances[name] = cls(*args, **kwargs)
-            logger.debug(f"[{self._name}] Created instance of '{name}': {cls.__name__}")
+            logger.debug("Created instance", registry=self._name, name=name, cls=cls.__name__)
 
         return self._instances[name]
 
@@ -203,7 +204,7 @@ class BaseRegistry(Generic[T]):
         """
         cls = self.get(name)
         instance = cls(*args, **kwargs)
-        logger.debug(f"[{self._name}] Created instance of '{name}': {cls.__name__}")
+        logger.debug("Created instance", registry=self._name, name=name, cls=cls.__name__)
         return instance
 
     def has(self, name: str) -> bool:
@@ -233,7 +234,7 @@ class BaseRegistry(Generic[T]):
         """
         self._instances.clear()
         self._registry.clear()
-        logger.debug(f"[{self._name}] Registry cleared")
+        logger.debug("Registry cleared", registry=self._name)
 
     def register_module(self, module: Any) -> builtins.list[str]:
         """
@@ -273,7 +274,9 @@ class BaseRegistry(Generic[T]):
                 self.register(reg_name, obj)
                 registered.append(reg_name)
 
-        logger.debug(f"[{self._name}] Registered {len(registered)} classes from module {module.__name__}")
+        logger.debug(
+            "Registered classes from module", registry=self._name, count=len(registered), module=module.__name__
+        )
         return registered
 
     def __len__(self) -> int:
@@ -336,7 +339,7 @@ class ComponentRegistry(BaseRegistry[Component]):
         """
         for name, instance in self._instances.items():
             if not instance.is_running:  # type: ignore[attr-defined]
-                logger.debug(f"[{self._name}] Starting component '{name}'")
+                logger.debug("Starting component", registry=self._name, name=name)
                 instance.start()  # type: ignore[attr-defined]
 
     def stop_all(self) -> None:
@@ -345,7 +348,7 @@ class ComponentRegistry(BaseRegistry[Component]):
         """
         for name, instance in self._instances.items():
             if instance.is_running:  # type: ignore[attr-defined]
-                logger.debug(f"[{self._name}] Stopping component '{name}'")
+                logger.debug("Stopping component", registry=self._name, name=name)
                 instance.stop()  # type: ignore[attr-defined]
 
 
@@ -434,7 +437,7 @@ class FactoryRegistry(Generic[T]):
             )
 
         self._factories[name] = factory
-        logger.debug(f"[{self._name}] Registered factory '{name}' in registry")
+        logger.debug("Registered factory in registry", registry=self._name, name=name)
 
     def unregister(self, name: str) -> None:
         """
@@ -448,7 +451,7 @@ class FactoryRegistry(Generic[T]):
         """
         if name in self._factories:
             del self._factories[name]
-            logger.debug(f"[{self._name}] Unregistered factory '{name}' from registry")
+            logger.debug("Unregistered factory from registry", registry=self._name, name=name)
         else:
             raise KeyError(f"'{name}' is not registered in the factory registry")
 
@@ -527,7 +530,7 @@ class FactoryRegistry(Generic[T]):
         Clear the registry.
         """
         self._factories.clear()
-        logger.debug(f"[{self._name}] Factory registry cleared")
+        logger.debug("Factory registry cleared", registry=self._name)
 
 
 # Global basic component registry
@@ -609,7 +612,7 @@ class Registry(Generic[K, T]):
             registry_item = RegistryItem(item=item, tags=tags, category=category, metadata=metadata)
 
             self._registry[name] = registry_item
-            logger.debug(f"Registered item '{name}' in registry")
+            logger.debug("Registered item in registry", name=name)
 
     def unregister(self, name: K) -> T:
         """
@@ -632,7 +635,7 @@ class Registry(Generic[K, T]):
 
             item = self._registry[name].item
             del self._registry[name]
-            logger.debug(f"Unregistered item '{name}' from registry")
+            logger.debug("Unregistered item from registry", name=name)
             return item
 
     def get(self, name: K) -> T:

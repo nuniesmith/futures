@@ -9,24 +9,15 @@ to import cleanly without requiring every external package.
 from __future__ import annotations
 
 import functools
-import logging
 from typing import Any
 
+from lib.core.logging_config import get_logger
+
 # ---------------------------------------------------------------------------
-# Logger — use loguru if available, else stdlib
+# Logger — structured logging via structlog
 # ---------------------------------------------------------------------------
 
-
-def _get_logger() -> Any:
-    try:
-        from loguru import logger as _l
-
-        return _l
-    except ImportError:
-        return logging.getLogger("lib.model")
-
-
-logger: Any = _get_logger()
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Exception stubs

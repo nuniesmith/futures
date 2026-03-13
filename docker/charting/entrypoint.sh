@@ -3,7 +3,7 @@ set -e
 
 echo "[startup] Starting Charting Service (Nginx + ApexCharts)..."
 echo "[startup] Port              : ${CHARTING_SERVICE_PORT:-8003}"
-echo "[startup] DATA_SERVICE_URL  : ${DATA_SERVICE_URL:-http://data:8001}"
+echo "[startup] DATA_SERVICE_URL  : ${DATA_SERVICE_URL:-http://data:8000}"
 echo "[startup] CORS_ORIGINS      : ${CORS_ORIGINS:-*}"
 
 # Remove any default nginx config that would conflict with ours

@@ -7,12 +7,12 @@ in financial market data, supporting both BTC and traditional markets.
 
 import numpy as np
 import pandas as pd
-from loguru import logger
+
+from lib.core.logging_config import get_logger
 
 # (utils.datetime_utils / utils.config_utils are from the original project; not needed here)
 
-# Configure logger
-logger = logger.bind(name="candle_patterns")
+logger = get_logger(__name__)
 
 
 def identify_manipulation_candles(
@@ -47,13 +47,15 @@ def identify_manipulation_candles(
         missing_columns = [col for col in required_columns if col not in df.columns]
 
         if missing_columns:
-            logger.error(f"Missing required columns: {missing_columns}")
+            logger.error("missing_required_columns", missing_columns=missing_columns)
             return df
 
         # Check if dataframe is too small for trend calculation
         if len(df) < trend_period + 1:
             logger.warning(
-                f"DataFrame too small for trend calculation. Need at least {trend_period + 1} rows, found {len(df)}"
+                "dataframe_too_small_for_trend_calculation",
+                min_required=trend_period + 1,
+                row_count=len(df),
             )
             # Return the original dataframe with additional columns initialized
             result = df.copy()
@@ -150,7 +152,7 @@ def identify_manipulation_candles(
         return result
 
     except Exception as e:
-        logger.error(f"Error in identify_manipulation_candles: {e}")
+        logger.error("identify_manipulation_candles_failed", error=str(e))
         # If an error occurs, return the original DataFrame
         return df
 
@@ -189,7 +191,11 @@ def get_valid_signals(
         missing_columns = [col for col in required_columns if col not in df.columns]
 
         if missing_columns:
-            logger.error(f"Missing required columns: {missing_columns}. Run identify_manipulation_candles first.")
+            logger.error(
+                "missing_required_columns",
+                missing_columns=missing_columns,
+                hint="Run identify_manipulation_candles first.",
+            )
             # Add the missing columns with appropriate default values
             result = df.copy()
             for col in missing_columns:
@@ -233,7 +239,7 @@ def get_valid_signals(
                 result.loc[strong_signals, "valid_signal"] = True
             elif timeframe.startswith("W"):
                 # Weekly timeframe - only the strongest signals
-                logger.info(f"Only processing strong signals for {timeframe} timeframe")
+                logger.info("processing_strong_signals_only", timeframe=timeframe)
                 result["valid_signal"] = False
                 # If enhanced features are available, use them
                 if "candle_height_pct" in result.columns and enhanced_filtering:
@@ -244,7 +250,7 @@ def get_valid_signals(
             else:
                 # For other long timeframes, be very selective
                 result["valid_signal"] = False
-                logger.info(f"No valid signals for {timeframe} timeframe in standard mode")
+                logger.info("no_valid_signals_for_timeframe", timeframe=timeframe, mode="standard")
 
         # Calculate signal strength if enhanced filtering is enabled
         if enhanced_filtering:
@@ -274,12 +280,12 @@ def get_valid_signals(
             if min_strength > 0:
                 weak_signals = (result["signal_strength"] < min_strength) & result["valid_signal"]
                 result.loc[weak_signals, "valid_signal"] = False
-                logger.info(f"Removed {weak_signals.sum()} weak signals below strength threshold {min_strength}")
+                logger.info("removed_weak_signals", count=int(weak_signals.sum()), min_strength=min_strength)
 
         return result
 
     except Exception as e:
-        logger.error(f"Error in get_valid_signals: {e}")
+        logger.error("get_valid_signals_failed", error=str(e))
         # If an error occurs, return the original DataFrame with a valid_signal column
         result = df.copy()
         result["valid_signal"] = False
@@ -321,7 +327,7 @@ def generate_entry_signals(
         missing_columns = [col for col in required_columns if col not in df.columns]
 
         if missing_columns:
-            logger.error(f"Missing required columns: {missing_columns}")
+            logger.error("missing_required_columns", missing_columns=missing_columns)
             return df
 
         # Make a copy to avoid modifying the original
@@ -491,7 +497,7 @@ def generate_entry_signals(
         return result
 
     except Exception as e:
-        logger.error(f"Error in generate_entry_signals: {e}")
+        logger.error("generate_entry_signals_failed", error=str(e))
         return df
 
 
@@ -515,7 +521,7 @@ def identify_advanced_patterns(df: pd.DataFrame, lookback_period: int = 5) -> pd
         # Check required columns
         required_columns = ["open", "high", "low", "close"]
         if not all(col in df.columns for col in required_columns):
-            logger.error("Missing required OHLC columns")
+            logger.error("missing_required_ohlc_columns")
             return df
 
         # Make a copy to avoid modifying the original
@@ -524,7 +530,9 @@ def identify_advanced_patterns(df: pd.DataFrame, lookback_period: int = 5) -> pd
         # Skip if dataframe is too small
         if len(result) < lookback_period + 2:
             logger.warning(
-                f"DataFrame too small for pattern identification. Need at least {lookback_period + 2} rows, found {len(result)}"
+                "dataframe_too_small_for_pattern_identification",
+                min_required=lookback_period + 2,
+                row_count=len(result),
             )
             return result
 
@@ -598,7 +606,7 @@ def identify_advanced_patterns(df: pd.DataFrame, lookback_period: int = 5) -> pd
         return result
 
     except Exception as e:
-        logger.error(f"Error in identify_advanced_patterns: {e}")
+        logger.error("identify_advanced_patterns_failed", error=str(e))
         return df
 
 
@@ -645,7 +653,7 @@ def get_pattern_strength(
 
         # Get row at index
         if index < 0 or index >= len(df):
-            logger.error(f"Index {index} out of bounds for DataFrame of length {len(df)}")
+            logger.error("index_out_of_bounds", index=index, dataframe_length=len(df))
             return {"strength": 0.0, "patterns": []}
 
         row = df.iloc[index]
@@ -683,7 +691,7 @@ def get_pattern_strength(
         }
 
     except Exception as e:
-        logger.error(f"Error in get_pattern_strength: {e}")
+        logger.error("get_pattern_strength_failed", error=str(e))
         return {"strength": 0.0, "patterns": []}
 
 
@@ -709,7 +717,7 @@ def filter_signals_for_crypto(
     """
     try:
         if df is None or df.empty or "entry_signal" not in df.columns:
-            logger.error("Invalid DataFrame for crypto signal filtering")
+            logger.error("invalid_dataframe_for_crypto_signal_filtering")
             return df
 
         result = df.copy()
@@ -725,7 +733,7 @@ def filter_signals_for_crypto(
             # Filter by minimum strength
             weak_signals = (result["signal_strength"] < min_strength) & result["entry_signal"]
             result.loc[weak_signals, "entry_signal"] = False
-            logger.info(f"Removed {weak_signals.sum()} weak signals below strength threshold {min_strength}")
+            logger.info("removed_weak_signals", count=int(weak_signals.sum()), min_strength=min_strength)
 
         # Respect key levels if enabled and columns exist
         if respect_key_levels and "key_level" in result.columns:
@@ -742,7 +750,7 @@ def filter_signals_for_crypto(
 
             # Remove signals not near key levels or areas of interest
             result.loc[non_key_signals, "entry_signal"] = False
-            logger.info(f"Removed {non_key_signals.sum()} signals not near key levels or areas of interest")
+            logger.info("removed_non_key_level_signals", count=int(non_key_signals.sum()))
 
         # Add volatility-based filtering for crypto
         if "candle_height_pct" in result.columns:
@@ -751,17 +759,20 @@ def filter_signals_for_crypto(
                 "entry_signal"
             ]
             result.loc[low_vol_signals, "entry_signal"] = False
-            logger.info(f"Removed {low_vol_signals.sum()} low volatility signals")
+            logger.info("removed_low_volatility_signals", count=int(low_vol_signals.sum()))
 
         # Log signals removed
         final_count = result["entry_signal"].sum()
         removed_count = initial_count - final_count
         logger.info(
-            f"Crypto filtering removed {removed_count} of {initial_count} signals ({removed_count / initial_count * 100:.1f}%)"
+            "crypto_filtering_complete",
+            removed_count=removed_count,
+            initial_count=initial_count,
+            removed_pct=round(removed_count / initial_count * 100, 1) if initial_count else 0,
         )
 
         return result
 
     except Exception as e:
-        logger.error(f"Error in filter_signals_for_crypto: {e}")
+        logger.error("filter_signals_for_crypto_failed", error=str(e))
         return df

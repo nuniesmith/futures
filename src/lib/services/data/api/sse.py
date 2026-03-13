@@ -62,10 +62,6 @@ _PUBSUB_BACKOFF = [0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 30.0]
 # Track last send time per event type for throttling
 _last_sent: dict[str, float] = {}
 
-# Bridge staleness threshold — if the heartbeat cache key is older than this,
-# bridge is considered offline.  Matches _HEARTBEAT_TTL in positions.py (60s).
-_BRIDGE_STALE_SECONDS = 60.0
-
 
 def _should_throttle(event_key: str) -> bool:
     """Return True if we should skip this event due to throttling."""
@@ -318,50 +314,6 @@ def _get_risk_from_cache() -> str | None:
     return None
 
 
-def _get_bridge_status() -> dict[str, Any]:
-    """Check NT8 Bridge liveness by inspecting the heartbeat cache key.
-
-    Returns a dict:
-        connected: bool   — heartbeat received within _BRIDGE_STALE_SECONDS
-        age_seconds: float — seconds since last heartbeat (-1 if never seen)
-        account: str      — account name from last heartbeat
-        bridge_version: str
-        positions: int    — open position count from last heartbeat
-    """
-    from zoneinfo import ZoneInfo
-
-    _EST_LOCAL = ZoneInfo("America/New_York")
-    try:
-        from lib.core.cache import _cache_key, cache_get
-
-        key = _cache_key("bridge_heartbeat", "current")
-        raw = cache_get(key)
-        if raw is None:
-            return {"connected": False, "age_seconds": -1, "account": "", "bridge_version": "", "positions": 0}
-
-        hb = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
-        received = hb.get("received_at", "")
-        age = -1.0
-        connected = False
-        if received:
-            try:
-                dt = datetime.fromisoformat(received)
-                age = (datetime.now(tz=_EST_LOCAL) - dt).total_seconds()
-                connected = age < _BRIDGE_STALE_SECONDS
-            except Exception:
-                pass
-
-        return {
-            "connected": connected,
-            "age_seconds": round(age, 1),
-            "account": hb.get("account", ""),
-            "bridge_version": hb.get("bridge_version", ""),
-            "positions": hb.get("positions", 0),
-        }
-    except Exception:
-        return {"connected": False, "age_seconds": -1, "account": "", "bridge_version": "", "positions": 0}
-
-
 def _get_orb_from_cache() -> str | None:
     """Read multi-session ORB results from Redis cache (TASK-801).
 
@@ -457,7 +409,6 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
          the browser's EventSource retry fires a clean reconnect
     4. Otherwise, fall back to polling Redis every 5 seconds
     5. Send heartbeat every 30 seconds
-    6. Emit bridge-status event when bridge online/offline state changes
     """
 
     # 1. Retry directive — tells browser to reconnect after 3 seconds on disconnect
@@ -577,7 +528,6 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
     last_orb_hash = ""
     last_reddit_hash = ""
     last_session = ""
-    last_bridge_connected: bool | None = None  # None = not yet emitted
 
     # Consecutive pubsub error counter — reset to 0 on any successful read.
     pubsub_errors = 0
@@ -595,19 +545,6 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
             if now - last_heartbeat >= _HEARTBEAT_INTERVAL:
                 yield _make_heartbeat_event()
                 last_heartbeat = now
-
-            # --- Bridge status (checked every loop iteration, change-only emit) ---
-            try:
-                bridge_info = _get_bridge_status()
-                bridge_now = bridge_info["connected"]
-                if bridge_now != last_bridge_connected:
-                    last_bridge_connected = bridge_now
-                    yield _format_sse(
-                        data=json.dumps(bridge_info, default=str),
-                        event="bridge-status",
-                    )
-            except Exception:
-                pass
 
             if use_pubsub and pubsub is not None:
                 # ---- Pub/sub mode: check for messages ----
@@ -753,7 +690,6 @@ async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, No
 
             else:
                 # ---- Polling mode: check Redis cache periodically ----
-                # (bridge-status is already checked above, outside both branches)
                 try:
                     # Check focus data
                     cached = _get_focus_from_cache()

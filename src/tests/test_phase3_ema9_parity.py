@@ -6,7 +6,7 @@ produce identical (≤ 1 tick) Phase 3 EMA9 trail stop levels and exit
 decisions when fed the same deterministic OHLCV bar sequence.
 
 The C# logic is *reimplemented here in Python* as a pure function so we
-can run both sides in the same pytest process without a live NT8 instance.
+can run both sides in the same pytest process without a live trading instance.
 
 What is under test
 ------------------
@@ -18,8 +18,8 @@ What is under test
 4. TP3 hard exit is triggered at the same bar in both implementations.
 5. TP3 check takes priority over EMA9 stop check in both implementations.
 
-C# parity notes
----------------
+Python-canonical parity notes
+------------------------------
 UpdateEma9 in BreakoutStrategy.cs (L1826-1854):
     Seed: accumulate SMA over the first `period` (9) closed bars,
           then switch to: ema = ema + k * (close - ema)  where k = 2/(9+1) = 0.2

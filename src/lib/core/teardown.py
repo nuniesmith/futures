@@ -14,19 +14,9 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
+from lib.core.logging_config import get_logger
 
-def _get_logger() -> Any:
-    try:
-        from loguru import logger as _l
-
-        return _l
-    except ImportError:
-        import logging
-
-        return logging.getLogger("core.teardown")
-
-
-logger: Any = _get_logger()
+logger = get_logger(__name__)
 
 # Core components that require specific teardown procedures
 CORE_COMPONENTS = [
@@ -56,6 +46,7 @@ _teardown_state: dict[str, Any] = {
 
 # Get logger for this module
 _logger = logger
+# NOTE: _logger is an alias kept for compatibility within this module
 
 
 def _update_teardown_state(**kwargs) -> None:
@@ -114,7 +105,7 @@ def _shutdown_component(component_name: str, timeout: float = DEFAULT_TEARDOWN_T
                 spec = importlib.util.find_spec(module_path)
 
                 if spec is None:
-                    _logger.debug(f"No teardown module found for {component_name}")
+                    _logger.debug("No teardown module found", component=component_name)
                     return True, None  # Assume success if component doesn't exist
 
         # Import the module
@@ -126,7 +117,7 @@ def _shutdown_component(component_name: str, timeout: float = DEFAULT_TEARDOWN_T
         elif hasattr(module, "shutdown"):
             teardown_func = module.shutdown
         else:
-            _logger.debug(f"No teardown/shutdown function found in {module_path}")
+            _logger.debug("No teardown/shutdown function found", module_path=module_path)
             return True, None  # Assume success if no teardown function
 
         # If we have a background thread version, use it with timeout
@@ -143,7 +134,7 @@ def _shutdown_component(component_name: str, timeout: float = DEFAULT_TEARDOWN_T
             # Check if thread completed
             if teardown_thread.is_alive():
                 elapsed = time.time() - start_time
-                _logger.warning(f"Teardown of {component_name} timed out after {elapsed:.2f}s")
+                _logger.warning("Teardown timed out", component=component_name, elapsed_s=round(elapsed, 2))
                 return False, f"Timed out after {elapsed:.2f}s"
 
         else:
@@ -151,13 +142,15 @@ def _shutdown_component(component_name: str, timeout: float = DEFAULT_TEARDOWN_T
             teardown_func()
 
         elapsed = time.time() - start_time
-        _logger.info(f"Component {component_name} shut down in {elapsed:.3f}s")
+        _logger.info("Component shut down", component=component_name, elapsed_s=round(elapsed, 3))
         return True, None
 
     except Exception as e:
         elapsed = time.time() - start_time
         error_msg = f"{type(e).__name__}: {str(e)}"
-        _logger.error(f"Error shutting down {component_name} after {elapsed:.3f}s: {error_msg}")
+        _logger.error(
+            "Error shutting down component", component=component_name, elapsed_s=round(elapsed, 3), error=error_msg
+        )
         return False, error_msg
 
 
@@ -200,7 +193,7 @@ def shutdown_databases() -> bool:
         except AttributeError:
             _logger.debug("close_all_connections function not found in database module")
         except Exception as e:
-            _logger.error(f"Error closing database connections: {e}")
+            _logger.error("Error closing database connections", error=str(e))
             success = False
 
         # Shut down ORM engine
@@ -227,12 +220,12 @@ def shutdown_databases() -> bool:
         except AttributeError:
             _logger.debug("shutdown_engine function not found in ORM module")
         except Exception as e:
-            _logger.error(f"Error shutting down ORM engine: {e}")
+            _logger.error("Error shutting down ORM engine", error=str(e))
             success = False
 
         return success
     except Exception as e:
-        _logger.error(f"Unexpected error in database shutdown: {e}")
+        _logger.error("Unexpected error in database shutdown", error=str(e))
         return False
 
 
@@ -266,12 +259,12 @@ def shutdown_cache() -> bool:
             except ImportError:
                 _logger.debug("Cache module not found, skipping cache shutdown")
             except Exception as e:
-                _logger.error(f"Error shutting down cache: {e}")
+                _logger.error("Error shutting down cache", error=str(e))
                 return False
 
         return True
     except Exception as e:
-        _logger.error(f"Unexpected error in cache shutdown: {e}")
+        _logger.error("Unexpected error in cache shutdown", error=str(e))
         return False
 
 
@@ -297,7 +290,7 @@ def shutdown_event_system() -> bool:
         except ImportError:
             _logger.debug("Event bus module not found, skipping shutdown")
         except Exception as e:
-            _logger.error(f"Error shutting down event bus: {e}")
+            _logger.error("Error shutting down event bus", error=str(e))
             success = False
 
         # Try to shut down pubsub
@@ -311,12 +304,12 @@ def shutdown_event_system() -> bool:
         except ImportError:
             _logger.debug("Pubsub module not found, skipping shutdown")
         except Exception as e:
-            _logger.error(f"Error disconnecting from pubsub: {e}")
+            _logger.error("Error disconnecting from pubsub", error=str(e))
             success = False
 
         return success
     except Exception as e:
-        _logger.error(f"Unexpected error in event system shutdown: {e}")
+        _logger.error("Unexpected error in event system shutdown", error=str(e))
         return False
 
 
@@ -340,12 +333,12 @@ def shutdown_scheduler() -> bool:
         except ImportError:
             _logger.debug("Scheduler module not found, skipping shutdown")
         except Exception as e:
-            _logger.error(f"Error shutting down scheduler: {e}")
+            _logger.error("Error shutting down scheduler", error=str(e))
             return False
 
         return True
     except Exception as e:
-        _logger.error(f"Unexpected error in scheduler shutdown: {e}")
+        _logger.error("Unexpected error in scheduler shutdown", error=str(e))
         return False
 
 
@@ -369,12 +362,12 @@ def shutdown_filesystem() -> bool:
         except ImportError:
             _logger.debug("Filesystem module not found, skipping cleanup")
         except Exception as e:
-            _logger.error(f"Error closing file handles: {e}")
+            _logger.error("Error closing file handles", error=str(e))
             return False
 
         return True
     except Exception as e:
-        _logger.error(f"Unexpected error in filesystem shutdown: {e}")
+        _logger.error("Unexpected error in filesystem shutdown", error=str(e))
         return False
 
 
@@ -398,12 +391,12 @@ def shutdown_security() -> bool:
         except ImportError:
             _logger.debug("Security module not found, skipping cleanup")
         except Exception as e:
-            _logger.error(f"Error cleaning up security resources: {e}")
+            _logger.error("Error cleaning up security resources", error=str(e))
             return False
 
         return True
     except Exception as e:
-        _logger.error(f"Unexpected error in security shutdown: {e}")
+        _logger.error("Unexpected error in security shutdown", error=str(e))
         return False
 
 
@@ -500,7 +493,7 @@ def teardown(components: list[str] | None = None, timeout: float = DEFAULT_TEARD
                 shutdown_components.remove(component_name)
 
         except Exception as e:
-            _logger.error(f"Error in teardown of {component_name}: {str(e)}")
+            _logger.error("Error in teardown of component", component=component_name, error=str(e))
             with _teardown_lock:
                 _teardown_state["failed_components"][component_name] = str(e)
             success = False
@@ -517,7 +510,7 @@ def teardown(components: list[str] | None = None, timeout: float = DEFAULT_TEARD
                     _teardown_state["failed_components"][component_name] = error or "Unknown error"
                 success = False
         except Exception as e:
-            _logger.error(f"Error in teardown of {component_name}: {str(e)}")
+            _logger.error("Error in teardown of component", component=component_name, error=str(e))
             with _teardown_lock:
                 _teardown_state["failed_components"][component_name] = str(e)
             success = False
@@ -529,7 +522,7 @@ def teardown(components: list[str] | None = None, timeout: float = DEFAULT_TEARD
         pass
 
     except Exception as e:
-        _logger.error(f"Error during final cleanup: {str(e)}")
+        _logger.error("Error during final cleanup", error=str(e))
         success = False
 
     # Mark teardown as completed
@@ -549,9 +542,11 @@ def teardown(components: list[str] | None = None, timeout: float = DEFAULT_TEARD
         skipped = len(_teardown_state["skipped_components"])
 
     _logger.info(
-        f"Core teardown completed in {elapsed:.2f}s: "
-        f"{successful} components shut down successfully, "
-        f"{failed} failed, {skipped} skipped"
+        "Core teardown completed",
+        elapsed_s=round(elapsed, 2),
+        successful=successful,
+        failed=failed,
+        skipped=skipped,
     )
 
     return success
@@ -579,7 +574,7 @@ def emergency_shutdown() -> None:
         except ImportError:
             _logger.debug("Database module not found, skipping emergency shutdown")
         except Exception as e:
-            _logger.error(f"Error in emergency database shutdown: {e}")
+            _logger.error("Error in emergency database shutdown", error=str(e))
 
         # File handles
         try:
@@ -592,13 +587,13 @@ def emergency_shutdown() -> None:
         except ImportError:
             _logger.debug("Filesystem module not found, skipping emergency shutdown")
         except Exception as e:
-            _logger.error(f"Error in emergency filesystem shutdown: {e}")
+            _logger.error("Error in emergency filesystem shutdown", error=str(e))
 
         # Other critical cleanup
         # [add as needed]
 
     except Exception as e:
-        _logger.critical(f"Critical error during emergency shutdown: {e}")
+        _logger.critical("Critical error during emergency shutdown", error=str(e))
 
     # Force flush all loggers
     # (No logger.complete() method; consider logger.remove() or logger.shutdown() if needed)

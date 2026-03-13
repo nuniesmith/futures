@@ -1,5 +1,8 @@
 import pandas as pd
-from loguru import logger
+
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class ADLineIndicator:
@@ -16,7 +19,7 @@ class ADLineIndicator:
 
     def __init__(self):
         self.logger = logger
-        self.history_df = pd.DataFrame(columns=self.REQUIRED_COLUMNS)
+        self.history_df = pd.DataFrame(columns=pd.Index(self.REQUIRED_COLUMNS))
         self.current_value = None
 
     def _calculate_adl(self, data: pd.DataFrame) -> pd.Series:
@@ -39,7 +42,7 @@ class ADLineIndicator:
             if missing_columns:
                 raise ValueError(f"DataFrame is missing required columns: {missing_columns}")
 
-            self.logger.info("Calculating Accumulation/Distribution Line (ADL).")
+            self.logger.info("calculating_adl")
 
             # Avoid division by zero when high equals low
             zero_range_mask = (data["High"] - data["Low"]) == 0
@@ -49,14 +52,14 @@ class ADLineIndicator:
             mfv = mfm * data["Volume"]
             adl = mfv.cumsum()
 
-            self.logger.info("ADL calculation successful.")
+            self.logger.info("adl_calculation_successful")
             return adl
 
         except ValueError as ve:
-            self.logger.error(f"Validation error: {ve}")
+            self.logger.error("validation_error", error=str(ve))
             raise
         except Exception as e:
-            self.logger.exception("An error occurred while calculating the ADL.")
+            self.logger.exception("adl_calculation_failed", error=str(e))
             raise RuntimeError("Failed to calculate Accumulation/Distribution Line.") from e
 
     def update(self, data_point: dict) -> float | None:
@@ -77,7 +80,7 @@ class ADLineIndicator:
             volume = data_point.get("volume")
 
             if None in (high, low, close, volume):
-                self.logger.warning("Data point missing one or more required keys: 'high', 'low', 'close', 'volume'.")
+                self.logger.warning("missing_required_keys", keys=["high", "low", "close", "volume"])
                 return None
 
             # Append new data point
@@ -91,7 +94,7 @@ class ADLineIndicator:
             return self.current_value
 
         except Exception as e:
-            self.logger.error(f"ADL update failed: {e}", exc_info=True)
+            self.logger.error("adl_update_failed", error=str(e), exc_info=True)
             return None
 
     def apply(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -105,11 +108,11 @@ class ADLineIndicator:
             pd.DataFrame: DataFrame with an added 'ADL' column containing the computed values.
         """
         try:
-            self.logger.info("Applying ADL indicator to provided DataFrame.")
+            self.logger.info("applying_adl_indicator")
             data = data.copy()  # Work on a copy to prevent side effects.
             data["ADL"] = self._calculate_adl(data)
-            self.logger.info("ADL column added successfully.")
+            self.logger.info("adl_column_added_successfully")
             return data
         except Exception as e:
-            self.logger.error(f"Error applying ADL: {e}")
+            self.logger.error("adl_apply_failed", error=str(e))
             raise

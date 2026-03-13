@@ -26,7 +26,6 @@
 Everything lives in this single repo. There is no external training repo — models are trained
 by the built-in trainer service and stored in `models/`.
 
-
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                            Ruby Futures                                 │
@@ -34,9 +33,9 @@ by the built-in trainer service and stored in `models/`.
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐  │
 │  │   Postgres   │  │    Redis     │  │ Data Service │  │   Engine   │  │
 │  │  (journal,   │  │  (hot cache, │  │  (FastAPI +  │  │ (scheduler,│  │
-│  │   history,   │  │   live bars, │  │   HTMX dash, │  │  analysis, │  │
-│  │   risk)      │  │   positions) │  │   REST API,  │  │  ORB, risk │  │
-│  │              │  │              │  │   SSE)       │  │  scoring)  │  │
+│  │   history,   │  │   live bars, │  │   REST API,  │  │  analysis, │  │
+│  │   risk)      │  │   positions) │  │   SSE)       │  │  ORB, risk │  │
+│  │              │  │              │  │              │  │  scoring)  │  │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └─────┬──────┘  │
 │         └─────────────────┴─────────────────┴────────────────┘         │
 │                                    │                                    │
@@ -53,22 +52,33 @@ by the built-in trainer service and stored in `models/`.
 │  ┌──────────────────────┐  ┌─────────────────────────────────────────┐  │
 │  │  Trainer Service     │  │  Monitoring (optional profile)          │  │
 │  │  GPU CNN training    │  │  Prometheus · Grafana                   │  │
-│  │  port 8200           │  │                                         │  │
+│  │  port 8501           │  │                                         │  │
 │  └──────────────────────┘  └─────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Docker services:**
+**Docker services** (`nuniesmith/futures`):
 
-| Service | Role | Port |
-|---|---|---|
-| **Postgres** | Durable storage — trade journal, historical bars, risk events | 5433 |
-| **Redis** | Hot cache — live bars, analysis metrics, positions, focus, SSE pub/sub | 6380 |
-| **Engine** | FastAPI REST API + HTMX dashboard + SSE stream + background analysis worker | 8100 |
-| **Web** | HTMX dashboard frontend (reverse-proxies to engine) | 8180 |
-| **Trainer** | GPU CNN training server — triggered via the 🧠 Trainer UI *(training profile)* | 8200 |
-| **Prometheus** | Metrics collection *(monitoring profile)* | 9095 |
-| **Grafana** | Dashboards & visualization *(monitoring profile)* | 3010 |
+| Service | Image Tag | Role | Port |
+|---|---|---|---|
+| **data** | `:data` | FastAPI REST + SSE API, bar cache, Kraken feed, Rithmic account manager | 8050 → 8000 |
+| **engine** | `:engine` | Scheduler, risk manager, breakout detection, CNN inference, Grok briefs | *(no public port)* |
+| **web** | `:web` | HTMX dashboard frontend (reverse-proxies to data) | 8080 |
+| **trainer** | `:trainer` | GPU CNN training server — triggered via the 🧠 Trainer UI *(training profile)* | 8501 |
+| **charting** | `:charting` | ApexCharts + nginx charting service | 8003 |
+| **Postgres** | — | Durable storage — trade journal, historical bars, risk events | 5433 |
+| **Redis** | — | Hot cache — live bars, analysis metrics, positions, focus, SSE pub/sub | 6380 |
+| **Prometheus** | — | Metrics collection *(monitoring profile)* | 9095 |
+| **Grafana** | — | Dashboards & visualization *(monitoring profile)* | 3010 |
+
+**Data hierarchy** (highest → lowest priority):
+
+```
+Rithmic (async_rithmic)      ← primary for CME futures when creds are active: live ticks, time bars, order book
+MassiveAPI (massive_client)  ← current primary for CME futures (REST + WebSocket, futures beta)
+Yahoo Finance (yfinance)     ← last-resort fallback (delayed data)
+Kraken REST / WebSocket      ← crypto spot only via kraken_client.py (personal account)
+```
 
 ---
 
@@ -105,10 +115,17 @@ Edit `.env` and set:
 ```
 MASSIVE_API_KEY=your_key_here    # https://massive.com/dashboard  (real-time CME futures data)
 XAI_API_KEY=your_key_here        # https://console.x.ai           (Grok AI analyst)
+
+# Rithmic (prop-firm order execution + market data)
+RITHMIC_USERNAME=your_username
+RITHMIC_PASSWORD=your_password
+RITHMIC_SYSTEM_NAME=your_system
+RITHMIC_GATEWAY=your_gateway
 ```
 
 Without `MASSIVE_API_KEY` the system falls back to yfinance (delayed data).
 Without `XAI_API_KEY` the Grok AI analyst tab is disabled — everything else works normally.
+Without `RITHMIC_*` credentials the engine runs in signal-only mode (no order execution).
 
 ### 4. Verify
 
@@ -117,7 +134,7 @@ docker compose ps                 # all services should be "healthy"
 docker compose logs -f engine     # watch the engine schedule actions
 ```
 
-Open the dashboard at **http://localhost:8180**.
+Open the dashboard at **http://localhost:8080**.
 
 ---
 
@@ -153,7 +170,8 @@ docker compose --profile training --profile monitoring up -d --build
 ### Useful Commands
 
 ```bash
-docker compose logs -f engine           # follow engine + API logs
+docker compose logs -f engine           # follow engine logs
+docker compose logs -f data             # follow data API logs
 docker compose logs -f web              # follow web frontend logs
 docker compose logs -f trainer          # follow trainer logs
 docker compose exec engine bash         # shell into engine container
@@ -180,19 +198,18 @@ pip install -e ".[dev]"
 ./run.sh --local
 ```
 
-This starts only the web service (port 8180) and expects the engine + Redis + Postgres
+This starts only the web service (port 8080) and expects the engine + Redis + Postgres
 to already be running (e.g. via Docker Compose).
 
 ### Run Tests
 
 ```bash
-pytest src/tests/ -x -q --tb=short     # full suite
+pytest tests/ -x -q --tb=short         # full suite (2,700+ tests)
 ruff check src/                         # linting
 ./run.sh --test                         # tests + lint together
 ```
 
-
-
+---
 
 ## CNN Model Training
 
@@ -224,13 +241,6 @@ docker compose --profile training run --rm trainer \
 
 ### Syncing Models Locally
 
-```bash
-bash scripts/sync_models.sh              # download all model files from this repo's main branch
-bash scripts/sync_models.sh --check      # check whether local models are current
-bash scripts/sync_models.sh --pt-only    # download only the .pt checkpoint
-bash scripts/sync_models.sh --restart    # download + restart the engine container
-```
-
 `run.sh` automatically calls `sync_models.sh` if `models/breakout_cnn_best.pt` is missing.
 
 ---
@@ -240,92 +250,93 @@ bash scripts/sync_models.sh --restart    # download + restart the engine contain
 ```
 futures/
 ├── src/
-│   ├── lib/
-│   │   ├── analysis/                   # Market analysis modules
-│   │   │   ├── breakout_cnn.py         #   CNN inference (PyTorch)
-│   │   │   ├── confluence.py           #   Multi-timeframe confluence filter
-│   │   │   ├── cvd.py                  #   Cumulative Volume Delta + divergences
-│   │   │   ├── ict.py                  #   ICT/SMC: FVGs, order blocks, sweeps
-│   │   │   ├── orb_filters.py          #   6 deterministic ORB quality filters
-│   │   │   ├── regime.py               #   HMM market regime detection
-│   │   │   ├── scorer.py               #   Pre-market instrument scoring
-│   │   │   ├── signal_quality.py       #   Signal quality score
-│   │   │   ├── volatility.py           #   K-Means adaptive vol clustering
-│   │   │   ├── volume_profile.py       #   POC, VAH/VAL, naked POCs
-│   │   │   └── wave_analysis.py        #   Wave dominance tracking
-│   │   │
-│   │   ├── core/                       # Infrastructure
-│   │   │   ├── alerts.py               #   Alert dispatch (email, webhook)
-│   │   │   ├── cache.py                #   Redis cache + data source abstraction
-│   │   │   ├── logging_config.py       #   Structured logging (structlog)
-│   │   │   ├── models.py               #   Database models + Postgres ORM
-│   │   │   └── redis_helpers.py        #   Redis utility functions
-│   │   │
-│   │   ├── integrations/               # External services
-│   │   │   ├── grok_helper.py          #   xAI Grok AI analyst
-│   │   │   └── massive_client.py       #   Massive.com REST + WebSocket client
-│   │   │
-│   │   ├── trading/                    # Trading engine
-│   │   │   ├── engine.py               #   DashboardEngine: optimization, backtest
-│   │   │   ├── strategies.py           #   Backtesting strategies (Optuna-tunable)
-│   │   │   └── costs.py                #   CME slippage + commission model
-│   │   │
-│   │   ├── training/                   # CNN training pipeline
-│   │   │   ├── trainer_server.py       #   FastAPI training server (port 8200)
-│   │   │   ├── train.py                #   Full training pipeline
-│   │   │   ├── dataset.py              #   Dataset generation from bars
-│   │   │   └── model.py                #   CNN model architecture
-│   │   │
-│   │   └── services/                   # Deployable services
-│   │       ├── data/                   #   FastAPI data service + API routers
-│   │       │   └── api/
-│   │       │       ├── dashboard.py    #     Main HTMX dashboard page
-│   │       │       ├── trainer.py      #     🧠 Trainer page + proxy to trainer:8200
-│   │       │       ├── settings.py     #     ⚙️ Settings page
-
-│   │       │       ├── sse.py          #     Server-sent events stream
-│   │       │       └── ...
-│   │       ├── engine/                 #   Background engine service
-│   │       └── web/                    #   HTMX dashboard frontend (reverse proxy)
-│   │
-│   ├── tradovate/                      # Tradovate broker bridge (JS)
-│   │   ├── Bridge.js                   #   Broker bridge connector
-│   │   └── Copier.js                   #   Trade copier
-│   │
-│   └── tests/                          # Pytest test suite
+│   └── lib/
+│       ├── core/                           # Infrastructure
+│       │   ├── config.py                   #   Global configuration
+│       │   ├── cache.py                    #   Redis cache + data source abstraction
+│       │   ├── models.py                   #   Database models + Postgres ORM
+│       │   ├── alerts.py                   #   Alert dispatch (email, webhook)
+│       │   ├── logging_config.py           #   Structured logging (structlog)
+│       │   ├── db/                         #   Database helpers + migrations
+│       │   └── exceptions/                 #   Custom exception types
+│       │
+│       ├── indicators/                     # Technical indicators
+│       │   ├── momentum/                   #   RSI, MACD, stochastic, etc.
+│       │   ├── trend/                      #   Moving averages, ADX, etc.
+│       │   ├── volatility/                 #   ATR, Bollinger, Keltner, etc.
+│       │   ├── volume/                     #   OBV, CVD, VWAP, etc.
+│       │   └── other/                      #   Miscellaneous indicators
+│       │
+│       ├── integrations/                   # External services
+│       │   ├── rithmic_client.py           #   Rithmic (async_rithmic) order execution + market data
+│       │   ├── massive_client.py           #   Massive.com REST + WebSocket client
+│       │   ├── kraken_client.py            #   Kraken REST + WebSocket crypto client
+│       │   ├── news_client.py              #   News feed integration
+│       │   ├── grok_helper.py              #   xAI Grok AI analyst
+│       │   ├── reddit_watcher.py           #   Reddit sentiment polling
+│       │   └── pine/                       #   TradingView Pine Script tools
+│       │
+│       ├── model/                          # ML model library
+│       │   ├── base/                       #   Base model classes
+│       │   ├── deep/                       #   CNN, transformer architectures
+│       │   ├── ensemble/                   #   Ensemble methods
+│       │   ├── evaluation/                 #   Model evaluation + metrics
+│       │   ├── ml/                         #   Classical ML models
+│       │   ├── prediction/                 #   Prediction pipelines
+│       │   └── statistical/                #   Statistical models
+│       │
+│       ├── trading/                        # Trading logic
+│       │   └── strategies/                 #   Strategy implementations
+│       │       ├── rb/                     #     Range breakout (breakout.py)
+│       │       └── ruby_signal_engine.py   #     Core signal engine
+│       │
+│       └── services/                       # Deployable services
+│           ├── data/                       #   FastAPI data service (port 8000)
+│           ├── engine/                     #   Background engine worker (no HTTP)
+│           ├── web/                        #   Reverse proxy (port 8080)
+│           └── training/                   #   GPU trainer (port 8501)
+│
+├── static/                                 # Frontend static assets
+│   ├── trading.html                        #   Main trading dashboard
+│   └── pine.html                           #   Pine Script viewer
+│
+├── models/                                 # CNN model files (git-tracked via LFS)
+│   ├── breakout_cnn_best.pt                #   Champion PyTorch checkpoint
+│   ├── breakout_cnn_best_meta.json         #   Champion metadata (acc, prec, recall, date)
+│   └── feature_contract.json               #   Feature names + normalization constants
 │
 ├── scripts/
-│   ├── daily_report.py                 # End-of-day breakout session summary
-│   ├── monitor_signals.py              # Live breakout signal terminal monitor
-│   ├── session_signal_audit.py         # Per-session signal quality audit
-│   ├── check_onnx_parity.py            # Verify PT and ONNX model outputs match
-│   ├── smoke_test_trainer.py           # Quick end-to-end trainer smoke test
-│   ├── patch_breakout_strategy.py      # Patch BreakoutStrategy.cs with latest params
-│   └── patch_datapreloader.py          # Patch DataPreloader.cs with symbol list
+│   ├── daily_report.py                     # End-of-day breakout session summary
+│   ├── monitor_signals.py                  # Live breakout signal terminal monitor
+│   ├── session_signal_audit.py             # Per-session signal quality audit
+│   └── smoke_test_trainer.py               # Quick end-to-end trainer smoke test
 │
-├── models/                             # CNN model files (git-tracked via LFS)
-│   ├── breakout_cnn_best.pt            #   Champion PyTorch checkpoint
-│   ├── breakout_cnn_best_meta.json     #   Champion metadata (acc, prec, recall, date)
-│   └── feature_contract.json           #   Feature names + normalization constants
+├── docker/                                 # Docker build contexts
+│   ├── data/Dockerfile                     #   Data API container
+│   ├── engine/Dockerfile                   #   Background engine container
+│   ├── web/Dockerfile                      #   Web frontend container
+│   ├── trainer/Dockerfile                  #   GPU trainer container
+│   ├── charting/Dockerfile                 #   Charting service container
+│   └── docker-compose.yml                  #   Full service stack
+│
+├── docs/                                   # Design docs
+│   ├── architecture.md                     #   System architecture reference
+│   ├── logging.md                          #   Logging conventions
+│   ├── completed.md                        #   Completed work log
+│   └── backlog.md                          #   Backlog / roadmap
+│
+├── tests/                                  # Pytest test suite (2,700+ tests)
 │
 ├── config/
-│   ├── grafana/                        # Grafana provisioning + dashboards
-│   └── prometheus/                     # Prometheus scrape config
+│   ├── grafana/                            # Grafana provisioning + dashboards
+│   └── prometheus/                         # Prometheus scrape config
 │
-├── docker/
-│   ├── data/Dockerfile                 # Engine + data API container
-│   ├── engine/Dockerfile               # Background engine container
-│   ├── web/Dockerfile                  # Web frontend container
-│   ├── trainer/Dockerfile              # GPU trainer container
-│   └── monitoring/                     # Prometheus + Grafana Dockerfiles
-│
-├── dataset/                            # Generated training datasets (git-ignored)
-├── data/                               # Persistent app data (git-ignored)
-├── docs/                               # Design docs and audit reports
-├── docker-compose.yml                  # Full service stack
-├── pyproject.toml                      # Python project config (hatch + deps)
-├── run.sh                              # One-command build + deploy script
-└── todo.md                             # Project status & phase tracking
+├── dataset/                                # Generated training datasets (git-ignored)
+├── data/                                   # Persistent app data (git-ignored)
+├── docker-compose.yml                      # Full service stack
+├── pyproject.toml                          # Python project config (hatch + deps)
+├── run.sh                                  # One-command build + deploy script
+└── todo.md                                 # Project status & phase tracking
 ```
 
 ---
@@ -345,9 +356,21 @@ futures/
 
 | Variable | Description | Fallback |
 |---|---|---|
-| `MASSIVE_API_KEY` | [Massive.com](https://massive.com) real-time CME futures data | yfinance (delayed) |
+| `MASSIVE_API_KEY` | [Massive.com](https://massive.com) — current primary for CME futures (REST + WebSocket, futures beta) | yfinance (delayed) |
 | `XAI_API_KEY` | [xAI](https://console.x.ai) Grok AI analyst | AI features disabled |
 | `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` | [Kraken](https://www.kraken.com) crypto spot data | Crypto panels hidden |
+
+#### Rithmic (Execution + Market Data)
+
+| Variable | Description |
+|---|---|
+| `RITHMIC_USERNAME` | Rithmic login username |
+| `RITHMIC_PASSWORD` | Rithmic login password |
+| `RITHMIC_SYSTEM_NAME` | Rithmic system name (e.g. `Rithmic Paper Trading`) |
+| `RITHMIC_GATEWAY` | Rithmic gateway (e.g. `Chicago`) |
+
+Without Rithmic credentials the engine runs in signal-only mode — all detection and CNN
+inference still works, but no orders are placed.
 
 #### Trading
 
@@ -355,7 +378,7 @@ futures/
 |---|---|---|
 | `ACCOUNT_SIZE` | `150000` | Account size for risk calculations ($50K, $100K, or $150K) |
 | `ORB_FILTER_GATE` | `majority` | Filter strictness: `all`, `majority`, or `none` |
-| `ORB_CNN_GATE` | `0` | `0` = CNN advisory only, `1` = CNN hard gate (blocks trade signal)
+| `ORB_CNN_GATE` | `0` | `0` = CNN advisory only, `1` = CNN hard gate (blocks trade signal) |
 
 #### Trainer
 
@@ -386,26 +409,25 @@ futures/
 ## Testing
 
 ```bash
-# Full test suite
-pytest src/tests/ -x -q --tb=short
+# Full test suite (2,700+ tests)
+pytest tests/ -x -q --tb=short
 
 # Specific modules
-pytest src/tests/test_orb_filters.py -v       # ORB filter logic
-pytest src/tests/test_scheduler.py -v          # session scheduling
-pytest src/tests/test_risk.py -v               # risk manager
-pytest src/tests/test_ict.py -v                # ICT/SMC concepts
-pytest src/tests/test_cvd.py -v                # cumulative volume delta
-pytest src/tests/test_volume_profile.py -v     # volume profile analysis
-pytest src/tests/test_data_service.py -v       # FastAPI endpoints
+pytest tests/test_copy_trader.py -v            # Rithmic copy trader
+pytest tests/test_ruby_signal_engine.py -v     # core signal engine
+pytest tests/test_orb_filters.py -v            # ORB filter logic
+pytest tests/test_scheduler.py -v              # session scheduling
+pytest tests/test_risk.py -v                   # risk manager
+pytest tests/test_ict.py -v                    # ICT/SMC concepts
+pytest tests/test_cvd.py -v                    # cumulative volume delta
+pytest tests/test_volume_profile.py -v         # volume profile analysis
+pytest tests/test_data_service.py -v           # FastAPI endpoints
 
 # With coverage
-pytest src/tests/ --cov=lib --cov-report=html
+pytest tests/ --cov=lib --cov-report=html
 
 # Linting
 ruff check src/
-
-# Verify ONNX and PyTorch model outputs match
-PYTHONPATH=src python scripts/check_onnx_parity.py
 
 # Quick trainer smoke test (requires trainer service running)
 PYTHONPATH=src python scripts/smoke_test_trainer.py
@@ -417,12 +439,7 @@ PYTHONPATH=src python scripts/smoke_test_trainer.py
 
 ### Model Sync
 
-```bash
-bash scripts/sync_models.sh              # pull latest model files
-bash scripts/sync_models.sh --check      # check if models are current
-bash scripts/sync_models.sh --pt-only    # pull only the .pt checkpoint
-bash scripts/sync_models.sh --restart    # pull + restart engine container
-```
+`run.sh` automatically calls `sync_models.sh` if `models/breakout_cnn_best.pt` is missing.
 
 ### Daily Report
 
@@ -448,20 +465,6 @@ PYTHONPATH=src python scripts/session_signal_audit.py --days 14            # las
 PYTHONPATH=src python scripts/session_signal_audit.py --export-json out.json
 ```
 
-
-# Patch BreakoutStrategy.cs with latest model params from feature_contract.json
-PYTHONPATH=src python scripts/patch_breakout_strategy.py
-
-# Patch DataPreloader.cs with the current tracked symbol list
-PYTHONPATH=src python scripts/patch_datapreloader.py
-```
-
----
-
-## Related Repos
-
-
-
 ---
 
 ## Technologies
@@ -470,13 +473,14 @@ PYTHONPATH=src python scripts/patch_datapreloader.py
 |---|---|
 | **Language** | Python 3.11+ |
 | **Web** | FastAPI, HTMX, SSE |
-| **Data** | Massive.com (real-time CME), yfinance (fallback), Kraken (crypto), pandas |
+| **Data** | Rithmic (async_rithmic), Massive.com (REST + WebSocket), yfinance (fallback), Kraken (crypto), pandas |
 | **Storage** | PostgreSQL 16, Redis 7 |
-| **AI / ML** | PyTorch (CNN training), ONNX (inference), xAI Grok (AI analyst) |
+| **AI / ML** | PyTorch (CNN training + inference), xAI Grok (AI analyst) |
 | **Analysis** | scikit-learn, hmmlearn (HMM regime), backtesting.py, Optuna |
-| **Execution** | NinjaTrader 8 (C# strategies + Bridge add-on) |
+| **Execution** | Rithmic (async_rithmic) — prop-firm order execution + market data |
+| **Charting** | ApexCharts + nginx |
 | **Observability** | structlog, Prometheus, Grafana |
-| **Deployment** | Docker Compose |
+| **Deployment** | Docker Compose, Tailscale mesh |
 
 ---
 

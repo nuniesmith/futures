@@ -3,7 +3,7 @@ Trades API router — trade CRUD endpoints.
 
 Provides endpoints for creating, closing, cancelling, and listing trades.
 Includes a legacy /log_trade endpoint for backwards compatibility with
-older NinjaTrader scripts.
+older trading scripts.
 
 Risk enforcement:
   - POST /trades runs a pre-flight risk check via the local RiskManager
@@ -13,7 +13,7 @@ Risk enforcement:
     callers can set ``enforce_risk=True`` in the request body to get a
     403 rejection instead.
 
-Position management (NinjaTrader live bridge) is handled by positions.py.
+Position management (live trading connection) is handled by positions.py.
 Asset/account info endpoints are handled by analysis.py.
 """
 
@@ -285,7 +285,7 @@ def api_today_pnl(account_size: int = Query(150_000)):
 def log_trade(req: LegacyTradeRequest):
     """Legacy: create and immediately close a trade in one call.
 
-    Kept for backwards compatibility with older NinjaTrader scripts.
+    Kept for backwards compatibility with older trading scripts.
     """
     trade_id = create_trade(
         account_size=150_000,

@@ -14,8 +14,8 @@ Validates:
   - VolumeProfileStrategy: backtesting strategy (smoke test)
   - Edge cases: empty data, single bar, constant price, zero volume
 
-These tests mirror the logic implemented in the NT8 Ruby.cs
-indicator to ensure Python ↔ NinjaScript parity.
+These tests mirror the logic implemented in the Ruby indicator
+to ensure Python-canonical parity.
 """
 
 from datetime import datetime, timedelta

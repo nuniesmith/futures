@@ -1,7 +1,9 @@
 import yaml  # type: ignore[import-untyped]
-from loguru import logger
 
 from lib.core.exceptions.base import FrameworkException
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class ExceptionsUtils:
@@ -37,19 +39,21 @@ class ExceptionsUtils:
         try:
             if not self.config_path.is_file():
                 raise FileNotFoundError(f"Exception config file not found: {self.config_path}")
-            logger.info(f"Loading exceptions from: {self.config_path}")
+            logger.info("loading_exceptions_config", config_path=str(self.config_path))
             with open(self.config_path) as file:
                 config = yaml.safe_load(file)
             exceptions_config = config.get("exceptions", {})
             if not exceptions_config:
-                logger.warning("No exceptions configured. Using default fallback.")
+                logger.warning("no_exceptions_configured", action="using_default_fallback")
                 exceptions_config = self._default_fallback()
             return exceptions_config
         except FileNotFoundError:
-            logger.error(f"Exception config file not found at {self.config_path}. Using default fallback.")
+            logger.error(
+                "exception_config_not_found", config_path=str(self.config_path), action="using_default_fallback"
+            )
             return self._default_fallback()
         except yaml.YAMLError as e:
-            logger.error(f"Failed to parse exceptions configuration file: {e}")
+            logger.error("exception_config_parse_error", error=str(e), action="using_default_fallback")
             return self._default_fallback()
 
     @staticmethod
@@ -81,18 +85,21 @@ class ExceptionsUtils:
                 missing_keys = required_keys - details.keys()
                 if missing_keys:
                     logger.warning(
-                        f"Error '{error_name}' in category '{category}' is missing keys: {', '.join(missing_keys)}."
+                        "exception_config_missing_keys",
+                        error_name=error_name,
+                        category=category,
+                        missing_keys=", ".join(missing_keys),
                     )
-        logger.info("Exceptions configuration validation completed.")
+        logger.info("exceptions_config_validation_completed")
 
     def reload(self):
         """
         Reload the exceptions configuration (e.g., if exceptions.yaml changes at runtime).
         """
-        logger.info("Reloading exceptions configuration...")
+        logger.info("reloading_exceptions_config")
         self._config = self._load_config()
         self.validate_config()
-        logger.info("Exceptions configuration reloaded successfully.")
+        logger.info("exceptions_config_reloaded")
 
     def get_exception(self, category: str, error_name: str) -> dict:
         """
@@ -107,12 +114,12 @@ class ExceptionsUtils:
         """
         category_config = self._config.get(category)
         if not category_config:
-            logger.warning(f"Category '{category}' not found. Falling back to default error.")
+            logger.warning("exception_category_not_found", category=category, action="using_fallback")
             return self._fallback_error()
 
         exception_details = category_config.get(error_name)
         if not exception_details:
-            logger.warning(f"Error '{error_name}' not found in category '{category}'. Falling back to default error.")
+            logger.warning("exception_not_found", error_name=error_name, category=category, action="using_fallback")
             return self._fallback_error()
 
         message_key = f"message_{self.env}" if f"message_{self.env}" in exception_details else "message"

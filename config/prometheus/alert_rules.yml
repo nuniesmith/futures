@@ -168,8 +168,7 @@ groups:
                 summary: "CNN breakout model has not been retrained in > 26 hours"
                 description: >
                     model_stale is 1 on {{ $labels.instance }}.  The champion CNN model
-                    was last promoted more than 26 hours ago.  Run scripts/sync_models.sh
-                    or trigger a training run in the rb repo.
+                    was last promoted more than 26 hours ago.
                 runbook_url: "https://wiki.internal/runbooks/cnn-model-stale"
 
           - alert: CNNModelLowAccuracy

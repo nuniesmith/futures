@@ -1,5 +1,8 @@
 import pandas as pd
-from loguru import logger
+
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class CorrelationMatrixIndicator:
@@ -24,7 +27,7 @@ class CorrelationMatrixIndicator:
 
         self.logger = logger
         self.indicators = indicators
-        self.history_df = pd.DataFrame(columns=self.indicators)
+        self.history_df = pd.DataFrame(columns=pd.Index(self.indicators, name="indicator"))
         self.current_matrix = None
 
     def _calculate_correlation_matrix(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -52,16 +55,16 @@ class CorrelationMatrixIndicator:
             if len(valid_data) < 2:
                 raise ValueError("Not enough valid data points to calculate correlation matrix.")
 
-            self.logger.info(f"Calculating correlation matrix for indicators: {self.indicators}")
+            self.logger.info("calculating_correlation_matrix", indicators=self.indicators)
             corr_matrix = valid_data.corr()  # type: ignore[union-attr]
-            self.logger.info("Correlation matrix calculated successfully.")
+            self.logger.info("correlation_matrix_calculated")
             return corr_matrix
 
         except ValueError as ve:
-            self.logger.error(f"Validation error: {ve}")
+            self.logger.error("validation_error", error=str(ve))
             raise ve
         except Exception as e:
-            self.logger.exception("An error occurred while calculating the correlation matrix.")
+            self.logger.exception("correlation_matrix_calculation_failed")
             raise RuntimeError("Failed to calculate correlation matrix.") from e
 
     def update(self, data_point: dict) -> pd.DataFrame | None:
@@ -80,7 +83,7 @@ class CorrelationMatrixIndicator:
             new_row = {col: data_point.get(col) for col in self.indicators}
             # Warn if any indicator is missing in the new data point
             if any(value is None for value in new_row.values()):
-                self.logger.warning("Data point is missing one or more required indicators for correlation update.")
+                self.logger.warning("missing_indicators_in_data_point")
                 return None
 
             # Append new data and update the history DataFrame
@@ -90,13 +93,13 @@ class CorrelationMatrixIndicator:
             if len(self.history_df.dropna()) >= 2:
                 self.current_matrix = self._calculate_correlation_matrix(self.history_df)
             else:
-                self.logger.debug("Not enough data to calculate correlation matrix yet.")
+                self.logger.debug("insufficient_data_for_correlation_matrix")
                 self.current_matrix = None
 
             return self.current_matrix
 
         except Exception as e:
-            self.logger.error(f"Correlation Matrix Indicator update failed: {e}", exc_info=True)
+            self.logger.error("correlation_matrix_update_failed", error=str(e), exc_info=True)
             return None
 
     def apply(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -119,5 +122,5 @@ class CorrelationMatrixIndicator:
             return data
 
         except Exception as e:
-            self.logger.error(f"Error applying correlation matrix: {e}")
+            self.logger.error("correlation_matrix_apply_failed", error=str(e))
             raise RuntimeError("Failed to apply correlation matrix indicator.") from e

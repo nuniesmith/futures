@@ -9,7 +9,7 @@ Covers:
   - Health & metrics endpoints
   - Analysis endpoints (latest, status, assets, accounts, etc.)
   - Actions endpoints (force_refresh, optimize_now, update_settings, live feed)
-  - Positions endpoints (CRUD for NinjaTrader bridge)
+  - Positions endpoints (CRUD for Rithmic integration)
   - Trades endpoints (create, close, cancel, list, legacy log_trade)
   - Journal endpoints (save, entries, stats, today)
 """
@@ -496,7 +496,7 @@ class TestActions:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Positions endpoints (NinjaTrader bridge)
+# Positions endpoints (Rithmic integration)
 # ═══════════════════════════════════════════════════════════════════════════
 
 

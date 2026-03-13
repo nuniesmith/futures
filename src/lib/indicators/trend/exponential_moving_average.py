@@ -1,5 +1,8 @@
 import pandas as pd
-from loguru import logger
+
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class EMAIndicator:
@@ -24,7 +27,7 @@ class EMAIndicator:
             raise ValueError("Period must be a positive integer.")
         self.logger = logger
         self.period = period
-        self.history_df = pd.DataFrame(columns=self.REQUIRED_COLUMNS)
+        self.history_df = pd.DataFrame(columns=pd.Index(self.REQUIRED_COLUMNS))
         self.current_value = None
 
     def _calculate_ema(self, data: pd.DataFrame) -> pd.Series:
@@ -43,9 +46,9 @@ class EMAIndicator:
         if "Close" not in data.columns:
             raise ValueError("DataFrame must contain a 'Close' column.")
 
-        self.logger.info(f"Calculating Exponential Moving Average (EMA) with period: {self.period}.")
+        self.logger.info("calculating_ema", period=self.period)
         ema = data["Close"].ewm(span=self.period, adjust=False).mean()
-        self.logger.info("Exponential Moving Average (EMA) calculated successfully.")
+        self.logger.info("ema_calculated_successfully")
         return ema  # type: ignore[return-value]
 
     def update(self, data_point: dict) -> float | None:
@@ -61,7 +64,7 @@ class EMAIndicator:
         try:
             close = data_point.get("close")
             if close is None:
-                self.logger.warning("Data point missing required 'close' for EMA update.")
+                self.logger.warning("missing_data_point", field="close", indicator="EMA")
                 return None
 
             # Append new data point to the history DataFrame
@@ -78,7 +81,7 @@ class EMAIndicator:
             return self.current_value
 
         except Exception as e:
-            self.logger.error(f"EMA Indicator update failed: {e}", exc_info=True)
+            self.logger.error("ema_update_failed", error=str(e), exc_info=True)
             return None
 
     def apply(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -100,5 +103,5 @@ class EMAIndicator:
             return data
 
         except Exception as e:
-            self.logger.error(f"Error applying EMA indicator: {e}", exc_info=True)
+            self.logger.error("ema_apply_failed", error=str(e), exc_info=True)
             raise

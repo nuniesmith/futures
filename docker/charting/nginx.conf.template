@@ -5,7 +5,7 @@
 #   envsubst '${DATA_SERVICE_URL} ${CHARTING_SERVICE_PORT} ${CORS_ORIGINS}'
 #
 # Variables substituted at runtime:
-#   ${DATA_SERVICE_URL}       — upstream data service  (e.g. http://data:8001)
+#   ${DATA_SERVICE_URL}       — upstream data service  (e.g. http://data:8000)
 #   ${CHARTING_SERVICE_PORT}  — port nginx listens on  (e.g. 8003)
 #   ${CORS_ORIGINS}           — CORS allow-origin value (e.g. *)
 #

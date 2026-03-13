@@ -525,15 +525,10 @@ def _compute_system_health() -> dict[str, Any]:
         "grafana_up": False,
         "prometheus_up": False,
         "broker_connected": False,
-        "bridge_connected": False,
         "broker_state": "disconnected",
-        "bridge_state": "disconnected",
         "broker_version": "",
-        "bridge_version": "",
         "broker_account": "",
-        "bridge_account": "",
         "broker_age_seconds": -1,
-        "bridge_age_seconds": -1,
         "positions_count": 0,
         "risk_blocked": False,
         "last_heartbeat": None,
@@ -586,8 +581,6 @@ def _compute_system_health() -> dict[str, Any]:
         from lib.core.cache import cache_get
 
         raw = cache_get("futures:broker_heartbeat:current")
-        if not raw:
-            raw = cache_get("futures:bridge_heartbeat:current")
         if raw:
             heartbeat = json.loads(raw)
     except Exception:
@@ -597,14 +590,11 @@ def _compute_system_health() -> dict[str, Any]:
         received_at = heartbeat.get("received_at", "")
         account = heartbeat.get("account", "")
         state = heartbeat.get("state", "unknown")
-        version = heartbeat.get("broker_version", heartbeat.get("bridge_version", ""))
+        version = heartbeat.get("broker_version", "")
 
         result["broker_account"] = account
-        result["bridge_account"] = account
         result["broker_state"] = state
-        result["bridge_state"] = state
         result["broker_version"] = version
-        result["bridge_version"] = version
         result["positions_count"] = heartbeat.get("positions", 0)
         result["risk_blocked"] = heartbeat.get("riskBlocked", False)
         result["last_heartbeat"] = received_at
@@ -614,10 +604,8 @@ def _compute_system_health() -> dict[str, Any]:
                 dt = datetime.fromisoformat(received_at)
                 age = (datetime.now(tz=_EST) - dt).total_seconds()
                 result["broker_age_seconds"] = round(age, 1)
-                result["bridge_age_seconds"] = round(age, 1)
                 connected = age < 60
                 result["broker_connected"] = connected
-                result["bridge_connected"] = connected
             except Exception:
                 pass
 

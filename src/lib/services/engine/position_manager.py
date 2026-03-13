@@ -26,9 +26,9 @@ Usage::
     # On every 1m bar close (position maintenance):
     orders = pm.update_all(bars_by_ticker)
 
-    # Emit orders to NinjaTrader Bridge
+    # Emit orders to Rithmic gateway
     for order in orders:
-        bridge.send(order)
+        gateway.send(order)
 
 Environment Variables:
     PM_REVERSAL_MIN_CNN_PROB    — Min CNN prob to reverse (default 0.85)
@@ -129,9 +129,9 @@ class OrderType(StrEnum):
 
 @dataclass
 class OrderCommand:
-    """An order instruction to be sent to the NinjaTrader Bridge.
+    """An order instruction to be sent to the Rithmic gateway.
 
-    The bridge translates these into NinjaScript order calls.
+    The gateway translates these into exchange order submissions.
     """
 
     symbol: str
@@ -353,7 +353,7 @@ class PositionManager:
         2. Process incoming breakout signals → decide: hold / reverse / enter / exit.
         3. Manage bracket phases (initial → breakeven → trailing).
         4. Compute EMA9 trail updates every bar.
-        5. Emit ``OrderCommand`` objects for the NinjaTrader Bridge.
+        5. Emit ``OrderCommand`` objects for the Rithmic gateway.
         6. Persist position history for analysis.
 
     Thread safety:
@@ -542,7 +542,7 @@ class PositionManager:
         range_low).
 
         Returns a list of OrderCommand objects.  The caller is responsible
-        for sending them to the NinjaTrader Bridge.
+        for sending them to the Rithmic gateway.
         """
         orders: list[OrderCommand] = []
 

@@ -10,7 +10,7 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from loguru import logger
+from lib.core.logging_config import get_logger
 
 # Import public components from submodules
 from .base import Database
@@ -42,7 +42,7 @@ _connection_lock = threading.RLock()
 _active_connections: dict[str, list[Any]] = {"postgres": [], "other": []}
 
 # Module logger
-_logger = logger.bind(name="core.data.db")
+_logger = get_logger("lib.core.db")
 
 
 def register_connection(connection: Any, db_type: str = "other") -> None:
@@ -58,7 +58,7 @@ def register_connection(connection: Any, db_type: str = "other") -> None:
             _active_connections[db_type] = []
         _active_connections[db_type].append(connection)
 
-    _logger.debug(f"Registered {db_type} connection: {connection}")
+    _logger.debug("connection_registered", db_type=db_type)
 
 
 def unregister_connection(connection: Any, db_type: str = "other") -> None:
@@ -73,7 +73,7 @@ def unregister_connection(connection: Any, db_type: str = "other") -> None:
         if db_type in _active_connections and connection in _active_connections[db_type]:
             _active_connections[db_type].remove(connection)
 
-    _logger.debug(f"Unregistered {db_type} connection: {connection}")
+    _logger.debug("connection_unregistered", db_type=db_type)
 
 
 def get_connection_count() -> dict[str, int]:
@@ -94,7 +94,7 @@ def close_all_connections() -> bool:
     Returns:
         True if all connections closed successfully, False otherwise
     """
-    _logger.info("Closing all database connections")
+    _logger.info("closing_all_connections")
     success = True
 
     # Close PostgreSQL connections
@@ -106,12 +106,12 @@ def close_all_connections() -> bool:
             if postgres_connections:
                 postgres_success = close_postgres_connections(postgres_connections)
                 if not postgres_success:
-                    _logger.warning("Some PostgreSQL connections failed to close")
+                    _logger.warning("postgres_connections_close_partial_failure")
                     success = False
             else:
-                _logger.debug("No PostgreSQL connections to close")
+                _logger.debug("no_postgres_connections_to_close")
         except Exception as e:
-            _logger.error(f"Error closing PostgreSQL connections: {e}")
+            _logger.error("postgres_connections_close_failed", exc_info=True)
             success = False
 
     # Close any remaining connections
@@ -128,7 +128,7 @@ def close_all_connections() -> bool:
             if not connections:
                 continue
 
-            _logger.info(f"Closing {len(connections)} {db_type} connections")
+            _logger.info("closing_connections", db_type=db_type, count=len(connections))
             for connection in connections.copy():
                 try:
                     if hasattr(connection, "close"):
@@ -138,9 +138,9 @@ def close_all_connections() -> bool:
                     elif hasattr(connection, "shutdown"):
                         connection.shutdown()
                     connections.remove(connection)
-                    _logger.debug(f"Closed {db_type} connection: {connection}")
+                    _logger.debug("connection_closed", db_type=db_type)
                 except Exception as e:
-                    _logger.error(f"Error closing {db_type} connection {connection}: {e}")
+                    _logger.error("connection_close_failed", db_type=db_type, exc_info=True)
                     success = False
 
     # Reset active connections tracking

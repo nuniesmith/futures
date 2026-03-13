@@ -500,9 +500,9 @@ class TestV8TrainingLoop:
         assert 1 <= result.epochs_trained <= 2, f"Expected 1–2 epochs_trained, got {result.epochs_trained}"
 
     def test_best_epoch_in_range(self, train_result):
-        """best_epoch must be within [0, epochs_trained)."""
+        """best_epoch must be within [1, epochs_trained] (1-based)."""
         result, _ = train_result
-        assert 0 <= result.best_epoch < result.epochs_trained, (
+        assert 1 <= result.best_epoch <= result.epochs_trained, (
             f"best_epoch={result.best_epoch} out of range for epochs_trained={result.epochs_trained}"
         )
 

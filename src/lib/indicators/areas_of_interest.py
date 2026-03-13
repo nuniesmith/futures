@@ -8,11 +8,12 @@ key levels, and session highs/lows.
 
 import numpy as np
 import pandas as pd
-from loguru import logger
+
+from lib.core.logging_config import get_logger
 
 # (utils.datetime_utils / utils.config_utils are from the original project; not needed here)
 
-logger = logger.bind(name="areas_of_interest")
+logger = get_logger(__name__)
 
 
 def identify_fair_value_gaps(df, gap_threshold=0.0005):
@@ -64,7 +65,7 @@ def identify_fair_value_gaps(df, gap_threshold=0.0005):
 
         return result
     except Exception as e:
-        logger.error(f"Error in identify_fair_value_gaps: {e}")
+        logger.error("identify_fair_value_gaps_failed", error=str(e))
         return df
 
 
@@ -106,7 +107,9 @@ def identify_supply_demand_zones(df, zone_length=5, zone_strength_threshold=3, l
         # Skip if dataframe is too short
         if len(result) <= zone_length:
             logger.warning(
-                f"DataFrame too short for zone identification: {len(result)} rows, need at least {zone_length + 1}"
+                "dataframe_too_short_for_zone_identification",
+                row_count=len(result),
+                min_required=zone_length + 1,
             )
             return result
 
@@ -185,7 +188,7 @@ def identify_supply_demand_zones(df, zone_length=5, zone_strength_threshold=3, l
 
         return result
     except Exception as e:
-        logger.error(f"Error in identify_supply_demand_zones: {e}")
+        logger.error("identify_supply_demand_zones_failed", error=str(e))
         return df
 
 
@@ -238,7 +241,7 @@ def identify_key_levels(df, round_digits=2):
 
         return result
     except Exception as e:
-        logger.error(f"Error in identify_key_levels: {e}")
+        logger.error("identify_key_levels_failed", error=str(e))
         return df
 
 
@@ -263,7 +266,7 @@ def identify_session_levels(df, time_column="datetime"):
 
         # Check if we have enough data
         if len(result) == 0:
-            logger.warning("Empty DataFrame provided to identify_session_levels")
+            logger.warning("empty_dataframe_for_session_levels")
             return result
 
         # Ensure we have datetime information as a Series (not Index)
@@ -278,12 +281,12 @@ def identify_session_levels(df, time_column="datetime"):
             try:
                 time_data = pd.Series(pd.to_datetime(result.index, errors="coerce"), index=result.index)
             except Exception:
-                logger.error("Could not extract datetime from index")
+                logger.error("could_not_extract_datetime_from_index")
                 return result
 
         # Skip if we couldn't get valid datetime data
         if time_data.isna().all():
-            logger.warning("No valid datetime data found in DataFrame")
+            logger.warning("no_valid_datetime_data_found")
             return result
 
         # Initialize session columns
@@ -340,14 +343,14 @@ def identify_session_levels(df, time_column="datetime"):
                 result.loc[weekly_low_idx, "is_weekly_low"] = True
 
         except Exception as e:
-            logger.error(f"Error extracting datetime components: {e}")
+            logger.error("error_extracting_datetime_components", error=str(e))
 
         # Clean up temporary columns
         result = result.drop(columns=["temp_date", "temp_year", "temp_week"], errors="ignore")
 
         return result
     except Exception as e:
-        logger.error(f"Error in identify_session_levels: {e}")
+        logger.error("identify_session_levels_failed", error=str(e))
         return df
 
 
@@ -372,7 +375,7 @@ def is_price_in_area_of_interest(df, current_price=None, buffer_percentage=0.001
     try:
         # Make sure we have a dataframe with data
         if df is None or df.empty:
-            logger.warning("Empty DataFrame provided to is_price_in_area_of_interest")
+            logger.warning("empty_dataframe_for_area_of_interest")
             return {
                 "in_fair_value_gap": False,
                 "in_supply_zone": False,
@@ -462,7 +465,7 @@ def is_price_in_area_of_interest(df, current_price=None, buffer_percentage=0.001
 
         return result
     except Exception as e:
-        logger.error(f"Error in is_price_in_area_of_interest: {e}")
+        logger.error("is_price_in_area_of_interest_failed", error=str(e))
         return {
             "in_fair_value_gap": False,
             "in_supply_zone": False,
@@ -552,5 +555,5 @@ def identify_bitcoin_specific_levels(df, fibonacci_base=None):
 
         return result
     except Exception as e:
-        logger.error(f"Error in identify_bitcoin_specific_levels: {e}")
+        logger.error("identify_bitcoin_specific_levels_failed", error=str(e))
         return df

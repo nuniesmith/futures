@@ -172,8 +172,6 @@ def _legacy_risk_to_live_risk(data: dict[str, Any]) -> dict[str, Any]:
         "risk_pct_of_account": data.get("risk_pct_of_account", 0),
         "remaining_risk_budget": round(max_risk * remaining_slots, 2),
         "remaining_trade_slots": remaining_slots,
-        "tradovate_positions": [],
-        "tradovate_position_count": 0,
         "session_time_remaining": "",
         "session_active": True,
         "computed_at": now.isoformat(),
@@ -331,7 +329,6 @@ async def get_live_risk_html():
     state.get("margin_remaining", account_size)
     health_reason = state.get("health_reason", "")
     unrealized = state.get("total_unrealized_pnl", 0.0)
-    tradovate_count = state.get("tradovate_position_count", 0)
 
     pnl_color = "#44ff88" if daily_pnl >= 0 else "#ff4444"
     total_pnl_color = "#44ff88" if total_pnl >= 0 else "#ff4444"
@@ -380,16 +377,6 @@ async def get_live_risk_html():
             )
             pills.append(pill)
         position_pills = " ".join(pills)
-
-    # Tradovate position indicator
-    tv_indicator = ""
-    if tradovate_count > 0:
-        tv_indicator = (
-            f'<span style="display:inline-block;background:#1a1a2e;border:1px solid #555;'
-            f'border-radius:4px;padding:2px 6px;margin-left:8px;font-size:10px;">'
-            f"📺 TV: {tradovate_count}"
-            f"</span>"
-        )
 
     html = f"""
     <style>
@@ -451,7 +438,6 @@ async def get_live_risk_html():
             <span class="risk-metric">
                 <span class="risk-label">Positions</span><br>
                 <span class="risk-value" style="color:{pos_color}">{open_count}/{max_open}</span>
-                {tv_indicator}
             </span>
         </div>
 

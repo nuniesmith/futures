@@ -8,10 +8,12 @@ from collections.abc import Callable
 from typing import Any
 
 import pandas as pd
-from loguru import logger
 
+from lib.core.logging_config import get_logger
 from lib.indicators.base import Indicator
 from lib.indicators.factory import IndicatorFactory
+
+logger = get_logger(__name__)
 
 
 class IndicatorManager:
@@ -46,7 +48,7 @@ class IndicatorManager:
         Args:
             indicators: Optional list of indicator instances or configurations to add.
         """
-        self.logger = logger.bind(name="indicator.manager")
+        self.logger = get_logger(__name__)
         self._indicators: dict[str, Indicator] = {}
         self._groups: dict[str, set[str]] = {}
 
@@ -55,7 +57,7 @@ class IndicatorManager:
             for ind in indicators:
                 self.add_indicator(ind)
 
-        self.logger.info(f"IndicatorManager initialized with {len(self._indicators)} indicators")
+        self.logger.info("indicator_manager_initialized", indicator_count=len(self._indicators))
 
     def add_indicator(
         self,
@@ -143,7 +145,7 @@ class IndicatorManager:
                 indicator_id = ind.name
                 self._indicators[indicator_id] = ind
             except ValueError as e:
-                self.logger.error(f"Failed to create indicator from config: {e}")
+                self.logger.error("failed_to_create_indicator_from_config", error=str(e))
                 raise
         else:
             raise ValueError("Indicator must be an Indicator instance or a configuration dictionary")
@@ -155,7 +157,7 @@ class IndicatorManager:
                     self._groups[group] = set()
                 self._groups[group].add(indicator_id)
 
-        self.logger.debug(f"Added indicator: {indicator_id}")
+        self.logger.debug("added_indicator", indicator_id=indicator_id)
         return indicator_id
 
     def remove_indicator(self, indicator_id: str) -> bool:
@@ -169,7 +171,7 @@ class IndicatorManager:
             True if the indicator was removed, False if not found.
         """
         if indicator_id not in self._indicators:
-            self.logger.warning(f"Indicator not found: {indicator_id}")
+            self.logger.warning("indicator_not_found", indicator_id=indicator_id)
             return False
 
         # Remove from indicators dict
@@ -180,7 +182,7 @@ class IndicatorManager:
             if indicator_id in group:
                 group.remove(indicator_id)
 
-        self.logger.debug(f"Removed indicator: {indicator_id}")
+        self.logger.debug("removed_indicator", indicator_id=indicator_id)
         return True
 
     def get_indicator(self, indicator_id: str) -> Indicator | None:
@@ -220,9 +222,9 @@ class IndicatorManager:
                 if ind_id in self._indicators:
                     self._groups[group_name].add(ind_id)
                 else:
-                    self.logger.warning(f"Indicator not found: {ind_id}")
+                    self.logger.warning("indicator_not_found", indicator_id=ind_id)
 
-        self.logger.debug(f"Added/updated group: {group_name}")
+        self.logger.debug("added_updated_group", group_name=group_name)
 
     def remove_group(self, group_name: str) -> bool:
         """
@@ -235,11 +237,11 @@ class IndicatorManager:
             True if the group was removed, False if not found.
         """
         if group_name not in self._groups:
-            self.logger.warning(f"Group not found: {group_name}")
+            self.logger.warning("group_not_found", group_name=group_name)
             return False
 
         del self._groups[group_name]
-        self.logger.debug(f"Removed group: {group_name}")
+        self.logger.debug("removed_group", group_name=group_name)
         return True
 
     def list_groups(self) -> list[str]:
@@ -262,7 +264,7 @@ class IndicatorManager:
             List of indicator IDs in the group.
         """
         if group_name not in self._groups:
-            self.logger.warning(f"Group not found: {group_name}")
+            self.logger.warning("group_not_found", group_name=group_name)
             return []
 
         return list(self._groups[group_name])
@@ -281,9 +283,9 @@ class IndicatorManager:
         for ind_id, indicator in self._indicators.items():
             try:
                 results[ind_id] = indicator(data)
-                self.logger.debug(f"Calculated indicator: {ind_id}")
+                self.logger.debug("calculated_indicator", indicator_id=ind_id)
             except Exception as e:
-                self.logger.error(f"Error calculating indicator {ind_id}: {e}")
+                self.logger.error("indicator_calculation_failed", indicator_id=ind_id, error=str(e))
                 results[ind_id] = None
 
         return results
@@ -300,7 +302,7 @@ class IndicatorManager:
             Dictionary mapping indicator IDs to their calculated values.
         """
         if group_name not in self._groups:
-            self.logger.warning(f"Group not found: {group_name}")
+            self.logger.warning("group_not_found", group_name=group_name)
             return {}
 
         results = {}
@@ -308,12 +310,12 @@ class IndicatorManager:
             if ind_id in self._indicators:
                 try:
                     results[ind_id] = self._indicators[ind_id](data)
-                    self.logger.debug(f"Calculated indicator: {ind_id}")
+                    self.logger.debug("calculated_indicator", indicator_id=ind_id)
                 except Exception as e:
-                    self.logger.error(f"Error calculating indicator {ind_id}: {e}")
+                    self.logger.error("indicator_calculation_failed", indicator_id=ind_id, error=str(e))
                     results[ind_id] = None
             else:
-                self.logger.warning(f"Indicator not found: {ind_id}")
+                self.logger.warning("indicator_not_found", indicator_id=ind_id)
 
         return results
 
@@ -333,12 +335,12 @@ class IndicatorManager:
             if ind_id in self._indicators:
                 try:
                     results[ind_id] = self._indicators[ind_id](data)
-                    self.logger.debug(f"Calculated indicator: {ind_id}")
+                    self.logger.debug("calculated_indicator", indicator_id=ind_id)
                 except Exception as e:
-                    self.logger.error(f"Error calculating indicator {ind_id}: {e}")
+                    self.logger.error("indicator_calculation_failed", indicator_id=ind_id, error=str(e))
                     results[ind_id] = None
             else:
-                self.logger.warning(f"Indicator not found: {ind_id}")
+                self.logger.warning("indicator_not_found", indicator_id=ind_id)
 
         return results
 
@@ -361,7 +363,7 @@ class IndicatorManager:
         for indicator in self._indicators.values():
             indicator.reset()
 
-        self.logger.debug("Reset all indicators")
+        self.logger.debug("reset_all_indicators")
 
     def reset_group(self, group_name: str) -> bool:
         """
@@ -374,14 +376,14 @@ class IndicatorManager:
             True if the group was found and reset, False otherwise.
         """
         if group_name not in self._groups:
-            self.logger.warning(f"Group not found: {group_name}")
+            self.logger.warning("group_not_found", group_name=group_name)
             return False
 
         for ind_id in self._groups[group_name]:
             if ind_id in self._indicators:
                 self._indicators[ind_id].reset()
 
-        self.logger.debug(f"Reset indicators in group: {group_name}")
+        self.logger.debug("reset_group_indicators", group_name=group_name)
         return True
 
     def get_all_values(self) -> dict[str, float | dict[str, float] | None]:
@@ -397,7 +399,7 @@ class IndicatorManager:
                 try:
                     values[ind_id] = indicator.get_value()
                 except Exception as e:
-                    self.logger.error(f"Error getting value for indicator {ind_id}: {e}")
+                    self.logger.error("error_getting_indicator_value", indicator_id=ind_id, error=str(e))
                     values[ind_id] = None
 
         return values
@@ -413,7 +415,7 @@ class IndicatorManager:
             Dictionary mapping indicator IDs to their latest values.
         """
         if group_name not in self._groups:
-            self.logger.warning(f"Group not found: {group_name}")
+            self.logger.warning("group_not_found", group_name=group_name)
             return {}
 
         values: dict[str, float | dict[str, float] | None] = {}
@@ -422,7 +424,7 @@ class IndicatorManager:
                 try:
                     values[ind_id] = self._indicators[ind_id].get_value()
                 except Exception as e:
-                    self.logger.error(f"Error getting value for indicator {ind_id}: {e}")
+                    self.logger.error("error_getting_indicator_value", indicator_id=ind_id, error=str(e))
                     values[ind_id] = None
 
         return values
@@ -478,7 +480,7 @@ class IndicatorManager:
                 try:
                     manager.add_indicator(ind_config)
                 except ValueError as e:
-                    manager.logger.error(f"Failed to load indicator: {e}")
+                    manager.logger.error("failed_to_load_indicator", error=str(e))
 
         # Add groups
         if "groups" in config:
@@ -510,9 +512,9 @@ class IndicatorManager:
                     self.add_indicator(indicator, [category])
                     added_indicators.append(indicator.name)
                 except Exception as e:
-                    self.logger.error(f"Failed to add indicator {ind_cls.__name__}: {e}")
+                    self.logger.error("failed_to_add_indicator", indicator_class=ind_cls.__name__, error=str(e))
 
-        self.logger.info(f"Added {len(added_indicators)} indicators of category '{category}'")
+        self.logger.info("added_indicators_by_category", count=len(added_indicators), category=category)
         return added_indicators
 
     def create_combined_dataframe(self, data: pd.DataFrame, indicator_ids: list[str] | None = None) -> pd.DataFrame:
@@ -547,9 +549,9 @@ class IndicatorManager:
                         # Single-column result
                         result[ind_id] = ind_result
 
-                    self.logger.debug(f"Added indicator {ind_id} to combined DataFrame")
+                    self.logger.debug("added_indicator_to_combined_dataframe", indicator_id=ind_id)
                 except Exception as e:
-                    self.logger.error(f"Error calculating indicator {ind_id}: {e}")
+                    self.logger.error("indicator_calculation_failed", indicator_id=ind_id, error=str(e))
 
         return result
 
@@ -575,7 +577,7 @@ class IndicatorManager:
                 ind = IndicatorFactory.create_from_config(config)
                 temp_indicators.append(ind)
             except ValueError as e:
-                self.logger.error(f"Failed to create indicator from config: {e}")
+                self.logger.error("failed_to_create_indicator_from_config", error=str(e))
 
         # Calculate each indicator and add to result
         for ind in temp_indicators:
@@ -590,8 +592,8 @@ class IndicatorManager:
                     # Single-column result
                     result[ind.name] = ind_result
 
-                self.logger.debug(f"Added indicator {ind.name} to result DataFrame")
+                self.logger.debug("added_indicator_to_result_dataframe", indicator_name=ind.name)
             except Exception as e:
-                self.logger.error(f"Error calculating indicator {ind.name}: {e}")
+                self.logger.error("indicator_calculation_failed", indicator_name=ind.name, error=str(e))
 
         return result

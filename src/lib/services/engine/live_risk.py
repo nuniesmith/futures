@@ -78,7 +78,7 @@ class PositionSnapshot:
     hold_duration_seconds: int = 0
     risk_dollars: float = 0.0
     margin_used: float = 0.0
-    source: str = "engine"  # "engine", "tradovate", "bridge"
+    source: str = "engine"  # "engine", "rithmic"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -150,10 +150,6 @@ class LiveRiskState:
     remaining_risk_budget: float = 0.0
     remaining_trade_slots: int = 0
 
-    # ── Tradovate positions (from TradingView integration) ──────────────
-    tradovate_positions: list[dict[str, Any]] = field(default_factory=list)
-    tradovate_position_count: int = 0
-
     # ── Session info ────────────────────────────────────────────────────
     session_time_remaining: str = ""  # e.g. "2h 15m"
     session_active: bool = True
@@ -200,9 +196,6 @@ class LiveRiskState:
             "risk_pct_of_account": round(self.risk_pct_of_account, 2),
             "remaining_risk_budget": round(self.remaining_risk_budget, 2),
             "remaining_trade_slots": self.remaining_trade_slots,
-            # Tradovate
-            "tradovate_positions": self.tradovate_positions,
-            "tradovate_position_count": self.tradovate_position_count,
             # Session
             "session_time_remaining": self.session_time_remaining,
             "session_active": self.session_active,
@@ -321,7 +314,6 @@ class LiveRiskState:
 def compute_live_risk(
     risk_manager: RiskManager | None = None,
     position_manager: PositionManager | None = None,
-    tradovate_positions: list[dict[str, Any]] | None = None,
 ) -> LiveRiskState:
     """Compute the unified live risk state from available sources.
 
@@ -331,7 +323,6 @@ def compute_live_risk(
     Args:
         risk_manager: Engine's RiskManager instance (may be None if unavailable)
         position_manager: Engine's PositionManager instance (may be None)
-        tradovate_positions: Live positions from Tradovate (may be None)
 
     Returns:
         LiveRiskState with all fields populated.
@@ -388,42 +379,6 @@ def compute_live_risk(
 
         except Exception as exc:
             logger.warning("Failed to read PositionManager state: %s", exc)
-
-    # ── Merge Tradovate positions ───────────────────────────────────────
-    if tradovate_positions:
-        state.tradovate_positions = tradovate_positions
-        state.tradovate_position_count = len(tradovate_positions)
-
-        # If no engine positions but we have Tradovate positions, use those
-        # as the primary position source for risk calculations
-        if not state.positions and tradovate_positions:
-            for tv_pos in tradovate_positions:
-                snap = PositionSnapshot(
-                    symbol=tv_pos.get("symbol", ""),
-                    asset_name=_resolve_asset_name(tv_pos.get("symbol", "")),
-                    side=tv_pos.get("side", "UNKNOWN"),
-                    quantity=tv_pos.get("quantity", 0),
-                    entry_price=tv_pos.get("entry_price", 0),
-                    current_price=tv_pos.get("current_price", 0),
-                    unrealized_pnl=tv_pos.get("unrealized_pnl", 0),
-                    source="tradovate",
-                )
-                state.positions.append(snap)
-            state.open_position_count = len(state.positions)
-
-    # Also check Redis for Tradovate positions synced from TV webhook
-    if not tradovate_positions:
-        try:
-            from lib.core.cache import cache_get
-
-            raw = cache_get("tv:positions:for_risk_sync")
-            if raw:
-                tv_data = json.loads(raw)
-                if isinstance(tv_data, list) and tv_data:
-                    state.tradovate_positions = tv_data
-                    state.tradovate_position_count = len(tv_data)
-        except Exception:
-            pass
 
     # ── Compute derived fields ──────────────────────────────────────────
     _compute_derived_fields(state)
@@ -700,7 +655,6 @@ def _dict_to_live_risk(data: dict[str, Any]) -> LiveRiskState:
         "risk_pct_of_account",
         "remaining_risk_budget",
         "remaining_trade_slots",
-        "tradovate_position_count",
         "session_time_remaining",
         "session_active",
         "computed_at",
@@ -716,10 +670,6 @@ def _dict_to_live_risk(data: dict[str, Any]) -> LiveRiskState:
         for pos_dict in data["positions"]:
             snap = PositionSnapshot(**{k: v for k, v in pos_dict.items() if hasattr(PositionSnapshot, k)})
             state.positions.append(snap)
-
-    # Tradovate positions (raw dicts)
-    if "tradovate_positions" in data:
-        state.tradovate_positions = data["tradovate_positions"]
 
     return state
 
@@ -791,13 +741,9 @@ class LiveRiskPublisher:
 
         Call this when a position opens/closes for instant dashboard update.
         """
-        # Load Tradovate positions from Redis if available
-        tv_positions = self._load_tradovate_positions()
-
         state = compute_live_risk(
             risk_manager=self._risk_manager,
             position_manager=self._position_manager,
-            tradovate_positions=tv_positions,
         )
 
         state.publish_to_redis()
@@ -805,19 +751,3 @@ class LiveRiskPublisher:
         self._last_state = state
 
         return state
-
-    def _load_tradovate_positions(self) -> list[dict[str, Any]] | None:
-        """Try to load Tradovate positions from Redis."""
-        try:
-            from lib.core.cache import cache_get
-
-            raw = cache_get("tv:positions")
-            if raw:
-                data = json.loads(raw)
-                if isinstance(data, dict):
-                    return data.get("positions", [])
-                if isinstance(data, list):
-                    return data
-        except Exception:
-            pass
-        return None

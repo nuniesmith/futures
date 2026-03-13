@@ -23,7 +23,7 @@ COPY docker/charting/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # ── Runtime defaults (all overridable via docker-compose environment:) ────────
-ENV DATA_SERVICE_URL=http://data:8001
+ENV DATA_SERVICE_URL=http://data:8000
 ENV CHARTING_SERVICE_PORT=8003
 ENV CORS_ORIGINS=*
 

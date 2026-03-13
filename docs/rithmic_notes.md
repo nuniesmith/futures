@@ -1,3 +1,7 @@
+> **Historical comparison** — The Tradovate/NinjaTrader bridge has been removed
+> (PURGE-A/B). Rithmic is now the sole execution layer. The comparison tables
+> below are kept for reference only.
+
 **✅ Full Review of `async_rithmic` (March 2026 version) for your exact use case**
 
 I (and the team) went through the official docs (readthedocs + GitHub), the protobuf wrappers, recent release notes (v1.5.7+), and cross-checked against Rithmic’s Protocol Buffer spec + common prop-firm rules for Rithmic accounts (Topstep, Apex, Bulenox, Take Profit Trader, etc.).
@@ -243,7 +247,6 @@ async def copy_trade_to_slave(self, client, main_order, size_scale=1.0):
 Your current setup (read-only data creds + execution on copy creds with `MANUAL` flag) is **prop-firm bulletproof**.
 
 Want me to:
-- Add the rate-limit counter + Slack alert to your `CopyTrader` class?
 - Show how to detect “Consumer Slow” or rate-limit errors in the event handlers?
 - Or integrate this reconnection config into the full pre-market + copy-trading script?
 

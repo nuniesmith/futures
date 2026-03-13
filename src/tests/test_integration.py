@@ -1003,10 +1003,10 @@ class TestGrokSSEChannel:
 
 
 # ===========================================================================
-# TEST 13: Positions sync from NT8 bridge
+# TEST 13: Positions sync via Rithmic integration
 # ===========================================================================
 class TestPositionsSyncIntegration:
-    """Verify RiskManager can sync positions from NT8 bridge cache."""
+    """Verify RiskManager can sync positions from Rithmic integration cache."""
 
     def test_sync_positions_updates_risk_state(self):
         from lib.services.engine.risk import RiskManager

@@ -2,11 +2,7 @@
 # Runs the overnight CNN retraining pipeline and/or train_gpu.py directly.
 # This image is intentionally separate from the engine so that:
 #   - The main stack (docker-compose.yml) runs CPU-only on any machine.
-#   - GPU training runs on a dedicated rig via docker-compose.train.yml.
-#   - Trained models are synced back to the main machine via rsync/scp
-#     (see scripts/sync_models.sh).
-#
-# CUDA 12.8 + Python 3.13 via deadsnakes PPA on Ubuntu 24.04.
+
 # Installs the [gpu] extras so torch/torchvision get CUDA-enabled wheels.
 
 # ---------------------------------------------------------------------------

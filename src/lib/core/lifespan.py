@@ -12,12 +12,9 @@ from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
-try:
-    from loguru import logger
-except ImportError:
-    import logging
+from lib.core.logging_config import get_logger
 
-    logger = logging.getLogger("core.lifecycle")  # type: ignore[assignment]
+logger = get_logger(__name__)
 
 try:
     from fastapi import FastAPI  # type: ignore[attr-defined]
@@ -42,7 +39,7 @@ async def get_lifespan_manager(app: Any | None = None) -> AsyncGenerator[None, N
         None: This context manager doesn't yield any value
     """
     # Startup phase
-    logger.info("Starting application lifecycle")
+    logger.info("starting_application_lifecycle")
 
     # Try to get service registry if available
     try:
@@ -51,62 +48,62 @@ async def get_lifespan_manager(app: Any | None = None) -> AsyncGenerator[None, N
         service_registry = get_registry("component")
     except ImportError:
         service_registry = None
-        logger.debug("Service registry not available")
+        logger.debug("service_registry_not_available")
 
     try:
         # Connect to database if available
         try:
             from lib.core.db import get_db
 
-            logger.info("Connecting to database")
+            logger.info("connecting_to_database")
             db_connected = await get_db().connect()
             if db_connected:
-                logger.info("Database connection established")
+                logger.info("database_connection_established")
             else:
-                logger.error("Failed to connect to database")
+                logger.error("failed_to_connect_to_database")
         except ImportError:
-            logger.debug("Database module not available, skipping connection")
+            logger.debug("database_module_not_available", action="skipping_connection")
 
         # Start all services if service registry is available
         if service_registry:
-            logger.info("Starting registered services")
+            logger.info("starting_registered_services")
             await service_registry.start_all()  # type: ignore[attr-defined]
-            logger.info("All services started")
+            logger.info("all_services_started")
 
     except Exception as e:
         # Log startup errors but allow app to start
         # so health endpoints can report the issues
-        logger.error(f"Startup error: {str(e)}", exc_info=True)
+        logger.error("startup_error", error=str(e), exc_info=True)
 
     yield  # Application runs here
 
     # Shutdown phase
-    logger.info("Shutting down application")
+    logger.info("shutting_down_application")
 
     try:
         # Stop all services gracefully if service registry is available
         if service_registry:
-            logger.info("Stopping registered services")
+            logger.info("stopping_registered_services")
             await service_registry.stop_all()  # type: ignore[attr-defined]
-            logger.info("All services stopped")
+            logger.info("all_services_stopped")
 
         # Disconnect database if available
         try:
             from lib.core.db import get_db
 
-            logger.info("Disconnecting from database")
+            logger.info("disconnecting_from_database")
             db_disconnected = await get_db().disconnect()
             if db_disconnected:
-                logger.info("Database disconnected successfully")
+                logger.info("database_disconnected_successfully")
             else:
-                logger.warning("Database disconnection may not be complete")
+                logger.warning("database_disconnection_may_not_be_complete")
         except ImportError:
             pass
 
     except Exception as e:
-        logger.error(f"Shutdown error: {str(e)}", exc_info=True)
+        logger.error("shutdown_error", error=str(e), exc_info=True)
 
-    logger.info("Application lifecycle completed")
+    logger.info("application_lifecycle_completed")
 
 
 def get_sync_lifespan_manager() -> Callable:
@@ -120,7 +117,7 @@ def get_sync_lifespan_manager() -> Callable:
     @contextlib.contextmanager
     def sync_lifespan_manager():
         # Startup phase
-        logger.info("Starting application lifecycle (sync)")
+        logger.info("starting_application_lifecycle", mode="sync")
 
         # Try to get service registry if available
         try:
@@ -129,7 +126,7 @@ def get_sync_lifespan_manager() -> Callable:
             service_registry = get_service_registry()
         except ImportError:
             service_registry = None
-            logger.debug("Service registry not available")
+            logger.debug("service_registry_not_available")
 
         try:
             # Connect to database if available
@@ -138,36 +135,36 @@ def get_sync_lifespan_manager() -> Callable:
 
                 db_module = importlib.import_module("lib.core.db")
                 if hasattr(db_module, "connect_sync"):
-                    logger.info("Connecting to database")
+                    logger.info("connecting_to_database")
                     db_connected = db_module.connect_sync()
                     if db_connected:
-                        logger.info("Database connection established")
+                        logger.info("database_connection_established")
                     else:
-                        logger.error("Failed to connect to database")
+                        logger.error("failed_to_connect_to_database")
             except ImportError:
-                logger.debug("Database module not available, skipping connection")
+                logger.debug("database_module_not_available", action="skipping_connection")
 
             # Start all services if service registry is available
             if service_registry and hasattr(service_registry, "start_all"):
-                logger.info("Starting registered services")
+                logger.info("starting_registered_services")
                 run_async(service_registry.start_all())
-                logger.info("All services started")
+                logger.info("all_services_started")
 
         except Exception as e:
             # Log startup errors but allow app to start
-            logger.error(f"Startup error: {str(e)}", exc_info=True)
+            logger.error("startup_error", error=str(e), exc_info=True)
 
         yield  # Application runs here
 
         # Shutdown phase
-        logger.info("Shutting down application")
+        logger.info("shutting_down_application")
 
         try:
             # Stop all services gracefully if service registry is available
             if service_registry and hasattr(service_registry, "stop_all"):
-                logger.info("Stopping registered services")
+                logger.info("stopping_registered_services")
                 run_async(service_registry.stop_all())
-                logger.info("All services stopped")
+                logger.info("all_services_stopped")
 
             # Disconnect database if available
             try:
@@ -175,19 +172,19 @@ def get_sync_lifespan_manager() -> Callable:
 
                 db_module = importlib.import_module("lib.core.db")
                 if hasattr(db_module, "disconnect_sync"):
-                    logger.info("Disconnecting from database")
+                    logger.info("disconnecting_from_database")
                     db_disconnected = db_module.disconnect_sync()
                     if db_disconnected:
-                        logger.info("Database disconnected successfully")
+                        logger.info("database_disconnected_successfully")
                     else:
-                        logger.warning("Database disconnection may not be complete")
+                        logger.warning("database_disconnection_may_not_be_complete")
             except ImportError:
                 pass
 
         except Exception as e:
-            logger.error(f"Shutdown error: {str(e)}", exc_info=True)
+            logger.error("shutdown_error", error=str(e), exc_info=True)
 
-        logger.info("Application lifecycle completed")
+        logger.info("application_lifecycle_completed")
 
     return sync_lifespan_manager
 
@@ -200,7 +197,7 @@ def setup_fastapi_lifespan(app: Any) -> None:
         app: FastAPI application instance
     """
     if not FASTAPI_AVAILABLE:
-        logger.error("FastAPI is not installed, cannot set up lifespan events")
+        logger.error("fastapi_not_installed", detail="cannot set up lifespan events")
         return
 
     logger.warning(
@@ -255,7 +252,7 @@ class ApplicationLifecycle:
             service: Service object with start/stop methods
         """
         self.services.append(service)
-        logger.debug(f"Registered service: {service.__class__.__name__}")
+        logger.debug("registered_service", service=service.__class__.__name__)
 
     def register_services(self, services: list[Any]) -> None:
         """
@@ -270,10 +267,10 @@ class ApplicationLifecycle:
     async def start_async(self) -> None:
         """Start all registered services asynchronously."""
         if self.is_started:
-            logger.warning("Services are already started")
+            logger.warning("services_already_started")
             return
 
-        logger.info("Starting all services asynchronously")
+        logger.info("starting_all_services", mode="async")
 
         for service in self.services:
             try:
@@ -284,20 +281,20 @@ class ApplicationLifecycle:
                     # Run synchronous start method in executor
                     await asyncio.to_thread(service.start)
                 else:
-                    logger.warning(f"Service {service.__class__.__name__} has no start method")
+                    logger.warning("service_has_no_start_method", service=service.__class__.__name__)
             except Exception as e:
-                logger.error(f"Error starting service {service.__class__.__name__}: {str(e)}")
+                logger.error("error_starting_service", service=service.__class__.__name__, error=str(e))
 
         self.is_started = True
-        logger.info("All services started")
+        logger.info("all_services_started")
 
     def start_sync(self) -> None:
         """Start all registered services synchronously."""
         if self.is_started:
-            logger.warning("Services are already started")
+            logger.warning("services_already_started")
             return
 
-        logger.info("Starting all services synchronously")
+        logger.info("starting_all_services", mode="sync")
 
         for service in self.services:
             try:
@@ -308,20 +305,20 @@ class ApplicationLifecycle:
                     # Run async start method in event loop
                     run_async(service.start_async())
                 else:
-                    logger.warning(f"Service {service.__class__.__name__} has no start method")
+                    logger.warning("service_has_no_start_method", service=service.__class__.__name__)
             except Exception as e:
-                logger.error(f"Error starting service {service.__class__.__name__}: {str(e)}")
+                logger.error("error_starting_service", service=service.__class__.__name__, error=str(e))
 
         self.is_started = True
-        logger.info("All services started")
+        logger.info("all_services_started")
 
     async def stop_async(self) -> None:
         """Stop all registered services asynchronously."""
         if not self.is_started:
-            logger.warning("Services are not started")
+            logger.warning("services_not_started")
             return
 
-        logger.info("Stopping all services asynchronously")
+        logger.info("stopping_all_services", mode="async")
 
         # Stop services in reverse order
         for service in reversed(self.services):
@@ -333,20 +330,20 @@ class ApplicationLifecycle:
                     # Run synchronous stop method in executor
                     await asyncio.to_thread(service.stop)
                 else:
-                    logger.warning(f"Service {service.__class__.__name__} has no stop method")
+                    logger.warning("service_has_no_stop_method", service=service.__class__.__name__)
             except Exception as e:
-                logger.error(f"Error stopping service {service.__class__.__name__}: {str(e)}")
+                logger.error("error_stopping_service", service=service.__class__.__name__, error=str(e))
 
         self.is_started = False
-        logger.info("All services stopped")
+        logger.info("all_services_stopped")
 
     def stop_sync(self) -> None:
         """Stop all registered services synchronously."""
         if not self.is_started:
-            logger.warning("Services are not started")
+            logger.warning("services_not_started")
             return
 
-        logger.info("Stopping all services synchronously")
+        logger.info("stopping_all_services", mode="sync")
 
         # Stop services in reverse order
         for service in reversed(self.services):
@@ -358,12 +355,12 @@ class ApplicationLifecycle:
                     # Run async stop method in event loop
                     run_async(service.stop_async())
                 else:
-                    logger.warning(f"Service {service.__class__.__name__} has no stop method")
+                    logger.warning("service_has_no_stop_method", service=service.__class__.__name__)
             except Exception as e:
-                logger.error(f"Error stopping service {service.__class__.__name__}: {str(e)}")
+                logger.error("error_stopping_service", service=service.__class__.__name__, error=str(e))
 
         self.is_started = False
-        logger.info("All services stopped")
+        logger.info("all_services_stopped")
 
     @asynccontextmanager
     async def lifespan_context(self):

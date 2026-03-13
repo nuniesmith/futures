@@ -1138,8 +1138,8 @@ class DashboardEngine:
     def _eod_warning(self) -> None:
         """Fire the 15:45 ET position-close warning alert.
 
-        Dispatched once per calendar day via the alert channels (Slack /
-        Discord / Telegram) and logged at WARNING level so it surfaces in
+        Dispatched once per calendar day via the alert channel (Discord)
+        and logged at WARNING level so it surfaces in
         any log aggregator.  Does NOT touch orders or positions.
         """
         try:

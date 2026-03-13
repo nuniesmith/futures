@@ -5,7 +5,6 @@ Provides centralized database connection handling for the application.
 """
 
 import asyncio
-import logging
 from contextlib import asynccontextmanager
 from typing import (
     Any,
@@ -18,9 +17,10 @@ from lib.core.db import register_connection, unregister_connection
 from lib.core.db.orm import init_engine, shutdown_engine
 from lib.core.db.postgres import PostgresConnection
 from lib.core.exceptions.data import DatabaseError
+from lib.core.logging_config import get_logger
 
 # Configure logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class DatabaseConfig(BaseModel):
@@ -132,7 +132,7 @@ class Database:
                 return True
 
             if self._connecting:
-                logger.warning("Connection attempt already in progress")
+                logger.warning("connection_attempt_already_in_progress")
                 return False
 
             self._connecting = True
@@ -168,7 +168,7 @@ class Database:
                 return connected
 
             except Exception as e:
-                logger.error(f"Database connection error: {str(e)}", exc_info=True)
+                logger.error("database_connection_error", exc_info=True)
                 return False
             finally:
                 self._connecting = False
@@ -211,7 +211,7 @@ class Database:
                 return success
 
             except Exception as e:
-                logger.error(f"Database disconnection error: {str(e)}", exc_info=True)
+                logger.error("database_disconnection_error", exc_info=True)
                 return False
 
     @property
@@ -267,7 +267,7 @@ class Database:
             # Rollback on exception
             if hasattr(conn, "rollback"):
                 conn.rollback()
-            logger.error(f"Transaction error: {str(e)}", exc_info=True)
+            logger.error("transaction_error", exc_info=True)
             raise
 
 

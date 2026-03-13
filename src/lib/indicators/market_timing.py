@@ -13,7 +13,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytz  # type: ignore[import-untyped]
-from loguru import logger
+
+from lib.core.logging_config import get_logger
 
 
 # Import shared utilities
@@ -42,8 +43,7 @@ class _Config:
 
 config = _Config()
 
-# Configure logger
-logger = logger.bind(name="market_timing")
+logger = get_logger(__name__)
 
 # Get session times from configuration, falling back to defaults if not configured
 _cfg_sessions = config.get_sessions()
@@ -170,7 +170,7 @@ def is_active_session(
         return result
 
     except Exception as e:
-        logger.error(f"Error in is_active_session: {e}")
+        logger.error("is_active_session_failed", error=str(e))
         # Return all False as default
         default_result = {
             "in_asian_session": False,
@@ -215,7 +215,7 @@ def _is_time_in_session(current_time: time, session_start: time, session_end: ti
         else:
             return current_time >= session_start or current_time <= session_end
     except Exception as e:
-        logger.error(f"Error in _is_time_in_session: {e}")
+        logger.error("is_time_in_session_failed", error=str(e))
         return False
 
 
@@ -243,7 +243,7 @@ def analyze_session_performance(
     try:
         # Check if dataframe is empty
         if df is None or df.empty:
-            logger.warning("Empty DataFrame provided to analyze_session_performance")
+            logger.warning("empty_dataframe_for_session_performance")
             return pd.DataFrame(
                 {
                     "session": ["Asian", "London", "New York", "Overlap", "Other"],
@@ -256,7 +256,7 @@ def analyze_session_performance(
         required_columns = ["high", "low"]
         for col in required_columns:
             if col not in df.columns:
-                logger.error(f"Required column '{col}' not found in dataframe")
+                logger.error("required_column_not_found", column=col)
                 return pd.DataFrame(
                     {
                         "session": ["Asian", "London", "New York", "Overlap", "Other"],
@@ -280,13 +280,13 @@ def analyze_session_performance(
                 try:
                     df_copy["datetime"] = pd.to_datetime(df_copy.index, errors="coerce")
                 except Exception as e1:
-                    logger.error(f"Could not extract datetime from index: {e1}")
+                    logger.error("could_not_extract_datetime_from_index", error=str(e1))
                     # Try using a temporary Series with .dt accessor
                     try:
                         datetime_series = pd.Series(df_copy.index).apply(pd.to_datetime)
                         df_copy["datetime"] = datetime_series.values
                     except Exception as e2:
-                        logger.error(f"All attempts to extract datetime failed: {e2}")
+                        logger.error("all_datetime_extraction_attempts_failed", error=str(e2))
                         return pd.DataFrame(
                             {
                                 "session": ["Asian", "London", "New York", "Overlap", "Other"],
@@ -296,7 +296,7 @@ def analyze_session_performance(
                             }
                         )
         except Exception as e:
-            logger.error(f"Error extracting datetime information: {e}")
+            logger.error("error_extracting_datetime_information", error=str(e))
             return pd.DataFrame(
                 {
                     "session": ["Asian", "London", "New York", "Overlap", "Other"],
@@ -308,7 +308,7 @@ def analyze_session_performance(
 
         # Check if we have valid datetime data
         if bool(df_copy["datetime"].isna().all()):
-            logger.error("All datetime values are invalid")
+            logger.error("all_datetime_values_invalid")
             return pd.DataFrame(
                 {
                     "session": ["Asian", "London", "New York", "Overlap", "Other"],
@@ -324,7 +324,7 @@ def analyze_session_performance(
             datetime_series = pd.Series(df_copy["datetime"])
             df_copy["hour"] = datetime_series.dt.hour
         except Exception as e:
-            logger.error(f"Error extracting hour component: {e}")
+            logger.error("error_extracting_hour_component", error=str(e))
             return pd.DataFrame(
                 {
                     "session": ["Asian", "London", "New York", "Overlap", "Other"],
@@ -503,7 +503,7 @@ def analyze_session_performance(
         return result_df
 
     except Exception as e:
-        logger.error(f"Error in analyze_session_performance: {e}")
+        logger.error("analyze_session_performance_failed", error=str(e))
         # Return empty DataFrame with error message
         return pd.DataFrame(
             {
@@ -642,7 +642,7 @@ def should_trade_now(
             }
 
     except Exception as e:
-        logger.error(f"Error in should_trade_now: {e}")
+        logger.error("should_trade_now_failed", error=str(e))
         # Default to conservative response
         return {
             "should_trade": False,
@@ -698,12 +698,12 @@ def get_next_session_start(
             elif target_session == "crypto_low":
                 session_start = CRYPTO_SESSIONS.get("low_volume", {"start": time(0, 0)})["start"]
             else:
-                logger.warning(f"Unknown crypto session: {target_session}, using default")
+                logger.warning("unknown_crypto_session", target_session=target_session, fallback="default")
                 session_start = time(0, 0)
         else:
             # Get from regular sessions
             if target_session not in DEFAULT_SESSIONS:
-                logger.warning(f"Unknown session: {target_session}, defaulting to london")
+                logger.warning("unknown_session", target_session=target_session, fallback="london")
                 target_session = "london"
 
             session_start = DEFAULT_SESSIONS[target_session]["start"]
@@ -723,7 +723,7 @@ def get_next_session_start(
         return pd.Timestamp(session_start_tomorrow)  # type: ignore[return-value]
 
     except Exception as e:
-        logger.error(f"Error in get_next_session_start: {e}")
+        logger.error("get_next_session_start_failed", error=str(e))
         # Return current timestamp + 1 day as fallback
         return pd.Timestamp.now() + pd.Timedelta(days=1)  # type: ignore[return-value]
 
@@ -769,7 +769,7 @@ def get_current_session(timestamp: pd.Timestamp | datetime | None = None, asset_
             return "None"
 
     except Exception as e:
-        logger.error(f"Error in get_current_session: {e}")
+        logger.error("get_current_session_failed", error=str(e))
         return "Error"
 
 
@@ -808,11 +808,11 @@ def add_session_indicators(df: pd.DataFrame, time_column: str = "datetime", asse
             try:
                 time_series = pd.to_datetime(result.index, errors="coerce")
             except Exception as e:
-                logger.error(f"Could not get datetime from index: {e}")
+                logger.error("could_not_get_datetime_from_index", error=str(e))
                 return result
 
         if time_series is None or time_series.isna().all():
-            logger.error("No valid datetime information found")
+            logger.error("no_valid_datetime_information_found")
             return result
 
         # Extract hour - vectorized
@@ -866,7 +866,7 @@ def add_session_indicators(df: pd.DataFrame, time_column: str = "datetime", asse
         return result
 
     except Exception as e:
-        logger.error(f"Error in add_session_indicators: {e}")
+        logger.error("add_session_indicators_failed", error=str(e))
         return df
 
 
@@ -892,7 +892,7 @@ def analyze_hourly_activity(
     """
     try:
         if df is None or df.empty:
-            logger.warning("Empty DataFrame provided to analyze_hourly_activity")
+            logger.warning("empty_dataframe_for_hourly_activity")
             return pd.DataFrame()
 
         # Get datetime information with error handling
@@ -906,11 +906,11 @@ def analyze_hourly_activity(
             try:
                 time_series = pd.to_datetime(df.index, errors="coerce")
             except Exception as e:
-                logger.error(f"Could not get datetime from index: {e}")
+                logger.error("could_not_get_datetime_from_index", error=str(e))
                 return pd.DataFrame()
 
         if time_series is None or time_series.isna().all():
-            logger.error("No valid datetime information found")
+            logger.error("no_valid_datetime_information_found")
             return pd.DataFrame()
 
         # Create a copy with the hour information
@@ -952,7 +952,7 @@ def analyze_hourly_activity(
             hourly_stats = df_copy.groupby("hour")["movement"].agg(["mean", "median", "std", "count"]).reset_index()
 
         else:
-            logger.error(f"Cannot calculate {measure} - required columns missing")
+            logger.error("cannot_calculate_measure", measure=measure, reason="required_columns_missing")
             return pd.DataFrame()
 
         # Add session information
@@ -996,7 +996,7 @@ def analyze_hourly_activity(
         return hourly_stats
 
     except Exception as e:
-        logger.error(f"Error in analyze_hourly_activity: {e}")
+        logger.error("analyze_hourly_activity_failed", error=str(e))
         return pd.DataFrame()
 
 
@@ -1104,5 +1104,5 @@ def get_session_calendar(
         return calendar_df
 
     except Exception as e:
-        logger.error(f"Error in get_session_calendar: {e}")
+        logger.error("get_session_calendar_failed", error=str(e))
         return pd.DataFrame()

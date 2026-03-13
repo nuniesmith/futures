@@ -85,40 +85,6 @@ scrape_configs:
                 service: "prometheus"
 
     # ---------------------------------------------------------------------------
-    # NinjaTrader Bridge — scraped directly from the Bridge HTTP listener
-    # ---------------------------------------------------------------------------
-    # The Bridge strategy exposes Prometheus metrics at /metrics on its
-    # signal listener port.  Since NinjaTrader runs on the Windows host
-    # (not in Docker), we use host.docker.internal to reach it.
-    #
-    # Metrics exposed:
-    #   bridge_up, bridge_listener_up, bridge_ruby_attached,
-    #   bridge_signalbus_active, bridge_positions_count,
-    #   bridge_cash_balance, bridge_unrealized_pnl, bridge_realized_pnl,
-    #   bridge_risk_blocked, bridge_signals_received_total,
-    #   bridge_signals_executed_total, bridge_signals_rejected_total,
-    #   bridge_exits_executed_total, bridge_orders_filled_total,
-    #   bridge_orders_rejected_total, bridge_signalbus_enqueued_total,
-    #   bridge_signalbus_drained_total, bridge_signalbus_pending,
-    #   bridge_heartbeats_total, bridge_position_pushes_total,
-    #   bridge_uptime_seconds, bridge_info
-    # ---------------------------------------------------------------------------
-    - job_name: "ninjatrader-bridge"
-      metrics_path: /metrics
-      scrape_interval: 15s
-      scrape_timeout: 5s
-      static_configs:
-          - targets: ["host.docker.internal:5680"]
-            labels:
-                service: "ninjatrader-bridge"
-                component: "trading"
-
-      # The Bridge may not always be running (only during trading hours).
-      # Mark the target as optional so Prometheus doesn't fire alerts
-      # during off-hours when NT8 is closed.
-      # honor_timestamps: true
-
-    # ---------------------------------------------------------------------------
     # Redis Exporter (optional — add oliver006/redis_exporter to compose)
     # ---------------------------------------------------------------------------
     # - job_name: "redis"

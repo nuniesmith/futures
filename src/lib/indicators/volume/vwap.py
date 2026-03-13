@@ -1,5 +1,8 @@
 import pandas as pd
-from loguru import logger
+
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def vwap(data: pd.DataFrame) -> pd.Series:
@@ -20,11 +23,11 @@ def vwap(data: pd.DataFrame) -> pd.Series:
     if missing_cols:
         raise ValueError(f"DataFrame is missing the following columns: {', '.join(missing_cols)}")
 
-    logger.info("Calculating Volume-Weighted Average Price (VWAP).")
+    logger.info("calculating_vwap")
     cum_volume = data["Volume"].cumsum()
     cum_vwap = (data["Close"] * data["Volume"]).cumsum()
     vwap_series = cum_vwap / cum_volume
-    logger.info("VWAP calculated successfully.")
+    logger.info("vwap_calculated_successfully")
     return pd.Series(vwap_series, index=data.index, name="VWAP")
 
 
@@ -38,10 +41,10 @@ def apply(data: pd.DataFrame) -> pd.DataFrame:
     Returns:
         pd.DataFrame: DataFrame with a new column 'VWAP' added.
     """
-    logger.info("Adding VWAP to DataFrame.")
+    logger.info("adding_vwap_to_dataframe")
     data = data.copy()
     data["VWAP"] = vwap(data)
-    logger.info("VWAP added successfully.")
+    logger.info("vwap_added_successfully")
     return data
 
 
@@ -58,8 +61,8 @@ class VWAPIndicator:
     REQUIRED_COLUMNS = ["Close", "Volume"]
 
     def __init__(self):
-        self.logger = logger
-        self.history_df = pd.DataFrame(columns=self.REQUIRED_COLUMNS)
+        self.logger = get_logger(__name__)
+        self.history_df = pd.DataFrame(columns=pd.Index(self.REQUIRED_COLUMNS))
         self.current_value = None
 
     def update(self, data_point: dict) -> float | None:
@@ -76,7 +79,7 @@ class VWAPIndicator:
             close = data_point.get("close")
             volume = data_point.get("volume")
             if close is None or volume is None:
-                self.logger.warning("Data point missing required 'close' or 'volume' for VWAP update.")
+                self.logger.warning("missing_required_fields", fields=["close", "volume"], indicator="VWAP")
                 return None
 
             new_row = pd.DataFrame([{"Close": close, "Volume": volume}])
@@ -93,5 +96,5 @@ class VWAPIndicator:
             return self.current_value
 
         except Exception as e:
-            self.logger.error(f"VWAP Indicator update failed: {e}", exc_info=True)
+            self.logger.error("vwap_update_failed", error=str(e), exc_info=True)
             return None

@@ -5,28 +5,35 @@ This module provides SQLAlchemy ORM engine initialization, management
 and cleanup functionality for the application.
 """
 
+from __future__ import annotations
+
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from loguru import logger
+from lib.core.logging_config import get_logger
 
-# Try to import SQLAlchemy
+# Type-checking-only imports so Pyright sees the real types without
+# runtime side-effects when SQLAlchemy is absent.
+if TYPE_CHECKING:
+    from sqlalchemy import Engine
+    from sqlalchemy.orm import DeclarativeMeta, Session
+
+# Runtime availability check
 try:
     from sqlalchemy import create_engine
-    from sqlalchemy.ext.declarative import declarative_base
-    from sqlalchemy.orm import scoped_session, sessionmaker
+    from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
     HAS_SQLALCHEMY = True
 except ImportError:
     HAS_SQLALCHEMY = False
 
 # Module logger
-_logger = logger.bind(name="core.database.orm")
+_logger = get_logger(__name__)
 
 # Base ORM model
-Base = None
+Base: DeclarativeMeta | None = None  # type: ignore[assignment]
 if HAS_SQLALCHEMY:
-    Base = declarative_base()
+    Base = declarative_base()  # type: ignore[assignment]
 
 # Engine and session tracking
 _engine_lock = threading.RLock()
@@ -42,8 +49,8 @@ def init_engine(
     pool_size: int = 5,
     max_overflow: int = 10,
     pool_timeout: int = 30,
-    **engine_kwargs,
-) -> Any:
+    **engine_kwargs: Any,
+) -> Engine | None:
     """
     Initialize a SQLAlchemy engine.
 
@@ -60,17 +67,16 @@ def init_engine(
         SQLAlchemy engine or None if SQLAlchemy is not available
     """
     if not HAS_SQLALCHEMY:
-        _logger.warning("SQLAlchemy is not installed, cannot initialize ORM engine")
+        _logger.warning("sqlalchemy_not_installed")
         return None
 
     with _engine_lock:
         if engine_name in _engines:
-            _logger.debug(f"Engine '{engine_name}' already initialized")
+            _logger.debug("engine_already_initialized", engine_name=engine_name)
             return _engines[engine_name]
 
         try:
-            # Create engine with connection pooling settings
-            engine = create_engine(
+            engine = create_engine(  # type: ignore[possibly-undefined]
                 db_url,
                 echo=echo,
                 pool_size=pool_size,
@@ -81,15 +87,14 @@ def init_engine(
 
             _engines[engine_name] = engine
 
-            # Create session factory
-            session_factory = sessionmaker(bind=engine)
-            _session_factories[engine_name] = scoped_session(session_factory)
+            session_factory = sessionmaker(bind=engine)  # type: ignore[possibly-undefined]
+            _session_factories[engine_name] = scoped_session(session_factory)  # type: ignore[possibly-undefined]
 
-            _logger.info(f"Initialized SQLAlchemy engine '{engine_name}'")
-            return engine
+            _logger.info("engine_initialized", engine_name=engine_name)
+            return engine  # type: ignore[return-value]
 
         except Exception as e:
-            _logger.error(f"Error initializing SQLAlchemy engine '{engine_name}': {e}")
+            _logger.error("engine_init_failed", engine_name=engine_name, error=str(e))
             return None
 
 
@@ -107,7 +112,7 @@ def get_engine(engine_name: str = "default") -> Any | None:
         return _engines.get(engine_name)
 
 
-def get_session(engine_name: str = "default") -> Any | None:
+def get_session(engine_name: str = "default") -> Session | None:
     """
     Get a SQLAlchemy session.
 
@@ -126,7 +131,7 @@ def get_session(engine_name: str = "default") -> Any | None:
 
         session = session_factory()
         _active_sessions.append(session)
-        return session
+        return session  # type: ignore[return-value]
 
 
 def close_session(session: Any) -> bool:
@@ -149,7 +154,7 @@ def close_session(session: Any) -> bool:
                 _active_sessions.remove(session)
         return True
     except Exception as e:
-        _logger.error(f"Error closing session: {e}")
+        _logger.error("session_close_failed", error=str(e))
         return False
 
 
@@ -182,19 +187,19 @@ def shutdown_engine(engine_name: str | None = None) -> bool:
                 if session in _active_sessions:
                     _active_sessions.remove(session)
         except Exception as e:
-            _logger.error(f"Error closing session during engine shutdown: {e}")
+            _logger.error("session_close_failed_during_shutdown", error=str(e))
             success = False
 
     # Dispose engines
     with _engine_lock:
-        engines_to_shutdown = {}
+        engines_to_shutdown: dict[str, Any] = {}
 
         if engine_name is not None:
             # Shut down specific engine
             if engine_name in _engines:
                 engines_to_shutdown[engine_name] = _engines[engine_name]
             else:
-                _logger.warning(f"Engine '{engine_name}' not found for shutdown")
+                _logger.warning("engine_not_found_for_shutdown", engine_name=engine_name)
         else:
             # Shut down all engines
             engines_to_shutdown = _engines.copy()
@@ -202,7 +207,7 @@ def shutdown_engine(engine_name: str | None = None) -> bool:
         # Dispose each engine
         for name, engine in engines_to_shutdown.items():
             try:
-                _logger.info(f"Shutting down SQLAlchemy engine '{name}'")
+                _logger.info("engine_shutting_down", engine_name=name)
                 engine.dispose()
 
                 # Remove from tracking
@@ -214,12 +219,12 @@ def shutdown_engine(engine_name: str | None = None) -> bool:
                     del _session_factories[name]
 
             except Exception as e:
-                _logger.error(f"Error shutting down SQLAlchemy engine '{name}': {e}")
+                _logger.error("engine_shutdown_failed", engine_name=name, error=str(e))
                 success = False
 
     if success:
-        _logger.info("SQLAlchemy engine(s) shut down successfully")
+        _logger.info("engines_shutdown_complete")
     else:
-        _logger.warning("Some errors occurred during SQLAlchemy engine shutdown")
+        _logger.warning("engines_shutdown_partial_failure")
 
     return success

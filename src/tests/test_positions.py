@@ -1,8 +1,8 @@
 """
-Tests for the NinjaTrader Live Position Bridge API.
+Tests for the Live Position API.
 
 Covers:
-  - POST /positions/update   — push positions from NinjaTrader
+  - POST /positions/update   — push positions from trading platform
   - GET  /positions/          — read current positions
   - DELETE /positions/        — clear stale positions
   - get_live_positions()      — direct cache read helper
@@ -74,7 +74,7 @@ def full_client():
 
 @pytest.fixture()
 def sample_payload():
-    """A realistic NinjaTrader position payload."""
+    """A realistic position payload."""
     return {
         "account": "Sim101",
         "positions": [
@@ -795,7 +795,7 @@ class TestModelValidation:
 
 
 class TestExistingEndpointsRegression:
-    """Verify that existing endpoints still respond after position bridge addition."""
+    """Verify that existing endpoints still respond after position API addition."""
 
     def test_health_still_works(self, full_client):
         resp = full_client.get("/health")
@@ -813,12 +813,12 @@ class TestExistingEndpointsRegression:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Rapid-fire updates (simulating NinjaTrader behavior)
+# Rapid-fire updates (simulating rapid platform behavior)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestRapidUpdates:
-    """Simulate rapid position updates like NinjaTrader would send."""
+    """Simulate rapid position updates like a trading platform would send."""
 
     def test_rapid_position_updates(self, client):
         """Multiple rapid POSTs don't corrupt data."""

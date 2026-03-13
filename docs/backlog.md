@@ -452,7 +452,7 @@
 ## 🔴 Phase TV — TradingView Integration (Reference Overlay Only)
 
 > TradingView is used as a **reference overlay for live price action only**.
-> No position sendback. No order execution. All trading decisions happen in Tradovate,
+> No position sendback. No order execution. All trading decisions are executed via Rithmic,
 > informed by the Python dashboard.
 
 ### Phase TV-B: Ruby Futures Indicator — Engine Signal Overlay
@@ -492,54 +492,14 @@
   - Left monitor: TradingView with Ruby Futures indicator (reference only)
   - Right monitor: Python dashboard (focus mode, risk strip, swing signals, sentiment)
   - Pre-market: dashboard daily bias + Grok brief + Reddit sentiment → informs watchlist
-  - All execution is manual via Tradovate, informed by dashboard
-  - Zero dependency on NinjaTrader or Windows
+  - All execution via Rithmic CopyTrader, informed by dashboard
+  - Zero dependency on Windows (Rithmic is the sole execution layer)
 
 ---
 
-## 🔴 Phase TBRIDGE — Tradovate JavaScript Bridge
+## ~~Phase TBRIDGE — Tradovate JavaScript Bridge~~ *(removed)*
 
-> Replaces the TradingView position sendback approach entirely. Only one bridge
-> connection needed (leader account) — PickMyTrade copies all trades to remaining accounts.
-
-### Phase TBRIDGE-A: Tradovate API Client (JavaScript/Node.js)
-
-- [ ] **Research Tradovate API docs** — REST endpoints for order placement, position query,
-  account info
-  - Auth flow: OAuth2 token → WebSocket session → order commands
-  - Rate limits and order types (market, limit, stop-market, bracket)
-- [ ] **`bridge/tradovate_client.js`** — Node.js client for Tradovate REST + WebSocket
-  - `authenticate(credentials)` → access token
-  - `placeOrder({symbol, action, qty, orderType, price?, stopPrice?})` → order ID
-  - `getPositions()` → open positions array
-  - `cancelOrder(orderId)` → confirmation
-  - `flattenAll()` → close all positions
-  - WebSocket: real-time fill notifications, position updates, P&L streaming
-- [ ] **Environment config**: `TRADOVATE_USERNAME`, `TRADOVATE_PASSWORD`,
-  `TRADOVATE_APP_ID`, `TRADOVATE_CID`, `TRADOVATE_SECRET` — all via env vars, never hardcoded
-
-### Phase TBRIDGE-B: Python ↔ Node.js Bridge
-
-- [ ] **`POST /api/bridge/order`** — Python engine sends order intent to Node.js bridge
-  - Bridge runs as a sidecar container or subprocess
-  - Communication via HTTP (localhost) or Redis pub/sub
-  - Python publishes `OrderCommand` → bridge translates to Tradovate API call
-  - Bridge publishes fill confirmations → Python `PositionManager` updates
-- [ ] **Position sync**: bridge polls Tradovate positions every 5s
-  → publishes to `engine:live_positions` Redis key
-  (dashboard live position overlay already reads from this key)
-- [ ] **Health monitoring**: bridge heartbeat → `broker_heartbeat` Redis key (30s TTL)
-  (`positions.py` already reads this key for dashboard broker-connected indicator)
-
-### Phase TBRIDGE-C: PickMyTrade Integration
-
-- [ ] Wire bridge to 1st Tradovate account only (leader account)
-- [ ] **PickMyTrade config**: connect all remaining TPT/Apex accounts as followers
-  - Verify webhook latency (bridge fill → PickMyTrade copy → follower fill)
-  - Test quantity multiplier config for different account sizes ($150K vs $300K)
-  - Confirm simultaneous connection of all follower accounts
-- [ ] **Failsafe**: if bridge disconnects, dashboard shows alert + blocks new signals
-  - Manual trading via Tradovate UI remains available as fallback
+> Tradovate bridge — removed in PURGE-A/B, replaced by Rithmic CopyTrader.
 
 ---
 
@@ -594,7 +554,7 @@ Step 3: Compare
 
 ### PickMyTrade + Account Scaling
 
-- [ ] Sign up for PickMyTrade, test Tradovate bridge → PickMyTrade copy on a single Apex eval account
+- [ ] Sign up for PickMyTrade, test Rithmic → PickMyTrade copy on a single Apex eval account
   - Verify webhook latency for intraday futures
   - Test quantity multiplier config ($150K vs $300K)
   - Confirm 20 Apex accounts can connect simultaneously

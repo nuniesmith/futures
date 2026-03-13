@@ -5,9 +5,11 @@ from typing import Any
 
 from jsonschema import validate as jsonschema_validate
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
-from loguru import logger
 
 from lib.core.exceptions import FrameworkException
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class ErrorSeverity(Enum):
@@ -150,9 +152,9 @@ def validate_exception_schema(schema_path, config_data):
         with open(schema_path) as schema_file:
             schema = json.load(schema_file)
         jsonschema_validate(instance=config_data, schema=schema)
-        logger.info("Exception schema validated successfully.")
+        logger.info("exception_schema_validated")
     except JsonSchemaValidationError as e:
-        logger.error(f"Schema validation error: {e.message}")
+        logger.error("schema_validation_error", error=e.message, schema_path=str(schema_path))
         raise SchemaValidationError(
             message=f"Schema validation error: {e.message}", details={"schema_path": schema_path, "error": str(e)}
         ) from e

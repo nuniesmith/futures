@@ -18,7 +18,7 @@ def test_gold_price_no_scaling():
 
     The ASSETS dict should map Gold to MGC=F so that the Massive API
     resolves to the micro gold front-month contract, matching the
-    NinjaTrader MGC chart exactly.  Using GC=F (full-size) can cause
+    MGC chart exactly.  Using GC=F (full-size) can cause
     a price mismatch due to different front-month contract months.
     """
     from lib.core.models import ASSETS, MICRO_CONTRACT_SPECS

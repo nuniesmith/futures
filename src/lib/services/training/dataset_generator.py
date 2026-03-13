@@ -1956,7 +1956,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
 
     The row includes all columns needed by BreakoutDataset.__getitem__ to
     compute the 37-feature tabular vector per feature_contract.json v8,
-    mirroring C# PrepareCnnTabular() exactly:
+    mirroring original tabular preparation exactly:
 
       [0]  quality_pct_norm       ← quality_pct / 100
       [1]  volume_ratio           ← breakout_volume_ratio (log-scaled in dataset)
@@ -2089,7 +2089,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
         vwap = (result.or_high + result.or_low) / 2.0 if result.or_range > 0 else result.entry
     vwap_distance_raw = ((result.entry - vwap) / atr_value) if atr_value > 0 else 0.0
 
-    # ── [13] asset_class_id — ordinal / 4 matching C# GetAssetClassNorm() ─
+    # ── [13] asset_class_id — ordinal / 4 matching asset class normalisation ─
     try:
         from lib.analysis.ml.breakout_cnn import get_asset_class_id as _get_cls
 

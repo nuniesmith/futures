@@ -558,7 +558,7 @@ This is the core of the new strategy. It manages persistent micro positions:
 # 2. Process incoming breakout signals → decide: hold / reverse / exit
 # 3. Manage bracket phases (initial → breakeven → trailing)
 # 4. Compute EMA9 trail updates every bar
-# 5. Emit order commands (for NinjaTrader Bridge to execute)
+# 5. Emit order commands (for Rithmic integration to execute)
 # 6. Persist position history for analysis
 ```
 
@@ -570,14 +570,13 @@ Key classes and functions:
 - `update_ema9_trail()` — trailing stop computation
 
 
-**Files in `ninjatrader` repo:**
+**Files in `futures` repo:**
 
 | File | Change |
 |------|--------|
-| `BreakoutStrategy.cs` | Add 13-value `BreakoutType` enum, implement 3-phase bracket, EMA9 trailing, stop-and-reverse logic |
-| `OrbCnnPredictor.cs` | Update to pass 12 tabular features (v6 contract) |
-| `OrbChartRenderer.cs` | Add 9 new box styles for new breakout types |
-| `BridgeClient.cs` | Add position state sync with Python engine |
+| `src/lib/services/engine/position_manager.py` | 13-value `BreakoutType` enum, 3-phase bracket, EMA9 trailing, stop-and-reverse logic |
+| `src/lib/analysis/breakout_cnn.py` | Update to pass 12 tabular features (v6 contract) |
+| `src/lib/services/engine/rithmic_client.py` | Position state sync with Rithmic execution layer |
 
 ### Phase 5: Full Retrain & Deploy
 

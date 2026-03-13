@@ -12,21 +12,19 @@ from typing import (
     TypeVar,
 )
 
-from loguru import logger
 from redis import ConnectionError as RedisConnectionError
 from redis import Redis
 
-_log_prefix_base = "[redis_client - base]"
+from lib.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class RedisError(Exception):
     """Custom exception for Redis-related errors."""
 
-    _log_prefix_class = f"{_log_prefix_base} - RedisError"
-
     def __init__(self, message="Redis error occurred"):
-        log_prefix = f"{RedisError._log_prefix_class} - __init__"
-        logger.error(f"{log_prefix} ❌ RedisError instantiated: {message}")
+        logger.error("redis_error_instantiated", message=message)
         self.message = message
         super().__init__(self.message)
 
@@ -49,24 +47,23 @@ def _ensure_connection(
     Returns:
         A wrapped method that ensures connection is valid before execution
     """
-    log_prefix = f"{_log_prefix_base} - _ensure_connection"
 
     def wrapper(self_instance: RedisClientType, *args: P.args, **kwargs: P.kwargs) -> R:  # Use RedisClientType here
-        wrapper_log_prefix = f"{log_prefix} - wrapper"
-        logger.debug(f"{wrapper_log_prefix} START - Entering connection wrapper for method: {method.__name__}.")
+        logger.debug("ensure_connection_start", method=method.__name__)
         logger.debug(
-            f"{wrapper_log_prefix} Checking Redis connection status. Current connection: {self_instance.connection} (Type: {type(self_instance.connection)})"
+            "connection_status_check",
+            method=method.__name__,
+            connection=str(self_instance.connection),
+            connection_type=str(type(self_instance.connection)),
         )
         if not self_instance.connection or not self_instance._check_connection_health(timeout=1):
-            logger.warning(
-                f"{wrapper_log_prefix} ⚠️ Redis connection is lost or not responding. Attempting to reconnect..."
-            )
+            logger.warning("connection_lost_reconnecting", method=method.__name__)
             self_instance._initialize_connection()
-            logger.debug(f"{wrapper_log_prefix} Reconnection attempt completed.")
+            logger.debug("reconnection_attempt_completed", method=method.__name__)
         else:
-            logger.debug(f"{wrapper_log_prefix} Redis connection is active, skipping reconnection.")
+            logger.debug("connection_active", method=method.__name__)
         result = method(self_instance, *args, **kwargs)
-        logger.debug(f"{wrapper_log_prefix} END - Exiting connection wrapper for method: {method.__name__}.")
+        logger.debug("ensure_connection_end", method=method.__name__)
         return result
 
     return wrapper
@@ -85,8 +82,6 @@ class BaseRedisClient(ABC):
         connection (Optional[redis.Redis]): The Redis connection
     """
 
-    _log_prefix_class = f"{_log_prefix_base} - BaseRedisClient"
-
     DEFAULT_TIMEOUT = 5
     DEFAULT_MAX_RETRIES = 5
     DEFAULT_MAX_CONNECTIONS = 10
@@ -102,9 +97,11 @@ class BaseRedisClient(ABC):
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
         connection_kwargs: dict[str, Any] | None = None,
     ):
-        log_prefix = f"{BaseRedisClient._log_prefix_class} - __init__"
         logger.debug(
-            f"{log_prefix} START - Initializing BaseRedisClient with Timeout: {timeout}s, Max retries: {max_retries}, Max Connections: {max_connections}."
+            "base_redis_client_init_start",
+            timeout=timeout,
+            max_retries=max_retries,
+            max_connections=max_connections,
         )
         self.max_connections = max_connections
         self.timeout = timeout
@@ -115,15 +112,14 @@ class BaseRedisClient(ABC):
         self.connection_params: dict[str, Any] = {}
         self._setup_connection_params()
         self._initialize_connection()
-        logger.debug(f"{log_prefix} END - BaseRedisClient initialization COMPLETED.")
+        logger.debug("base_redis_client_init_completed")
 
     def _setup_connection_params(self):
         """
         Set up Redis connection parameters from environment variables.
         Now supports Redis Sentinel for high availability.
         """
-        log_prefix = f"{self._log_prefix_class} - _setup_connection_params"
-        logger.debug(f"{log_prefix} START - Setting up connection parameters.")
+        logger.debug("setup_connection_params_start")
 
         # Import utils here to avoid circular imports
         from lib.core.db.redis_clients.utils import clean_redis_url, construct_redis_url
@@ -154,7 +150,7 @@ class BaseRedisClient(ABC):
 
             # For logging, construct a clean representation
             self.clean_url = f"sentinel://{','.join(sentinel_hosts)}:{sentinel_port}/{self.connection_params['db']} (master: {sentinel_master})"
-            logger.debug(f"{log_prefix} Redis Sentinel configuration: {self.clean_url}")
+            logger.debug("redis_sentinel_config", clean_url=self.clean_url)
         elif use_cluster:
             # Redis Cluster mode
             cluster_hosts = os.getenv("REDIS_CLUSTER_HOSTS", "").strip().split(",")
@@ -172,7 +168,7 @@ class BaseRedisClient(ABC):
 
             # For logging, construct a clean representation
             self.clean_url = f"cluster://{','.join(cluster_hosts)}:{cluster_port}"
-            logger.debug(f"{log_prefix} Redis Cluster configuration: {self.clean_url}")
+            logger.debug("redis_cluster_config", clean_url=self.clean_url)
         else:
             # Standard Redis connection
             user = os.getenv("REDIS_USER", "default").strip()
@@ -203,9 +199,9 @@ class BaseRedisClient(ABC):
             # Construct and clean Redis URL
             self.redis_url = construct_redis_url(**conn_params_for_url)
             self.clean_url = clean_redis_url(self.redis_url)
-            logger.debug(f"{log_prefix} Redis URL: {self.clean_url}")
+            logger.debug("redis_url_configured", clean_url=self.clean_url)
 
-        logger.debug(f"{log_prefix} END - Connection parameters setup COMPLETED.")
+        logger.debug("setup_connection_params_completed")
 
     @abstractmethod
     def _create_connection(self) -> Redis:
@@ -300,15 +296,13 @@ class BaseRedisClient(ABC):
         Returns:
             Any: The connection pool
         """
-        log_prefix = f"{self._log_prefix_class} - _get_or_create_connection_pool"
-
         # Thread-safe access to connection pools
         with self._pool_lock:
             if pool_key in self._connection_pools:
-                logger.debug(f"{log_prefix} Reusing existing connection pool: {pool_key}")
+                logger.debug("reusing_connection_pool", pool_key=pool_key)
                 return self._connection_pools[pool_key]
 
-            logger.debug(f"{log_prefix} Creating new connection pool: {pool_key}")
+            logger.debug("creating_connection_pool", pool_key=pool_key)
             new_pool = pool_factory(**kwargs)
             self._connection_pools[pool_key] = new_pool
             return new_pool
@@ -321,41 +315,40 @@ class BaseRedisClient(ABC):
         Raises:
             RedisError: If unable to connect after max_retries
         """
-        log_prefix = f"{self._log_prefix_class} - _initialize_connection"
-        logger.debug(f"{log_prefix} START - Initializing Redis connection. Max retries: {self.max_retries}.")
+        logger.debug("initialize_connection_start", max_retries=self.max_retries)
         now = time.time()
         if now - self.last_connection_attempt < 5:
-            logger.warning(f"{log_prefix} ⚠️ Skipping reconnect attempt (throttled). Last attempt was too recent.")
-            logger.debug(f"{log_prefix} END - Connection initialization SKIPPED due to throttling.")
+            logger.warning("connection_init_throttled")
             return
 
         self.last_connection_attempt = now
         failures = []
         for attempt in range(self.max_retries):
             attempt_num = attempt + 1
-            logger.debug(f"{log_prefix} Attempt {attempt_num}/{self.max_retries} to connect.")
+            logger.debug("connection_attempt", attempt=attempt_num, max_retries=self.max_retries)
             try:
-                logger.debug(f"{log_prefix} Attempting connection to Redis using URL: {self.clean_url}.")
+                logger.debug("connecting_to_redis", clean_url=self.clean_url)
                 self.connection = self._create_connection()  # Call subclass method to create connection
                 if self.connection and self._check_connection_health():
-                    logger.info(f"{log_prefix} ✅ Connected to Redis on attempt {attempt_num}.")
-                    logger.debug(f"{log_prefix} END - Connection initialization SUCCESS on attempt {attempt_num}.")
+                    logger.info("redis_connected", attempt=attempt_num)
                     return
             except RedisConnectionError as e:
                 failures.append(str(e))
                 logger.warning(
-                    f"{log_prefix} ⚠️ Redis connection failed on attempt {attempt_num}/{self.max_retries}: {e}"
+                    "connection_attempt_failed",
+                    attempt=attempt_num,
+                    max_retries=self.max_retries,
+                    error=str(e),
                 )
                 # Calculate adaptive backoff based on failure pattern
                 base_sleep = min(30, 2**attempt)  # Cap at 30 seconds
                 jitter = random.uniform(0, 2)  # More randomness to avoid thundering herd
                 time_to_sleep = base_sleep + jitter
-                logger.debug(f"{log_prefix} Backoff - Sleeping for {time_to_sleep:.2f} seconds before next attempt.")
+                logger.debug("connection_backoff", sleep_seconds=round(time_to_sleep, 2))
                 time.sleep(time_to_sleep)
 
-        error_message = f"❌ Failed to connect to Redis after {self.max_retries} attempts. Errors: {failures}"
-        logger.error(f"{log_prefix} {error_message}")
-        logger.debug(f"{log_prefix} END - Connection initialization FAILED after {self.max_retries} attempts.")
+        error_message = f"Failed to connect to Redis after {self.max_retries} attempts. Errors: {failures}"
+        logger.error("redis_connection_failed", max_retries=self.max_retries, errors=failures)
         raise RedisError(error_message)
 
     def _check_connection_health(self, timeout: float | None = None) -> bool:
@@ -368,12 +361,10 @@ class BaseRedisClient(ABC):
         Returns:
             bool: True if connection is healthy, False otherwise
         """
-        log_prefix = f"{self._log_prefix_class} - _check_connection_health"
-        logger.debug(f"{log_prefix} START - Checking connection health.")
+        logger.debug("health_check_start")
 
         if not self.connection:
-            logger.debug(f"{log_prefix} No connection available to check. Returning False.")
-            logger.debug(f"{log_prefix} END - Health check returning False.")
+            logger.debug("health_check_no_connection")
             return False
 
         try:
@@ -384,18 +375,15 @@ class BaseRedisClient(ABC):
             else:
                 result = bool(self.connection.ping())
 
-            logger.debug(f"{log_prefix} Health check result: {result}")
-            logger.debug(f"{log_prefix} END - Health check SUCCESS.")
+            logger.debug("health_check_result", healthy=result)
             return result
         except Exception as e:  # Catch all exceptions, not just Redis-specific ones
-            logger.error(f"{log_prefix} ❌ Redis health check error: {e}", exc_info=True)
-            logger.debug(f"{log_prefix} END - Health check ERROR, returning False.")
+            logger.error("health_check_error", error=str(e), exc_info=True)
             return False
 
     def clear_connection_pool(self):
         """Clear all connections in the connection pool."""
-        log_prefix = f"{self._log_prefix_class} - clear_connection_pool"
-        logger.debug(f"{log_prefix} START - Clearing connection pool.")
+        logger.debug("clear_connection_pool_start")
         if self.connection and hasattr(self.connection, "connection_pool"):
             try:
                 pool_key = self._get_connection_pool_key()
@@ -403,29 +391,25 @@ class BaseRedisClient(ABC):
                     if pool_key in self._connection_pools:
                         self.connection.connection_pool.disconnect()
                         del self._connection_pools[pool_key]
-                        logger.info(f"{log_prefix} ✅ Redis connection pool cleared and removed from registry.")
+                        logger.info("connection_pool_cleared_and_removed", pool_key=pool_key)
                     else:
                         self.connection.connection_pool.disconnect()
-                        logger.info(f"{log_prefix} ✅ Redis connection pool cleared (not in registry).")
-                logger.debug(f"{log_prefix} END - Connection pool clear SUCCESS.")
+                        logger.info("connection_pool_cleared_not_in_registry")
             except Exception as e:
-                logger.error(f"{log_prefix} ❌ Failed to clear connection pool: {e}", exc_info=True)
-                logger.debug(f"{log_prefix} END - Connection pool clear ERROR.")
+                logger.error("clear_connection_pool_error", error=str(e), exc_info=True)
         else:
-            logger.warning(f"{log_prefix} ⚠️ No connection pool to clear.")
-            logger.debug(f"{log_prefix} END - Connection pool clear WARNING - No pool available.")
+            logger.warning("no_connection_pool_to_clear")
 
     def reconnect_if_needed(self):
         """Reconnect to Redis if the connection is lost."""
-        log_prefix = f"{self._log_prefix_class} - reconnect_if_needed"
-        logger.debug(f"{log_prefix} START - Checking connection health.")
+        logger.debug("reconnect_check_start")
         if not self.connection or not self._check_connection_health(timeout=2):
-            logger.warning(f"{log_prefix} ⚠️ Redis connection is unavailable. Reconnecting...")
+            logger.warning("connection_unavailable_reconnecting")
             self._initialize_connection()
-            logger.debug(f"{log_prefix} Reconnection triggered.")
+            logger.debug("reconnection_triggered")
         else:
-            logger.debug(f"{log_prefix} Connection is healthy, no reconnection needed.")
-        logger.debug(f"{log_prefix} END - Connection check and reconnection COMPLETED.")
+            logger.debug("connection_healthy_no_reconnect_needed")
+        logger.debug("reconnect_check_completed")
 
     def ping(self, timeout: float | None = None) -> Any:
         """
@@ -441,20 +425,16 @@ class BaseRedisClient(ABC):
 
     def close(self):
         """Closes the Redis connection gracefully."""
-        log_prefix = f"{self._log_prefix_class} - close"
-        logger.debug(f"{log_prefix} START - Closing Redis connection.")
+        logger.debug("close_connection_start")
         if self.connection:
             try:
                 self.connection.close()
-                logger.info(f"{log_prefix} 🔴 Redis connection has been closed.")
+                logger.info("redis_connection_closed")
                 self.connection = None  # Set to None after closing
-                logger.debug(f"{log_prefix} END - Connection close SUCCESS.")
             except Exception as e:
-                logger.error(f"{log_prefix} ❌ Failed to close Redis connection: {e}", exc_info=True)
-                logger.debug(f"{log_prefix} END - Connection close ERROR.")
+                logger.error("close_connection_error", error=str(e), exc_info=True)
         else:
-            logger.warning(f"{log_prefix} ⚠️ No active Redis connection to close.")
-            logger.debug(f"{log_prefix} END - Connection close WARNING - No active connection.")
+            logger.warning("no_active_connection_to_close")
 
     def with_timeout(self, timeout: int) -> "BaseRedisClient":
         """
@@ -466,8 +446,7 @@ class BaseRedisClient(ABC):
         Returns:
             BaseRedisClient: A new client instance with the specified timeout
         """
-        log_prefix = f"{self._log_prefix_class} - with_timeout"
-        logger.debug(f"{log_prefix} Creating client with new timeout: {timeout}s")
+        logger.debug("creating_client_with_timeout", timeout=timeout)
 
         new_client = self.__class__(
             timeout=timeout,
@@ -655,10 +634,8 @@ class BaseRedisClient(ABC):
     # === Context Managers ===
     async def __aenter__(self):
         """Async context manager enter method."""
-        log_prefix = f"{self._log_prefix_class} - __aenter__"
-        logger.debug(f"{log_prefix} START - Entering async context.")
+        logger.debug("async_context_enter")
         self.reconnect_if_needed()  # Ensure we have an active connection
-        logger.debug(f"{log_prefix} END - Async context entered.")
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
@@ -666,19 +643,15 @@ class BaseRedisClient(ABC):
         Async context manager exit method.
         Note: We no longer close the connection here to maintain connection pooling.
         """
-        log_prefix = f"{self._log_prefix_class} - __aexit__"
-        logger.debug(f"{log_prefix} START - Exiting async context.")
+        logger.debug("async_context_exit")
         # Only report errors if any occurred
         if exc_type:
-            logger.error(f"{log_prefix} Exception during context: {exc_type.__name__}: {exc}")
-        logger.debug(f"{log_prefix} END - Async context exit completed.")
+            logger.error("async_context_exception", exc_type=exc_type.__name__, error=str(exc))
 
     def __enter__(self):
         """Synchronous context manager enter method."""
-        log_prefix = f"{self._log_prefix_class} - __enter__"
-        logger.debug(f"{log_prefix} START - Entering synchronous context.")
+        logger.debug("sync_context_enter")
         self.reconnect_if_needed()  # Ensure we have an active connection
-        logger.debug(f"{log_prefix} END - Synchronous context entered.")
         return self
 
     def __exit__(self, exc_type, exc_val, traceback):
@@ -686,9 +659,7 @@ class BaseRedisClient(ABC):
         Synchronous context manager exit method.
         Note: We no longer close the connection here to maintain connection pooling.
         """
-        log_prefix = f"{self._log_prefix_class} - __exit__"
-        logger.debug(f"{log_prefix} START - Exiting synchronous context.")
+        logger.debug("sync_context_exit")
         # Only report errors if any occurred
         if exc_type:
-            logger.error(f"{log_prefix} Exception during context: {exc_type.__name__}: {exc_val}")
-        logger.debug(f"{log_prefix} END - Synchronous context exit completed.")
+            logger.error("sync_context_exception", exc_type=exc_type.__name__, error=str(exc_val))

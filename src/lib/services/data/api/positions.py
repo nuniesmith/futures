@@ -65,9 +65,8 @@ _BROKER_STATUS_TTL = 30  # 30 seconds — refreshed on each probe or heartbeat
 # any future broker connector that accepts commands.
 # Module-level defaults — overridden at call time by persisted Redis settings
 # (edited via the Settings → Services UI).  Env vars are the last fallback.
-# New TV_BROKER_* env vars take priority; legacy NT_BRIDGE_* vars are the fallback.
-_BROKER_HOST_DEFAULT = os.getenv("TV_BROKER_HOST", "") or os.getenv("NT_BRIDGE_HOST", "")
-_BROKER_PORT_DEFAULT = int(os.getenv("TV_BROKER_PORT", "") or os.getenv("NT_BRIDGE_PORT", "") or "0")
+_BROKER_HOST_DEFAULT = os.getenv("TV_BROKER_HOST", "")
+_BROKER_PORT_DEFAULT = int(os.getenv("TV_BROKER_PORT", "") or "0")
 _BROKER_TIMEOUT = 5.0  # seconds
 
 
@@ -88,9 +87,8 @@ def _get_broker_host_port() -> tuple[str, int]:
 
             data = _json.loads(raw)
             svc = data.get("services", {})
-            # Check new TV keys first, fall back to legacy bridge keys
-            host = svc.get("tv_broker_host") or svc.get("bridge_host") or _BROKER_HOST_DEFAULT
-            port = int(svc.get("tv_broker_port") or svc.get("bridge_port") or _BROKER_PORT_DEFAULT)
+            host = svc.get("tv_broker_host") or _BROKER_HOST_DEFAULT
+            port = int(svc.get("tv_broker_port") or _BROKER_PORT_DEFAULT)
             return host, port
     except Exception:
         pass
@@ -263,12 +261,6 @@ def _is_broker_alive() -> bool:
         return age < _HEARTBEAT_TTL
     except Exception:
         return False
-
-
-# Legacy aliases — other modules may import these names
-_is_bridge_alive = _is_broker_alive
-_get_bridge_url = _get_broker_url
-_get_bridge_host_port = _get_broker_host_port
 
 
 # ---------------------------------------------------------------------------
@@ -590,9 +582,6 @@ def _probe_broker_status() -> dict[str, Any]:
     return broker_status
 
 
-_probe_bridge_status = _probe_broker_status
-
-
 @router.get("/broker_status")
 def get_broker_status():
     """Read the broker connector's /status endpoint.
@@ -620,13 +609,6 @@ def get_broker_status():
         "broker_url": _get_broker_url(),
         "timestamp": datetime.now(tz=_EST).isoformat(),
     }
-
-
-# Legacy alias — some dashboard code may reference "bridge_status"
-@router.get("/bridge_status")
-def get_bridge_status():
-    """Legacy alias for broker_status (backward compat)."""
-    return get_broker_status()
 
 
 @router.get("/broker_orders")
@@ -664,13 +646,6 @@ def get_broker_orders():
         }
 
 
-# Legacy alias
-@router.get("/bridge_orders")
-def get_bridge_orders():
-    """Legacy alias for broker_orders (backward compat)."""
-    return get_broker_orders()
-
-
 # ---------------------------------------------------------------------------
 # Endpoints — Dashboard reads (GET)
 # ---------------------------------------------------------------------------
@@ -705,7 +680,7 @@ def get_positions():
             realized_pnl=data.get("realizedPnL", 0.0),
             pending_orders=pending,
             broker_connected=_is_broker_alive(),
-            broker_version=data.get("broker_version", data.get("bridge_version", "")),
+            broker_version=data.get("broker_version", ""),
             source=data.get("source", ""),
         )
     except Exception as exc:
@@ -751,10 +726,6 @@ def get_live_positions() -> dict[str, Any]:
     cash_balance, realized_pnl, pending_orders, broker_connected,
     broker_version, source.
 
-    Also provides legacy ``bridge_connected`` and ``bridge_version``
-    keys for backward compatibility with dashboard code that hasn't
-    been updated yet.
-
     Importable by other modules without going through HTTP.
     """
     raw = cache_get(_POSITIONS_CACHE_KEY)
@@ -771,8 +742,6 @@ def get_live_positions() -> dict[str, Any]:
             "pending_orders": [],
             "broker_connected": False,
             "broker_version": "",
-            "bridge_connected": False,
-            "bridge_version": "",
             "source": "",
         }
 
@@ -781,7 +750,7 @@ def get_live_positions() -> dict[str, Any]:
         positions = data.get("positions", [])
         total_pnl = sum(p.get("unrealizedPnL", 0) for p in positions)
         broker_conn = _is_broker_alive()
-        broker_ver = data.get("broker_version", data.get("bridge_version", ""))
+        broker_ver = data.get("broker_version", "")
         return {
             "account": data.get("account", ""),
             "positions": positions,
@@ -794,9 +763,6 @@ def get_live_positions() -> dict[str, Any]:
             "pending_orders": data.get("pendingOrders", []),
             "broker_connected": broker_conn,
             "broker_version": broker_ver,
-            # Legacy aliases for backward compat
-            "bridge_connected": broker_conn,
-            "bridge_version": broker_ver,
             "source": data.get("source", ""),
         }
     except Exception:
@@ -812,8 +778,6 @@ def get_live_positions() -> dict[str, Any]:
             "pending_orders": [],
             "broker_connected": False,
             "broker_version": "",
-            "bridge_connected": False,
-            "bridge_version": "",
             "source": "",
         }
 

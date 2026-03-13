@@ -31,10 +31,10 @@ if not HAS_PSYCOPG2:
 else:
     HAS_PSYCOPG3 = False
 
-from loguru import logger
+from lib.core.logging_config import get_logger
 
 # Module logger
-_logger = logger.bind(name="core.database.postgres")
+_logger = get_logger("lib.core.db.postgres")
 
 # Connection pools by DSN
 _pool_lock = threading.RLock()
@@ -159,7 +159,7 @@ class PostgresConnection:
 
             return True
         except Exception as e:
-            _logger.error(f"Error connecting to PostgreSQL: {e}")
+            _logger.error("postgres_connect_failed", exc_info=True)
             self.conn = None
             return False
 
@@ -233,7 +233,7 @@ class PostgresConnection:
                     "max_conn": max_conn,
                     "type": "psycopg2",
                 }
-                _logger.debug(f"Created new psycopg2 connection pool for {self.pool_key}")
+                _logger.debug("connection_pool_created", driver="psycopg2", pool_key=self.pool_key)
                 # Create psycopg3 pool
                 if isinstance(self.dsn, dict):
                     dsn_str = " ".join(f"{k}={v}" for k, v in self.dsn.items())
@@ -249,7 +249,7 @@ class PostgresConnection:
                     "max_conn": max_conn,
                     "type": "psycopg3",
                 }
-                _logger.debug(f"Created new psycopg3 connection pool for {self.pool_key}")
+                _logger.debug("connection_pool_created", driver="psycopg3", pool_key=self.pool_key)
 
     def close(self) -> bool:
         """
@@ -275,7 +275,7 @@ class PostgresConnection:
             self.conn = None
             return True
         except Exception as e:
-            _logger.error(f"Error closing PostgreSQL connection: {e}")
+            _logger.error("postgres_close_failed", exc_info=True)
             return False
 
     def _close_direct_connection(self) -> None:
@@ -286,7 +286,7 @@ class PostgresConnection:
         try:
             self.conn.close()
         except Exception as e:
-            _logger.error(f"Error closing direct connection: {e}")
+            _logger.error("direct_connection_close_failed", exc_info=True)
 
     def _return_to_pool(self) -> None:
         """Return connection to the pool."""
@@ -308,7 +308,7 @@ class PostgresConnection:
                 elif pool_info["type"] == "psycopg3":
                     self.conn.close()
             except Exception as e:
-                _logger.error(f"Error returning connection to pool: {e}")
+                _logger.error("pool_return_failed", exc_info=True)
                 # Try to close it directly as a fallback
                 self._close_direct_connection()
 
@@ -385,14 +385,14 @@ def close_postgres_connections(connections: list[Any] | None = None) -> bool:
                     # Direct connection object
                     conn.close()
             except Exception as e:
-                _logger.error(f"Error closing PostgreSQL connection {conn}: {e}")
+                _logger.error("postgres_connection_close_failed", exc_info=True)
                 success = False
 
     # Close all connection pools
     with _pool_lock:
         for dsn, pool_info in list(_connection_pools.items()):
             try:
-                _logger.debug(f"Closing connection pool for {dsn}")
+                _logger.debug("closing_connection_pool", dsn=dsn)
 
                 if pool_info["type"] == "psycopg2":
                     pool_info["pool"].closeall()
@@ -401,7 +401,7 @@ def close_postgres_connections(connections: list[Any] | None = None) -> bool:
 
                 del _connection_pools[dsn]
             except Exception as e:
-                _logger.error(f"Error closing PostgreSQL connection pool for {dsn}: {e}")
+                _logger.error("connection_pool_close_failed", dsn=dsn, exc_info=True)
                 success = False
 
     return success
