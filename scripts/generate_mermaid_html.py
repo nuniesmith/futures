@@ -13,6 +13,7 @@ Output: docs/futures_system_printable.html
 """
 
 from pathlib import Path
+from typing import Any
 
 # =============================================================================
 # SECTIONS — each becomes one printed page
@@ -24,7 +25,7 @@ from pathlib import Path
 #               Use STUB nodes (class "stub") for cross-section references.
 # =============================================================================
 
-SECTIONS = [
+SECTIONS: list[dict[str, Any]] = [
     # ──────────────────────────────────────────────────────────────
     #  PAGE 0 — OVERVIEW
     # ──────────────────────────────────────────────────────────────
