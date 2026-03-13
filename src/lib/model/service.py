@@ -897,58 +897,58 @@ class ModelService:
                     return xgb.XGBRegressor(objective="reg:squarederror", **regression_params)
 
                 def fit(self, train_data, target_column, direction_column=None, **_kwargs):
-                                    # Extract common features
-                                    self.features = [
-                                        col
-                                        for col in train_data.columns
-                                        if col != target_column and (direction_column is None or col != direction_column)
-                                    ]
+                    # Extract common features
+                    self.features = [
+                        col
+                        for col in train_data.columns
+                        if col != target_column and (direction_column is None or col != direction_column)
+                    ]
 
-                                    # Prepare direction target if provided
-                                    if direction_column is None:
-                                        # Create direction column (price goes up or down)
-                                        direction_column = f"{target_column}_direction"
-                                        train_data[direction_column] = (
-                                            train_data[target_column].shift(-1) > train_data[target_column]
-                                        ).astype(int)
+                    # Prepare direction target if provided
+                    if direction_column is None:
+                        # Create direction column (price goes up or down)
+                        direction_column = f"{target_column}_direction"
+                        train_data[direction_column] = (
+                            train_data[target_column].shift(-1) > train_data[target_column]
+                        ).astype(int)
 
-                                    # Extract features and targets
-                                    X = train_data[self.features]
-                                    y_reg = train_data[target_column]
-                                    y_dir = train_data[direction_column]
+                    # Extract features and targets
+                    X = train_data[self.features]
+                    y_reg = train_data[target_column]
+                    y_dir = train_data[direction_column]
 
-                                    # Fit direction model
-                                    self.direction_model.fit(X, y_dir)
+                    # Fit direction model
+                    self.direction_model.fit(X, y_dir)
 
-                                    # Fit regression model
-                                    self.regression_model.fit(X, y_reg)
+                    # Fit regression model
+                    self.regression_model.fit(X, y_reg)
 
-                                    # Return metrics
-                                    metrics: dict[str, float] = {}
-                                    if "validation_data" in _kwargs:
-                                        val_data = _kwargs["validation_data"]
-                                        X_val = val_data[self.features]
+                    # Return metrics
+                    metrics: dict[str, float] = {}
+                    if "validation_data" in _kwargs:
+                        val_data = _kwargs["validation_data"]
+                        X_val = val_data[self.features]
 
-                                        # Direction metrics
-                                        from sklearn.metrics import accuracy_score, roc_auc_score
+                        # Direction metrics
+                        from sklearn.metrics import accuracy_score, roc_auc_score
 
-                                        y_dir_val = val_data[direction_column]
-                                        y_dir_pred = self.direction_model.predict(X_val)
-                                        y_dir_prob = self.direction_model.predict_proba(X_val)[:, 1]
-                                        metrics["dir_accuracy"] = float(accuracy_score(y_dir_val, y_dir_pred))
-                                        metrics["dir_roc_auc"] = float(roc_auc_score(y_dir_val, y_dir_prob))
+                        y_dir_val = val_data[direction_column]
+                        y_dir_pred = self.direction_model.predict(X_val)
+                        y_dir_prob = self.direction_model.predict_proba(X_val)[:, 1]
+                        metrics["dir_accuracy"] = float(accuracy_score(y_dir_val, y_dir_pred))
+                        metrics["dir_roc_auc"] = float(roc_auc_score(y_dir_val, y_dir_prob))
 
-                                        # Regression metrics
-                                        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+                        # Regression metrics
+                        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-                                        y_reg_val = val_data[target_column]
-                                        y_reg_pred = self.regression_model.predict(X_val)
-                                        metrics["reg_mse"] = mean_squared_error(y_reg_val, y_reg_pred)
-                                        metrics["reg_rmse"] = float(np.sqrt(metrics["reg_mse"]))
-                                        metrics["reg_mae"] = mean_absolute_error(y_reg_val, y_reg_pred)
-                                        metrics["reg_r2"] = r2_score(y_reg_val, y_reg_pred)
+                        y_reg_val = val_data[target_column]
+                        y_reg_pred = self.regression_model.predict(X_val)
+                        metrics["reg_mse"] = mean_squared_error(y_reg_val, y_reg_pred)
+                        metrics["reg_rmse"] = float(np.sqrt(metrics["reg_mse"]))
+                        metrics["reg_mae"] = mean_absolute_error(y_reg_val, y_reg_pred)
+                        metrics["reg_r2"] = r2_score(y_reg_val, y_reg_pred)
 
-                                    return {"status": "success", "metrics": metrics}
+                    return {"status": "success", "metrics": metrics}
 
                 def predict(self, X, **_kwargs):
                     if not hasattr(self.direction_model, "feature_importances_"):
@@ -1941,67 +1941,67 @@ class ModelService:
             return predictions
 
     def save_model(self, model_name: str, path: str | None = None) -> str:
-            """
-            Save a model to disk.
+        """
+        Save a model to disk.
 
-            Args:
-                model_name: Name of the model to save
-                path: Directory path (uses model_dir if None)
+        Args:
+            model_name: Name of the model to save
+            path: Directory path (uses model_dir if None)
 
-            Returns:
-                Path to the saved model
+        Returns:
+            Path to the saved model
 
-            Raises:
-                ValueError: If the model is not initialized
-            """
-            # Use model_dir as default path
-            if path is None:
-                if self.model_dir is None:
-                    raise ValueError("No path specified and no model_dir configured")
-                path = str(self.model_dir / model_name)
+        Raises:
+            ValueError: If the model is not initialized
+        """
+        # Use model_dir as default path
+        if path is None:
+            if self.model_dir is None:
+                raise ValueError("No path specified and no model_dir configured")
+            path = str(self.model_dir / model_name)
 
-            logger.info(f"Saving model {model_name} to {path}")
+        logger.info(f"Saving model {model_name} to {path}")
 
-            with self._model_operation(model_name, "save") as model:
-                # Create version-specific path
-                version_info = self._versions[model_name]
-                version_id = version_info.version_id
-                model_path = f"{path}/{model_name}_{version_id}"
+        with self._model_operation(model_name, "save") as model:
+            # Create version-specific path
+            version_info = self._versions[model_name]
+            version_id = version_info.version_id
+            model_path = f"{path}/{model_name}_{version_id}"
 
-                # Ensure directory exists
-                os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
-                # Run pre-save hooks
-                self._run_lifecycle_hooks("pre_save", model_name, path=model_path)
+            # Run pre-save hooks
+            self._run_lifecycle_hooks("pre_save", model_name, path=model_path)
 
-                # Try different save methods
-                save_path: str | None = None
-                if hasattr(model, "save") and callable(model.save):
-                    result = model.save(model_path)
-                    save_path = str(result) if result is not None else None
-                elif hasattr(model, "save_model") and callable(model.save_model):
-                    result = model.save_model(model_path)
-                    save_path = str(result) if result is not None else None
-                else:
-                    # For models without a save method, try pickle
-                    import pickle
+            # Try different save methods
+            save_path: str | None = None
+            if hasattr(model, "save") and callable(model.save):
+                result = model.save(model_path)
+                save_path = str(result) if result is not None else None
+            elif hasattr(model, "save_model") and callable(model.save_model):
+                result = model.save_model(model_path)
+                save_path = str(result) if result is not None else None
+            else:
+                # For models without a save method, try pickle
+                import pickle
 
-                    try:
-                        with open(f"{model_path}.pkl", "wb") as f:
-                            pickle.dump(model, f)
-                        save_path = f"{model_path}.pkl"
-                    except Exception as e:
-                        raise ValueError(f"Failed to save model {model_name} with pickle: {e}") from e
+                try:
+                    with open(f"{model_path}.pkl", "wb") as f:
+                        pickle.dump(model, f)
+                    save_path = f"{model_path}.pkl"
+                except Exception as e:
+                    raise ValueError(f"Failed to save model {model_name} with pickle: {e}") from e
 
-                # Save version info
-                version_path = f"{model_path}_info.json"
-                with open(version_path, "w") as f:
-                    json.dump(version_info.to_dict(), f, indent=2)
+            # Save version info
+            version_path = f"{model_path}_info.json"
+            with open(version_path, "w") as f:
+                json.dump(version_info.to_dict(), f, indent=2)
 
-                # Run post-save hooks
-                self._run_lifecycle_hooks("post_save", model_name, save_path=save_path)
+            # Run post-save hooks
+            self._run_lifecycle_hooks("post_save", model_name, save_path=save_path)
 
-                return save_path if save_path is not None else model_path
+            return save_path if save_path is not None else model_path
 
     def load_model(self, model_name: str, path: str) -> None:
         """
