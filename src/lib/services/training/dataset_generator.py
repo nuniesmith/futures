@@ -1716,33 +1716,50 @@ def generate_dataset_for_symbol(
         try:
             from lib.analysis.cross_asset import compute_cross_asset_features as _compute_ca
 
+            _ca_t0 = time.monotonic()
             _cached_cross_asset = _compute_ca(symbol, _bars_by_ticker_safe)
-            logger.debug("Pre-computed cross-asset features for %s", symbol)
+            logger.info(
+                "Pre-computed cross-asset features for %s in %.1fs",
+                symbol,
+                time.monotonic() - _ca_t0,
+            )
         except Exception as _ca_exc:
-            logger.debug("Cross-asset pre-compute failed for %s: %s", symbol, _ca_exc)
+            logger.warning("Cross-asset pre-compute failed for %s: %s", symbol, _ca_exc)
 
     for r in all_sim_results:
         if _cached_cross_asset is not None:
             r._cached_cross_asset = _cached_cross_asset
 
     # ── Pre-compute asset fingerprint once for this symbol ────────────────
-    # compute_asset_fingerprint() calls df.copy() on the full 1m bars and
-    # runs Hurst exponent, session concentration, and volume profile
-    # classification — all expensive and fully deterministic per symbol.
-    # Attach the pre-built fingerprint so _build_row() reads plain floats.
+    # compute_asset_fingerprint() runs Hurst exponent, session concentration,
+    # and volume profile classification — all fully deterministic per symbol.
+    # Pre-slice bars_1m to the 20-day lookback window HERE, before passing
+    # it in, so the function never has to touch the full 50k-row series.
+    # At 1 bar/min that is at most 20 × 1440 = 28 800 rows.
     _cached_fingerprint: Any = None
     try:
         from lib.analysis.asset_fingerprint import compute_asset_fingerprint as _compute_fp
 
+        _fp_bars_1m = bars_1m
+        if bars_1m is not None and not bars_1m.empty:
+            _fp_max_bars = 20 * 1440
+            if len(bars_1m) > _fp_max_bars:
+                _fp_bars_1m = bars_1m.iloc[-_fp_max_bars:]
+
+        _fp_t0 = time.monotonic()
         _cached_fingerprint = _compute_fp(
             symbol,
             bars_daily=bars_daily,
-            bars_1m=bars_1m,
+            bars_1m=_fp_bars_1m,
             lookback_days=20,
         )
-        logger.debug("Pre-computed asset fingerprint for %s", symbol)
+        logger.info(
+            "Pre-computed asset fingerprint for %s in %.1fs",
+            symbol,
+            time.monotonic() - _fp_t0,
+        )
     except Exception as _fp_exc:
-        logger.debug("Asset fingerprint pre-compute failed for %s: %s", symbol, _fp_exc)
+        logger.warning("Asset fingerprint pre-compute failed for %s: %s", symbol, _fp_exc)
 
     for r in all_sim_results:
         if _cached_fingerprint is not None:

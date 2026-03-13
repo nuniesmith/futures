@@ -60,10 +60,12 @@ import logging
 import os
 import shutil
 import threading
+import warnings
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -71,6 +73,13 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from lib.core.logging_config import get_logger, setup_logging
+
+_ET = ZoneInfo("America/New_York")
+
+# Suppress numpy RuntimeWarnings from fingerprint/Hurst calculations that
+# fire on degenerate single-element slices.  These are harmless and produce
+# thousands of lines of noise that slow down docker log I/O.
+warnings.filterwarnings("ignore", category=RuntimeWarning, module=r"numpy.*")
 
 setup_logging(service="trainer")
 
@@ -95,7 +104,7 @@ class _RingBufferHandler(logging.Handler):
         global _log_total_written
         try:
             entry = {
-                "ts": datetime.fromtimestamp(record.created).strftime("%H:%M:%S"),
+                "ts": datetime.fromtimestamp(record.created, tz=_ET).strftime("%H:%M:%S"),
                 "level": record.levelname,
                 "name": record.name,
                 "msg": self.format(record),
