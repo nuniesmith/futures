@@ -144,28 +144,12 @@ class TestAlertDispatcherConstruction:
         assert "Discord" in d.channels_configured
         assert d.has_channels is True
 
-    def test_telegram_channel_detected(self):
-        d = _fresh_dispatcher(telegram_token="bot123", telegram_chat_id="456")
-        assert "Telegram" in d.channels_configured
-        assert d.has_channels is True
-
-    def test_telegram_needs_both_token_and_chat(self):
-        """Telegram requires both token AND chat_id to be configured."""
-        d_token_only = _fresh_dispatcher(telegram_token="bot123")
-        assert "Telegram" not in d_token_only.channels_configured
-
-        d_chat_only = _fresh_dispatcher(telegram_chat_id="456")
-        assert "Telegram" not in d_chat_only.channels_configured
-
-    def test_multiple_channels(self):
-        d = _fresh_dispatcher(
-            discord_webhook="https://discord.com/api/webhooks/test",
-            telegram_chat_id="456",
-        )
-        channels = d.channels_configured
-        assert "Discord" in channels
-
-        assert len(channels) == 3
+    def test_multiple_discord_dispatchers(self):
+        """Two separate Discord webhooks should each register as a Discord channel."""
+        d1 = _fresh_dispatcher(discord_webhook="https://discord.com/api/webhooks/test1")
+        d2 = _fresh_dispatcher(discord_webhook="https://discord.com/api/webhooks/test2")
+        assert "Discord" in d1.channels_configured
+        assert "Discord" in d2.channels_configured
 
     def test_custom_cooldown(self):
         d = _fresh_dispatcher(cooldown_sec=60)
@@ -364,9 +348,9 @@ class TestAlertDispatcherStats:
 
     def test_suppressed_count_increments(self):
         """When dedup blocks a signal, total_suppressed should increment."""
-        d = _fresh_dispatcher()
-        # Mark key as sent
-
+        d = _fresh_dispatcher(discord_webhook="https://discord.com/api/webhooks/test")
+        # Pre-mark the key so the next send_signal call hits the cooldown path
+        d._store.mark_sent("suppressed_key")
         d.send_signal(signal_key="suppressed_key", title="X", message="Y")
         stats = d.get_stats()
         assert stats.get("total_suppressed", 0) >= 1
@@ -448,12 +432,12 @@ class TestGetDispatcher:
         d = get_dispatcher()
         assert "Discord" in d.channels_configured
 
-    def test_dispatcher_reads_telegram_env(self, monkeypatch):
+    def test_dispatcher_reads_discord_env_only(self, monkeypatch):
+        """get_dispatcher with only Discord env set should only show Discord channel."""
         reset_dispatcher()
-        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot_env_123")
-        monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat_env_456")
+        monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/env_only")
         d = get_dispatcher()
-        assert "Telegram" in d.channels_configured
+        assert d.channels_configured == ["Discord"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -589,11 +573,8 @@ class TestAlertEdgeCases:
         assert stats["cooldown_sec"] == 120
 
     def test_empty_webhook_not_treated_as_channel(self):
-        """Empty string webhooks should not register as channels."""
-        d = _fresh_dispatcher(
-            discord_webhook="",
-            telegram_chat_id="",
-        )
+        """Empty string webhook should not register as a channel."""
+        d = _fresh_dispatcher(discord_webhook="")
         assert d.has_channels is False
         assert d.channels_configured == []
 
