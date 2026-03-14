@@ -79,7 +79,15 @@ _ET = ZoneInfo("America/New_York")
 # Suppress numpy RuntimeWarnings from fingerprint/Hurst calculations that
 # fire on degenerate single-element slices.  These are harmless and produce
 # thousands of lines of noise that slow down docker log I/O.
-warnings.filterwarnings("ignore", category=RuntimeWarning, module=r"numpy.*")
+#
+# We filter by *message* pattern rather than ``module=r"numpy.*"`` because
+# on Python 3.13 the warnings originate from numpy's C extension layer
+# (``numpy/_core/_methods.py`` calling into compiled code) and the module
+# filter does not match reliably for C-level warnings.
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=r"Degrees of freedom <= 0")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=r"invalid value encountered")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=r"divide by zero encountered")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=r"Mean of empty slice")
 
 setup_logging(service="trainer")
 

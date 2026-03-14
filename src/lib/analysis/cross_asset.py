@@ -239,17 +239,23 @@ def _pearson_corr(x: pd.Series, y: pd.Series) -> float:
 
     Returns 0.0 if insufficient overlapping data.
     """
+    import warnings as _warnings
+
     # Align on index
     combined = pd.concat([x, y], axis=1, join="inner").dropna()
     if len(combined) < 5:
         return 0.0
     a = combined.iloc[:, 0].values
     b = combined.iloc[:, 1].values
-    std_a = np.std(a, ddof=1)
-    std_b = np.std(b, ddof=1)
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore", category=RuntimeWarning)
+        std_a = np.std(a, ddof=1)
+        std_b = np.std(b, ddof=1)
     if std_a < 1e-12 or std_b < 1e-12:
         return 0.0
-    corr = float(np.corrcoef(a, b)[0, 1])
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore", category=RuntimeWarning)
+        corr = float(np.corrcoef(a, b)[0, 1])
     if math.isnan(corr) or math.isinf(corr):
         return 0.0
     return max(-1.0, min(1.0, corr))
@@ -272,7 +278,11 @@ def _rolling_corr(
     ).dropna()
     if len(combined) < window:
         return pd.Series(dtype=float)
-    return combined["x"].rolling(window).corr(combined["y"])  # type: ignore[return-value]
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore", category=RuntimeWarning)
+        return combined["x"].rolling(window).corr(combined["y"])  # type: ignore[return-value]
 
 
 def _normalise_corr(raw: float) -> float:
@@ -308,6 +318,12 @@ def compute_cross_asset_features(
     long_window: int = 200,
 ) -> CrossAssetFeatures:
     """Compute CNN-ready cross-asset correlation features for *ticker*.
+
+    All internal numpy/pandas computations are wrapped in
+    ``warnings.catch_warnings()`` to suppress ``RuntimeWarning`` from
+    degenerate slices (ddof=1 on single-element arrays, NaN divides).
+    These warnings are harmless — the code already handles NaN/inf
+    fallbacks — but they flood Docker logs during dataset generation.
 
     Args:
         ticker: The ticker of the asset that generated the breakout signal.
@@ -398,12 +414,16 @@ def compute_cross_asset_features(
         peer_bars_long = bars_by_ticker.get(primary_peer)
         if peer_bars_long is not None and not peer_bars_long.empty:
             try:
+                import warnings as _warnings
+
                 peer_returns_long = _log_returns(_extract_close(peer_bars_long))
                 rolling = _rolling_corr(signal_returns, peer_returns_long, window=short_window)
                 rolling_clean = rolling.dropna()
                 if len(rolling_clean) >= long_window:
-                    baseline_mean = float(rolling_clean.iloc[-long_window:].mean())
-                    baseline_std = float(rolling_clean.iloc[-long_window:].std())
+                    with _warnings.catch_warnings():
+                        _warnings.simplefilter("ignore", category=RuntimeWarning)
+                        baseline_mean = float(rolling_clean.iloc[-long_window:].mean())
+                        baseline_std = float(rolling_clean.iloc[-long_window:].std())
                     current = float(rolling_clean.iloc[-1])
 
                     z = (current - baseline_mean) / baseline_std if baseline_std > 1e-06 else 0.0

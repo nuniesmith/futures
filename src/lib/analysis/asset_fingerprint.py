@@ -442,6 +442,8 @@ def _compute_hurst_exponent(
 
     Falls back to 0.5 (random walk) if computation fails.
     """
+    import warnings as _warnings
+
     if prices is None or len(prices) < max_lag * 2:
         return 0.5
     try:
@@ -453,9 +455,14 @@ def _compute_hurst_exponent(
         lags = range(2, max_lag + 1)
         rs_list = []
 
-        # Suppress divide-by-zero and invalid-value warnings that arise when
-        # a chunk has zero variance (flat prices / insufficient data).
-        with np.errstate(divide="ignore", invalid="ignore"):
+        # Suppress both numpy floating-point errors (np.errstate) AND Python
+        # RuntimeWarnings (warnings.catch_warnings).  np.errstate only controls
+        # the floating-point error *result* (e.g. returning NaN vs raising),
+        # but numpy still emits Python-level RuntimeWarnings for "Degrees of
+        # freedom <= 0" and "invalid value encountered" through the warnings
+        # module.  Both must be silenced to avoid log spam during training.
+        with _warnings.catch_warnings(), np.errstate(divide="ignore", invalid="ignore"):
+            _warnings.simplefilter("ignore", category=RuntimeWarning)
             for lag in lags:
                 # Split into non-overlapping chunks of size lag
                 chunks = n // lag
@@ -486,7 +493,8 @@ def _compute_hurst_exponent(
         log_rs = np.array([x[1] for x in rs_list])
 
         # Linear regression: log(R/S) = H * log(lag) + c
-        with np.errstate(divide="ignore", invalid="ignore"):
+        with _warnings.catch_warnings(), np.errstate(divide="ignore", invalid="ignore"):
+            _warnings.simplefilter("ignore", category=RuntimeWarning)
             coeffs = np.polyfit(log_lags, log_rs, 1)
         hurst = float(coeffs[0])
 
@@ -722,6 +730,11 @@ def compute_asset_fingerprint(
 ) -> AssetFingerprint:
     """Compute a full behavioral fingerprint for one asset.
 
+    All internal numpy/pandas computations suppress ``RuntimeWarning``
+    to avoid flooding Docker logs during dataset generation.  The warnings
+    are harmless — degenerate slices (e.g. ddof=1 on single-element arrays)
+    produce NaN which the code already handles with neutral-default fallbacks.
+
     Args:
         ticker: Instrument ticker (e.g. ``"MGC"``, ``"MES"``, ``"6E"``).
         bars_daily: Daily OHLCV bars (≥ *lookback_days* + 14 rows ideal).
@@ -733,6 +746,7 @@ def compute_asset_fingerprint(
         ``AssetFingerprint`` with all dimensions computed.  Missing data
         produces neutral defaults rather than errors.
     """
+    import warnings as _warnings
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -755,37 +769,46 @@ def compute_asset_fingerprint(
         if len(bars_1m) > _max_1m_bars:
             bars_1m_sliced = bars_1m.iloc[-_max_1m_bars:]
 
-    # 1. Typical daily range / ATR
-    try:
-        fp.typical_daily_range_atr = _compute_typical_daily_range_atr(bars_daily, lookback_days)  # type: ignore[arg-type]
-    except Exception as exc:
-        errors.append(f"daily_range: {exc}")
+    # Suppress numpy RuntimeWarnings for the entire fingerprint computation.
+    # Individual sub-functions may encounter degenerate data (single-element
+    # slices, zero-variance chunks) that triggers "Degrees of freedom <= 0"
+    # and "invalid value encountered" warnings.  These are harmless — the
+    # code handles NaN/inf with neutral defaults — but they produce thousands
+    # of lines of log noise during dataset generation.
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore", category=RuntimeWarning)
 
-    # 2. Session concentration
-    try:
-        fp.session_concentration = _compute_session_concentration(bars_1m_sliced, lookback_days)  # type: ignore[arg-type]
-    except Exception as exc:
-        errors.append(f"session_conc: {exc}")
+        # 1. Typical daily range / ATR
+        try:
+            fp.typical_daily_range_atr = _compute_typical_daily_range_atr(bars_daily, lookback_days)  # type: ignore[arg-type]
+        except Exception as exc:
+            errors.append(f"daily_range: {exc}")
 
-    # 3. Mean reversion tendency (Hurst exponent)
-    try:
-        if bars_daily is not None and not bars_daily.empty:
-            close_prices = bars_daily["Close"].astype(float)
-            fp.mean_reversion_tendency = _compute_hurst_exponent(close_prices)  # type: ignore[arg-type]
-    except Exception as exc:
-        errors.append(f"hurst: {exc}")
+        # 2. Session concentration
+        try:
+            fp.session_concentration = _compute_session_concentration(bars_1m_sliced, lookback_days)  # type: ignore[arg-type]
+        except Exception as exc:
+            errors.append(f"session_conc: {exc}")
 
-    # 4. Volume profile shape
-    try:
-        fp.volume_profile_shape = _classify_volume_profile(bars_1m_sliced, lookback_days)  # type: ignore[arg-type]
-    except Exception as exc:
-        errors.append(f"vol_profile: {exc}")
+        # 3. Mean reversion tendency (Hurst exponent)
+        try:
+            if bars_daily is not None and not bars_daily.empty:
+                close_prices = bars_daily["Close"].astype(float)
+                fp.mean_reversion_tendency = _compute_hurst_exponent(close_prices)  # type: ignore[arg-type]
+        except Exception as exc:
+            errors.append(f"hurst: {exc}")
 
-    # 5. Overnight gap statistics
-    try:
-        fp.overnight_gap = _compute_overnight_gap_stats(bars_daily, lookback_days)  # type: ignore[arg-type]
-    except Exception as exc:
-        errors.append(f"gap_stats: {exc}")
+        # 4. Volume profile shape
+        try:
+            fp.volume_profile_shape = _classify_volume_profile(bars_1m_sliced, lookback_days)  # type: ignore[arg-type]
+        except Exception as exc:
+            errors.append(f"vol_profile: {exc}")
+
+        # 5. Overnight gap statistics
+        try:
+            fp.overnight_gap = _compute_overnight_gap_stats(bars_daily, lookback_days)  # type: ignore[arg-type]
+        except Exception as exc:
+            errors.append(f"gap_stats: {exc}")
 
     # 6. Breakout follow-through (requires historical breakout events —
     #    set to default here; callers with DB access can enrich afterward)

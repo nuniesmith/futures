@@ -75,6 +75,16 @@ logger = logging.getLogger("analysis.dataset_generator")
 
 _EST = ZoneInfo("America/New_York")
 
+# Sentinel object used to mark that a pre-computation was attempted but
+# produced no usable result (either the function returned None or raised
+# an exception).  This lets _build_row() distinguish "never attempted"
+# (attribute missing → fall back to on-demand compute) from "attempted
+# and failed" (attribute is _PRECOMPUTE_FAILED → skip, use defaults).
+# Without this, a failed pre-compute leaves the attribute unset, and
+# _build_row() falls back to recomputing the expensive operation for
+# every single row (~5000×), causing the pipeline to appear stuck.
+_PRECOMPUTE_FAILED = object()
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -1735,10 +1745,14 @@ def generate_dataset_for_symbol(
                 _ca_exc,
                 exc_info=True,
             )
+            # Mark as attempted-but-failed so _build_row() does NOT fall
+            # back to the expensive per-row recomputation path.
+            _cached_cross_asset = _PRECOMPUTE_FAILED
 
     for r in all_sim_results:
-        if _cached_cross_asset is not None:
-            r._cached_cross_asset = _cached_cross_asset
+        # Always attach the result (real value, None, or _PRECOMPUTE_FAILED)
+        # so _build_row() can distinguish "never attempted" from "failed".
+        r._cached_cross_asset = _cached_cross_asset
 
     # ── Pre-compute asset fingerprint once for this symbol ────────────────
     # compute_asset_fingerprint() runs Hurst exponent, session concentration,
@@ -1781,10 +1795,14 @@ def generate_dataset_for_symbol(
             _fp_exc,
             exc_info=True,
         )
+        # Mark as attempted-but-failed so _build_row() does NOT fall
+        # back to the expensive per-row recomputation path.
+        _cached_fingerprint = _PRECOMPUTE_FAILED
 
     for r in all_sim_results:
-        if _cached_fingerprint is not None:
-            r._cached_fingerprint = _cached_fingerprint
+        # Always attach the result (real value, None, or _PRECOMPUTE_FAILED)
+        # so _build_row() can distinguish "never attempted" from "failed".
+        r._cached_fingerprint = _cached_fingerprint
 
     sim_results = all_sim_results
 
@@ -2362,21 +2380,30 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     # ── v8-B cross-asset correlation features [28–30] ─────────────────────
     # Prefer the pre-computed cached result attached by generate_dataset_for_symbol()
     # to avoid recomputing rolling Pearson correlations on the full 50k-bar
-    # peer DataFrames for every row.  Falls back to computing on-demand when
-    # the cache is not present (e.g. standalone _build_row() calls).
+    # peer DataFrames for every row.  Falls back to computing on-demand ONLY
+    # when the attribute is completely absent (standalone _build_row() calls).
+    # If the attribute is _PRECOMPUTE_FAILED, skip the fallback — the
+    # pre-compute already tried and failed; retrying per-row would be
+    # catastrophically slow (~5000× the cost) and flood logs with warnings.
     primary_peer_corr = 0.5
     cross_class_corr = 0.5
     correlation_regime = 0.5
     try:
-        _cross_feats = getattr(result, "_cached_cross_asset", None)
-        if _cross_feats is None:
-            # Fallback: compute on-demand (slower path, no cache available)
+        _cross_sentinel = object()  # unique default to detect "not set"
+        _cross_feats = getattr(result, "_cached_cross_asset", _cross_sentinel)
+        if _cross_feats is _cross_sentinel:
+            # Attribute not set at all — standalone call, not from generate_dataset_for_symbol.
+            # Fall back to on-demand compute (expensive but necessary).
             from lib.analysis.cross_asset import compute_cross_asset_features
 
             _bars_by_ticker = getattr(result, "_bars_by_ticker", None)
             if _bars_by_ticker is not None and isinstance(_bars_by_ticker, dict):
                 _cross_feats = compute_cross_asset_features(result.symbol, _bars_by_ticker)
-        if _cross_feats is not None:
+        elif _cross_feats is _PRECOMPUTE_FAILED or _cross_feats is None:
+            # Pre-compute was attempted but failed (or no peers available).
+            # Use neutral defaults — do NOT retry the expensive computation.
+            _cross_feats = None
+        if _cross_feats is not None and _cross_feats is not _PRECOMPUTE_FAILED:
             primary_peer_corr = _cross_feats.primary_peer_corr
             cross_class_corr = _cross_feats.cross_class_corr
             correlation_regime = _cross_feats.correlation_regime
@@ -2388,7 +2415,9 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     # generate_dataset_for_symbol() to avoid running Hurst exponent,
     # session concentration, and volume profile classification (each doing
     # a full df.copy() of the 50k-bar 1m series) on every row.
-    # Falls back to computing on-demand when the cache is absent.
+    # Falls back to computing on-demand ONLY when the attribute is
+    # completely absent (standalone _build_row() calls).  If the attribute
+    # is _PRECOMPUTE_FAILED, skip — retrying per-row would be catastrophic.
     typical_daily_range_norm = 0.5
     session_concentration_val = 0.5
     breakout_follow_through_val = 0.5
@@ -2396,9 +2425,11 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
     overnight_gap_tendency = 0.5
     volume_profile_shape_val = 0.5
     try:
-        _fp = getattr(result, "_cached_fingerprint", None)
-        if _fp is None:
-            # Fallback: compute on-demand (slower path, no cache available)
+        _fp_sentinel = object()  # unique default to detect "not set"
+        _fp = getattr(result, "_cached_fingerprint", _fp_sentinel)
+        if _fp is _fp_sentinel:
+            # Attribute not set at all — standalone call, not from generate_dataset_for_symbol.
+            # Fall back to on-demand compute (expensive but necessary).
             from lib.analysis.asset_fingerprint import compute_asset_fingerprint
 
             _daily_bars_fp = getattr(result, "_daily_bars", None)
@@ -2410,7 +2441,11 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
                     bars_1m=_bars_1m_fp,
                     lookback_days=20,
                 )
-        if _fp is not None:
+        elif _fp is _PRECOMPUTE_FAILED or _fp is None:
+            # Pre-compute was attempted but failed.
+            # Use neutral defaults — do NOT retry the expensive computation.
+            _fp = None
+        if _fp is not None and _fp is not _PRECOMPUTE_FAILED:
             from lib.analysis.asset_fingerprint import VolumeProfileShape as _VPS
 
             # [31] typical_daily_range_norm — clamp [0.5, 2.5] → [0, 1]
