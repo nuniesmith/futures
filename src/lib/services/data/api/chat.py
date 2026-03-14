@@ -379,7 +379,7 @@ async def _call_chat_nonstreaming(
 
 async def _stream_chat_async(
     messages: list[dict[str, str]],
-) -> AsyncGenerator[tuple[str, str], None]:
+) -> AsyncGenerator[tuple[str, str]]:
     """Stream a chat response via AsyncOpenAI, yielding ``(token, backend)`` tuples.
 
     The very first item is always ``("", backend_name)`` — a sentinel that
@@ -604,7 +604,7 @@ async def _sse_chat_generator(
     inject_context: bool,
     clear_history: bool,
     request: Request,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     """Async generator that drives the SSE chat stream.
 
     Consumes ``_stream_chat_async`` directly — no thread pool, no queue,

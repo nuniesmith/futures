@@ -396,7 +396,7 @@ def _get_orb_from_cache() -> str | None:
 # ---------------------------------------------------------------------------
 
 
-async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str, None]:
+async def _dashboard_event_generator(request: Request) -> AsyncGenerator[str]:
     """Async generator that yields SSE events for the dashboard.
 
     Flow:
@@ -863,7 +863,7 @@ async def sse_dashboard(request: Request):
 # ---------------------------------------------------------------------------
 
 
-async def _bars_event_generator(request: Request, symbol: str) -> AsyncGenerator[str, None]:
+async def _bars_event_generator(request: Request, symbol: str) -> AsyncGenerator[str]:
     """Yield SSE events for 1-minute bar closes for *symbol*.
 
     Flow:

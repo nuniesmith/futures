@@ -749,6 +749,19 @@ app.include_router(ruby_router, tags=["Ruby Signal Engine"])
 # NOTE: pine_router is mounted WITHOUT a prefix — routes are defined with full paths.
 app.include_router(pine_router, tags=["Pine Script Generator"])
 
+# DOM (Depth of Market): /api/dom/snapshot, /api/dom/config, /sse/dom
+# NOTE: dom routers are mounted WITHOUT a prefix — routes are defined with full paths.
+from lib.services.data.api.dom import router as dom_router  # noqa: E402
+from lib.services.data.api.dom import sse_router as dom_sse_router  # noqa: E402
+
+app.include_router(dom_router, tags=["DOM"])
+app.include_router(dom_sse_router, tags=["DOM SSE"])
+
+# Static Pages: /chat, /dom, /journal — serve standalone HTML from static/
+from lib.services.data.api.static_pages import router as static_pages_router  # noqa: E402
+
+app.include_router(static_pages_router, tags=["Static Pages"])
+
 
 # ---------------------------------------------------------------------------
 # Root endpoint — now served by dashboard_router (GET / returns HTML dashboard)

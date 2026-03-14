@@ -26,7 +26,7 @@ except ImportError:
 
 
 @asynccontextmanager
-async def get_lifespan_manager(app: Any | None = None) -> AsyncGenerator[None, None]:
+async def get_lifespan_manager(app: Any | None = None) -> AsyncGenerator[None]:
     """
     Lifespan context manager for FastAPI application.
 

@@ -262,7 +262,7 @@ def _build_context(engine) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
-async def _stream_briefing_sse(context: dict[str, Any], api_key: str) -> AsyncGenerator[str, None]:
+async def _stream_briefing_sse(context: dict[str, Any], api_key: str) -> AsyncGenerator[str]:
     """Async SSE generator for morning briefing streaming.
 
     Wraps the blocking ``stream_morning_briefing()`` generator in
@@ -340,7 +340,7 @@ async def _stream_live_update_sse(
     context: dict[str, Any],
     api_key: str,
     update_number: int = 1,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     """Async SSE generator for live update streaming."""
     from lib.integrations.grok_helper import stream_live_analysis
 

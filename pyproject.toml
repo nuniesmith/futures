@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "futures-lib"
 version = "0.1.0"
 description = "Ruby Futures — live dashboard, market stats & web UI for futures trading"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 readme = "README.md"
 
 dependencies = [
@@ -122,7 +122,7 @@ addopts = "-p no:faulthandler"
 
 [tool.ruff]
 src = ["src"]
-target-version = "py311"
+target-version = "py313"
 line-length = 120
 
 [tool.ruff.lint]
@@ -137,14 +137,16 @@ select = [
     "TCH", # flake8-type-checking
 ]
 ignore = [
-    "E501", # line-too-long (handled by formatter)
+    "E501",  # line-too-long (handled by formatter)
+    "UP046", # Generic class uses Generic subclass instead of type parameters (pre-existing code)
+    "UP047", # Generic function should use type parameters (pre-existing code)
 ]
 
 [tool.ruff.lint.isort]
 known-first-party = ["lib", "entrypoints"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 mypy_path = "src"
 files = ["src/lib", "src/entrypoints", "scripts"]
 
@@ -161,3 +163,21 @@ disallow_incomplete_defs = false
 
 # Silence noise from unannotated third-party code
 follow_imports = "silent"
+
+# Per-module overrides — silence noisy third-party stubs
+[[tool.mypy.overrides]]
+module = [
+    "massive.*",
+    "async_rithmic.*",
+    "mplfinance.*",
+    "hmmlearn.*",
+    "backtesting.*",
+    "optuna.*",
+    "praw.*",
+    "vaderSentiment.*",
+    "finnhub.*",
+    "apscheduler.*",
+    "slowapi.*",
+]
+ignore_missing_imports = true
+ignore_errors = true
