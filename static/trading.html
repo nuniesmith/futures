@@ -40,6 +40,151 @@
                 --mono: "JetBrains Mono", monospace;
                 --head: "Syne", sans-serif;
             }
+            /* ─── TPT Account Strip ─── */
+            .tpt-strip {
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                padding: 8px 14px;
+                background: var(--s2);
+                border: 1px solid var(--b1);
+                border-radius: 6px;
+                margin-bottom: 12px;
+                flex-wrap: wrap;
+            }
+            .tpt-strip .tpt-item {
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+            }
+            .tpt-strip .tpt-label {
+                font-size: 9px;
+                letter-spacing: 0.1em;
+                color: var(--muted);
+                text-transform: uppercase;
+            }
+            .tpt-strip .tpt-val {
+                font-size: 13px;
+                font-weight: 700;
+                font-family: var(--mono);
+            }
+            /* ─── Focus Assets Grid ─── */
+            .focus-assets-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                gap: 8px;
+                margin: 16px 0;
+            }
+            .focus-asset-card {
+                background: var(--s2);
+                border: 1px solid var(--b1);
+                border-radius: 6px;
+                padding: 10px 12px;
+                cursor: pointer;
+                transition: all 0.15s;
+            }
+            .focus-asset-card:hover {
+                border-color: var(--b3);
+                background: var(--s3);
+            }
+            .focus-asset-card.selected {
+                border-color: var(--green);
+                background: var(--green2);
+            }
+            .focus-asset-card .fa-sym {
+                font-size: 14px;
+                font-weight: 700;
+                color: #fff;
+            }
+            .focus-asset-card .fa-bias {
+                font-size: 11px;
+                font-weight: 600;
+            }
+            .focus-asset-card .fa-detail {
+                font-size: 10px;
+                color: var(--muted);
+                margin-top: 4px;
+            }
+            /* ─── Engage Trade Card ─── */
+            .engage-card {
+                background: var(--s2);
+                border: 2px solid var(--green);
+                border-radius: 8px;
+                padding: 16px;
+                margin-top: 14px;
+            }
+            .engage-card .engage-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 12px;
+            }
+            .engage-btn {
+                background: var(--green);
+                color: #000;
+                border: none;
+                border-radius: 6px;
+                padding: 12px 28px;
+                font-family: var(--mono);
+                font-size: 14px;
+                font-weight: 800;
+                letter-spacing: 0.06em;
+                cursor: pointer;
+                transition: all 0.15s;
+            }
+            .engage-btn:hover {
+                background: #00ff88;
+            }
+            .engage-btn:disabled {
+                background: var(--b1);
+                color: var(--muted);
+                cursor: not-allowed;
+            }
+            /* ─── Active Trade Monitor ─── */
+            .active-trade-card {
+                background: var(--s2);
+                border: 1px solid var(--green);
+                border-radius: 6px;
+                padding: 14px;
+                margin-bottom: 10px;
+            }
+            .phase-badge {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 3px 10px;
+                border-radius: 4px;
+                letter-spacing: 0.04em;
+            }
+            .phase-scout {
+                background: rgba(59, 158, 255, 0.15);
+                color: var(--blue);
+            }
+            .phase-build {
+                background: rgba(167, 139, 250, 0.15);
+                color: var(--purple);
+            }
+            .phase-protect {
+                background: rgba(0, 232, 122, 0.15);
+                color: var(--green);
+            }
+            .phase-manage {
+                background: rgba(255, 176, 32, 0.15);
+                color: var(--amber);
+            }
+            .trade-events {
+                max-height: 120px;
+                overflow-y: auto;
+                font-size: 10px;
+                color: var(--muted);
+                line-height: 1.6;
+                margin-top: 8px;
+                padding: 6px 8px;
+                background: var(--s3);
+                border-radius: 4px;
+            }
             * {
                 box-sizing: border-box;
                 margin: 0;
@@ -827,6 +972,90 @@
                     max-height: 300px;
                 }
             }
+            @media (max-width: 768px) {
+                #nav {
+                    padding: 0 8px;
+                    overflow-x: auto;
+                    -webkit-overflow-scrolling: touch;
+                }
+                .logo {
+                    margin-right: 12px;
+                }
+                .logo-text {
+                    font-size: 13px;
+                }
+                .nav-step {
+                    padding: 0 8px;
+                    font-size: 10px;
+                }
+                .step-sep {
+                    width: 8px;
+                }
+                .nav-right {
+                    display: none;
+                }
+                .page {
+                    padding: 10px 8px;
+                }
+                #pipeline-wrap {
+                    padding: 10px 0;
+                }
+                .pipeline-title {
+                    font-size: 20px;
+                }
+                .g2,
+                .g3,
+                .g4,
+                .g5 {
+                    grid-template-columns: 1fr;
+                }
+                .span2 {
+                    grid-column: auto;
+                }
+                #pos-body {
+                    grid-template-columns: 1fr 1fr !important;
+                    gap: 6px !important;
+                }
+                #live-layout {
+                    grid-template-columns: 1fr;
+                    height: auto;
+                }
+                #chart-area {
+                    min-height: 300px;
+                }
+                #signals-panel {
+                    max-height: none;
+                }
+                .tpt-strip {
+                    gap: 8px;
+                }
+                .tpt-strip .tpt-val {
+                    font-size: 11px;
+                }
+                .focus-assets-grid {
+                    grid-template-columns: 1fr 1fr;
+                }
+                #ct-form {
+                    grid-template-columns: 1fr !important;
+                }
+                .ct-field[style*="grid-column: 1/-1"] {
+                    grid-column: auto !important;
+                }
+            }
+            @media (max-width: 480px) {
+                .nav-step span:not(.step-num) {
+                    display: none;
+                }
+                .nav-step {
+                    padding: 0 6px;
+                }
+                .focus-assets-grid {
+                    grid-template-columns: 1fr;
+                }
+                #pos-body {
+                    grid-template-columns: 1fr !important;
+                }
+            }
 
             /* Pulse anim */
             @keyframes pulse {
@@ -1112,21 +1341,100 @@
                 <!-- ═══ PIPELINE PAGE ═══ -->
                 <div id="page-pipeline" class="page active">
                     <div id="pipeline-wrap">
+                        <!-- TPT Account Strip -->
+                        <div class="tpt-strip" id="tpt-strip">
+                            <div class="tpt-item">
+                                <span class="tpt-label">Account</span>
+                                <span class="tpt-val" style="color: var(--cyan)"
+                                    >TPT $150K</span
+                                >
+                            </div>
+                            <div class="tpt-item">
+                                <span class="tpt-label">Daily Goal</span>
+                                <span
+                                    class="tpt-val"
+                                    style="color: var(--green)"
+                                    >$500–$1,800</span
+                                >
+                            </div>
+                            <div class="tpt-item">
+                                <span class="tpt-label">Daily Loss Limit</span>
+                                <span class="tpt-val" style="color: var(--red)"
+                                    >$3,300</span
+                                >
+                            </div>
+                            <div class="tpt-item">
+                                <span class="tpt-label">Max Contracts</span>
+                                <span
+                                    class="tpt-val"
+                                    style="color: var(--amber)"
+                                    >15</span
+                                >
+                            </div>
+                            <div class="tpt-item">
+                                <span class="tpt-label">Trailing DD</span>
+                                <span class="tpt-val" style="color: var(--red)"
+                                    >$4,500</span
+                                >
+                            </div>
+                            <div class="tpt-item">
+                                <span class="tpt-label">Profit Target</span>
+                                <span
+                                    class="tpt-val"
+                                    style="color: var(--green)"
+                                    id="tpt-progress"
+                                    >$9,000</span
+                                >
+                            </div>
+                            <div class="tpt-item">
+                                <span class="tpt-label">Session P&L</span>
+                                <span
+                                    class="tpt-val val-green"
+                                    id="tpt-session-pnl"
+                                    >$0</span
+                                >
+                            </div>
+                        </div>
+
                         <div id="pipeline-status">
                             <div class="pipeline-title">
                                 MORNING ANALYSIS PIPELINE
                             </div>
                             <div class="pipeline-sub" id="pipeline-subtitle">
-                                Select instrument and run — go make coffee while
-                                it works
+                                Select focus assets for today — quality over
+                                quantity
                             </div>
+
+                            <!-- Dynamic focus asset cards loaded from pre-market analysis -->
+                            <div id="focus-assets-area" style="margin: 16px 0">
+                                <div
+                                    class="focus-assets-grid"
+                                    id="focus-assets-grid"
+                                >
+                                    <!-- Populated by loadFocusAssets() -->
+                                </div>
+                                <div
+                                    id="focus-loading"
+                                    style="
+                                        text-align: center;
+                                        font-size: 11px;
+                                        color: var(--muted);
+                                        padding: 12px 0;
+                                    "
+                                >
+                                    Loading focus assets from pre-market
+                                    analysis…
+                                </div>
+                            </div>
+
                             <div
                                 style="
                                     display: flex;
                                     gap: 8px;
                                     justify-content: center;
-                                    margin: 16px 0;
+                                    margin: 12px 0;
                                     flex-wrap: wrap;
+                                    align-items: center;
                                 "
                             >
                                 <select
@@ -1142,11 +1450,15 @@
                                         outline: none;
                                     "
                                 >
+                                    <option>MGC</option>
                                     <option>MES</option>
                                     <option>MNQ</option>
                                     <option>M2K</option>
-                                    <option>MGC</option>
+                                    <option>MYM</option>
                                     <option>MCL</option>
+                                    <option>SIL</option>
+                                    <option>MBT</option>
+                                    <option>MET</option>
                                 </select>
                                 <button
                                     class="btn btn-primary"
@@ -1162,6 +1474,13 @@
                                     style="display: none"
                                 >
                                     ↺ Reset
+                                </button>
+                                <button
+                                    class="btn btn-ghost btn-sm"
+                                    onclick="loadFocusAssets()"
+                                    title="Refresh focus assets"
+                                >
+                                    ↺ Refresh Assets
                                 </button>
                             </div>
                             <div
@@ -1204,6 +1523,61 @@
                             >
                                 Review & Confirm Plan →
                             </button>
+                        </div>
+
+                        <!-- Rithmic Connection Status -->
+                        <div
+                            id="rithmic-status-indicator"
+                            style="
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                margin-top: 12px;
+                                padding: 6px 12px;
+                                background: rgba(255, 255, 255, 0.03);
+                                border-radius: 6px;
+                                border: 1px solid rgba(255, 255, 255, 0.06);
+                            "
+                        >
+                            <span
+                                class="conn-dot conn-warn"
+                                style="margin-right: 4px"
+                            ></span>
+                            <span
+                                style="
+                                    color: var(--amber);
+                                    font-size: 10px;
+                                    font-weight: 600;
+                                "
+                                >SIMULATION MODE</span
+                            >
+                            <span
+                                style="
+                                    color: var(--muted);
+                                    font-size: 9px;
+                                    margin-left: 4px;
+                                "
+                                >Connect Rithmic for live execution</span
+                            >
+                        </div>
+
+                        <!-- Active Trades Monitor (visible when trades are active) -->
+                        <div
+                            id="active-trades-area"
+                            style="display: none; margin-top: 16px"
+                        >
+                            <div
+                                style="
+                                    font-size: 10px;
+                                    letter-spacing: 0.1em;
+                                    color: var(--muted);
+                                    text-transform: uppercase;
+                                    margin-bottom: 6px;
+                                "
+                            >
+                                Active Trades
+                            </div>
+                            <div id="active-trades-list"></div>
                         </div>
                     </div>
                 </div>
@@ -1274,11 +1648,15 @@
                                                 outline: none;
                                             "
                                         >
+                                            <option>MGC</option>
                                             <option>MES</option>
                                             <option>MNQ</option>
                                             <option>M2K</option>
-                                            <option>MGC</option>
+                                            <option>MYM</option>
                                             <option>MCL</option>
+                                            <option>SIL</option>
+                                            <option>MBT</option>
+                                            <option>MET</option>
                                         </select>
                                     </div>
                                 </div>
@@ -1473,7 +1851,7 @@
                                             <span
                                                 class="val val-green"
                                                 id="risk-used"
-                                                >$0 / $825</span
+                                                >$0 / $3,300</span
                                             >
                                         </div>
                                         <div class="risk-bar-bg">
@@ -1507,7 +1885,7 @@
                                                 style="font-size: 14px"
                                                 id="risk-remain"
                                             >
-                                                $825
+                                                $3,300
                                             </div>
                                         </div>
                                         <div
@@ -1523,8 +1901,9 @@
                                                     font-size: 14px;
                                                     color: #fff;
                                                 "
+                                                id="risk-contracts"
                                             >
-                                                2 / 4
+                                                0 / 15
                                             </div>
                                         </div>
                                     </div>
@@ -2220,7 +2599,7 @@
                                         <span
                                             class="val val-red"
                                             id="s-loss-val"
-                                            >825</span
+                                            >3300</span
                                         ></label
                                     >
                                     <input
@@ -2229,7 +2608,7 @@
                                         min="200"
                                         max="5000"
                                         step="25"
-                                        value="825"
+                                        value="3300"
                                         oninput="
                                             document.getElementById(
                                                 's-loss-val',
@@ -2245,7 +2624,7 @@
                                     <label
                                         >Max Contracts —
                                         <span class="val" id="s-cont-val"
-                                            >4</span
+                                            >15</span
                                         ></label
                                     >
                                     <input
@@ -2253,7 +2632,7 @@
                                         id="s-max-cont"
                                         min="1"
                                         max="20"
-                                        value="4"
+                                        value="15"
                                         oninput="
                                             document.getElementById(
                                                 's-cont-val',
@@ -2410,7 +2789,7 @@
                 planConfirmed: false,
                 planData: null,
                 hardStop: true,
-                liveSymbol: "MES",
+                liveSymbol: "MGC",
                 liveSSE: null,
                 priceChart: null,
                 cvdChart: null,
@@ -2419,6 +2798,11 @@
                 cvdTotal: 0,
                 signals: [],
                 sessionPnl: 0,
+                focusAssets: [],
+                selectedZone: null,
+                activeTrades: [],
+                rithmicReady: false,
+                rithmicLabel: "",
             };
 
             // ─── NAV ────────────────────────────────────────────────────────────────────
@@ -2446,7 +2830,10 @@
                 S.page = id;
                 if (id === "live") initLivePage();
                 if (id === "journal") initJournalPage();
-                if (id === "plan" && S.planData) renderPlanPage();
+                if (id === "plan" && S.planData) {
+                    renderPlanPage();
+                    onPlanRendered();
+                }
                 // Start periodic copy-trade status refresh on live page
                 if (id === "live") {
                     if (window._ctRefreshTimer)
@@ -2614,6 +3001,17 @@
                             "100% — All systems ready";
                         unlockNav(1);
                         markNavDone("pipeline");
+
+                        // Auto-save pre-session report
+                        fetch("/api/reports/pre-session", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                plan_data: d.plan,
+                                focus_assets: S.focusAssets,
+                                account_size: 150000,
+                            }),
+                        }).catch(() => {});
                     }
                 };
 
@@ -2640,8 +3038,400 @@
                 document.getElementById("pipeline-reset-btn").style.display =
                     "none";
                 document.getElementById("pipeline-subtitle").textContent =
-                    "Select instrument and run — go make coffee while it works";
+                    "Select focus assets for today — quality over quantity";
                 lastCat = null;
+            }
+
+            // ─── FOCUS ASSETS ─────────────────────────────────────────────────────────
+            async function loadFocusAssets() {
+                const grid = document.getElementById("focus-assets-grid");
+                const loading = document.getElementById("focus-loading");
+                if (loading) loading.style.display = "block";
+
+                try {
+                    const r = await fetch("/api/focus");
+                    const d = await r.json();
+                    const assets = d.assets || [];
+                    S.focusAssets = assets;
+
+                    if (assets.length === 0) {
+                        grid.innerHTML =
+                            '<div style="grid-column:1/-1;text-align:center;font-size:11px;color:var(--muted);padding:12px">No focus data yet — run the pipeline or check data connections</div>';
+                        if (loading) loading.style.display = "none";
+                        return;
+                    }
+
+                    grid.innerHTML = assets
+                        .slice(0, 9)
+                        .map((a) => {
+                            const biasColor =
+                                a.bias === "LONG"
+                                    ? "var(--green)"
+                                    : a.bias === "SHORT"
+                                      ? "var(--red)"
+                                      : "var(--muted)";
+                            const biasEmoji =
+                                a.bias_emoji ||
+                                (a.bias === "LONG"
+                                    ? "🟢"
+                                    : a.bias === "SHORT"
+                                      ? "🔴"
+                                      : "⚪");
+                            const catBadge =
+                                a.focus_category === "scalp_focus"
+                                    ? '<span style="font-size:9px;background:var(--green2);color:var(--green);padding:1px 6px;border-radius:3px;font-weight:700">FOCUS</span>'
+                                    : a.focus_category === "swing"
+                                      ? '<span style="font-size:9px;background:var(--blue2);color:var(--blue);padding:1px 6px;border-radius:3px;font-weight:700">SWING</span>'
+                                      : "";
+                            return `<div class="focus-asset-card" onclick="selectFocusAsset('${a.symbol}')" data-symbol="${a.symbol}">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+                                <span class="fa-sym">${biasEmoji} ${a.symbol}</span>
+                                ${catBadge}
+                            </div>
+                            <div class="fa-bias" style="color:${biasColor}">${a.bias} ${a.last_price ? a.last_price.toLocaleString() : ""}</div>
+                            <div class="fa-detail">Quality: ${a.quality_pct || 0}% · Wave: ${a.wave_ratio || 0}x</div>
+                            ${a.notes ? `<div class="fa-detail" style="color:var(--amber)">${a.notes}</div>` : ""}
+                        </div>`;
+                        })
+                        .join("");
+
+                    // Also update the pipeline dropdown with available symbols
+                    const select = document.getElementById("pipeline-symbol");
+                    const currentVal = select.value;
+                    const symbols = assets.map((a) => a.symbol);
+                    // Keep existing options but reorder — put focus assets first
+                    const allOptions = [...select.options].map((o) => o.value);
+                    const combined = [...new Set([...symbols, ...allOptions])];
+                    select.innerHTML = combined
+                        .map(
+                            (s) =>
+                                `<option${s === currentVal ? " selected" : ""}>${s}</option>`,
+                        )
+                        .join("");
+
+                    if (loading) loading.style.display = "none";
+                } catch (err) {
+                    if (loading)
+                        loading.textContent =
+                            "Could not load focus assets — run pipeline manually";
+                    console.warn("loadFocusAssets error:", err);
+                }
+            }
+
+            function selectFocusAsset(symbol) {
+                // Update pipeline dropdown
+                const select = document.getElementById("pipeline-symbol");
+                for (let i = 0; i < select.options.length; i++) {
+                    if (select.options[i].value === symbol) {
+                        select.selectedIndex = i;
+                        break;
+                    }
+                }
+                // Also update live symbol
+                S.liveSymbol = symbol;
+
+                // Visual selection
+                document.querySelectorAll(".focus-asset-card").forEach((c) => {
+                    c.classList.toggle("selected", c.dataset.symbol === symbol);
+                });
+            }
+
+            // Load focus assets on page load
+            loadFocusAssets();
+
+            // Refresh active trades periodically
+            async function refreshActiveTrades() {
+                try {
+                    const r = await fetch("/api/trade/active");
+                    const d = await r.json();
+                    S.activeTrades = d.trades || [];
+                    const area = document.getElementById("active-trades-area");
+                    const list = document.getElementById("active-trades-list");
+                    if (!area || !list) return;
+
+                    if (S.activeTrades.length === 0) {
+                        area.style.display = "none";
+                        return;
+                    }
+                    area.style.display = "block";
+                    list.innerHTML = S.activeTrades
+                        .map((t) => {
+                            const dirColor =
+                                t.direction === "LONG"
+                                    ? "var(--green)"
+                                    : "var(--red)";
+                            const pnlColor =
+                                (t.unrealized_pnl || 0) >= 0
+                                    ? "var(--green)"
+                                    : "var(--red)";
+                            const phaseClass =
+                                {
+                                    scout: "phase-scout",
+                                    build: "phase-build",
+                                    protect: "phase-protect",
+                                    manage: "phase-manage",
+                                }[t.phase] || "";
+                            const rithmicBadge = t.rithmic_stop_order_placed
+                                ? '<span style="font-size:9px;background:rgba(0,230,118,0.12);color:var(--green);padding:1px 5px;border-radius:3px;margin-left:4px">RITHMIC STOP ✓</span>'
+                                : S.rithmicReady
+                                  ? '<span style="font-size:9px;background:rgba(255,179,0,0.12);color:var(--amber);padding:1px 5px;border-radius:3px;margin-left:4px">NO STOP ORDER</span>'
+                                  : '<span style="font-size:9px;background:rgba(255,255,255,0.06);color:var(--muted);padding:1px 5px;border-radius:3px;margin-left:4px">SIM</span>';
+                            const stopDisplay =
+                                t.current_stop_price > 0
+                                    ? t.current_stop_price.toFixed(2)
+                                    : t.mental_stop_price > 0
+                                      ? `⚠ ${t.mental_stop_price.toFixed(2)} (mental)`
+                                      : "NONE";
+                            const stopColor =
+                                t.current_stop_price > 0
+                                    ? "var(--red)"
+                                    : t.mental_stop_price > 0
+                                      ? "var(--amber)"
+                                      : "var(--muted)";
+                            return `<div class="active-trade-card">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+                                <div style="display:flex;align-items:center;gap:8px">
+                                    <span style="font-size:14px;font-weight:700;color:#fff">${t.symbol}</span>
+                                    <span class="badge" style="color:${dirColor}">${t.direction} ×${t.total_contracts}</span>
+                                    <span class="phase-badge ${phaseClass}">${t.phase_display || t.phase}</span>
+                                    ${rithmicBadge}
+                                </div>
+                                <div style="display:flex;align-items:center;gap:10px">
+                                    <span style="font-size:12px;color:${pnlColor};font-weight:700">${(t.unrealized_pnl || 0) >= 0 ? "+" : ""}$${Math.abs(t.unrealized_pnl || 0).toFixed(2)}</span>
+                                    <button class="btn btn-ghost btn-sm" onclick="setManualStop('${t.symbol}')" title="Set/move stop">🛑</button>
+                                    <button class="btn btn-ghost btn-sm" onclick="takePartialProfit('${t.symbol}')">Partial</button>
+                                    <button class="btn btn-ghost btn-sm" onclick="closeActiveTrade('${t.symbol}')">Close</button>
+                                </div>
+                            </div>
+                            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;font-size:11px">
+                                <div><span style="color:var(--muted)">Avg Entry:</span> <span class="val">${(t.avg_entry_price || 0).toFixed(2)}</span></div>
+                                <div><span style="color:var(--muted)">Stop:</span> <span class="val" style="color:${stopColor}">${stopDisplay}</span></div>
+                                <div><span style="color:var(--muted)">T1:</span> <span class="val" style="color:${t.target_1_hit ? "var(--green)" : "var(--muted)"}">${t.target_1_hit ? "✓ HIT" : "—"} ${t.plan?.target_1 ? t.plan.target_1.toFixed(2) : ""}</span></div>
+                                <div><span style="color:var(--muted)">T2:</span> <span class="val" style="color:${t.target_2_hit ? "var(--green)" : "var(--muted)"}">${t.target_2_hit ? "✓ HIT" : "—"}</span></div>
+                                <div><span style="color:var(--muted)">Contracts:</span> <span class="val">${t.total_contracts}/${t.plan?.max_contracts || "?"}</span></div>
+                            </div>
+                            ${t.events && t.events.length > 0 ? `<div class="trade-events">${t.events.map((e) => `<div>${e}</div>`).join("")}</div>` : ""}
+                        </div>`;
+                        })
+                        .join("");
+                } catch (err) {
+                    /* non-fatal */
+                }
+            }
+
+            async function setManualStop(symbol) {
+                const trade = S.activeTrades.find((t) => t.symbol === symbol);
+                const currentStop = trade
+                    ? trade.current_stop_price || trade.mental_stop_price || 0
+                    : 0;
+                const price = prompt(
+                    `Set stop price for ${symbol}:`,
+                    currentStop > 0 ? currentStop.toFixed(2) : "",
+                );
+                if (!price || isNaN(parseFloat(price))) return;
+                try {
+                    const r = await fetch("/api/trade/set-stop", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            symbol: symbol,
+                            stop_price: parseFloat(price),
+                            reason: "Manual stop from WebUI",
+                        }),
+                    });
+                    const d = await r.json();
+                    if (d.ok) {
+                        const rNote =
+                            d.rithmic && d.rithmic.ok
+                                ? " (Rithmic ✓)"
+                                : " (in-memory only)";
+                        addSignal({
+                            type: "executor",
+                            level: "Stop",
+                            color: "red",
+                            title: `Stop set @ ${parseFloat(price).toFixed(2)}${rNote}`,
+                            body: d.note || "",
+                            action: "STOP SET",
+                            urgency: "high",
+                            ts: new Date().toLocaleTimeString(),
+                        });
+                    }
+                    refreshActiveTrades();
+                } catch (err) {
+                    alert(`Failed to set stop: ${err.message}`);
+                }
+            }
+
+            async function closeActiveTrade(symbol) {
+                if (!confirm(`Close active trade for ${symbol}?`)) return;
+                try {
+                    await fetch(`/api/trade/close/${symbol}`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            reason: "Manual close from WebUI",
+                        }),
+                    });
+                    refreshActiveTrades();
+                } catch (err) {
+                    alert("Close failed: " + err.message);
+                }
+            }
+
+            async function takePartialProfit(symbol) {
+                const qty = prompt(
+                    `Take partial profit on ${symbol}\nHow many contracts?`,
+                    "1",
+                );
+                if (!qty) return;
+                try {
+                    await fetch("/api/trade/partial", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            symbol,
+                            qty: parseInt(qty),
+                            reason: "Manual partial from WebUI",
+                        }),
+                    });
+                    refreshActiveTrades();
+                } catch (err) {
+                    alert("Partial failed: " + err.message);
+                }
+            }
+
+            // Poll active trades every 10s
+            setInterval(refreshActiveTrades, 10000);
+            refreshActiveTrades();
+
+            // ─── ENGAGE TRADE ──────────────────────────────────────────────────────────
+            function populateEngageZones() {
+                const p = S.planData;
+                if (!p || !p.zones) return;
+                const container = document.getElementById("engage-zone-select");
+                if (!container) return;
+
+                container.innerHTML = p.zones
+                    .map((z) => {
+                        const dirColor =
+                            z.dir === "LONG" ? "var(--green)" : "var(--red)";
+                        return `<div class="stat-card" style="padding:10px;cursor:pointer;border:2px solid transparent;transition:all 0.15s"
+                                onclick="selectEngageZone('${z.id}')" id="engage-zone-${z.id}"
+                                data-zone='${JSON.stringify(z).replace(/'/g, "&apos;")}'>
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+                            <span class="badge" style="color:${dirColor}">${z.dir}</span>
+                            <span style="font-size:16px;font-weight:800;color:${dirColor}">${z.score}</span>
+                        </div>
+                        <div style="font-size:12px;color:#fff;font-weight:600">${z.range_lo.toFixed(2)} – ${z.range_hi.toFixed(2)}</div>
+                        <div style="font-size:10px;color:var(--muted);margin-top:2px">R:R ${z.rr} · CNN ${z.cnn_prob}%</div>
+                    </div>`;
+                    })
+                    .join("");
+            }
+
+            function selectEngageZone(zoneId) {
+                const p = S.planData;
+                if (!p) return;
+                const zone = p.zones.find((z) => z.id === zoneId);
+                if (!zone) return;
+                S.selectedZone = zone;
+
+                // Visual selection
+                document
+                    .querySelectorAll("[id^='engage-zone-']")
+                    .forEach((el) => {
+                        el.style.borderColor =
+                            el.id === `engage-zone-${zoneId}`
+                                ? "var(--green)"
+                                : "transparent";
+                    });
+
+                const btn = document.getElementById("engage-btn");
+                btn.disabled = false;
+                btn.textContent = `⚡ ENGAGE ${zone.dir} ${p.symbol} @ ${zone.range_lo.toFixed(2)}–${zone.range_hi.toFixed(2)}`;
+            }
+
+            async function engageTrade() {
+                const p = S.planData;
+                const z = S.selectedZone;
+                if (!p || !z) return;
+
+                const btn = document.getElementById("engage-btn");
+                btn.disabled = true;
+                btn.textContent = "⏳ Engaging…";
+
+                const initialSize =
+                    parseInt(
+                        document.getElementById("engage-initial-size").value,
+                    ) || 1;
+                const maxContracts =
+                    parseInt(
+                        document.getElementById("engage-max-contracts").value,
+                    ) || 4;
+
+                // Build limit levels from the entry zone (spread evenly)
+                const spread = z.range_hi - z.range_lo;
+                const buildLevels = [];
+                const buildSizes = [];
+                const remaining = Math.min(maxContracts - initialSize, 3);
+                if (remaining > 0 && spread > 0) {
+                    for (let i = 0; i < remaining; i++) {
+                        const pct = (i + 1) / (remaining + 1);
+                        const level =
+                            z.dir === "LONG"
+                                ? z.range_lo + spread * pct // buy on dips within zone
+                                : z.range_hi - spread * pct; // sell on rips within zone
+                        buildLevels.push(parseFloat(level.toFixed(2)));
+                        buildSizes.push(1);
+                    }
+                }
+
+                try {
+                    const r = await fetch("/api/trade/engage", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            symbol: p.symbol,
+                            direction: z.dir,
+                            entry_zone_low: z.range_lo,
+                            entry_zone_high: z.range_hi,
+                            ideal_entry: (z.range_lo + z.range_hi) / 2,
+                            invalidation_level: z.stop,
+                            target_1: z.t1,
+                            target_2: z.t2 || z.t1 * 1.5,
+                            target_3: z.t2 || z.t1 * 2,
+                            max_contracts: maxContracts,
+                            initial_size: initialSize,
+                            build_levels: buildLevels,
+                            build_sizes: buildSizes,
+                            max_risk_dollars: 825,
+                            reason: z.reasons
+                                ? z.reasons.join(" + ")
+                                : "Plan zone entry",
+                            plan_confidence: z.score || 0,
+                        }),
+                    });
+                    const d = await r.json();
+                    const status = document.getElementById("engage-status");
+
+                    if (d.ok) {
+                        const sim = d.simulated
+                            ? " (SIMULATED — connect Rithmic for live)"
+                            : "";
+                        status.innerHTML = `<span style="color:var(--green)">✅ Trade engaged! ${d.trade?.phase_display || ""}${sim}</span>`;
+                        btn.textContent = "✅ ENGAGED — monitoring";
+                        refreshActiveTrades();
+                    } else {
+                        status.innerHTML = `<span style="color:var(--red)">❌ ${d.error || "Failed to engage"}</span>`;
+                        btn.disabled = false;
+                        btn.textContent = `⚡ RETRY ENGAGE`;
+                    }
+                } catch (err) {
+                    document.getElementById("engage-status").innerHTML =
+                        `<span style="color:var(--red)">❌ ${err.message}</span>`;
+                    btn.disabled = false;
+                    btn.textContent = `⚡ RETRY ENGAGE`;
+                }
             }
 
             // ─── PLAN PAGE ───────────────────────────────────────────────────────────────
@@ -2860,6 +3650,34 @@
       </div>
     </div>
 
+    <!-- ENGAGE TRADE card (after plan zones) -->
+    <div class="card span2" id="engage-trade-card">
+      <div class="card-head">
+        <div class="card-title"><div class="card-accent" style="background:var(--green)"></div><span class="card-label">⚡ Engage Trade — Staged Entry</span></div>
+        <span style="font-size:10px;color:var(--muted)">MANUAL flag · no stop until target breaks</span>
+      </div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px" id="engage-zone-select">
+          <!-- Populated from plan zones -->
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+          <div class="field"><label>Initial Size (contracts)</label><input id="engage-initial-size" type="number" min="1" max="5" value="1"></div>
+          <div class="field"><label>Max Build (total contracts)</label><input id="engage-max-contracts" type="number" min="1" max="15" value="4"></div>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:10px;line-height:1.6;padding:8px;background:var(--s3);border-radius:4px;border-left:3px solid var(--amber)">
+          <strong style="color:var(--amber)">Staged Entry Flow:</strong><br>
+          1️⃣ <strong>SCOUT</strong> — Market order to get in (1 contract, no stop)<br>
+          2️⃣ <strong>BUILD</strong> — Limit orders at plan levels to accumulate<br>
+          3️⃣ <strong>PROTECT</strong> — Once T1 breaks, stop goes to breakeven<br>
+          4️⃣ <strong>MANAGE</strong> — Take partials on T2, trail rest to T3
+        </div>
+        <button class="engage-btn" id="engage-btn" onclick="engageTrade()" disabled>
+          ⚡ SELECT A ZONE ABOVE TO ENGAGE
+        </button>
+        <div id="engage-status" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
+      </div>
+    </div>
+
     <!-- Notes + Confirm -->
     <div class="card span2">
       <div class="card-head">
@@ -2879,6 +3697,11 @@
       </div>
     </div>
   </div>`;
+            }
+
+            // After rendering plan page, populate engage zones
+            function onPlanRendered() {
+                populateEngageZones();
             }
 
             async function confirmPlan() {
@@ -3633,6 +4456,8 @@
                     const d = JSON.parse(e.data);
                     if (d.type === "tick") handleTick(d);
                     else if (d.type === "signal") addSignal(d.signal);
+                    else if (d.type === "executor_actions")
+                        handleExecutorActions(d);
                 };
 
                 // Also subscribe to the main dashboard SSE for copy-trade-update events
@@ -3675,12 +4500,23 @@
 
                 // Update risk bar
                 const lossUsed = Math.max(0, -S.sessionPnl);
-                const limit = 825;
+                const limit = 3300;
                 const pct = Math.min((lossUsed / limit) * 100, 100);
                 document.getElementById("risk-used").textContent =
-                    `$${lossUsed.toFixed(0)} / $${limit}`;
+                    `$${lossUsed.toFixed(0)} / $${limit.toLocaleString()}`;
                 document.getElementById("risk-remain").textContent =
-                    `$${Math.max(0, limit - lossUsed).toFixed(0)}`;
+                    `$${Math.max(0, limit - lossUsed).toLocaleString()}`;
+                // Update TPT session P&L strip
+                const tptPnl = document.getElementById("tpt-session-pnl");
+                if (tptPnl) {
+                    tptPnl.textContent =
+                        (S.sessionPnl >= 0 ? "+" : "") +
+                        "$" +
+                        Math.abs(S.sessionPnl).toFixed(0);
+                    tptPnl.className =
+                        "tpt-val " +
+                        (S.sessionPnl >= 0 ? "val-green" : "val-red");
+                }
                 const fill = document.getElementById("risk-fill");
                 fill.style.width = pct + "%";
                 fill.style.background =
@@ -3751,11 +4587,117 @@
                 S.signals = [];
             }
 
+            function handleExecutorActions(d) {
+                // d = { type: 'executor_actions', symbol, price, actions: [...] }
+                if (!d.actions || d.actions.length === 0) return;
+                for (const a of d.actions) {
+                    const actionType = a.action || "";
+                    if (
+                        actionType === "set_stop" ||
+                        actionType === "move_stop"
+                    ) {
+                        addSignal({
+                            type: "executor",
+                            level: "Stop",
+                            color: "red",
+                            title: `${actionType === "set_stop" ? "Stop SET" : "Stop MOVED"} @ ${(a.price || 0).toFixed(2)}`,
+                            body: a.reason || "",
+                            action: actionType.toUpperCase(),
+                            urgency: "high",
+                            ts: new Date().toLocaleTimeString(),
+                        });
+                    } else if (actionType === "take_partial") {
+                        addSignal({
+                            type: "executor",
+                            level: "Partial",
+                            color: "purple",
+                            title: `Partial exit: ${a.qty || 1}x @ ${(a.price || d.price || 0).toFixed(2)}`,
+                            body: a.reason || "",
+                            action: "PARTIAL",
+                            urgency: "med",
+                            ts: new Date().toLocaleTimeString(),
+                        });
+                    } else if (actionType === "close_trade") {
+                        addSignal({
+                            type: "executor",
+                            level: "Close",
+                            color: "amber",
+                            title: `Trade CLOSED — ${a.reason || ""}`,
+                            body: `Exit @ ${(a.price || d.price || 0).toFixed(2)}`,
+                            action: "CLOSED",
+                            urgency: "high",
+                            ts: new Date().toLocaleTimeString(),
+                        });
+                    } else if (actionType === "alert") {
+                        const colorMap = {
+                            critical: "red",
+                            info: "cyan",
+                            warning: "amber",
+                        };
+                        addSignal({
+                            type: "executor",
+                            level: a.level || "Alert",
+                            color: colorMap[a.level] || "amber",
+                            title: a.message || "Executor alert",
+                            body: "",
+                            action: "ALERT",
+                            urgency: a.level === "critical" ? "high" : "med",
+                            ts: new Date().toLocaleTimeString(),
+                        });
+                    }
+                }
+                // Refresh active trades display after executor actions
+                refreshActiveTrades();
+            }
+
+            async function checkRithmicStatus() {
+                try {
+                    const r = await fetch("/api/trade/rithmic-ready");
+                    const d = await r.json();
+                    S.rithmicReady = d.ready || false;
+                    S.rithmicLabel = d.main_label || "";
+
+                    const indicator = document.getElementById(
+                        "rithmic-status-indicator",
+                    );
+                    if (!indicator) return;
+
+                    if (d.ready) {
+                        indicator.innerHTML = `
+                            <span class="conn-dot conn-ok" style="margin-right:4px"></span>
+                            <span style="color:var(--green);font-size:10px;font-weight:600">RITHMIC LIVE</span>
+                            <span style="color:var(--muted);font-size:9px;margin-left:4px">${d.main_label || "Connected"}</span>`;
+                    } else {
+                        indicator.innerHTML = `
+                            <span class="conn-dot conn-warn" style="margin-right:4px"></span>
+                            <span style="color:var(--amber);font-size:10px;font-weight:600">SIMULATION MODE</span>
+                            <span style="color:var(--muted);font-size:9px;margin-left:4px">${d.reason || "Connect Rithmic for live execution"}</span>`;
+                    }
+                } catch (err) {
+                    /* non-fatal */
+                }
+            }
+
+            // Check Rithmic status on load and periodically
+            checkRithmicStatus();
+            setInterval(checkRithmicStatus, 30000);
+
             function changeLiveSymbol() {
                 S.liveSymbol = document.getElementById("live-symbol").value;
                 document.getElementById("chart-title").textContent =
                     `${S.liveSymbol} — 15m`;
                 document.getElementById("pos-sym").textContent = S.liveSymbol;
+                // Sync live symbol dropdown with pipeline if available
+                const pipelineSelect =
+                    document.getElementById("pipeline-symbol");
+                if (pipelineSelect) {
+                    for (let i = 0; i < pipelineSelect.options.length; i++) {
+                        if (pipelineSelect.options[i].value === S.liveSymbol) {
+                            pipelineSelect.selectedIndex = i;
+                            break;
+                        }
+                    }
+                }
                 if (S.priceChart) {
                     S.priceChart.destroy();
                     S.priceChart = null;
@@ -3922,7 +4864,7 @@
                     kraken_api_secret:
                         document.getElementById("s-kraken-secret")?.value,
                     daily_loss_limit: parseInt(
-                        document.getElementById("s-daily-loss")?.value || 825,
+                        document.getElementById("s-daily-loss")?.value || 3300,
                     ),
                     max_contracts: parseInt(
                         document.getElementById("s-max-cont")?.value || 4,

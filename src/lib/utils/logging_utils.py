@@ -20,6 +20,7 @@ import os
 import sys
 import time
 import traceback
+import warnings
 from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
@@ -27,6 +28,13 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+warnings.warn(
+    "lib.utils.logging_utils is deprecated and will be removed in a future version. "
+    "Use lib.core.logging_config.get_logger() instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 # =====================================================================
 # Custom Log Levels

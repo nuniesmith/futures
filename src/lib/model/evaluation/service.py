@@ -1,6 +1,13 @@
+from __future__ import annotations
+
 import json
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import torch
+    from pytorch_forecasting import TimeSeriesDataSet
+    from pytorch_forecasting.metrics import MAE, MAPE, RMSE
 
 import numpy as np
 import pandas as pd
@@ -16,12 +23,15 @@ except ImportError:
     HAS_YAML = False
 
 try:
-    import torch
+    import torch as _torch  # type: ignore[import-untyped]
 
     HAS_TORCH = True
 except ImportError:
-    torch = None  # type: ignore[assignment]
+    _torch = None  # type: ignore[assignment]
     HAS_TORCH = False
+
+if not TYPE_CHECKING:
+    torch = _torch  # type: ignore[assignment]
 
 try:
     import matplotlib.pyplot as plt
@@ -32,19 +42,28 @@ except ImportError:
     HAS_MATPLOTLIB = False
 
 try:
-    from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
+    from pytorch_forecasting import TemporalFusionTransformer
+    from pytorch_forecasting import TimeSeriesDataSet as _TimeSeriesDataSet
     from pytorch_forecasting.data import GroupNormalizer
-    from pytorch_forecasting.metrics import MAE, MAPE, RMSE
+    from pytorch_forecasting.metrics import MAE as _MAE
+    from pytorch_forecasting.metrics import MAPE as _MAPE
+    from pytorch_forecasting.metrics import RMSE as _RMSE
 
     HAS_PYTORCH_FORECASTING = True
 except ImportError:
     TemporalFusionTransformer = None  # type: ignore[assignment]
-    TimeSeriesDataSet = None  # type: ignore[assignment]
-    MAPE = None
-    MAE = None
-    RMSE = None
+    _TimeSeriesDataSet = None  # type: ignore[assignment]
+    _MAPE = None  # type: ignore[assignment]
+    _MAE = None  # type: ignore[assignment]
+    _RMSE = None  # type: ignore[assignment]
     GroupNormalizer = None  # type: ignore[assignment]
     HAS_PYTORCH_FORECASTING = False
+
+if not TYPE_CHECKING:
+    TimeSeriesDataSet = _TimeSeriesDataSet  # type: ignore[assignment,misc]
+    MAE = _MAE  # type: ignore[assignment,misc]
+    MAPE = _MAPE  # type: ignore[assignment,misc]
+    RMSE = _RMSE  # type: ignore[assignment,misc]
 
 
 class EvaluationService:
@@ -408,6 +427,7 @@ class EvaluationService:
         static_reals = dataset_config.get("static_reals", [])
 
         # Create dataset
+        assert TimeSeriesDataSet is not None and GroupNormalizer is not None
         dataset = TimeSeriesDataSet(
             data=df,
             time_idx=dataset_config["time_idx"],
@@ -510,6 +530,7 @@ class EvaluationService:
                 return {}
 
             # Create evaluation metrics
+            assert MAE is not None and RMSE is not None and MAPE is not None
             metrics = {"mae": MAE(), "rmse": RMSE(), "mape": MAPE()}
 
             # Compute metrics
@@ -558,6 +579,7 @@ class EvaluationService:
                 return {}
 
             # Create evaluation metrics
+            assert MAE is not None and RMSE is not None and MAPE is not None
             metrics = {"mae": MAE(), "rmse": RMSE(), "mape": MAPE()}
 
             # Compute metrics

@@ -3,11 +3,15 @@ DataResolver — Unified Symbol Data Fetch with Cache-First Pipeline
 ===================================================================
 Provides a single ``DataResolver`` class that resolves 1-minute OHLCV bars
 for any supported symbol (CME futures or Kraken spot crypto) using a
-three-tier cache hierarchy:
+four-tier cache hierarchy:
 
-    1. Redis (hot)     — in-memory, sub-millisecond, 7-day window
+    0. Rithmic live  — real-time L1 snapshot when RITHMIC_LIVE_DATA=1
+                       (single-row DataFrame; only for days <= 1 requests)
+    1. Redis (hot)   — in-memory, sub-millisecond, 7-day window
     2. Postgres (warm) — durable, deep history up to 365 days
-    3. API (cold)      — Massive REST (futures) or Kraken REST (crypto)
+    3. API (cold)    — Massive REST (futures) or Kraken REST (crypto)
+
+Priority chain: **Rithmic (if live) → Redis → Postgres → API**
 
 Any data fetched from the cold path is immediately backfilled into both
 Postgres and Redis so subsequent requests are served from warm/hot tiers.
@@ -63,6 +67,7 @@ Design goals
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -186,7 +191,7 @@ class ResolveMetadata:
     """Metadata about a single DataResolver.resolve() call."""
 
     symbol: str
-    source: str = "none"  # "redis" | "postgres" | "massive_api" | "kraken_api" | "none"
+    source: str = "none"  # "rithmic_l1" | "redis" | "postgres" | "massive_api" | "kraken_api" | "none"
     rows: int = 0
     cache_hit: bool = False  # True when Redis satisfied the full request
     backfilled_redis: bool = False  # True when we wrote new data into Redis
@@ -415,12 +420,101 @@ def _backfill_redis(symbol: str, df: pd.DataFrame) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Rithmic Tier-0 helper (sync, uses sync Redis client)
+# ---------------------------------------------------------------------------
+
+
+def _try_rithmic_l1(symbol: str) -> pd.DataFrame | None:
+    """Read the latest L1 snapshot from Redis ``rithmic:l1:{symbol}``.
+
+    Returns a single-row DataFrame with columns ``open, high, low, close,
+    volume`` built from the Rithmic tick snapshot, or ``None`` when:
+      - ``RITHMIC_LIVE_DATA`` env var is not ``"1"``
+      - The stream manager is not connected
+      - The Redis key is absent or expired (2 s TTL written by ``on_tick``)
+
+    This is intentionally synchronous so it fits cleanly into the existing
+    sync ``_resolve_internal`` call path.  It uses the low-level ``_r`` Redis
+    client (sync) rather than the async stream-manager methods.
+    """
+    if os.getenv("RITHMIC_LIVE_DATA", "0") != "1":
+        return None
+
+    try:
+        # Guard: only attempt when stream manager says it's live
+        from lib.integrations.rithmic_client import get_stream_manager
+
+        if not get_stream_manager().is_live():
+            return None
+    except Exception:
+        return None
+
+    try:
+        from lib.core.cache import REDIS_AVAILABLE, _r
+
+        if not REDIS_AVAILABLE or _r is None:
+            return None
+
+        raw = _r.hgetall(f"rithmic:l1:{symbol}")
+        if not raw:
+            return None
+
+        decoded: dict[str, float | int | None] = {}
+        for k, v in raw.items():
+            key_str = k.decode() if isinstance(k, bytes) else str(k)
+            val_str = v.decode() if isinstance(v, bytes) else str(v)
+            try:
+                decoded[key_str] = float(val_str) if "." in val_str else int(val_str)
+            except (ValueError, TypeError):
+                decoded[key_str] = None
+
+        last = decoded.get("last")
+        if last is None:
+            return None
+
+        bid = decoded.get("bid", last)
+        ask = decoded.get("ask", last)
+        volume = decoded.get("volume", 0)
+        ts_raw = decoded.get("ts")
+
+        # Build a timestamp: prefer the tick ssboe, fall back to now
+        if ts_raw is not None:
+            try:
+                ts = datetime.fromtimestamp(int(ts_raw), tz=UTC)
+            except Exception:
+                ts = datetime.now(UTC)
+        else:
+            ts = datetime.now(UTC)
+
+        # Represent as a single-bar OHLCV row — open/high/low/close = last
+        mid = (float(bid) + float(ask)) / 2.0 if bid is not None and ask is not None else float(last)
+        df = pd.DataFrame(
+            [
+                {
+                    "open": mid,
+                    "high": mid,
+                    "low": mid,
+                    "close": mid,
+                    "volume": int(volume) if volume else 0,
+                }
+            ],
+            index=pd.DatetimeIndex([ts], tz=UTC),
+        )
+        logger.debug("DataResolver: Rithmic L1 hit for %s (last=%.4f)", symbol, mid)
+        return df
+
+    except Exception as exc:
+        logger.debug("_try_rithmic_l1(%s) failed: %s", symbol, exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # DataResolver
 # ---------------------------------------------------------------------------
 
 
 class DataResolver:
-    """Unified data resolver: Redis → Postgres → API with automatic backfill.
+    """Unified data resolver: Rithmic → Redis → Postgres → API with automatic backfill.
 
     Thread-safe and stateless — safe to share across threads or instantiate
     per-call.  All remote API calls are made synchronously (the training
@@ -437,6 +531,10 @@ class DataResolver:
         known to be unavailable). Default False.
     skip_postgres : bool
         Bypass the Postgres tier entirely. Default False.
+    prefer_rithmic : bool
+        When True, attempt Tier 0 (Rithmic live L1 snapshot) before Redis
+        for requests with days <= 1.  Has no effect unless RITHMIC_LIVE_DATA=1
+        and the stream manager is connected.  Default False.
     """
 
     def __init__(
@@ -445,11 +543,15 @@ class DataResolver:
         enable_backfill_postgres: bool = True,
         skip_redis: bool = False,
         skip_postgres: bool = False,
+        prefer_rithmic: bool = False,
     ) -> None:
         self.enable_backfill_redis = enable_backfill_redis
         self.enable_backfill_postgres = enable_backfill_postgres
         self.skip_redis = skip_redis
         self.skip_postgres = skip_postgres
+        # When True, Tier 0 (Rithmic live L1) is attempted before Redis for
+        # short-term requests (days <= 1).  Ignored when RITHMIC_LIVE_DATA != "1".
+        self.prefer_rithmic = prefer_rithmic
 
     # ------------------------------------------------------------------
     # Public API
@@ -599,8 +701,31 @@ class DataResolver:
         end: datetime,
         meta: ResolveMetadata,
     ) -> pd.DataFrame | None:
-        """Core three-tier resolution logic."""
+        """Core four-tier resolution logic (Rithmic → Redis → Postgres → API)."""
         is_crypto = _is_kraken(symbol)
+
+        # ── Tier 0: Rithmic live L1 snapshot ─────────────────────────
+        # Only attempted when:
+        #   • RITHMIC_LIVE_DATA=1  (env gate)
+        #   • prefer_rithmic=True  (caller opt-in)
+        #   • days <= 1            (ticks cover only ~5 min of history;
+        #                           longer requests fall through as normal)
+        #   • non-crypto symbol    (Rithmic serves futures/equities only)
+        if self.prefer_rithmic and not is_crypto and days <= 1 and os.getenv("RITHMIC_LIVE_DATA", "0") == "1":
+            try:
+                df = _try_rithmic_l1(symbol)
+                if df is not None and not df.empty:
+                    meta.source = "rithmic_l1"
+                    meta.cache_hit = True
+                    logger.debug(
+                        "DataResolver: Rithmic L1 hit for %s (%d rows)",
+                        symbol,
+                        len(df),
+                    )
+                    return df
+            except Exception as exc:
+                # Never let Tier 0 block the normal resolution chain
+                logger.debug("DataResolver: Rithmic Tier 0 skipped for %s: %s", symbol, exc)
 
         # ── Tier 1: Redis ────────────────────────────────────────────
         # Only use Redis when the request fits inside the Redis window AND

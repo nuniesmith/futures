@@ -23,8 +23,11 @@ Endpoints:
     GET  /metrics/prometheus   — Prometheus text-format metrics endpoint
     POST /train                — Kick off a training run (async background task)
     POST /train/cancel         — Request cancellation of the current run
+    GET  /train/validate       — Check dataset health: CSV rows vs images on disk
+    POST /train/repair         — Re-generate images for rows with missing files
     GET  /models               — List all model files in models/ + archive/
     GET  /models/archive       — List archived model checkpoints
+    GET  /models/compare       — Side-by-side accuracy comparison of two model checkpoints
 
 Environment variables:
     TRAINER_HOST                  — Bind address (default 0.0.0.0)
@@ -39,7 +42,7 @@ Environment variables:
     CNN_RETRAIN_LR                — Learning rate (default 0.0001)
     CNN_RETRAIN_PATIENCE          — Early stopping patience (default 12)
     CNN_RETRAIN_SYMBOLS           — Comma-separated symbols (default: all micros)
-    CNN_RETRAIN_DAYS_BACK         — Days of history (default 180)
+    CNN_RETRAIN_DAYS_BACK         — Days of history (default 365)
     CNN_RETRAIN_BARS_SOURCE       — Data source (default "engine"; engine handles Redis→DB→API internally)
     ENGINE_DATA_URL               — Engine/data service base URL for bar fetching (default "http://data:8000")
     CNN_RETRAIN_ORB_SESSION       — Session filter (default "all")
@@ -249,7 +252,7 @@ def _symbols_to_groups(symbols: list[str]) -> dict[str, list[str]]:
 DEFAULT_SYMBOLS: list[str] = (
     os.getenv("CNN_RETRAIN_SYMBOLS", "").split(",") if os.getenv("CNN_RETRAIN_SYMBOLS") else _FALLBACK_SYMBOLS
 )
-DEFAULT_DAYS_BACK = int(os.getenv("CNN_RETRAIN_DAYS_BACK", "180"))
+DEFAULT_DAYS_BACK = int(os.getenv("CNN_RETRAIN_DAYS_BACK", "365"))
 # "engine" is the preferred default — the trainer calls the engine's HTTP API
 # (GET /bars/{symbol}?auto_fill=true) which handles Redis → Postgres → external
 # API resolution internally.  This works correctly when the trainer runs on a
@@ -413,6 +416,8 @@ class TrainRequest(BaseModel):
                                  (assumes bars are already cached)
       - ``"train"``        : train → evaluate → promote only
                              (assumes dataset/images/ and labels.csv already exist)
+      - ``"repair"``       : re-generate images for CSV rows whose image files are
+                             missing on disk, then re-merge into labels.csv
     """
 
     symbols: list[str] | None = Field(None, description="Symbols to generate dataset for")
@@ -434,7 +439,8 @@ class TrainRequest(BaseModel):
             "Pipeline step to run: None=full pipeline, "
             "'load_data'=fetch bars only, "
             "'generate_dataset'=render images+CSV only, "
-            "'train'=train+evaluate+promote only"
+            "'train'=train+evaluate+promote only, "
+            "'repair'=re-render missing images and re-merge labels.csv"
         ),
     )
     train_mode: str = Field(
@@ -506,6 +512,10 @@ def _run_training_pipeline(params: TrainRequest) -> None:
                            bars.  Assumes load_data has already run.
         "train"          → Steps 3–5 only: train → evaluate → promote.
                            Assumes dataset/images/ and labels.csv already exist on disk.
+        "repair"         → Find all CSV rows whose image files are missing, re-fetch bars for
+                           those symbols, re-render their images (skip_existing=False for those
+                           symbols only), then re-merge new rows back into labels.csv deduplicated
+                           by image_path.
     """
     try:
         # ----- Resolve parameters -----
@@ -564,7 +574,176 @@ def _run_training_pipeline(params: TrainRequest) -> None:
         # Normalise step — None means full pipeline
         step = (params.step or "").strip().lower() or "full"
         run_config["step"] = step
-        logger.info("Starting training pipeline", **run_config)
+        logger.info(
+            "Starting training pipeline — step=%s, days_back=%d%s",
+            step,
+            days_back,
+            " (default 365 days)" if params.days_back is None else "",
+        )
+
+        # ═══════════════════════════════════════════════════════════════════
+        # STEP: repair  — re-generate images for CSV rows with missing files.
+        # Reads labels.csv, identifies symbols that have at least one missing
+        # image, re-fetches bars for those symbols only, re-renders with
+        # skip_existing=False (force overwrite), then re-merges back into
+        # labels.csv deduplicated by image_path.
+        # ═══════════════════════════════════════════════════════════════════
+        if step == "repair":
+            import numpy as np
+            import pandas as pd
+
+            from lib.services.training.dataset_generator import (
+                DatasetConfig,
+                generate_dataset,
+                validate_dataset,
+            )
+
+            labels_csv_repair = str(DATASET_DIR / "labels.csv")
+
+            # --- Pre-repair validation ---
+            _state.set(TrainStatus.GENERATING, "Validating dataset before repair…")
+            pre_report = validate_dataset(labels_csv_repair, check_images=True)
+
+            if pre_report.get("error", "").startswith("CSV not found"):
+                _state.finish(error=f"Cannot repair — labels.csv not found at {labels_csv_repair}")
+                return
+
+            total_rows = pre_report.get("total_rows", 0)
+            missing_before = pre_report.get("missing_images", 0)
+            logger.info(
+                "Repair: %d/%d rows have missing images (%.1f%% coverage before repair)",
+                missing_before,
+                total_rows,
+                100.0 * (total_rows - missing_before) / total_rows if total_rows else 0.0,
+            )
+
+            if missing_before == 0:
+                logger.info("Repair: no missing images found — nothing to do")
+                _state.finish(
+                    result={
+                        "step": "repair",
+                        "total_rows": total_rows,
+                        "missing_before": 0,
+                        "missing_after": 0,
+                        "images_repaired": 0,
+                        "message": "No missing images found — dataset is already complete",
+                    }
+                )
+                return
+
+            # --- Identify symbols that have missing images ---
+            try:
+                df_csv = pd.read_csv(labels_csv_repair)
+                missing_mask = df_csv["image_path"].apply(
+                    lambda p: not p or (isinstance(p, float) and np.isnan(p)) or not os.path.isfile(str(p))
+                )
+                if "symbol" in df_csv.columns:
+                    repair_symbols = sorted(df_csv.loc[missing_mask, "symbol"].dropna().unique().tolist())
+                else:
+                    repair_symbols = []
+            except Exception as _csv_err:
+                _state.finish(error=f"Repair: failed to read labels.csv — {_csv_err}")
+                return
+
+            if not repair_symbols:
+                logger.warning("Repair: missing images found but no symbols identified — aborting")
+                _state.finish(error="Repair: could not identify symbols with missing images")
+                return
+
+            logger.info(
+                "Repair: re-generating images for %d symbol(s): %s",
+                len(repair_symbols),
+                ", ".join(repair_symbols),
+            )
+
+            if _state.cancel_requested:
+                _state.finish(error="Cancelled before repair generation")
+                return
+
+            _state.set(
+                TrainStatus.GENERATING,
+                f"Repairing images for {len(repair_symbols)} symbol(s): {', '.join(repair_symbols)}",
+            )
+
+            # --- Build a DatasetConfig with skip_existing=False to force re-render ---
+            repair_days_back = params.days_back or DEFAULT_DAYS_BACK
+            repair_bars_source = params.bars_source or DEFAULT_BARS_SOURCE
+            repair_orb_session = params.orb_session or DEFAULT_ORB_SESSION
+
+            repair_config = DatasetConfig(
+                output_dir=str(DATASET_DIR),
+                image_dir=str(DATASET_DIR / "images"),
+                bars_source=repair_bars_source,
+                orb_session=repair_orb_session,
+                breakout_type=params.breakout_type,
+                use_parity_renderer=True,
+                skip_existing=False,  # force re-render so missing images are recreated
+            )
+
+            try:
+                repair_stats = generate_dataset(
+                    symbols=repair_symbols,
+                    days_back=repair_days_back,
+                    config=repair_config,
+                )
+                logger.info(
+                    "Repair generation complete — %d images rendered for %d symbol(s)",
+                    repair_stats.total_images,
+                    len(repair_stats.symbols_processed),
+                )
+            except Exception as _gen_err:
+                _state.finish(error=f"Repair: generate_dataset failed — {_gen_err}")
+                return
+
+            # --- Dedup pass: eliminate duplicate image_path rows that may
+            #     have accumulated across multiple repair runs. ---
+            try:
+                df_merged = pd.read_csv(labels_csv_repair)
+                rows_before_dedup = len(df_merged)
+                df_merged = df_merged.drop_duplicates(subset=["image_path"], keep="last")
+                df_merged.to_csv(labels_csv_repair, index=False)
+                rows_after_dedup = len(df_merged)
+                if rows_before_dedup != rows_after_dedup:
+                    logger.info(
+                        "Repair: deduplication removed %d duplicate rows (%d → %d)",
+                        rows_before_dedup - rows_after_dedup,
+                        rows_before_dedup,
+                        rows_after_dedup,
+                    )
+            except Exception as _dedup_err:
+                logger.warning("Repair: deduplication pass failed (non-fatal) — %s", _dedup_err)
+
+            # --- Post-repair validation ---
+            post_report = validate_dataset(labels_csv_repair, check_images=True)
+            missing_after = post_report.get("missing_images", 0)
+            total_rows_after = post_report.get("total_rows", total_rows)
+            images_repaired = missing_before - missing_after
+
+            logger.info(
+                "Repair complete — missing images: %d → %d (repaired %d, coverage %.1f%%)",
+                missing_before,
+                missing_after,
+                images_repaired,
+                100.0 * (total_rows_after - missing_after) / total_rows_after if total_rows_after else 0.0,
+            )
+
+            _state.finish(
+                result={
+                    "step": "repair",
+                    "symbols_repaired": repair_symbols,
+                    "total_rows": total_rows_after,
+                    "missing_before": missing_before,
+                    "missing_after": missing_after,
+                    "images_repaired": images_repaired,
+                    "images_rendered": repair_stats.total_images,
+                    "coverage_pct": round(
+                        100.0 * (total_rows_after - missing_after) / total_rows_after if total_rows_after else 0.0,
+                        1,
+                    ),
+                    "repair_errors": repair_stats.errors[:20],
+                }
+            )
+            return
 
         # ── helpers shared across steps ───────────────────────────────────
         labels_csv = DATASET_DIR / "labels.csv"
@@ -1314,6 +1493,98 @@ async def cancel_train() -> JSONResponse:
     )
 
 
+@app.get("/train/validate")
+async def validate_dataset_endpoint() -> JSONResponse:
+    """Validate the current dataset — check CSV rows vs images on disk.
+
+    Returns a report with:
+      - total_rows         : number of rows in labels.csv
+      - missing_images     : rows whose image_path file doesn't exist on disk
+      - empty_image_paths  : rows with a blank/NaN image_path value
+      - coverage_pct       : percentage of rows that DO have an image on disk
+      - label_distribution : count per label class
+      - symbols            : sorted list of symbols in the CSV
+      - valid              : False if CSV is missing or any images are absent
+    """
+    from lib.services.training.dataset_generator import validate_dataset
+
+    labels_csv_path = str(DATASET_DIR / "labels.csv")
+    report = validate_dataset(labels_csv_path, check_images=True)
+
+    total = report.get("total_rows", 0)
+    missing = report.get("missing_images", 0)
+    coverage_pct = round(100.0 * (total - missing) / total, 1) if total else 0.0
+    report["coverage_pct"] = coverage_pct
+
+    # 206 Partial Content when the CSV exists but images are missing;
+    # 200 when everything is healthy; 404 when CSV doesn't exist at all.
+    status_code = (
+        404 if report.get("error", "").startswith("CSV not found") else 206 if not report.get("valid") else 200
+    )
+
+    return JSONResponse(status_code=status_code, content=report)
+
+
+@app.post("/train/repair", dependencies=[Depends(verify_api_key)])
+async def repair_dataset_endpoint(params: TrainRequest | None = None) -> JSONResponse:
+    """Re-generate images for any CSV rows with missing image files.
+
+    Kicks off a background pipeline run with ``step='repair'``.  The repair
+    step reads labels.csv, identifies symbols that have at least one missing
+    image, re-fetches bars for those symbols, force-re-renders their images
+    (``skip_existing=False``), and re-merges the results back into labels.csv.
+
+    Returns 202 Accepted immediately; poll ``GET /status`` for progress.
+    Returns 409 Conflict if a training/repair run is already in progress.
+    """
+    if _state.is_busy():
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "A training/repair run is already in progress",
+                "status": _state.to_dict(),
+            },
+        )
+
+    _state.reset()
+
+    # Build a TrainRequest with step="repair", inheriting any caller overrides
+    base = params if params is not None else TrainRequest()  # type: ignore[call-arg]
+    repair_params = TrainRequest(
+        symbols=base.symbols,
+        days_back=base.days_back,
+        breakout_type=base.breakout_type,
+        orb_session=base.orb_session,
+        bars_source=base.bars_source,
+        epochs=base.epochs,
+        batch_size=base.batch_size,
+        learning_rate=base.learning_rate,
+        patience=base.patience,
+        min_accuracy=base.min_accuracy,
+        min_precision=base.min_precision,
+        min_recall=base.min_recall,
+        force_promote=False,
+        step="repair",
+        train_mode=base.train_mode,
+    )
+
+    thread = threading.Thread(
+        target=_run_training_pipeline,
+        args=(repair_params,),
+        name="repair-pipeline",
+        daemon=True,
+    )
+    thread.start()
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "message": "Dataset repair started",
+            "params": repair_params.model_dump(exclude_none=True),
+        },
+    )
+
+
 @app.get("/logs")
 async def get_logs(offset: int = 0) -> JSONResponse:
     """Return recent in-memory log lines for the Web UI.
@@ -1425,6 +1696,128 @@ async def list_models() -> JSONResponse:
     )
 
     return JSONResponse({"models": result, "models_dir": str(MODELS_DIR)})
+
+
+@app.get("/models/compare")
+async def compare_models_endpoint(
+    model_a: str = "breakout_cnn_best.pt",
+    model_b: str | None = None,
+    val_csv: str | None = None,
+    batch_size: int = 32,
+) -> JSONResponse:
+    """Compare two model checkpoints side-by-side against a validation CSV.
+
+    Query parameters:
+        model_a   — filename in models/ dir (default: champion breakout_cnn_best.pt)
+        model_b   — filename in models/ dir (required; e.g. breakout_cnn_20250101_120000_acc89.pt)
+        val_csv   — path to validation CSV (default: dataset/val.csv, then dataset/labels.csv)
+        batch_size — batch size for evaluation (default: 32)
+
+    Returns:
+        200 with comparison dict on success.
+        400 if model_b is missing or either model file is not found.
+        404 if no validation CSV can be located.
+        503 if PyTorch is not available.
+    """
+    try:
+        from lib.analysis.ml.breakout_cnn import _TORCH_AVAILABLE, compare_models
+    except ImportError:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "breakout_cnn module not available"},
+        )
+
+    if not _TORCH_AVAILABLE:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "PyTorch is not available — cannot evaluate models"},
+        )
+
+    if not model_b:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "model_b query parameter is required (e.g. ?model_b=breakout_cnn_20250101_acc89.pt)"},
+        )
+
+    # Resolve model paths — accept absolute paths or bare filenames (looked up in MODELS_DIR)
+    def _resolve_model(name: str) -> str | None:
+        p = Path(name)
+        if p.is_absolute():
+            return str(p) if p.exists() else None
+        # Try models/ dir first, then archive/
+        candidate = MODELS_DIR / name
+        if candidate.exists():
+            return str(candidate)
+        candidate_archive = ARCHIVE_DIR / name
+        if candidate_archive.exists():
+            return str(candidate_archive)
+        return None
+
+    path_a = _resolve_model(model_a)
+    if path_a is None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"model_a not found: {model_a!r} (checked {MODELS_DIR} and {ARCHIVE_DIR})"},
+        )
+
+    path_b = _resolve_model(model_b)
+    if path_b is None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"model_b not found: {model_b!r} (checked {MODELS_DIR} and {ARCHIVE_DIR})"},
+        )
+
+    # Resolve validation CSV
+    if val_csv:
+        resolved_val = val_csv
+    else:
+        # Default: prefer dataset/val.csv (the held-out split), fall back to full labels.csv
+        _val_split = DATASET_DIR / "val.csv"
+        _labels_csv = DATASET_DIR / "labels.csv"
+        if _val_split.exists():
+            resolved_val = str(_val_split)
+        elif _labels_csv.exists():
+            resolved_val = str(_labels_csv)
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": (
+                        "No validation CSV found. "
+                        f"Tried: {_val_split}, {_labels_csv}. "
+                        "Run a training pipeline first, or pass ?val_csv=<path>."
+                    )
+                },
+            )
+
+    logger.info(
+        "Comparing models: %s vs %s on %s",
+        model_a,
+        model_b,
+        resolved_val,
+    )
+
+    result = compare_models(
+        model_a_path=path_a,
+        model_b_path=path_b,
+        val_csv=resolved_val,
+        batch_size=batch_size,
+        label_a=model_a,
+        label_b=model_b,
+    )
+
+    if result is None:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Model comparison failed — check logs for details",
+                "model_a": model_a,
+                "model_b": model_b,
+                "val_csv": resolved_val,
+            },
+        )
+
+    return JSONResponse(result)
 
 
 # ---------------------------------------------------------------------------

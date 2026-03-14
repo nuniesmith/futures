@@ -424,6 +424,24 @@ async def _run_step_ict(symbol: str, plan: dict) -> str:
         logger.debug("ICT step fallback: %s", exc)
 
     b = _base_price(symbol)
+
+    # Gold-specific ICT commentary: Gold respects round-number order blocks
+    # ($3200, $3250, $3300 etc.) and produces reliable FVGs on 1H/4H timeframes.
+    if symbol in ("MGC", "GC"):
+        round_level = round(b / 50) * 50  # nearest $50 round number
+        ob_lo = round_level - 50
+        ob_hi = round_level
+        fvg_lo = round_level + 25
+        fvg_hi = round_level + 50
+        liq_level = round_level + 75
+        parts = [
+            f"OB: {ob_lo:.0f}–{ob_hi:.0f} (round-number demand, Gold respects $50 increments).",
+            f"FVG: {fvg_lo:.0f}–{fvg_hi:.0f} (1H/4H FVG — Gold FVGs reliable on higher TFs).",
+            f"Buy Liq: {liq_level:.0f} (above round {round_level + 50:.0f}).",
+            f"Key round levels: {round_level - 100:.0f}, {round_level - 50:.0f}, {round_level:.0f}, {round_level + 50:.0f}, {round_level + 100:.0f}.",
+        ]
+        return " ".join(parts)
+
     return f"OB: {b - 20:.0f}–{b - 15:.0f}. FVG: {b + 50:.0f}–{b + 57:.0f}. Buy Liq: {b + 62:.0f}"
 
 
@@ -572,6 +590,80 @@ async def _run_step_plan(symbol: str, plan: dict) -> str:
     """Compile the final daily plan."""
     b = _base_price(symbol)
 
+    # ── Instrument-specific level offsets ─────────────────────────────
+    # MGC ($0.10 tick / $1.00 per tick) — typical daily range $20-40.
+    # GC  ($0.10 tick / $10.00 per tick) — same price action, bigger notional.
+    _is_gold = symbol in ("MGC", "GC")
+
+    if _is_gold:
+        # PDH / PDL — Gold's average daily range is $35-45
+        _pdh_offset = 40.0
+        _pdl_offset = -5.0
+        # Order-block offsets — Gold has clear OBs at round numbers ($15-25)
+        _ob_lo_offset = -20.0
+        _ob_hi_offset = -15.0
+        # FVG — Gold FVGs typically $30-50 above on 1H/4H
+        _fvg_lo_offset = 30.0
+        _fvg_hi_offset = 45.0
+        _fvg_mid_offset = 37.5
+        # ORB — Gold's opening range is typically $10-20
+        _orb_hi_offset = 15.0
+        _orb_lo_offset = -5.0
+        # Liquidity pools
+        _buy_liq_offset = 50.0
+        _sell_liq_offset = -25.0
+        # Entry zone A (LONG): $5-10 wide for MGC (tighter)
+        _za_lo = -20.0
+        _za_hi = -15.0  # 5pt wide zone
+        _za_stop = -25.0
+        _za_stop_pts = 5.0  # $50 risk per MGC contract
+        _za_t1 = 12.0
+        _za_t1_pts = 27.0
+        _za_t2 = 40.0
+        _za_t2_pts = 55.0
+        _za_rr = "1:5.5"
+        # Entry zone B (SHORT): $5-10 wide
+        _zb_lo = 30.0
+        _zb_hi = 38.0  # 8pt wide zone
+        _zb_stop = 44.0
+        _zb_stop_pts = 6.0  # $60 risk per MGC contract
+        _zb_t1 = 12.0
+        _zb_t1_pts = 20.0
+        _zb_t2 = -5.0
+        _zb_t2_pts = 40.0
+        _zb_rr = "1:3.3"
+    else:
+        # Generic defaults (MES / MNQ / M2K / MCL etc.)
+        _pdh_offset = 47.25
+        _pdl_offset = -10.50
+        _ob_lo_offset = -20.0
+        _ob_hi_offset = -15.0
+        _fvg_lo_offset = 50.0
+        _fvg_hi_offset = 57.0
+        _fvg_mid_offset = 50.25
+        _orb_hi_offset = 21.50
+        _orb_lo_offset = -8.75
+        _buy_liq_offset = 62.0
+        _sell_liq_offset = -25.50
+        _za_lo = -20.0
+        _za_hi = -12.0
+        _za_stop = -25.25
+        _za_stop_pts = 5.25
+        _za_t1 = 12.0
+        _za_t1_pts = 24.0
+        _za_t2 = 31.75
+        _za_t2_pts = 43.0
+        _za_rr = "1:4.5"
+        _zb_lo = 50.0
+        _zb_hi = 57.0
+        _zb_stop = 62.0
+        _zb_stop_pts = 6.0
+        _zb_t1 = 12.0
+        _zb_t1_pts = 40.0
+        _zb_t2 = -10.5
+        _zb_t2_pts = 63.0
+        _zb_rr = "1:6.0"
+
     # Ensure all plan fields are populated
     plan.setdefault("symbol", symbol)
     plan.setdefault("date", date.today().isoformat())
@@ -599,71 +691,81 @@ async def _run_step_plan(symbol: str, plan: dict) -> str:
         ],
     )
 
-    # Build levels
+    # Build levels using instrument-aware offsets
     plan.setdefault(
         "levels",
         [
-            {"label": "PDH", "price": round(b + 47.25, 2), "type": "range", "note": "Previous Day High"},
-            {"label": "PDL", "price": round(b - 10.50, 2), "type": "range", "note": "Previous Day Low"},
+            {"label": "PDH", "price": round(b + _pdh_offset, 2), "type": "range", "note": "Previous Day High"},
+            {"label": "PDL", "price": round(b + _pdl_offset, 2), "type": "range", "note": "Previous Day Low"},
             {"label": "POC", "price": round(b + 12.00, 2), "type": "volume", "note": "Point of Control"},
             {"label": "VAH", "price": round(b + 31.75, 2), "type": "volume", "note": "Value Area High"},
             {"label": "VAL", "price": round(b - 5.75, 2), "type": "volume", "note": "Value Area Low"},
             {
                 "label": "Bull OB",
-                "price": round(b - 19.50, 2),
+                "price": round(b + (_ob_lo_offset + _ob_hi_offset) / 2, 2),
                 "type": "ict",
-                "note": "H1 Bullish Order Block",
-                "range": [round(b - 20, 2), round(b - 15, 2)],
+                "note": "H1 Bullish Order Block" + (" (round-number zone)" if _is_gold else ""),
+                "range": [round(b + _ob_lo_offset, 2), round(b + _ob_hi_offset, 2)],
             },
             {
                 "label": "FVG",
-                "price": round(b + 50.25, 2),
+                "price": round(b + _fvg_mid_offset, 2),
                 "type": "ict",
-                "note": "Fair Value Gap unfilled",
-                "range": [round(b + 50, 2), round(b + 57, 2)],
+                "note": "Fair Value Gap unfilled" + (" (1H/4H)" if _is_gold else ""),
+                "range": [round(b + _fvg_lo_offset, 2), round(b + _fvg_hi_offset, 2)],
             },
-            {"label": "Buy Liq", "price": round(b + 62.00, 2), "type": "liq", "note": "Buy-side liquidity pool"},
-            {"label": "Sell Liq", "price": round(b - 25.50, 2), "type": "liq", "note": "Sell-side liquidity pool"},
-            {"label": "ORB High", "price": round(b + 21.50, 2), "type": "orb", "note": "Opening Range High"},
-            {"label": "ORB Low", "price": round(b - 8.75, 2), "type": "orb", "note": "Opening Range Low"},
+            {
+                "label": "Buy Liq",
+                "price": round(b + _buy_liq_offset, 2),
+                "type": "liq",
+                "note": "Buy-side liquidity pool",
+            },
+            {
+                "label": "Sell Liq",
+                "price": round(b + _sell_liq_offset, 2),
+                "type": "liq",
+                "note": "Sell-side liquidity pool",
+            },
+            {"label": "ORB High", "price": round(b + _orb_hi_offset, 2), "type": "orb", "note": "Opening Range High"},
+            {"label": "ORB Low", "price": round(b + _orb_lo_offset, 2), "type": "orb", "note": "Opening Range Low"},
         ],
     )
 
-    # Build entry zones
+    # Build entry zones using instrument-aware parameters
     plan.setdefault(
         "zones",
         [
             {
                 "id": "A",
                 "dir": "LONG",
-                "range_lo": round(b - 20, 2),
-                "range_hi": round(b - 12, 2),
+                "range_lo": round(b + _za_lo, 2),
+                "range_hi": round(b + _za_hi, 2),
                 "score": 94,
                 "cnn_prob": 87,
                 "reasons": ["H1 Order Block", "Value Area Low", "4H Demand Zone", "CVD Divergence"],
-                "stop": round(b - 25.25, 2),
-                "stop_pts": 5.25,
-                "t1": round(b + 12, 2),
-                "t1_pts": 24,
-                "t2": round(b + 31.75, 2),
-                "t2_pts": 43,
-                "rr": "1:4.5",
+                "stop": round(b + _za_stop, 2),
+                "stop_pts": _za_stop_pts,
+                "t1": round(b + _za_t1, 2),
+                "t1_pts": _za_t1_pts,
+                "t2": round(b + _za_t2, 2),
+                "t2_pts": _za_t2_pts,
+                "rr": _za_rr,
             },
             {
                 "id": "B",
                 "dir": "SHORT",
-                "range_lo": round(b + 50, 2),
-                "range_hi": round(b + 57, 2),
+                "range_lo": round(b + _zb_lo, 2),
+                "range_hi": round(b + _zb_hi, 2),
                 "score": 71,
                 "cnn_prob": 63,
                 "reasons": ["FVG fill zone", "PDH rejection", "HTF supply zone", "Volume imbalance"],
-                "stop": round(b + 62, 2),
-                "stop_pts": 6.0,
-                "t1": round(b + 12, 2),
-                "t1_pts": 40,
-                "t2": round(b - 10.5, 2),
-                "t2_pts": 63,
-                "rr": "1:6.0",
+                "stop": round(b + _zb_stop, 2),
+                "stop_pts": _zb_stop_pts,
+                "t1": round(b + _zb_t1, 2),
+                "t1_pts": _zb_t1_pts,
+                "t2": round(b + _zb_t2, 2),
+                "t2_pts": _zb_t2_pts,
+                "rr": _zb_rr,
             },
         ],
     )
@@ -741,7 +843,7 @@ _BASE_PRICES: dict[str, float] = {
     "MES": 5800,
     "MNQ": 20400,
     "M2K": 2080,
-    "MGC": 2930,
+    "MGC": 3300,
     "MCL": 69,
 }
 
@@ -949,6 +1051,25 @@ SIGNAL_TEMPLATES = [
 ]
 
 
+# Instrument-specific point multipliers for P&L calculation.
+# Each value represents dollars-per-point for the given contract.
+#   MGC: $1.00/tick, $0.10 tick size → $10/point
+#   MCL: $1.00/tick, $0.01 tick size → $100/point
+#   MES: $1.25/tick, $0.25 tick size → $5/point
+#   MNQ: $0.50/tick, $0.25 tick size → $2/point
+_POINT_MULTIPLIERS: dict[str, float] = {
+    "MGC": 10.0,
+    "GC": 100.0,
+    "MCL": 100.0,
+    "CL": 1000.0,
+    "MES": 5.0,
+    "ES": 50.0,
+    "MNQ": 2.0,
+    "NQ": 20.0,
+    "M2K": 5.0,
+}
+
+
 async def _live_stream_generator(symbol: str):
     """Stream live price updates, signals, and position data.
 
@@ -962,6 +1083,9 @@ async def _live_stream_generator(symbol: str):
     position: dict[str, float | int | str] = {"qty": 2, "entry": round(b - 19.5, 2), "dir": "LONG"}
     last_signal_tick = -20
 
+    # Look up instrument-specific dollar-per-point multiplier
+    pt_mult = _POINT_MULTIPLIERS.get(symbol, 5.0)  # default MES $5/pt
+
     while True:
         tick += 1
 
@@ -970,8 +1094,8 @@ async def _live_stream_generator(symbol: str):
         price += drift + random.gauss(0, 2.5)
         price = max(b - 40, min(b + 70, price))
 
-        # P&L
-        pnl = (price - float(position["entry"])) * int(position["qty"]) * 5  # MES = $5/pt
+        # P&L — instrument-specific multiplier
+        pnl = (price - float(position["entry"])) * int(position["qty"]) * pt_mult
 
         # Candle update
         candle = {
@@ -1001,6 +1125,20 @@ async def _live_stream_generator(symbol: str):
             "daily_limit": daily_limit,
         }
         yield f"data: {json.dumps(payload)}\n\n"
+
+        # Push tick through TradeExecutor when trades are active
+        try:
+            from lib.services.data.api.trade_executor_routes import _get_copy_trader, _get_executor
+
+            executor = _get_executor()
+            ct = _get_copy_trader()
+            if executor and executor.active_trade_count > 0:
+                actions = await executor.process_live_tick(symbol, price, ct)
+                if actions:
+                    # Emit executor actions as a separate SSE event
+                    yield f"data: {json.dumps({'type': 'executor_actions', 'symbol': symbol, 'price': round(price, 2), 'actions': actions})}\n\n"
+        except Exception:
+            pass  # executor integration is non-fatal
 
         # Emit signal every ~20 ticks, not too frequent
         should_signal = tick - last_signal_tick >= 15 and random.random() < 0.25

@@ -26,6 +26,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from lib.core.models import (
+    _get_conn,
     cancel_trade,
     close_trade,
     create_trade,
@@ -72,6 +73,10 @@ class CloseTradeRequest(BaseModel):
     close_price: float = Field(..., description="Exit price")
 
 
+class GradeTradeRequest(BaseModel):
+    grade: str = Field(..., description="Trade quality grade: A, B, C, D, or F")
+
+
 class LegacyTradeRequest(BaseModel):
     """Backwards-compatible with the original /log_trade endpoint."""
 
@@ -102,6 +107,8 @@ class TradeResponse(BaseModel):
     rr: float | None = None
     notes: str = ""
     strategy: str = ""
+    grade: str = ""
+    source: str = "manual"
     # Risk fields (populated on create only)
     risk_checked: bool = Field(False, description="Whether a risk check was performed")
     risk_blocked: bool = Field(False, description="True if risk rules would block this trade")
@@ -267,6 +274,48 @@ def api_open_trades(
 def api_get_trade(trade_id: int):
     """Get a single trade by ID."""
     return TradeResponse(**_get_trade_by_id(trade_id))
+
+
+@router.patch("/trades/{trade_id}/grade")
+def api_grade_trade(trade_id: int, req: GradeTradeRequest):
+    """Set or update the quality grade on a trade.
+
+    Accepted grades: A, B, C, D, F (stored as-is; validation is advisory).
+    """
+    valid_grades = {"A", "B", "C", "D", "F", ""}
+    grade = req.grade.strip().upper()
+    if grade and grade not in valid_grades:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid grade '{grade}'. Use one of: A, B, C, D, F (or empty to clear).",
+        )
+
+    conn = _get_conn()
+    try:
+        result = conn.execute(
+            "UPDATE trades_v2 SET grade = ? WHERE id = ?",
+            (grade, trade_id),
+        )
+        # Check rowcount — works on both SQLite and Postgres wrappers
+        rowcount = getattr(result, "rowcount", None)
+        if rowcount is not None and rowcount == 0:
+            conn.close()
+            raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
+        conn.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Failed to update grade: {exc}") from exc
+    conn.close()
+
+    trade = _get_trade_by_id(trade_id)
+    return {
+        "status": "graded",
+        "trade_id": trade_id,
+        "grade": grade,
+        "trade": TradeResponse(**trade),
+    }
 
 
 @router.get("/trades/today/pnl")

@@ -5,28 +5,34 @@ This module handles the creation, loading, and management of
 prediction models for different assets.
 """
 
-import os
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from lib.model._shims import logger
 
 # --- Stubs for modules not present in this project ---
 AssetDataManager = None  # stub: data.manager.AssetDataManager  # type: ignore[assignment]
 
-try:
-    from lib.model.statistical.bayesian import BayesianLinearRegression as BayesianPredictor
-except ImportError:
-    BayesianPredictor = None  # type: ignore[assignment,misc]
-
-try:
+if TYPE_CHECKING:
     from lib.model.ml.gaussian import GaussianModel as GaussianPredictor
-except ImportError:
-    GaussianPredictor = None  # type: ignore[assignment,misc]
-
-try:
     from lib.model.ml.polynomial import PolynomialRegression as PolynomialPredictor
-except ImportError:
-    PolynomialPredictor = None  # type: ignore[assignment,misc]
+    from lib.model.statistical.bayesian import BayesianLinearRegression as BayesianPredictor
+else:
+    try:
+        from lib.model.statistical.bayesian import BayesianLinearRegression as BayesianPredictor
+    except ImportError:
+        BayesianPredictor = None  # type: ignore[assignment,misc]
+
+    try:
+        from lib.model.ml.gaussian import GaussianModel as GaussianPredictor
+    except ImportError:
+        GaussianPredictor = None  # type: ignore[assignment,misc]
+
+    try:
+        from lib.model.ml.polynomial import PolynomialRegression as PolynomialPredictor
+    except ImportError:
+        PolynomialPredictor = None  # type: ignore[assignment,misc]
 
 get_config = None  # stub: core.constants.manager.get_config
 
@@ -37,37 +43,35 @@ class ModelManager:
     creation, initialization, and persistence.
     """
 
-    def __init__(self, data_fetcher: "AssetDataManager | None" = None, model_dir: str | None = None):  # type: ignore[valid-type]
+    def __init__(self, data_fetcher: AssetDataManager | None = None, model_dir: str | None = None):  # type: ignore[valid-type]
         """
         Initialize the model manager.
 
         Args:
-            data_fetcher: Data fetcher instance for retrieving market data
-            model_dir: Directory where models are stored
+            data_fetcher: Data fetching component for retrieving market data
+            model_dir: Directory to store/load trained models
         """
-        # Get constants
-        self.constants = get_config()  # type: ignore[misc]
-
-        self.data_fetcher = data_fetcher or AssetDataManager()  # type: ignore[misc]
-        self.model_dir = model_dir or self.constants.MODEL_DIR
+        self.data_fetcher = data_fetcher
+        self.model_dir = model_dir or "models"
         self.models: dict[str, Any] = {}
-        self.model_types = {"gold": "bayesian", "bitcoin": "gaussian"}
-
-        # Ensure model directory exists
-        os.makedirs(self.model_dir, exist_ok=True)
-
-        # Initialize models
-        self._initialize_models()
+        self.model_types: dict[str, str] = {}
+        self.constants = get_config() if get_config is not None else None  # type: ignore[call-non-callable]
 
     def _initialize_models(self) -> None:
         """Initialize prediction models for each asset."""
         logger.info("Initializing prediction models")
 
+        if self.constants is None:
+            logger.warning("No constants/config available — skipping model initialization")
+            return
+
         for asset in self.constants.SUPPORTED_ASSETS:
             model_type = self.model_types.get(asset, "bayesian")
             self.models[asset] = self._create_model(asset, model_type)
 
-    def _create_model(self, asset: str, model_type: str) -> BayesianPredictor | GaussianPredictor | PolynomialPredictor:
+    def _create_model(
+        self, asset: str, model_type: str
+    ) -> BayesianPredictor | GaussianPredictor | PolynomialPredictor | None:  # type: ignore[valid-type]
         """
         Create a predictor model of the specified type.
 
@@ -76,150 +80,151 @@ class ModelManager:
             model_type: Type of prediction model to create
 
         Returns:
-            Initialized predictor model
+            Instantiated predictor model or None if the type is unknown / not available
         """
-        valid_model_types = getattr(self.constants, "VALID_MODEL_TYPES", ["bayesian", "gaussian", "polynomial"])
-        if model_type not in valid_model_types:
-            logger.warning(f"Invalid model type '{model_type}', defaulting to bayesian")
-            model_type = "bayesian"
+        if model_type == "bayesian":
+            if BayesianPredictor is None:
+                logger.warning("BayesianPredictor not available — falling back to None")
+                return None
+            return BayesianPredictor(asset=asset)  # type: ignore[call-arg]
+        if model_type == "gaussian":
+            if GaussianPredictor is None:
+                logger.warning("GaussianPredictor not available — falling back to None")
+                return None
+            return GaussianPredictor(asset=asset)  # type: ignore[call-arg]
+        if model_type == "polynomial":
+            if PolynomialPredictor is None:
+                logger.warning("PolynomialPredictor not available — falling back to None")
+                return None
+            return PolynomialPredictor(asset=asset)  # type: ignore[call-arg]
 
-        try:
-            # Create model based on type
-            if model_type == "bayesian":
-                # Get model parameters
-                params = getattr(self.constants, "MODEL_PARAMS", {}).get("bayesian", {})
-                return BayesianPredictor(asset=asset, data_fetcher=self.data_fetcher, **params)  # type: ignore[misc]
+        logger.warning("Unknown model type %r for asset %s — returning None", model_type, asset)
+        return None
 
-            elif model_type == "gaussian":
-                # Get base Gaussian parameters
-                gaussian_params = getattr(self.constants, "GAUSSIAN_PARAMS", {}).copy()
-
-                # Get asset-specific Gaussian parameters and update base params
-                asset_specific_params = {}
-                if hasattr(self.constants, "get_asset_gaussian_params"):
-                    asset_specific_params = self.constants.get_asset_gaussian_params(asset)
-                gaussian_params.update(asset_specific_params)
-
-                # Create the model with the combined parameters
-                logger.debug(f"Creating Gaussian model for {asset} with parameters: {gaussian_params}")
-                return GaussianPredictor(asset=asset, data_fetcher=self.data_fetcher, **gaussian_params)  # type: ignore[misc]
-
-            elif model_type == "polynomial":
-                # Get model parameters
-                params = getattr(self.constants, "MODEL_PARAMS", {}).get("polynomial", {})
-                return PolynomialPredictor(asset=asset, data_fetcher=self.data_fetcher, **params)  # type: ignore[call-arg,misc]
-
-            else:
-                # Default
-                logger.warning(f"Unrecognized model type '{model_type}', using bayesian as fallback")
-                return BayesianPredictor(asset=asset, data_fetcher=self.data_fetcher)  # type: ignore[misc]
-
-        except Exception as e:
-            logger.error(f"Error creating {model_type} model for {asset}: {str(e)}")
-            # Return a default model as fallback
-            return BayesianPredictor(asset=asset, data_fetcher=self.data_fetcher)  # type: ignore[misc]
-
-    def get_model_path(self, asset: str) -> str:
+    def get_model(self, asset: str) -> BayesianPredictor | GaussianPredictor | PolynomialPredictor | None:  # type: ignore[valid-type]
         """
-        Get the file path for a model.
+        Get the prediction model for a specific asset.
 
         Args:
-            asset: Asset type (e.g., 'gold', 'bitcoin')
+            asset: Asset identifier
 
         Returns:
-            Full path to the model file
-        """
-        model_type = self.model_types.get(asset, "bayesian")
-        return os.path.join(self.model_dir, f"{asset}_{model_type}_model.pkl")
-
-    async def update_models(
-        self, asset_model_map: dict[str, str] | None = None, load_existing: bool = True
-    ) -> dict[str, bool]:
-        """
-        Update the model types for specified assets.
-
-        Args:
-            asset_model_map: Mapping from asset names to model types
-            load_existing: Whether to load existing models after update
-
-        Returns:
-            Dictionary indicating which assets were updated successfully
-        """
-        if asset_model_map is None:
-            asset_model_map = {}
-
-        logger.info(f"Updating models: {asset_model_map}")
-
-        results = {}
-        for asset, model_type in asset_model_map.items():
-            if asset not in self.constants.SUPPORTED_ASSETS:
-                logger.warning(f"Skipping unsupported asset: {asset}")
-                results[asset] = False
-                continue
-
-            # Only update if the model type has changed
-            if model_type != self.model_types.get(asset):
-                try:
-                    self.model_types[asset] = model_type
-                    self.models[asset] = self._create_model(asset, model_type)
-                    logger.info(f"Created new {model_type} model for {asset}")
-                    results[asset] = True
-                except Exception as e:
-                    logger.error(f"Failed to update model for {asset}: {e}")
-                    results[asset] = False
-            else:
-                results[asset] = True  # No change needed
-
-        # Load existing trained models if requested
-        if load_existing:
-            await self.load_existing_models()
-
-        return results
-
-    async def load_existing_models(self) -> dict[str, bool]:
-        """
-        Load existing trained models.
-
-        Returns:
-            Dictionary indicating which models were loaded successfully
-        """
-        results = {}
-        for asset in self.constants.SUPPORTED_ASSETS:
-            model_path = self.get_model_path(asset)
-            if os.path.exists(model_path):
-                try:
-                    self.models[asset].load(model_path)
-                    logger.info(f"Loaded existing model for {asset} from {model_path}")
-                    results[asset] = True
-                except Exception as e:
-                    logger.error(f"Error loading model for {asset}: {str(e)}")
-                    results[asset] = False
-            else:
-                logger.warning(f"No model file found for {asset} at {model_path}")
-                results[asset] = False
-
-        return results
-
-    def get_model(self, asset: str) -> BayesianPredictor | GaussianPredictor | PolynomialPredictor | None:
-        """
-        Get the model for a specific asset.
-
-        Args:
-            asset: Asset name
-
-        Returns:
-            Model instance or None if not available
+            The predictor model for the asset, or None if not available
         """
         return self.models.get(asset)
 
-    def get_model_type(self, asset: str) -> str:
+    def load_models(self, model_dir: str | None = None) -> dict[str, bool]:
         """
-        Get the model type for a specific asset.
+        Load all trained models from disk.
 
         Args:
-            asset: Asset name
+            model_dir: Directory to load models from (overrides instance default)
 
         Returns:
-            Model type as string
+            Dict mapping asset name → load success bool
         """
-        return self.model_types.get(asset, "bayesian")
+        import pathlib
+
+        load_dir = pathlib.Path(model_dir or self.model_dir)
+        results: dict[str, bool] = {}
+
+        if self.constants is None:
+            logger.warning("No constants/config — skipping model load")
+            return results
+
+        for asset in self.constants.SUPPORTED_ASSETS:
+            model_path = load_dir / f"{asset}_model.pkl"
+            if model_path.exists():
+                try:
+                    import pickle
+
+                    with open(model_path, "rb") as f:
+                        self.models[asset] = pickle.load(f)  # noqa: S301
+                    logger.info("Loaded model for %s from %s", asset, model_path)
+                    results[asset] = True
+                except Exception as exc:
+                    logger.error("Error loading model for %s: %s", asset, exc)
+                    results[asset] = False
+            else:
+                logger.warning("No model file found for %s at %s", asset, model_path)
+                results[asset] = False
+
+        return results
+
+    def save_models(self, model_dir: str | None = None) -> dict[str, bool]:
+        """
+        Persist all trained models to disk.
+
+        Args:
+            model_dir: Directory to save models (overrides instance default)
+
+        Returns:
+            Dict mapping asset name → save success bool
+        """
+        import pathlib
+        import pickle
+
+        save_dir = pathlib.Path(model_dir or self.model_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        results: dict[str, bool] = {}
+
+        for asset, model in self.models.items():
+            if model is None:
+                results[asset] = False
+                continue
+            model_path = save_dir / f"{asset}_model.pkl"
+            try:
+                with open(model_path, "wb") as f:
+                    pickle.dump(model, f)
+                logger.info("Saved model for %s to %s", asset, model_path)
+                results[asset] = True
+            except Exception as exc:
+                logger.error("Error saving model for %s: %s", asset, exc)
+                results[asset] = False
+
+        return results
+
+    def get_model_info(self) -> dict[str, Any]:
+        """Return a summary of all managed models."""
+        return {
+            "model_dir": self.model_dir,
+            "model_count": len(self.models),
+            "assets": list(self.models.keys()),
+            "model_types": self.model_types,
+            "available": {
+                "bayesian": BayesianPredictor is not None,
+                "gaussian": GaussianPredictor is not None,
+                "polynomial": PolynomialPredictor is not None,
+            },
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"ModelManager(model_dir={self.model_dir!r}, "
+            f"models={list(self.models.keys())}, "
+            f"model_types={self.model_types})"
+        )
+
+
+def get_model_manager(
+    data_fetcher: Any = None,
+    model_dir: str | None = None,
+) -> ModelManager:
+    """Convenience factory — returns a ready-to-use ModelManager instance."""
+    manager = ModelManager(data_fetcher=data_fetcher, model_dir=model_dir)
+    return manager
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton (lazy)
+# ---------------------------------------------------------------------------
+
+_manager: ModelManager | None = None
+
+
+def get_default_manager() -> ModelManager:
+    """Return the process-wide ModelManager singleton, creating it on first call."""
+    global _manager
+    if _manager is None:
+        _manager = ModelManager()
+    return _manager

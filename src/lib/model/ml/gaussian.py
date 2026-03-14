@@ -203,10 +203,11 @@ class GaussianModel:
             initial_params = [self.mu_prior_mean, np.sqrt(self.sigma_prior_beta / (self.sigma_prior_alpha - 1))]
 
             # Minimize negative log posterior
-            result = minimize(
+            result = minimize(  # type: ignore[operator, reportOptionalCall]
                 lambda params: self.negative_log_posterior(params, data),
                 initial_params,
                 bounds=[(None, None), (0.001, None)],  # σ must be positive
+                method="L-BFGS-B",
             )
 
             mu_hat, sigma_hat = result.x

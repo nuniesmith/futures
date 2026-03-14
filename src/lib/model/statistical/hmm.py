@@ -171,9 +171,9 @@ class HMMModel(BaseModel):
 
             # Evaluate classification metrics
             if HAS_SKLEARN:
-                precision = precision_score(y_true, y_pred, average="weighted")
-                recall = recall_score(y_true, y_pred, average="weighted")
-                f1 = f1_score(y_true, y_pred, average="weighted")
+                precision = precision_score(y_true, y_pred, average="weighted")  # type: ignore[operator]
+                recall = recall_score(y_true, y_pred, average="weighted")  # type: ignore[operator]
+                f1 = f1_score(y_true, y_pred, average="weighted")  # type: ignore[operator]
             else:
                 precision = None
                 recall = None

@@ -698,6 +698,24 @@ app.include_router(news_router, tags=["News Sentiment"])
 # NOTE: pipeline_router is mounted WITHOUT a prefix — routes are defined with full paths.
 app.include_router(pipeline_router, tags=["Pipeline"])
 
+# Trade Executor: /api/trade/engage, /api/trade/active, /api/trade/active/{symbol},
+#                 /api/trade/partial, /api/trade/close/{symbol}, /api/trade/set-stop,
+#                 /api/trade/status, /api/trade/history
+# Staged trade execution with stop-hunt protection and plan-aware management.
+# NOTE: trade_executor_router is mounted WITHOUT a prefix — routes are defined with full paths.
+from lib.services.data.api.trade_executor_routes import router as trade_executor_router  # noqa: E402
+
+app.include_router(trade_executor_router, tags=["Trade Executor"])
+
+# Session Reports: /api/reports/pre-session, /api/reports/post-session,
+#                  /api/reports/history, /api/reports/pre-session/notes,
+#                  /api/reports/post-session/notes
+# Daily pre/post session reports for performance tracking and system improvement.
+# NOTE: session_report_router is mounted WITHOUT a prefix — routes are defined with full paths.
+from lib.services.data.api.session_report_routes import router as session_report_router  # noqa: E402
+
+app.include_router(session_report_router, tags=["Session Reports"])
+
 # Chat: /api/chat, /sse/chat, /api/chat/history, /api/chat/status
 # RustAssistant-powered multi-turn chat with RA→Grok fallback.
 # History stored in Redis per session_id. Market context auto-injected.

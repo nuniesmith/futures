@@ -1451,10 +1451,11 @@ class TestEngineStatusSwingSummary:
 class TestDailyPlanGrokIntegration:
     """Test the full flow: generate_daily_plan → Grok structured call → plan with grok_analysis."""
 
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data", return_value=(2750.0, 15.0))
     @patch("lib.trading.strategies.daily.daily_plan._fetch_grok_context")
     @patch("lib.integrations.grok_helper.run_daily_plan_grok_analysis")
     @patch("lib.integrations.grok_helper.format_grok_daily_plan_for_display")
-    def test_structured_grok_used_when_available(self, mock_format, mock_run, mock_legacy):
+    def test_structured_grok_used_when_available(self, mock_format, mock_run, mock_legacy, mock_fetch):
         """When structured Grok succeeds, grok_analysis should be populated."""
         from lib.trading.strategies.daily.daily_plan import generate_daily_plan
 
@@ -1489,9 +1490,10 @@ class TestDailyPlanGrokIntegration:
         # Legacy should NOT have been called since structured succeeded
         mock_legacy.assert_not_called()
 
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data", return_value=(2750.0, 15.0))
     @patch("lib.integrations.grok_helper.run_daily_plan_grok_analysis")
     @patch("lib.trading.strategies.daily.daily_plan._fetch_grok_context")
-    def test_falls_back_to_legacy_on_failure(self, mock_legacy, mock_structured):
+    def test_falls_back_to_legacy_on_failure(self, mock_legacy, mock_structured, mock_fetch):
         """When structured Grok fails, should fall back to free-text."""
         from lib.trading.strategies.daily.daily_plan import generate_daily_plan
 
@@ -1514,7 +1516,8 @@ class TestDailyPlanGrokIntegration:
         assert plan.market_context == "Legacy Grok text"
         mock_legacy.assert_called_once()
 
-    def test_no_grok_when_key_missing(self):
+    @patch("lib.trading.strategies.daily.daily_plan._fetch_asset_data", return_value=(2750.0, 15.0))
+    def test_no_grok_when_key_missing(self, mock_fetch):
         from lib.trading.strategies.daily.daily_plan import generate_daily_plan
 
         daily_df = _make_bars(60, start_price=2700.0)

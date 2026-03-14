@@ -409,12 +409,41 @@ def _get_session_info() -> dict[str, str]:
       - US Equity Open:       09:30–16:00  ← primary
       - CME Settlement:       14:00–14:30
       - Off-hours:            16:00–18:00
+      - Weekend / CME closed: Fri 17:00 ET → Sun 18:00 ET
     """
     now = datetime.now(tz=_EST)
     hour = now.hour
     minute = now.minute
+    weekday = now.weekday()  # 0=Mon … 4=Fri, 5=Sat, 6=Sun
     # fractional hour for sub-hour comparisons
     fhour = hour + minute / 60.0
+
+    # ── Weekend / CME closed window: Fri 17:00 ET → Sun 18:00 ET ─────────
+    # CME Globex closes Friday at 17:00 ET and reopens Sunday at 18:00 ET.
+    # During this window there is no futures market to watch.
+    _is_weekend_closed = (
+        weekday == 5  # all of Saturday
+        or (weekday == 4 and fhour >= 17.0)  # Friday at/after 17:00
+        or (weekday == 6 and fhour < 18.0)  # Sunday before 18:00
+    )
+    if _is_weekend_closed:
+        # Work out when Globex reopens for the subtitle
+        if weekday in (4, 5):
+            _reopen_label = "reopens Sunday 18:00 ET"
+        else:  # Sunday pre-open
+            _mins_until = int((18.0 - fhour) * 60)
+            _h, _m = divmod(_mins_until, 60)
+            _reopen_label = f"opens in {_h}h {_m:02d}m" if _h else f"opens in {_m}m"
+        return {
+            "mode": "closed",
+            "emoji": "🔒",
+            "label": f"FUTURES CLOSED — {_reopen_label}",
+            "css_class": "text-zinc-500",
+            "color_hex": "#71717a",
+            "time": now.strftime("%H:%M:%S"),
+            "date": now.strftime("%A, %B %d, %Y"),
+            "time_et": now.strftime("%I:%M:%S %p ET"),
+        }
 
     # Derive session boundaries from live UTC-converted ET hours so this
     # function is automatically correct for both EDT (UTC-4) and EST (UTC-5).
@@ -4700,10 +4729,32 @@ function updateClock() {{
         var _lon   = _sh('LON/LSE');
         var _us    = _sh('US Equity');
         var _set   = _sh('CME Settle');
+        // ── Weekend / CME closed: Fri 17:00 ET → Sun 18:00 ET ───────────
+        var _dow = now.toLocaleDateString('en-US',{{timeZone:'America/New_York',weekday:'short'}});
+        // _dow is 'Mon','Tue','Wed','Thu','Fri','Sat','Sun'
+        var _isClosed = (
+            _dow === 'Sat'
+            || (_dow === 'Fri' && etFrac >= 17.0)
+            || (_dow === 'Sun' && etFrac < 18.0)
+        );
+        if (_isClosed) {{
+            var _reopenTxt;
+            if (_dow === 'Sun') {{
+                var _minsLeft = Math.round((18.0 - etFrac) * 60);
+                var _hLeft = Math.floor(_minsLeft / 60);
+                var _mLeft = _minsLeft % 60;
+                _reopenTxt = _hLeft > 0
+                    ? 'opens in ' + _hLeft + 'h ' + ('0'+_mLeft).slice(-2) + 'm'
+                    : 'opens in ' + _mLeft + 'm';
+            }} else {{
+                _reopenTxt = 'reopens Sun 18:00 ET';
+            }}
+            c = '#71717a'; txt = '🔒 FUTURES CLOSED — ' + _reopenTxt;
+        }}
         // Evaluate daytime ET bands first (most common during US hours),
         // then work through the overnight chain.  All boundary values come
         // from the Python-injected data so DST is handled automatically.
-        if      (_us  && etFrac>=_ovL       && etFrac<_ovE)               {{ c='#fbbf24'; txt='⚡ LONDON/US OVERLAP'; }}
+        else if (_us  && etFrac>=_ovL       && etFrac<_ovE)               {{ c='#fbbf24'; txt='⚡ LONDON/US OVERLAP'; }}
         else if (_us  && etFrac>=_us.o      && etFrac<14.0)               {{ c=colors.us;     txt='🟢 US OPEN'; }}
         else if (_set && etFrac>=_set.o     && etFrac<_set.c)             {{ c='#fb923c'; txt='📊 CME SETTLEMENT'; }}
         else if (_us  && etFrac>=_set.c     && etFrac<_us.c)              {{ c=colors.us;     txt='🟢 US OPEN'; }}
@@ -5292,6 +5343,7 @@ def get_orb_history_html(
     days: int = 7,
     breakout_only: bool = False,
     btype: str | None = None,
+    group_by: str | None = None,
 ):
     """Return per-session signal history as an HTML table + summary.
 
@@ -5406,6 +5458,17 @@ def get_orb_history_html(
 
     # Checkbox state
     bo_checked = "checked" if breakout_only else ""
+
+    # group_by flag
+    _group_by_type = (group_by or "").lower() == "type"
+
+    # Helper to build a URL preserving all current filters
+    def _base_url(extra: str = "") -> str:
+        sess_param = f"&session={session}" if session and session.lower() != "all" else ""
+        bo_param = f"&breakout_only={'true' if breakout_only else 'false'}"
+        days_param = f"&days={days}"
+        btype_param = f"&btype={btype}" if btype and btype.upper() != "ALL" else ""
+        return f"/api/orb/history/html?{days_param}{bo_param}{sess_param}{btype_param}{extra}"
 
     # Build table rows
     rows_html = ""
@@ -5554,28 +5617,280 @@ def get_orb_history_html(
             </td>
         </tr>"""
 
-    # Per-type summary pills for the stats bar — all 13 types
+    # ── Grouped-by-type view ───────────────────────────────────────────────
+    # When group_by=type we build one <details> block per breakout type.
+    TABLE_HEADER = """
+                <table class="w-full text-left">
+                    <thead>
+                        <tr class="border-b t-border text-[9px] t-text-faint uppercase tracking-wider">
+                            <th class="py-1 px-1.5">Time</th>
+                            <th class="py-1 px-1.5">Session</th>
+                            <th class="py-1 px-1.5">Symbol</th>
+                            <th class="py-1 px-1.5">Type</th>
+                            <th class="py-1 px-1.5">Signal</th>
+                            <th class="py-1 px-1.5 text-right">Trigger</th>
+                            <th class="py-1 px-1.5 text-right">Range</th>
+                            <th class="py-1 px-1.5 text-right">ATR</th>
+                            <th class="py-1 px-1.5 text-center" title="MTF score · MACD slope · Divergence">MTF</th>
+                            <th class="py-1 px-1.5 text-center">CNN</th>
+                            <th class="py-1 px-1.5 text-center">Filter</th>
+                        </tr>
+                    </thead>
+                    <tbody>"""
+    TABLE_FOOTER = """
+                    </tbody>
+                </table>"""
+
+    grouped_rows_html = ""
+    if _group_by_type:
+        # Collect rows per type — reuse the already-built rows_html chunks by
+        # re-iterating events (rows_html is a single string; easier to re-group
+        # from the source data and call the same rendering logic inline).
+        rows_by_type: dict[str, list[dict]] = {}
+        for ev in events[:50]:
+            ev_btype2 = (ev.get("breakout_type") or "ORB").upper()
+            if ev_btype2 not in rows_by_type:
+                rows_by_type[ev_btype2] = []
+            # Find the corresponding rendered row from rows_html is complex;
+            # instead we store the event and re-render per group below.
+            rows_by_type[ev_btype2].append(ev)
+
+        def _render_event_row(ev: dict) -> str:  # noqa: PLR0912
+            ts_raw = ev.get("timestamp", "")
+            ts_display = ts_raw
+            if ts_raw and "T" in ts_raw:
+                try:
+                    dt2 = datetime.fromisoformat(ts_raw)
+                    ts_display = dt2.strftime("%m/%d %H:%M")
+                except Exception:
+                    pass
+            sym2 = ev.get("symbol", "?")
+            bd2 = bool(ev.get("breakout_detected"))
+            direction2 = ev.get("direction", "")
+            trigger2 = ev.get("trigger_price", 0)
+            or_range2 = ev.get("or_range", 0)
+            atr2 = ev.get("atr_value", 0)
+            ev_session2 = ev.get("session", "")
+            ev_btype2 = (ev.get("breakout_type") or "ORB").upper()
+            mtf_score_val2 = ev.get("mtf_score")
+            macd_slope_val2 = ev.get("macd_slope")
+            divergence_val2 = ev.get("divergence") or ""
+            meta2: dict = {}
+            if ev.get("metadata_json"):
+                with contextlib.suppress(json.JSONDecodeError, TypeError):
+                    meta2 = json.loads(ev["metadata_json"])
+            cnn_prob2 = meta2.get("cnn_prob")
+            filter_passed2 = meta2.get("filter_passed")
+            sk2 = meta2.get("session_key", ev_session2)
+            if bd2 and direction2 == "LONG":
+                row_bg2 = "background: rgba(34,197,94,0.08);"
+                dir_html2 = '<span class="text-green-400 font-bold">🟢 LONG</span>'
+            elif bd2 and direction2 == "SHORT":
+                row_bg2 = "background: rgba(239,68,68,0.08);"
+                dir_html2 = '<span class="text-red-400 font-bold">🔴 SHORT</span>'
+            elif bd2:
+                row_bg2 = "background: rgba(234,179,8,0.08);"
+                dir_html2 = f'<span class="text-yellow-400">{direction2 or "—"}</span>'
+            else:
+                row_bg2 = ""
+                dir_html2 = '<span class="t-text-faint">—</span>'
+            _bt_pill_color2 = _BTYPE_COLORS.get(ev_btype2, ("rgba(161,161,170,0.15)", "#a1a1aa"))
+            btype_html2 = (
+                f'<span style="font-size:8px;padding:0 4px;border-radius:3px;'
+                f'background:{_bt_pill_color2[0]};color:{_bt_pill_color2[1]};white-space:nowrap">'
+                f"{ev_btype2}</span>"
+            )
+            if mtf_score_val2 is not None:
+                try:
+                    ms2 = float(mtf_score_val2)
+                    ms_pct2 = int(ms2 * 100)
+                    ms_color2 = "#4ade80" if ms2 >= 0.65 else ("#fbbf24" if ms2 >= 0.45 else "#f87171")
+                    slope_arrow2 = ""
+                    if macd_slope_val2 is not None:
+                        with contextlib.suppress(Exception):
+                            slope_arrow2 = " ↑" if float(macd_slope_val2) > 0 else " ↓"
+                    div_icon2 = ""
+                    if divergence_val2 == "confirming":
+                        div_icon2 = " ✓"
+                    elif divergence_val2 == "opposing":
+                        div_icon2 = " ✗"
+                    mtf_html2 = (
+                        f'<span style="font-size:9px;font-family:monospace;color:{ms_color2}">'
+                        f"{ms_pct2}%{slope_arrow2}{div_icon2}</span>"
+                    )
+                except Exception:
+                    mtf_html2 = '<span class="t-text-faint">—</span>'
+            else:
+                mtf_html2 = '<span class="t-text-faint">—</span>'
+            if cnn_prob2 is not None:
+                pct2 = cnn_prob2 * 100
+                c2 = "text-green-400" if pct2 >= 65 else ("text-yellow-400" if pct2 >= 45 else "text-red-400")
+                cnn_html2 = f'<span class="{c2} font-mono">{pct2:.0f}%</span>'
+            else:
+                cnn_html2 = '<span class="t-text-faint">—</span>'
+            if filter_passed2 is True:
+                filt_html2 = '<span class="text-green-500">✅</span>'
+            elif filter_passed2 is False:
+                filt_html2 = '<span class="text-red-500">🚫</span>'
+            else:
+                filt_html2 = '<span class="t-text-faint">—</span>'
+            _sk_lower2 = sk2.lower()
+            if "london_ny" in _sk_lower2 or "ln_ny" in _sk_lower2:
+                sess_badge2 = '<span class="text-indigo-400 text-[10px]">🌐 LN-NY</span>'
+            elif "london" in _sk_lower2:
+                sess_badge2 = '<span class="text-blue-400 text-[10px]">🇬🇧 LON</span>'
+            elif "frankfurt" in _sk_lower2:
+                sess_badge2 = '<span class="text-yellow-400 text-[10px]">🇩🇪 FRA</span>'
+            elif "tokyo" in _sk_lower2:
+                sess_badge2 = '<span class="text-red-300 text-[10px]">🇯🇵 TYO</span>'
+            elif "shanghai" in _sk_lower2:
+                sess_badge2 = '<span class="text-red-400 text-[10px]">🇨🇳 SHA</span>'
+            elif "sydney" in _sk_lower2:
+                sess_badge2 = '<span class="text-cyan-400 text-[10px]">🇦🇺 SYD</span>'
+            elif "cme_settle" in _sk_lower2 or "settle" in _sk_lower2:
+                sess_badge2 = '<span class="text-orange-300 text-[10px]">📊 SET</span>'
+            elif "cme" in _sk_lower2:
+                sess_badge2 = '<span class="text-purple-400 text-[10px]">🕕 CME</span>'
+            elif "us" in _sk_lower2:
+                sess_badge2 = '<span class="text-emerald-400 text-[10px]">🇺🇸 US</span>'
+            elif "crypto" in _sk_lower2:
+                sess_badge2 = '<span class="text-orange-400 text-[10px]">₿ CRY</span>'
+            else:
+                sess_badge2 = f'<span class="t-text-faint text-[10px]">{sk2[:6]}</span>'
+            return (
+                f'<tr class="border-b t-border-subtle text-[10px]" style="{row_bg2}">'
+                f'<td class="py-1 px-1.5 t-text-muted font-mono whitespace-nowrap">{ts_display}</td>'
+                f'<td class="py-1 px-1.5">{sess_badge2}</td>'
+                f'<td class="py-1 px-1.5 t-text-secondary font-mono">{sym2}</td>'
+                f'<td class="py-1 px-1.5">{btype_html2}</td>'
+                f'<td class="py-1 px-1.5">{dir_html2}</td>'
+                f'<td class="py-1 px-1.5 t-text-secondary font-mono text-right">{trigger2:,.2f}</td>'
+                f'<td class="py-1 px-1.5 t-text-muted font-mono text-right">{or_range2:,.2f}</td>'
+                f'<td class="py-1 px-1.5 t-text-muted font-mono text-right">{atr2:,.2f}</td>'
+                f'<td class="py-1 px-1.5 text-center">{mtf_html2}</td>'
+                f'<td class="py-1 px-1.5 text-center">{cnn_html2}</td>'
+                f'<td class="py-1 px-1.5 text-center">{filt_html2}</td>'
+                f"</tr>"
+            )
+
+        for bt_key in _ALL_BTYPE_LABELS[1:]:  # ordered: skip "ALL"
+            type_evs = rows_by_type.get(bt_key, [])
+            if not type_evs:
+                continue
+            pill_bg2, pill_fg2 = _BTYPE_COLORS.get(bt_key, ("rgba(161,161,170,0.12)", "#a1a1aa"))
+            bo_in_group = sum(1 for e in type_evs if e.get("breakout_detected"))
+            group_rows = "".join(_render_event_row(e) for e in type_evs)
+            btype_link_url = _base_url(f"&btype={bt_key}")
+            grouped_rows_html += f"""
+        <details class="mb-2 rounded border t-border" open>
+            <summary class="flex items-center gap-2 px-3 py-2 cursor-pointer select-none
+                            hover:opacity-90 rounded"
+                     style="background:{pill_bg2}">
+                <span style="color:{pill_fg2};font-size:11px;font-weight:600">▶ {bt_key}</span>
+                <span class="t-text-muted text-[10px]">{len(type_evs)} signal{"s" if len(type_evs) != 1 else ""}</span>
+                <span class="text-green-400 text-[10px]">{bo_in_group} breakout{"s" if bo_in_group != 1 else ""}</span>
+                <a hx-get="{btype_link_url}" hx-target="#orb-history-container" hx-swap="innerHTML"
+                   class="ml-auto text-[9px] t-text-faint hover:opacity-80 cursor-pointer"
+                   onclick="event.stopPropagation()">filter only ↗</a>
+            </summary>
+            <div class="overflow-x-auto max-h-48 overflow-y-auto">
+                {TABLE_HEADER}
+                    {group_rows}
+                {TABLE_FOOTER}
+            </div>
+        </details>"""
+
+        if not grouped_rows_html:
+            grouped_rows_html = (
+                '<div class="py-6 text-center t-text-faint text-xs">No events found for the selected filters.</div>'
+            )
+
+    # Per-type summary pills for the stats bar — all 13 types (clickable)
     type_pills_html = ""
     for bt_key in _ALL_BTYPE_LABELS[1:]:  # skip "ALL"
         count = type_counts.get(bt_key, 0)
         if count == 0:
             continue
         pill_bg, pill_fg = _BTYPE_COLORS.get(bt_key, ("rgba(161,161,170,0.12)", "#a1a1aa"))
+        pill_url = _base_url(f"&btype={bt_key}")
         type_pills_html += (
-            f'<span style="font-size:9px;padding:1px 6px;border-radius:9999px;'
-            f'background:{pill_bg};color:{pill_fg};white-space:nowrap">'
-            f"{bt_key}: {count}</span> "
+            f'<a hx-get="{pill_url}" hx-target="#orb-history-container" hx-swap="innerHTML" '
+            f'style="font-size:9px;padding:1px 6px;border-radius:9999px;cursor:pointer;'
+            f'background:{pill_bg};color:{pill_fg};white-space:nowrap;text-decoration:none">'
+            f"{bt_key}: {count}</a> "
         )
+
+    # Stats bar type pills (same as above but for the dedicated stats bar row)
+    stats_type_pills_html = type_pills_html  # reuse the same markup
+
+    # Group-by toggle button
+    if _group_by_type:
+        toggle_url = _base_url()
+        group_toggle_html = (
+            f'<a hx-get="{toggle_url}" hx-target="#orb-history-container" hx-swap="innerHTML" '
+            f'style="font-size:9px;padding:2px 8px;border-radius:9999px;cursor:pointer;'
+            f"background:rgba(96,165,250,0.2);color:#60a5fa;border:1px solid #60a5fa55;"
+            f'white-space:nowrap;text-decoration:none">⊞ Flat List</a>'
+        )
+    else:
+        toggle_url = _base_url("&group_by=type")
+        group_toggle_html = (
+            f'<a hx-get="{toggle_url}" hx-target="#orb-history-container" hx-swap="innerHTML" '
+            f'style="font-size:9px;padding:2px 8px;border-radius:9999px;cursor:pointer;'
+            f"background:transparent;color:var(--text-muted);border:1px solid rgba(255,255,255,0.15);"
+            f'white-space:nowrap;text-decoration:none">⊞ Group by Type</a>'
+        )
+
+    # Build the conditional content block (flat table vs grouped view)
+    if _group_by_type:
+        content_block = grouped_rows_html
+    else:
+        content_block = f"""
+        <div class="overflow-x-auto max-h-72 overflow-y-auto">
+            <table class="w-full text-left">
+                <thead>
+                    <tr class="border-b t-border text-[9px] t-text-faint uppercase tracking-wider">
+                        <th class="py-1 px-1.5">Time</th>
+                        <th class="py-1 px-1.5">Session</th>
+                        <th class="py-1 px-1.5">Symbol</th>
+                        <th class="py-1 px-1.5">Type</th>
+                        <th class="py-1 px-1.5">Signal</th>
+                        <th class="py-1 px-1.5 text-right">Trigger</th>
+                        <th class="py-1 px-1.5 text-right">Range</th>
+                        <th class="py-1 px-1.5 text-right">ATR</th>
+                        <th class="py-1 px-1.5 text-center" title="MTF score · MACD slope · Divergence">MTF</th>
+                        <th class="py-1 px-1.5 text-center">CNN</th>
+                        <th class="py-1 px-1.5 text-center">Filter</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+        </div>"""
 
     return HTMLResponse(
         content=f"""
     <div class="t-panel border t-border rounded-lg p-4">
+
+        <!-- ── Strategy type stats bar ───────────────────────────────────── -->
+        <div class="t-panel-inner rounded-lg px-3 py-2 mb-3 flex flex-wrap items-center gap-2">
+            <div class="flex items-center gap-1.5 mr-2">
+                <span class="text-[11px] font-bold t-text font-mono">{total}</span>
+                <span class="text-[9px] t-text-muted">signals</span>
+            </div>
+            <div class="flex items-center gap-1.5 mr-2 border-l t-border-subtle pl-2">
+                <span class="text-[11px] font-bold text-green-400 font-mono">{bo_rate}</span>
+                <span class="text-[9px] t-text-muted">BO rate</span>
+            </div>
+            <div class="border-l t-border-subtle pl-2 flex flex-wrap items-center gap-1">
+                {stats_type_pills_html}
+            </div>
+        </div>
+
         <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-semibold t-text-muted">📊 Signal History</h3>
-            <div class="flex items-center gap-2">
-                {type_pills_html}
-                <span class="t-text-faint text-[10px]">Last {days}d · {total} events</span>
-            </div>
+            <span class="t-text-faint text-[10px]">Last {days}d</span>
         </div>
 
         <!-- Summary stats -->
@@ -5613,34 +5928,15 @@ def get_orb_history_html(
             </div>
         </div>
 
-        <!-- Breakout-type filter pills — all 13 types -->
+        <!-- Breakout-type filter pills — all 13 types + group-by toggle -->
         <div class="flex items-center gap-1 mb-2 flex-wrap">
             {bt_tabs_html}
+            <span class="ml-auto">{group_toggle_html}</span>
         </div>
 
-        <!-- Table -->
-        <div class="overflow-x-auto max-h-72 overflow-y-auto">
-            <table class="w-full text-left">
-                <thead>
-                    <tr class="border-b t-border text-[9px] t-text-faint uppercase tracking-wider">
-                        <th class="py-1 px-1.5">Time</th>
-                        <th class="py-1 px-1.5">Session</th>
-                        <th class="py-1 px-1.5">Symbol</th>
-                        <th class="py-1 px-1.5">Type</th>
-                        <th class="py-1 px-1.5">Signal</th>
-                        <th class="py-1 px-1.5 text-right">Trigger</th>
-                        <th class="py-1 px-1.5 text-right">Range</th>
-                        <th class="py-1 px-1.5 text-right">ATR</th>
-                        <th class="py-1 px-1.5 text-center" title="MTF score · MACD slope · Divergence">MTF</th>
-                        <th class="py-1 px-1.5 text-center">CNN</th>
-                        <th class="py-1 px-1.5 text-center">Filter</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows_html}
-                </tbody>
-            </table>
-        </div>
+        <!-- Table or grouped view -->
+        {content_block}
+
         <div class="mt-1.5 text-[9px] t-text-faint">
             MTF col: score% · ↑↓ MACD slope · ✓ confirming divergence · ✗ opposing
         </div>

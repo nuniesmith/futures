@@ -170,6 +170,20 @@ input:focus,select:focus{border-color:#3b82f6;box-shadow:0 0 0 2px #3b82f620}
 .field{margin-bottom:10px}
 .field-hint{font-size:0.62rem;color:var(--faint);margin-top:2px}
 .field-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end}
+.field-label-row{display:flex;align-items:center;gap:5px;margin-bottom:3px}
+.field-label-row label.lbl{margin-bottom:0}
+.info-icon{display:inline-flex;align-items:center;justify-content:center;
+           width:13px;height:13px;border-radius:50%;font-size:0.6rem;font-style:normal;
+           background:var(--bg-input);border:1px solid var(--border);color:var(--muted);
+           cursor:default;position:relative;flex-shrink:0;line-height:1}
+.info-icon:hover{border-color:#3b82f6;color:#3b82f6}
+.info-icon::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 6px);
+                  transform:translateX(-50%);white-space:normal;width:210px;
+                  background:#1c1c1e;color:#e4e4e7;border:1px solid #3f3f46;
+                  border-radius:7px;padding:7px 9px;font-size:0.65rem;line-height:1.45;
+                  pointer-events:none;opacity:0;transition:opacity .15s;z-index:200;
+                  box-shadow:0 4px 16px #0008;font-style:normal}
+.info-icon:hover::after{opacity:1}
 
 /* ── Buttons ── */
 .btn{border-radius:7px;padding:7px 16px;font-size:0.8rem;font-weight:600;cursor:pointer;
@@ -335,11 +349,15 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
           </div>
           <div class="grid-2" style="gap:8px">
             <div class="field">
-              <label class="lbl">Primary Interval</label>
-              <select id="s-interval">
-                <option value="1m">1m</option>
+              <div class="field-label-row">
+                <label class="lbl">Primary Interval</label>
+                <i class="info-icon" data-tip="1m is recommended for all intraday strategies. Change only if you have a specific need.">ⓘ</i>
+              </div>
+              <select id="s-interval"
+                title="1m is recommended for all intraday strategies. Change only if you have a specific need.">
+                <option value="1m" selected>1m</option>
                 <option value="2m">2m</option>
-                <option value="5m" selected>5m</option>
+                <option value="5m">5m</option>
                 <option value="15m">15m</option>
                 <option value="30m">30m</option>
                 <option value="60m">60m</option>
@@ -348,11 +366,16 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
               </select>
             </div>
             <div class="field">
-              <label class="lbl">Lookback Period</label>
-              <select id="s-period">
+              <div class="field-label-row">
+                <label class="lbl">Lookback Period</label>
+                <i class="info-icon" data-tip="Auto selects the optimal lookback based on your active strategy. Increase only for long-term strategies (Weekly, Monthly).">ⓘ</i>
+              </div>
+              <select id="s-period"
+                title="Auto selects the optimal lookback based on your active strategy. Increase only for long-term strategies (Weekly, Monthly).">
+                <option value="auto" selected>auto</option>
                 <option value="1d">1d</option>
                 <option value="3d">3d</option>
-                <option value="5d" selected>5d</option>
+                <option value="5d">5d</option>
                 <option value="7d">7d</option>
                 <option value="10d">10d</option>
                 <option value="14d">14d</option>
@@ -1117,7 +1140,12 @@ function renderStatus(d) {
   const per = d.period || (d.settings && d.settings.period);
   if (per) {
     const sel = document.getElementById('s-period');
-    if (sel) { for (let o of sel.options) { if (o.value === per) o.selected = true; } }
+    if (sel) {
+      let matched = false;
+      for (let o of sel.options) { if (o.value === per) { o.selected = true; matched = true; } }
+      // If the engine returns a value not in the list, fall back to "auto"
+      if (!matched) { for (let o of sel.options) { if (o.value === 'auto') o.selected = true; } }
+    }
   }
 
   const feed = d.live_feed || {};

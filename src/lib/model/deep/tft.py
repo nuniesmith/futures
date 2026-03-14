@@ -372,6 +372,9 @@ class TFTModel(BaseModel):
 
         else:
             # Full PyTorch Forecasting implementation
+            assert TimeSeriesDataSet is not None, "pytorch_forecasting is required but not installed"
+            assert GroupNormalizer is not None, "pytorch_forecasting is required but not installed"
+            assert RMSE is not None, "pytorch_forecasting is required but not installed"
             max_encoder_length = self.hyperparams["max_encoder_length"]
             max_prediction_length = self.hyperparams["max_prediction_length"]
 
@@ -503,6 +506,7 @@ class TFTModel(BaseModel):
 
                 # Forward pass
                 optimizer.zero_grad()
+                assert self.model is not None, "Model must be built before training"
                 y_pred = self.model(X_batch)
                 loss = criterion(y_pred, y_batch)
 
@@ -568,6 +572,8 @@ class TFTModel(BaseModel):
             if self.training_dataset is None:
                 raise ValueError("Model must be trained before making predictions")
 
+            assert self.model is not None, "Model must be trained before making predictions"
+
             # If data is provided, create a test dataset
             if data is not None:
                 # Create test dataset
@@ -575,11 +581,11 @@ class TFTModel(BaseModel):
                 test_dataloader = test_dataset.to_dataloader(batch_size=self.hyperparams["batch_size"], train=False)
 
                 # Make predictions
-                predictions = self.model.predict(test_dataloader, mode="prediction", return_x=False, return_y=False)
+                predictions = self.model.predict(test_dataloader, mode="prediction", return_x=False, return_y=False)  # type: ignore[union-attr]
 
                 if return_ci:
                     # Generate predictions with quantiles for confidence intervals
-                    raw_predictions = self.model.predict(test_dataloader, mode="raw", return_x=True, return_y=True)
+                    raw_predictions = self.model.predict(test_dataloader, mode="raw", return_x=True, return_y=True)  # type: ignore[union-attr]
 
                     # Extract quantiles
                     lower_quantile = raw_predictions.output.quantiles(0.1).cpu().numpy()
@@ -601,10 +607,10 @@ class TFTModel(BaseModel):
                 x, _ = next(iter(train_dataloader))
 
                 # Make predictions
-                predictions = self.model.predict(x, mode="prediction", n_samples=1)
+                predictions = self.model.predict(x, mode="prediction", n_samples=1)  # type: ignore[union-attr]
 
                 # Return the specified horizon
-                return predictions[:, : min(horizon, self.hyperparams["max_prediction_length"])].cpu().numpy()
+                return predictions[:, : min(horizon, self.hyperparams["max_prediction_length"])].cpu().numpy()  # type: ignore[index]
 
             else:
                 raise ValueError("Either data or horizon must be provided")
@@ -641,7 +647,7 @@ class TFTModel(BaseModel):
         else:
             # Save full TFT model
             if self.model is not None:
-                self.model.save(save_path)
+                self.model.save(save_path)  # type: ignore[operator]
                 logger.info(f"Saved TFT model to {save_path}")
 
     @log_execution

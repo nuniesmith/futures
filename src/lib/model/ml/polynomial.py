@@ -201,7 +201,7 @@ class PolynomialRegression:
         param_bounds = [(None, None)] * (self.degree + 1) + [(0.001, None)]
 
         # Minimize negative log-likelihood
-        result = minimize(
+        result = minimize(  # type: ignore[operator, reportOptionalCall]
             lambda params: self.negative_log_likelihood(params, X_centered, y),
             initial_params,
             bounds=param_bounds,
@@ -356,7 +356,7 @@ class PolynomialRegression:
         x = np.asarray(x).flatten()
         y = np.asarray(y).flatten()
 
-        kf = KFold(n_splits=k, shuffle=True, random_state=42)
+        kf = KFold(n_splits=k, shuffle=True, random_state=42)  # type: ignore[reportOptionalCall]
         scores = []
 
         for train_idx, test_idx in kf.split(x):
@@ -482,17 +482,18 @@ class PolynomialRegression:
 
         # Generate prediction curve
         x_seq = np.linspace(min(x), max(x), num_points)
+        lower_bound: np.ndarray | None = None
+        upper_bound: np.ndarray | None = None
         if prediction_interval:
-            y_mean, (lower_bound, upper_bound) = self.predict(
-                x_seq, return_interval=True, interval_width=prediction_interval
-            )
+            result = self.predict(x_seq, return_interval=True, interval_width=prediction_interval)
+            y_mean, (lower_bound, upper_bound) = result  # type: ignore[misc]
         else:
             y_mean = self.predict(x_seq)
 
         ax1.plot(x_seq, y_mean, "r-", lw=2, label="Mean prediction")
 
         # Generate prediction interval
-        if prediction_interval > 0:
+        if prediction_interval > 0 and lower_bound is not None and upper_bound is not None:
             ax1.fill_between(
                 x_seq,
                 lower_bound,

@@ -106,7 +106,7 @@ class ARIMAModel(Estimator):
             # Create and fit the model
             if self.seasonal_order:
                 # Use SARIMAModelX for seasonal models
-                self._model = SARIMAModelX(
+                self._model = SARIMAModelX(  # type: ignore[operator]
                     endog=endog,
                     exog=exog,
                     order=self.order,
@@ -117,7 +117,7 @@ class ARIMAModel(Estimator):
                 )
             else:
                 # Use ARIMAModel for non-seasonal models
-                self._model = StatsARIMAModel(
+                self._model = StatsARIMAModel(  # type: ignore[operator]
                     endog=endog,
                     exog=exog,
                     order=self.order,
@@ -288,12 +288,12 @@ class ARIMAModel(Estimator):
 
 class ConcreteARIMAModel(ARIMAModel):
     def __init__(self, name: str = "ARIMAModel", params: dict[str, Any] | None = None):
-        super().__init__(name, params)
+        super().__init__(name, params)  # pyright: ignore[reportCallIssue]
 
     def fit(  # type: ignore[override]
         self, X: pd.DataFrame | np.ndarray | pd.Series, y: pd.Series | np.ndarray | None = None
     ) -> "ARIMAModel":
-        return super().fit(X, y)
+        return super().fit(X, y)  # type: ignore
 
     def predict(  # type: ignore[override]
         self, X: pd.DataFrame | np.ndarray | None = None, steps: int = 1

@@ -151,6 +151,7 @@ class AssetPricePredictor:
             logger.warning(f"Limited data available ({len(X)} samples). Model accuracy may be affected.")
 
         # Split data
+        assert train_test_split is not None
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y)
 
         # Train the model
@@ -158,6 +159,7 @@ class AssetPricePredictor:
             self.model, best_params = self._train_with_hyperparameter_tuning(X_train, y_train)
             logger.info(f"Best hyperparameters: {best_params}")
         else:
+            assert RandomForestClassifier is not None
             self.model = RandomForestClassifier(
                 n_estimators=100, max_depth=10, random_state=42, class_weight="balanced"
             )
@@ -167,6 +169,7 @@ class AssetPricePredictor:
         # Evaluate model
         assert self.model is not None
         y_pred = self.model.predict(X_test)
+        assert accuracy_score is not None and classification_report is not None and confusion_matrix is not None
         accuracy = accuracy_score(y_test, y_pred)
         report = classification_report(y_test, y_pred, output_dict=True)
         conf_matrix = confusion_matrix(y_test, y_pred)
@@ -179,7 +182,9 @@ class AssetPricePredictor:
 
         # Log results
         logger.info(f"{self.asset_type.capitalize()} model accuracy: {accuracy:.4f}")
-        logger.info(f"{self.asset_type.capitalize()} classification report:\n{classification_report(y_test, y_pred)}")
+        logger.info(
+            f"{self.asset_type.capitalize()} classification report:\n{classification_report(y_test, y_pred)}"
+        )  # classification_report asserted non-None above
         logger.info("Top 5 most important features:")
         for feature, importance in sorted_features[:5]:
             logger.info(f"  {feature}: {importance:.4f}")
@@ -226,7 +231,7 @@ class AssetPricePredictor:
 
     def _train_with_hyperparameter_tuning(
         self, X_train: pd.DataFrame, y_train: pd.Series
-    ) -> tuple[RandomForestClassifier, dict[str, Any]]:
+    ) -> "tuple[Any, dict[str, Any]]":
         """
         Train model with hyperparameter tuning using GridSearchCV.
 
@@ -248,6 +253,7 @@ class AssetPricePredictor:
         }
 
         # Create GridSearchCV object
+        assert GridSearchCV is not None and RandomForestClassifier is not None
         grid_search = GridSearchCV(
             RandomForestClassifier(random_state=42, class_weight="balanced"),
             param_grid=param_grid,
@@ -537,9 +543,11 @@ class AssetPricePredictor:
                     "datetime": market_date.strftime("%Y-%m-%d %H:%M:%S"),
                     "day": market_date.strftime("%A"),
                     "prediction": prediction_text,
-                    "confidence": round(confidence, 2),
+                    "confidence": round(float(confidence), 2),
                     "raw_prediction": int(prediction),
-                    "probabilities": {movement_map[i]: round(prob * 100, 2) for i, prob in enumerate(probabilities)},
+                    "probabilities": {
+                        movement_map[i]: round(float(prob) * 100, 2) for i, prob in enumerate(probabilities)
+                    },
                 }
             except Exception as e:
                 logger.error(f"Error making prediction for {market}: {e}")

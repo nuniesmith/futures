@@ -105,7 +105,7 @@ class GARCH(Estimator):
             self._last_data = returns.copy()
 
             # Create and fit the model
-            self._model = arch_model(
+            self._model = arch_model(  # type: ignore[operator]
                 returns,
                 vol=self.vol,
                 p=self.p,

@@ -920,7 +920,9 @@ CREATE TABLE IF NOT EXISTS trades_v2 (
     pnl             REAL,
     rr              REAL,
     notes           TEXT    DEFAULT '',
-    strategy        TEXT    DEFAULT ''
+    strategy        TEXT    DEFAULT '',
+    grade           TEXT    DEFAULT '',
+    source          TEXT    DEFAULT 'manual'
 );
 """
 
@@ -941,9 +943,27 @@ CREATE TABLE IF NOT EXISTS trades_v2 (
     pnl             DOUBLE PRECISION,
     rr              DOUBLE PRECISION,
     notes           TEXT    DEFAULT '',
-    strategy        TEXT    DEFAULT ''
+    strategy        TEXT    DEFAULT '',
+    grade           TEXT    DEFAULT '',
+    source          TEXT    DEFAULT 'manual'
 );
 """
+
+# ---------------------------------------------------------------------------
+# Migration: add grade + source columns to existing trades_v2 tables
+# ---------------------------------------------------------------------------
+
+# Postgres supports IF NOT EXISTS on ALTER TABLE ADD COLUMN (PG 9.6+)
+_MIGRATE_ADD_GRADE_PG = [
+    "ALTER TABLE trades_v2 ADD COLUMN IF NOT EXISTS grade TEXT DEFAULT '';",
+    "ALTER TABLE trades_v2 ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual';",
+]
+
+# SQLite does NOT support IF NOT EXISTS on ALTER TABLE — use try/except in init_db
+_MIGRATE_ADD_GRADE_SQLITE = [
+    "ALTER TABLE trades_v2 ADD COLUMN grade TEXT DEFAULT '';",
+    "ALTER TABLE trades_v2 ADD COLUMN source TEXT DEFAULT 'manual';",
+]
 
 _MIGRATE_V1 = """
 INSERT INTO trades_v2
@@ -1091,6 +1111,15 @@ def init_db() -> None:
             logger.error("Postgres init_db failed: %s", exc)
             conn.rollback()
 
+        # Run grade/source column migrations (ADD COLUMN IF NOT EXISTS — idempotent on PG)
+        for stmt in _MIGRATE_ADD_GRADE_PG:
+            try:
+                conn.execute(stmt)
+            except Exception as exc:
+                logger.debug("grade/source column migration (pg, non-fatal): %s", exc)
+        with contextlib.suppress(Exception):
+            conn.commit()
+
         # Create audit tables (separate try so core tables aren't rolled back)
         try:
             _init_audit_tables(conn, use_postgres=True)
@@ -1116,9 +1145,19 @@ def init_db() -> None:
     # Check if new table already exists
     cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades_v2'")
     if cur.fetchone() is not None:
-        # trades_v2 exists — just ensure daily_journal + audit tables exist
+        # trades_v2 exists — ensure daily_journal + audit tables exist, then run column migrations
         conn.executescript(_SCHEMA_DAILY_JOURNAL_SQLITE)
         _init_audit_tables(conn, use_postgres=False)
+        # Run grade/source column migrations (SQLite doesn't support IF NOT EXISTS — use try/except)
+        for stmt in _MIGRATE_ADD_GRADE_SQLITE:
+            try:
+                conn.execute(stmt)
+            except Exception as exc:
+                # "duplicate column name" is expected on already-migrated DBs — ignore
+                if "duplicate column" not in str(exc).lower():
+                    logger.debug("grade/source column migration (sqlite, non-fatal): %s", exc)
+        with contextlib.suppress(Exception):
+            conn.commit()
         conn.close()
         return
 
@@ -1232,6 +1271,142 @@ def create_trade(
     trade_id = _insert_returning_id(conn, sql, params, "trades_v2")
     conn.commit()
     conn.close()
+    return trade_id
+
+
+def upsert_trade_from_fill(
+    account_key: str,
+    symbol: str,
+    direction: str,
+    entry_price: float,
+    close_price: float | None,
+    contracts: int,
+    pnl: float | None,
+    fill_time: str,
+    strategy: str = "rithmic_sync",
+    notes: str = "",
+    source: str = "rithmic_sync",
+) -> int:
+    """Insert or update a trade record from a Rithmic fill.
+
+    Uses fill_time + symbol + account_key as a natural dedup key:
+      - created_at matches fill_time (date prefix)
+      - asset matches symbol
+      - notes contains account_key
+
+    Returns the trade id (int).
+    """
+    conn = _get_conn()
+
+    # Build the notes field so it embeds the account key for dedup/filtering
+    full_notes = notes or f"rithmic_sync:{account_key}"
+    if account_key and account_key not in full_notes:
+        full_notes = f"{full_notes} [{account_key}]"
+
+    # Normalise fill_time to "YYYY-MM-DD HH:MM:SS" if possible
+    created_at = fill_time
+    try:
+        # Accept ISO strings, epoch strings, or already-formatted timestamps
+        if fill_time and fill_time.strip():
+            # Try parsing common formats
+            for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    created_at = datetime.strptime(fill_time.strip()[:19], fmt).strftime("%Y-%m-%d %H:%M:%S")
+                    break
+                except ValueError:
+                    continue
+    except Exception:
+        pass
+    if not created_at:
+        created_at = datetime.now(tz=_EST).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Determine status: if we have a close_price it's already closed
+    status = STATUS_CLOSED if close_price is not None else STATUS_OPEN
+
+    # Check for an existing record with matching fill_time prefix + symbol + account_key in notes
+    date_prefix = created_at[:10]  # "YYYY-MM-DD"
+    existing = conn.execute(
+        """SELECT id FROM trades_v2
+           WHERE created_at LIKE ?
+             AND asset = ?
+             AND notes LIKE ?
+           LIMIT 1""",
+        (f"{date_prefix}%", symbol, f"%{account_key}%"),
+    ).fetchone()
+
+    if existing is not None:
+        trade_id = int(_row_to_dict(existing).get("id") or 0)
+        # Update the existing record with latest fill data
+        conn.execute(
+            """UPDATE trades_v2
+               SET entry      = ?,
+                   close_price = ?,
+                   pnl         = ?,
+                   status      = ?,
+                   contracts   = ?,
+                   direction   = ?,
+                   strategy    = ?,
+                   notes       = ?,
+                   source      = ?,
+                   close_time  = CASE WHEN ? IS NOT NULL THEN ? ELSE close_time END
+               WHERE id = ?""",
+            (
+                entry_price,
+                close_price,
+                pnl,
+                status,
+                contracts,
+                direction.upper(),
+                strategy,
+                full_notes,
+                source,
+                close_price,
+                created_at if close_price is not None else None,
+                trade_id,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        logger.debug(
+            "upsert_trade_from_fill: updated existing trade id=%d symbol=%s account=%s",
+            trade_id,
+            symbol,
+            account_key,
+        )
+        return trade_id
+
+    # No existing record — insert a new one
+    sql = """INSERT INTO trades_v2
+           (created_at, account_size, asset, direction, entry, sl, tp,
+            contracts, status, close_price, close_time, pnl,
+            strategy, notes, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+    params = (
+        created_at,
+        150_000,  # default account_size — callers can patch if needed
+        symbol,
+        direction.upper(),
+        entry_price,
+        None,  # sl — not available from fill data
+        None,  # tp — not available from fill data
+        contracts,
+        status,
+        close_price,
+        created_at if close_price is not None else None,
+        pnl,
+        strategy,
+        full_notes,
+        source,
+    )
+    trade_id = _insert_returning_id(conn, sql, params, "trades_v2")
+    conn.commit()
+    conn.close()
+    logger.debug(
+        "upsert_trade_from_fill: inserted new trade id=%d symbol=%s account=%s",
+        trade_id,
+        symbol,
+        account_key,
+    )
     return trade_id
 
 

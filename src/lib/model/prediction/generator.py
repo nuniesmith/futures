@@ -59,7 +59,9 @@ class PredictionGenerator:
             return {"asset": asset, "error": f"No model available for {asset}"}
 
         try:
-            model_path = self.model_manager.get_model_path(asset)
+            import pathlib
+
+            model_path = str(pathlib.Path(self.model_manager.model_dir) / f"{asset}_model.pkl")
 
             # Check if model file exists and load it
             if not os.path.exists(model_path):
@@ -83,11 +85,13 @@ class PredictionGenerator:
             )
 
             # Get latest price data for reference
-            latest_data = await asyncio.to_thread(self.data_fetcher.get_latest_prices, asset)  # type: ignore[arg-type]
+            latest_data: Any = None
+            if self.data_fetcher is not None:
+                latest_data = await asyncio.to_thread(self.data_fetcher.get_latest_prices, asset)  # type: ignore[union-attr]
 
             return {
                 "asset": asset,
-                "model_type": self.model_manager.get_model_type(asset),
+                "model_type": self.model_manager.model_types.get(asset, "unknown"),
                 "predictions": predictions,
                 "latest_data": latest_data,
                 "timestamp": datetime.now().isoformat(),
@@ -118,6 +122,8 @@ class PredictionGenerator:
         """
         if assets is None:
             assets = self.constants.SUPPORTED_ASSETS if self.constants is not None else []
+
+        assert assets is not None
 
         # Use gather to run predictions concurrently
         tasks = []
@@ -160,7 +166,9 @@ class PredictionGenerator:
         price_info = {}
         for asset in assets:
             try:
-                latest = await asyncio.to_thread(self.data_fetcher.get_latest_prices, asset)  # type: ignore[arg-type]
+                if self.data_fetcher is None:
+                    continue
+                latest = await asyncio.to_thread(self.data_fetcher.get_latest_prices, asset)  # type: ignore[union-attr]
                 if latest:
                     price_info[asset] = latest
             except Exception as e:

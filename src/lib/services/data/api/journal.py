@@ -24,6 +24,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from lib.core.models import (
+    _get_conn,
     get_daily_journal,
     get_journal_stats,
     save_daily_journal,
@@ -890,6 +891,84 @@ def get_today_entry():
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to check today's journal: {exc}") from exc
+
+
+@router.get("/trades")
+def get_journal_trades(
+    source: str | None = Query(None, description="Filter by source: 'manual' or 'rithmic_sync'"),
+    account: str | None = Query(None, description="Filter by account key (matched against notes field)"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of trades to return"),
+    status: str | None = Query(None, description="Filter by status: 'OPEN', 'CLOSED', 'CANCELLED'"),
+):
+    """Return recent trades from trades_v2, spanning both manual and rithmic_sync sources.
+
+    Supports optional filtering by:
+      - ``source``: 'manual' | 'rithmic_sync'
+      - ``account``: account key substring matched against the notes field
+      - ``status``: 'OPEN' | 'CLOSED' | 'CANCELLED'
+      - ``limit``: maximum rows to return (default 100)
+
+    This endpoint feeds the journal UI's account filter and trade review panel.
+    """
+    try:
+        conn = _get_conn()
+
+        conditions: list[str] = []
+        params: list = []
+
+        if source:
+            conditions.append("source = ?")
+            params.append(source)
+
+        if account:
+            conditions.append("notes LIKE ?")
+            params.append(f"%{account}%")
+
+        if status:
+            conditions.append("status = ?")
+            params.append(status.upper())
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"""
+            SELECT id, created_at, account_size, asset, direction,
+                   entry, sl, tp, contracts, status,
+                   close_price, close_time, pnl, rr,
+                   notes, strategy,
+                   COALESCE(grade, '')  AS grade,
+                   COALESCE(source, 'manual') AS source
+            FROM trades_v2
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ?
+        """
+        params.append(limit)
+
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        conn.close()
+
+        trades = []
+        for row in rows:
+            if hasattr(row, "keys"):
+                d = {k: row[k] for k in row}
+            elif hasattr(row, "_data"):
+                d = dict(row._data)
+            else:
+                d = dict(row)
+            trades.append(d)
+
+        return {
+            "trades": trades,
+            "count": len(trades),
+            "filters": {
+                "source": source,
+                "account": account,
+                "status": status,
+                "limit": limit,
+            },
+            "timestamp": datetime.now(tz=_EST).isoformat(),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve trades: {exc}") from exc
 
 
 @router.get("/tags")

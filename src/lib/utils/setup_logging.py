@@ -8,6 +8,7 @@ focused on the initialization and setup of loggers for different components.
 
 import os
 import sys
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,13 @@ from typing import Any
 from .logging_utils import (
     get_logger,
     suppress_library_logs,
+)
+
+warnings.warn(
+    "lib.utils.setup_logging is deprecated and will be removed in a future version. "
+    "Use lib.core.logging_config.get_logger() instead.",
+    DeprecationWarning,
+    stacklevel=2,
 )
 
 # Default libraries to suppress verbose logging from

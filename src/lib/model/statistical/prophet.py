@@ -56,7 +56,7 @@ class ProphetModel(BaseModel):
         """
         if not HAS_PROPHET:
             raise ImportError("prophet is required but not installed")
-        self.model = Prophet(
+        self.model = Prophet(  # type: ignore[operator]
             changepoint_prior_scale=self.changepoint_prior_scale, seasonality_mode=self.seasonality_mode, **kwargs
         )
         logger.info("Built Prophet model instance.")
@@ -102,7 +102,7 @@ class ProphetModel(BaseModel):
         if not HAS_PROPHET:
             raise ImportError("prophet is required but not installed")
         logger.info("Training Prophet model...")
-        self.model = Prophet(
+        self.model = Prophet(  # type: ignore[operator]
             changepoint_prior_scale=self.changepoint_prior_scale, seasonality_mode=self.seasonality_mode, **kwargs
         )
         logger.info("Created Prophet model instance.")

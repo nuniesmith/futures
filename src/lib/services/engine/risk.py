@@ -49,7 +49,7 @@ _EST = ZoneInfo("America/New_York")
 # ---------------------------------------------------------------------------
 DEFAULT_ACCOUNT_SIZE = 150_000
 DEFAULT_RISK_PCT_PER_TRADE = 0.0075  # 0.75%
-DEFAULT_MAX_DAILY_LOSS = -1500.0  # 1% of 150k
+DEFAULT_MAX_DAILY_LOSS = -3300.0  # TPT $150K daily loss limit
 DEFAULT_MAX_OPEN_TRADES = 2
 DEFAULT_NO_ENTRY_AFTER = dt_time(10, 0)  # 10:00 AM ET
 DEFAULT_OVERNIGHT_WARNING = dt_time(11, 30)  # 11:30 AM ET — warn about overnight
@@ -57,10 +57,35 @@ DEFAULT_SESSION_END = dt_time(12, 0)  # 12:00 PM ET — session closes
 DEFAULT_STACK_MIN_R = 0.5  # must be +0.5R before stacking
 DEFAULT_STACK_MIN_WAVE = 1.8  # wave ratio > 1.8x to allow stacking
 
+# ---------------------------------------------------------------------------
+# TPT (Take Profit Trader) $150K account constants
+# ---------------------------------------------------------------------------
+TPT_PROFIT_TARGET = 9000
+TPT_MAX_POSITION_SIZE = 15
+TPT_EOD_TRAILING_DRAWDOWN = 4500
+DAILY_PROFIT_GOAL_MIN = 500
+DAILY_PROFIT_GOAL_MAX = 1800
+
 
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TPTAccountRules:
+    """Take Profit Trader $150K account rules."""
+
+    account_size: int = 150_000
+    profit_target: int = 9_000
+    max_position_size: int = 15
+    daily_loss_limit: float = 3_300.0
+    eod_trailing_drawdown: float = 4_500.0
+    daily_profit_goal_min: float = 500.0
+    daily_profit_goal_max: float = 1_800.0
+
+
+TPT_RULES = TPTAccountRules()
 
 
 @dataclass
@@ -223,6 +248,13 @@ class RiskManager:
         # Rule 7: Consecutive losses circuit breaker
         if self._consecutive_losses >= 3:
             reasons.append(f"Circuit breaker: {self._consecutive_losses} consecutive losses — take a break")
+
+        # Rule 8: TPT max position size (total contracts across all positions)
+        total_contracts = sum(p.get("quantity", 0) for p in self._open_positions.values()) + size
+        if total_contracts > TPT_RULES.max_position_size:
+            reasons.append(
+                f"TPT max position size: {total_contracts} contracts would exceed {TPT_RULES.max_position_size} limit"
+            )
 
         if reasons:
             combined = "; ".join(reasons)
@@ -624,3 +656,21 @@ class RiskManager:
         """Closed trades for today."""
         self._ensure_day_reset()
         return list(self._closed_trades)
+
+    def get_drawdown_status(self) -> dict[str, Any]:
+        """Get current drawdown status relative to TPT EOD trailing drawdown."""
+        return {
+            "daily_pnl": self._daily_pnl,
+            "daily_loss_limit": self.max_daily_loss,
+            "eod_trailing_drawdown": TPT_RULES.eod_trailing_drawdown,
+            "pnl_vs_goal_min": self._daily_pnl - TPT_RULES.daily_profit_goal_min,
+            "pnl_vs_goal_max": self._daily_pnl - TPT_RULES.daily_profit_goal_max,
+            "at_daily_goal": self._daily_pnl >= TPT_RULES.daily_profit_goal_min,
+            "at_stretch_goal": self._daily_pnl >= TPT_RULES.daily_profit_goal_max,
+            "profit_target_progress": (self._daily_pnl / TPT_RULES.profit_target * 100)
+            if TPT_RULES.profit_target > 0
+            else 0,
+            "risk_level": "green"
+            if self._daily_pnl > 0
+            else ("amber" if self._daily_pnl > self.max_daily_loss * 0.5 else "red"),
+        }

@@ -89,16 +89,32 @@ async def _invalidate_http_client() -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/charting-proxy/")
-@router.get("/charting-proxy/{path:path}")
-async def proxy_charting(request: Request, path: str = "") -> Response:
-    """Reverse-proxy GET requests to the charting container.
+@router.api_route("/charting-proxy/", methods=["GET", "HEAD", "OPTIONS"])
+async def proxy_charting_root(request: Request) -> Response:
+    """Reverse-proxy GET/HEAD/OPTIONS for the charting root to the charting container.
+
+    HEAD and OPTIONS are included so the dashboard's fetch probe and CORS
+    preflight requests don't get a 405 Method Not Allowed.
+
+        GET  /charting-proxy/  → charting GET /
+        HEAD /charting-proxy/  → charting HEAD /  (dashboard availability probe)
+    """
+    return await _proxy_charting(request, "")
+
+
+@router.api_route("/charting-proxy/{path:path}", methods=["GET", "HEAD", "OPTIONS"])
+async def proxy_charting_path(request: Request, path: str) -> Response:
+    """Reverse-proxy GET/HEAD/OPTIONS for charting sub-paths to the charting container.
 
     Strips the ``/charting-proxy`` prefix before forwarding so that:
-        GET /charting-proxy/           → charting GET /
-        GET /charting-proxy/index.html → charting GET /index.html
-        GET /charting-proxy/js/app.js  → charting GET /js/app.js
+        GET  /charting-proxy/index.html → charting GET /index.html
+        GET  /charting-proxy/js/app.js  → charting GET /js/app.js
     """
+    return await _proxy_charting(request, path)
+
+
+async def _proxy_charting(request: Request, path: str) -> Response:
+    """Shared implementation for all charting proxy routes."""
     client = await _get_http_client()
 
     upstream_path = f"/{path}" if path else "/"
@@ -127,7 +143,14 @@ async def proxy_charting(request: Request, path: str = "") -> Response:
                 headers=fwd_headers,
             )
 
-            excluded_resp = {"transfer-encoding", "content-encoding", "content-length"}
+            excluded_resp = {
+                "transfer-encoding",
+                "content-encoding",  # httpx already decompresses — browser must not re-decompress
+                "content-length",  # body length changes after decompression
+                "connection",
+                "keep-alive",
+                "server",
+            }
             resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded_resp}
 
             return Response(

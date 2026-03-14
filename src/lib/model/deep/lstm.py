@@ -53,7 +53,7 @@ class LSTMNetwork(nn.Module):
         )
         self.fc = nn.Linear(hidden_size, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Any) -> Any:
         lstm_out, _ = self.lstm(x)
         # Use the last output in the sequence for prediction.
         last_output = lstm_out[:, -1, :]
@@ -193,6 +193,8 @@ class LSTMModel(BaseModel):
         logger.info(f"Converted training samples to tensors on device: {self.device}")
 
         # Create a DataLoader for mini-batch training
+        assert TensorDataset is not None, "torch is required but not installed"
+        assert DataLoader is not None, "torch is required but not installed"
         dataset = TensorDataset(X_train_t, y_train_t)
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         logger.info(f"DataLoader created with batch_size: {batch_size}")
@@ -594,6 +596,8 @@ class ConcreteLSTMModel(LightningLSTMModel):
         X_train, y_train = self.prepare_data(train_series)
 
         # Create TensorDataset and DataLoader
+        assert TensorDataset is not None, "torch is required but not installed"
+        assert DataLoader is not None, "torch is required but not installed"
         train_dataset = TensorDataset(
             torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32)
         )

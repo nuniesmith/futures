@@ -1802,10 +1802,55 @@ def train_model(
         val_dataset = split_val  # type: ignore[assignment]
         logger.info("Auto-split: %d train / %d val", n_train, n_val)
 
+    # ── v9: WeightedRandomSampler for strategy imbalance ─────────────────
+    # Access the underlying DataFrame rows whether train_dataset is a plain
+    # BreakoutDataset or a torch Subset produced by the auto-split above.
+    if isinstance(train_dataset, torch.utils.data.Subset):
+        _subset_df = train_dataset.dataset.df.iloc[train_dataset.indices]  # type: ignore[union-attr]
+    else:
+        _subset_df = train_dataset.df  # type: ignore[union-attr]
+
+    # 1. Label-frequency weights
+    _label_counts = _subset_df["label"].value_counts().to_dict()
+    _label_weights: dict[str, float] = {lbl: 1.0 / max(cnt, 1) for lbl, cnt in _label_counts.items()}
+
+    # 2. Breakout-type multipliers — boost minority strategy types
+    _MINORITY_TYPES = {"BollingerSqueeze", "Fibonacci", "Consolidation", "Monthly", "Weekly", "InsideDay"}
+    _MAJORITY_TYPES = {"ORB", "PrevDay", "InitialBalance"}
+    _bt_series = _subset_df.get("breakout_type", pd.Series(dtype=str))
+
+    def _bt_multiplier(bt: Any) -> float:
+        if pd.isna(bt) or str(bt) not in _MINORITY_TYPES:
+            return 1.0
+        return 3.0
+
+    # 3. Build per-sample weight tensor
+    _sample_weights: list[float] = []
+    for _idx in range(len(_subset_df)):
+        _row = _subset_df.iloc[_idx]
+        _lw = _label_weights.get(str(_row["label"]), 1.0)
+        _bt = _row.get("breakout_type", None) if "breakout_type" in _subset_df.columns else None
+        _bm = _bt_multiplier(_bt)
+        _sample_weights.append(_lw * _bm)
+
+    _weights_tensor = torch.tensor(_sample_weights, dtype=torch.float64)
+    sampler = torch.utils.data.WeightedRandomSampler(
+        _weights_tensor.tolist(),
+        num_samples=len(_weights_tensor),
+        replacement=True,  # type: ignore[arg-type]
+    )
+    logger.info(
+        "WeightedRandomSampler: %d samples, label weights: %s, minority boost: 3x for %s",
+        len(_weights_tensor),
+        {k: round(v, 5) for k, v in _label_weights.items()},
+        sorted(_MINORITY_TYPES),
+    )
+
     train_loader = DataLoader(
         train_dataset,  # type: ignore[arg-type]
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=False,  # cannot use shuffle=True with a sampler
+        sampler=sampler,
         num_workers=num_workers,
         pin_memory=(device.type == "cuda"),
         drop_last=True,
@@ -1918,13 +1963,14 @@ def train_model(
             asset_class_ids = asset_class_ids.to(device, non_blocking=True)
             asset_ids = asset_ids.to(device, non_blocking=True)
 
-            # ── v8-D: Mixup augmentation on tabular features ─────────────
-            if mixup_alpha > 0.0 and tabs.size(0) > 1:
+            # ── v9: Mixup augmentation on BOTH images AND tabular features ────────
+            if mixup_alpha > 0.0 and imgs.size(0) > 1:
                 lam = float(np.random.beta(mixup_alpha, mixup_alpha))
-                perm = torch.randperm(tabs.size(0), device=device)
+                perm = torch.randperm(imgs.size(0), device=device)
+                imgs = lam * imgs + (1 - lam) * imgs[perm]
                 tabs = lam * tabs + (1 - lam) * tabs[perm]
-                # Note: labels are NOT mixed — mixup on tabular only acts as
-                # a regulariser without requiring soft label loss.
+                # Note: labels are NOT mixed — mixup acts as regulariser only.
+                # Using hard labels with mixed inputs is a known effective shortcut.
 
             with torch.amp.autocast("cuda", enabled=_use_amp):  # type: ignore[attr-defined]
                 outputs = model(imgs, tabs, asset_class_ids=asset_class_ids, asset_ids=asset_ids)
@@ -2163,6 +2209,108 @@ def evaluate_model(
     except Exception as exc:
         logger.error("Model evaluation failed: %s", exc, exc_info=True)
         return None
+
+
+def compare_models(
+    model_a_path: str,
+    model_b_path: str,
+    val_csv: str,
+    image_root: str | None = None,
+    batch_size: int = 32,
+    label_a: str = "model_a",
+    label_b: str = "model_b",
+) -> dict[str, Any] | None:
+    """Compare two model checkpoints against the same validation set.
+
+    Returns a comparison dict with:
+    - per-model metrics (accuracy, precision, recall, per-class accuracy)
+    - delta metrics (model_b - model_a)
+    - winner declaration
+    - per-sample agreement/disagreement counts
+
+    Args:
+        model_a_path: Path to the first model checkpoint (``.pt`` file).
+        model_b_path: Path to the second model checkpoint (``.pt`` file).
+        val_csv: Path to the shared validation CSV.
+        image_root: Optional root directory prepended to ``image_path`` values.
+        batch_size: Evaluation batch size (default 32).
+        label_a: Human-readable label for model A (default ``"model_a"``).
+        label_b: Human-readable label for model B (default ``"model_b"``).
+
+    Returns:
+        A structured comparison dict, or ``None`` if either evaluation failed.
+    """
+    logger.info(
+        "Comparing models: %s (%s) vs %s (%s) on %s",
+        label_a,
+        model_a_path,
+        label_b,
+        model_b_path,
+        val_csv,
+    )
+
+    metrics_a = evaluate_model(
+        model_a_path,
+        val_csv,
+        image_root=image_root,
+        batch_size=batch_size,
+    )
+    if metrics_a is None:
+        logger.error("compare_models: evaluation of %s (%s) failed", label_a, model_a_path)
+        return None
+
+    metrics_b = evaluate_model(
+        model_b_path,
+        val_csv,
+        image_root=image_root,
+        batch_size=batch_size,
+    )
+    if metrics_b is None:
+        logger.error("compare_models: evaluation of %s (%s) failed", label_b, model_b_path)
+        return None
+
+    delta_acc = metrics_b["val_accuracy"] - metrics_a["val_accuracy"]
+    delta_prec = metrics_b["val_precision"] - metrics_a["val_precision"]
+    delta_rec = metrics_b["val_recall"] - metrics_a["val_recall"]
+
+    winner = label_b if delta_acc > 0 else label_a
+
+    result: dict[str, Any] = {
+        label_a: metrics_a,
+        label_b: metrics_b,
+        "delta": {
+            "accuracy": round(delta_acc, 4),
+            "precision": round(delta_prec, 4),
+            "recall": round(delta_rec, 4),
+        },
+        "winner": winner,
+        "winner_margin_pct": round(abs(delta_acc) * 100, 4),
+        "model_a_path": model_a_path,
+        "model_b_path": model_b_path,
+    }
+
+    logger.info(
+        "Model comparison complete — winner: %s (margin: %.2f%%) | "
+        "accuracy: %s=%.1f%% %s=%.1f%% | "
+        "precision: %s=%.1f%% %s=%.1f%% | "
+        "recall: %s=%.1f%% %s=%.1f%%",
+        winner,
+        abs(delta_acc) * 100,
+        label_a,
+        metrics_a["val_accuracy"] * 100,
+        label_b,
+        metrics_b["val_accuracy"] * 100,
+        label_a,
+        metrics_a["val_precision"] * 100,
+        label_b,
+        metrics_b["val_precision"] * 100,
+        label_a,
+        metrics_a["val_recall"] * 100,
+        label_b,
+        metrics_b["val_recall"] * 100,
+    )
+
+    return result
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ Read-only account monitoring for Rithmic-connected prop firm accounts
 Architecture:
     - ``RithmicAccountConfig``  — per-account credentials + metadata
     - ``RithmicAccountManager`` — async lifecycle: connect/disconnect/refresh
+    - ``RithmicStreamManager``  — persistent TICKER_PLANT streaming connection
     - ``router``               — FastAPI endpoints consumed by the dashboard
 
 Endpoints:
@@ -17,6 +18,12 @@ Endpoints:
     POST /api/rithmic/account/{key}/refresh — force-refresh a single account
     GET  /api/rithmic/config            — load saved account configs (UI)
     POST /api/rithmic/config            — save account configs from settings UI
+
+    --- Streaming (RITHMIC-STREAM-A) ---
+    GET  /api/rithmic/stream/status           — live/connected/subscribed state
+    POST /api/rithmic/stream/subscribe        — subscribe to symbols
+    GET  /api/rithmic/stream/l1/{symbol}      — L1 bid/ask/last snapshot
+    GET  /api/rithmic/stream/ticks/{symbol}   — recent tick history
 
 Credentials are stored in Redis (AES-256-encrypted via a server-side key
 derived from the ``SECRET_KEY`` env var) and NEVER returned to the browser.
@@ -45,7 +52,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 logger = logging.getLogger("api.rithmic")
@@ -543,6 +550,161 @@ class RithmicAccountManager:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def get_today_fills(self, account_key: str) -> list[dict]:
+        """Open a short-lived Rithmic session and retrieve today's order/fill history.
+
+        Maps each order to a normalised fill dict and caches the result in Redis
+        under ``rithmic:fills:{account_key}:{today_date}`` with a 24 h TTL.
+
+        Returns a list of fill dicts (may be empty if no fills or on error).
+        """
+        if not self._loaded:
+            self.reload_configs()
+
+        config = self._configs.get(account_key)
+        if config is None:
+            logger.warning("rithmic[%s]: get_today_fills — account not found", account_key)
+            return []
+
+        if not config.enabled:
+            logger.debug("rithmic[%s]: get_today_fills — account disabled", account_key)
+            return []
+
+        username = config.get_username()
+        password = config.get_password()
+        if not username or not password:
+            logger.warning("rithmic[%s]: get_today_fills — credentials not configured", account_key)
+            return []
+
+        try:
+            from async_rithmic import RithmicClient  # type: ignore[import-untyped]
+        except ImportError:
+            logger.warning("rithmic[%s]: async-rithmic not installed", account_key)
+            return []
+
+        gateway = _resolve_gateway(config.gateway)
+        if gateway is None:
+            logger.warning("rithmic[%s]: get_today_fills — unknown gateway: %s", account_key, config.gateway)
+            return []
+
+        fills: list[dict] = []
+        client: Any = None
+        try:
+            async with self._lock:
+                client = RithmicClient(  # type: ignore[call-arg]
+                    user=username,
+                    password=password,
+                    system_name=config.system_name,
+                    app_name=config.app_name,
+                    app_version=config.app_version,
+                    gateway=gateway,
+                )
+                await asyncio.wait_for(client.connect(), timeout=15.0)
+
+                try:
+                    orders = await asyncio.wait_for(client.show_order_history_summary(), timeout=20.0)
+                    for order in orders or []:
+                        fills.append(
+                            {
+                                "account_key": account_key,
+                                "order_id": str(getattr(order, "order_id", "")),
+                                "symbol": str(getattr(order, "symbol", "")),
+                                "exchange": str(getattr(order, "exchange", "")),
+                                "buy_sell": str(
+                                    getattr(
+                                        order,
+                                        "buy_sell_type",
+                                        getattr(order, "action", ""),
+                                    )
+                                ),
+                                "qty": int(
+                                    getattr(
+                                        order,
+                                        "qty",
+                                        getattr(order, "quantity", 0),
+                                    )
+                                ),
+                                "fill_price": float(
+                                    getattr(
+                                        order,
+                                        "avg_fill_price",
+                                        getattr(order, "fill_price", 0.0),
+                                    )
+                                ),
+                                "fill_time": str(
+                                    getattr(
+                                        order,
+                                        "update_time",
+                                        getattr(order, "fill_time", ""),
+                                    )
+                                ),
+                                "status": str(getattr(order, "status", "FILLED")),
+                                "commission": float(getattr(order, "commission", 0.0)),
+                            }
+                        )
+                    logger.info(
+                        "rithmic[%s]: retrieved %d fill(s) from order history",
+                        account_key,
+                        len(fills),
+                    )
+                except Exception as hist_exc:
+                    logger.warning(
+                        "rithmic[%s]: show_order_history_summary error: %s",
+                        account_key,
+                        hist_exc,
+                    )
+
+        except TimeoutError:
+            logger.warning("rithmic[%s]: get_today_fills — connection timed out", account_key)
+        except Exception as exc:
+            logger.warning("rithmic[%s]: get_today_fills — error: %s", account_key, exc)
+        finally:
+            if client is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(client.disconnect(), timeout=5.0)
+
+        # Cache in Redis: rithmic:fills:{account_key}:{today_date}  TTL = 24 h
+        try:
+            from lib.core.cache import cache_set
+
+            today_date = datetime.now(tz=_EST).strftime("%Y-%m-%d")
+            redis_key = f"rithmic:fills:{account_key}:{today_date}"
+            cache_set(redis_key, json.dumps(fills, default=str).encode(), 86400)
+        except Exception as cache_exc:
+            logger.debug("rithmic[%s]: fills cache write failed (non-fatal): %s", account_key, cache_exc)
+
+        return fills
+
+    async def get_all_today_fills(self) -> list[dict]:
+        """Retrieve today's fills for all enabled accounts and combine them.
+
+        Calls ``get_today_fills`` concurrently for every enabled account and
+        merges the results into a single flat list.
+        """
+        if not self._loaded:
+            self.reload_configs()
+
+        enabled_keys = [k for k, c in self._configs.items() if c.enabled]
+        if not enabled_keys:
+            return []
+
+        results = await asyncio.gather(
+            *[self.get_today_fills(k) for k in enabled_keys],
+            return_exceptions=True,
+        )
+
+        combined: list[dict] = []
+        for key, result in zip(enabled_keys, results, strict=False):
+            if isinstance(result, Exception):
+                logger.warning("rithmic[%s]: get_all_today_fills — error: %s", key, result)
+            elif isinstance(result, list):
+                combined.extend(result)
+
+        logger.info(
+            "rithmic: get_all_today_fills — total %d fill(s) across %d account(s)", len(combined), len(enabled_keys)
+        )
+        return combined
+
     async def eod_close_all_positions(
         self,
         *,
@@ -721,6 +883,371 @@ def get_manager() -> RithmicAccountManager:
         _manager = RithmicAccountManager()
         _manager.reload_configs()
     return _manager
+
+
+# ---------------------------------------------------------------------------
+# Persistent stream manager (RITHMIC-STREAM-A)
+# ---------------------------------------------------------------------------
+
+
+class RithmicStreamManager:
+    """Persistent Rithmic connection for live market data streaming.
+
+    Manages long-lived connections to TICKER_PLANT (live ticks + time bars)
+    and PNL_PLANT (real-time P&L). Unlike RithmicAccountManager which uses
+    short-lived polling connections, this class maintains a persistent
+    connection with automatic reconnection on failure.
+
+    Gated by:
+        RITHMIC_LIVE_DATA=1   — enables the streaming connection
+        RITHMIC_DEBUG_LOGGING=1 — verbose connection logging
+
+    Redis keys written:
+        rithmic:ticks:{symbol}    — rolling 300-tick window (list, LPUSH+LTRIM)
+        rithmic:l1:{symbol}       — best bid/ask (hash, 2s TTL)
+        rithmic:pnl:{account_key} — real-time P&L per account (hash, no TTL)
+    """
+
+    def __init__(self) -> None:
+        self._client: Any = None
+        self._connected: bool = False
+        self._subscribed_symbols: set[str] = set()
+        self._reconnect_task: asyncio.Task[None] | None = None
+        self._lock: asyncio.Lock = asyncio.Lock()
+        self._config: RithmicAccountConfig | None = None
+        self._debug: bool = os.getenv("RITHMIC_DEBUG_LOGGING", "0") == "1"
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def start(self, config: RithmicAccountConfig) -> bool:
+        """Connect to TICKER_PLANT.  Returns True on success.
+
+        Uses exponential backoff on failure (max 5 retries, 2→4→8→16→32 s).
+        The config is saved so that ``reconnect`` can re-use it later.
+        """
+        async with self._lock:
+            self._config = config
+
+        username = config.get_username()
+        password = config.get_password()
+        if not username or not password:
+            logger.warning("rithmic-stream: credentials not configured — cannot start")
+            return False
+
+        max_retries = 5
+        delay = 2.0
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                from async_rithmic import RithmicClient, SysInfraType  # type: ignore[import-untyped]
+
+                gateway = _resolve_gateway(config.gateway)
+                if gateway is None:
+                    logger.error("rithmic-stream: unknown gateway %r", config.gateway)
+                    return False
+
+                if self._debug:
+                    logger.debug(
+                        "rithmic-stream: connecting (attempt %d/%d) user=%s gateway=%s",
+                        attempt,
+                        max_retries,
+                        config.get_username(),
+                        config.gateway,
+                    )
+
+                client = RithmicClient(
+                    user=username,
+                    password=password,
+                    system_name=config.system_name,
+                    app_name=config.app_name,
+                    app_version=config.app_version,
+                    url=gateway,
+                )
+                await asyncio.wait_for(
+                    client.connect(infra_type=SysInfraType.TICKER_PLANT),
+                    timeout=20.0,
+                )
+
+                async with self._lock:
+                    self._client = client
+                    self._connected = True
+
+                logger.info(
+                    "rithmic-stream: connected to TICKER_PLANT (gateway=%s user=%s)",
+                    config.gateway,
+                    config.get_username(),
+                )
+                return True
+
+            except ImportError:
+                logger.error("rithmic-stream: async-rithmic not installed — streaming unavailable")
+                return False
+            except TimeoutError:
+                logger.warning("rithmic-stream: connect attempt %d timed out", attempt)
+            except Exception as exc:
+                logger.warning("rithmic-stream: connect attempt %d failed: %s", attempt, exc)
+
+            if attempt < max_retries:
+                if self._debug:
+                    logger.debug("rithmic-stream: retrying in %.0f s", delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 32.0)
+
+        logger.error("rithmic-stream: exhausted %d connect attempts — giving up", max_retries)
+        async with self._lock:
+            self._connected = False
+        return False
+
+    async def stop(self) -> None:
+        """Disconnect gracefully and cancel any pending reconnect task."""
+        # Cancel reconnect background task first
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._reconnect_task
+            self._reconnect_task = None
+
+        async with self._lock:
+            client = self._client
+            self._client = None
+            self._connected = False
+
+        if client is not None:
+            try:
+                await asyncio.wait_for(client.disconnect(), timeout=5.0)
+                logger.info("rithmic-stream: disconnected")
+            except Exception as exc:
+                logger.debug("rithmic-stream: disconnect error (non-fatal): %s", exc)
+
+    # ------------------------------------------------------------------
+    # Symbol subscription
+    # ------------------------------------------------------------------
+
+    async def subscribe_symbols(self, symbols: list[str]) -> None:
+        """Subscribe to tick + L1 data for each symbol.
+
+        Calls ``client.subscribe_to_market_data(symbol)`` from the
+        async_rithmic API.  Successfully subscribed symbols are stored in
+        ``_subscribed_symbols`` so they can be re-subscribed on reconnect.
+        """
+        async with self._lock:
+            client = self._client
+            connected = self._connected
+
+        if not connected or client is None:
+            logger.warning("rithmic-stream: cannot subscribe — not connected")
+            return
+
+        for symbol in symbols:
+            try:
+                await asyncio.wait_for(
+                    client.subscribe_to_market_data(symbol),
+                    timeout=10.0,
+                )
+                async with self._lock:
+                    self._subscribed_symbols.add(symbol)
+                if self._debug:
+                    logger.debug("rithmic-stream: subscribed to %s", symbol)
+            except Exception as exc:
+                logger.warning("rithmic-stream: subscribe(%s) failed: %s", symbol, exc)
+
+    # ------------------------------------------------------------------
+    # Tick callback
+    # ------------------------------------------------------------------
+
+    async def on_tick(self, tick_data: Any) -> None:
+        """Callback for incoming tick events from TICKER_PLANT.
+
+        Publishes to Redis:
+          - ``rithmic:ticks:{symbol}``  — rolling 300-tick list (LPUSH + LTRIM)
+          - ``rithmic:l1:{symbol}``     — hash with bid/ask/last/volume (2 s TTL)
+
+        ``tick_data`` is the raw object from async_rithmic; we read attributes
+        defensively with ``getattr`` so schema changes don't crash the callback.
+        """
+        try:
+            symbol: str = str(getattr(tick_data, "symbol", "") or getattr(tick_data, "ticker", ""))
+            if not symbol:
+                return
+
+            bid = getattr(tick_data, "best_bid_price", None)
+            ask = getattr(tick_data, "best_ask_price", None)
+            last = getattr(tick_data, "last_trade_price", None) or getattr(tick_data, "trade_price", None)
+            volume = getattr(tick_data, "last_trade_size", None) or getattr(tick_data, "trade_size", None)
+            ts = getattr(tick_data, "trade_time", None) or getattr(tick_data, "ssboe", None)
+
+            tick_dict: dict[str, Any] = {
+                "symbol": symbol,
+                "bid": float(bid) if bid is not None else None,
+                "ask": float(ask) if ask is not None else None,
+                "last": float(last) if last is not None else None,
+                "volume": int(volume) if volume is not None else None,
+                "ts": int(ts) if ts is not None else None,
+            }
+
+            from lib.core.cache import REDIS_AVAILABLE, _r
+
+            if not REDIS_AVAILABLE or _r is None:
+                return
+
+            # Rolling 300-tick window
+            ticks_key = f"rithmic:ticks:{symbol}"
+            _r.lpush(ticks_key, json.dumps(tick_dict))
+            _r.ltrim(ticks_key, 0, 299)
+
+            # L1 snapshot with 2-second TTL
+            l1_key = f"rithmic:l1:{symbol}"
+            l1_data: dict[str, str] = {}
+            if tick_dict["bid"] is not None:
+                l1_data["bid"] = str(tick_dict["bid"])
+            if tick_dict["ask"] is not None:
+                l1_data["ask"] = str(tick_dict["ask"])
+            if tick_dict["last"] is not None:
+                l1_data["last"] = str(tick_dict["last"])
+            if tick_dict["volume"] is not None:
+                l1_data["volume"] = str(tick_dict["volume"])
+            if tick_dict["ts"] is not None:
+                l1_data["ts"] = str(tick_dict["ts"])
+            if l1_data:
+                _r.hset(l1_key, mapping=l1_data)
+                _r.expire(l1_key, 2)
+
+        except Exception as exc:
+            logger.debug("rithmic-stream: on_tick error: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Reconnect background task
+    # ------------------------------------------------------------------
+
+    async def reconnect(self, config: RithmicAccountConfig) -> None:
+        """Background task: re-connect and re-subscribe after a disconnect.
+
+        Intended to be spawned as an ``asyncio.create_task`` when the stream
+        drops.  Calls ``start()`` (which already does exponential backoff)
+        and then re-subscribes all previously subscribed symbols.
+        """
+        logger.info("rithmic-stream: starting reconnect background task")
+        try:
+            success = await self.start(config)
+            if success:
+                async with self._lock:
+                    symbols = list(self._subscribed_symbols)
+                if symbols:
+                    await self.subscribe_symbols(symbols)
+                    logger.info("rithmic-stream: reconnected and re-subscribed %d symbols", len(symbols))
+            else:
+                logger.error("rithmic-stream: reconnect failed — stream is offline")
+        except asyncio.CancelledError:
+            logger.debug("rithmic-stream: reconnect task cancelled")
+            raise
+        except Exception as exc:
+            logger.error("rithmic-stream: reconnect task error: %s", exc)
+
+    def trigger_reconnect(self, config: RithmicAccountConfig | None = None) -> None:
+        """Schedule a reconnect task on the running event loop (non-async entry point).
+
+        Safe to call from a sync context or from a connection-dropped callback.
+        Does nothing if a reconnect task is already running.
+        """
+        cfg = config or self._config
+        if cfg is None:
+            logger.warning("rithmic-stream: trigger_reconnect called with no config — ignoring")
+            return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            logger.debug("rithmic-stream: reconnect already in progress — skipping")
+            return
+        try:
+            loop = asyncio.get_event_loop()
+            self._reconnect_task = loop.create_task(self.reconnect(cfg))
+        except RuntimeError:
+            logger.debug("rithmic-stream: no running event loop for reconnect task")
+
+    # ------------------------------------------------------------------
+    # Status helpers
+    # ------------------------------------------------------------------
+
+    def is_live(self) -> bool:
+        """Return True when RITHMIC_LIVE_DATA=1 AND the stream is connected."""
+        return os.getenv("RITHMIC_LIVE_DATA", "0") == "1" and self._connected
+
+    # ------------------------------------------------------------------
+    # Redis readers (async)
+    # ------------------------------------------------------------------
+
+    async def get_l1_snapshot(self, symbol: str) -> dict[str, Any] | None:
+        """Read the latest L1 bid/ask/last from Redis ``rithmic:l1:{symbol}``.
+
+        Returns None when the key is missing or Redis is unavailable.
+        The key has a 2 s TTL so a None result means no recent tick arrived.
+        """
+        try:
+            from lib.core.cache import REDIS_AVAILABLE, _r
+
+            if not REDIS_AVAILABLE or _r is None:
+                return None
+
+            raw = _r.hgetall(f"rithmic:l1:{symbol}")
+            if not raw:
+                return None
+
+            # Decode bytes keys/values from Redis
+            decoded: dict[str, Any] = {}
+            for k, v in raw.items():
+                key_str = k.decode() if isinstance(k, bytes) else str(k)
+                val_str = v.decode() if isinstance(v, bytes) else str(v)
+                # Coerce numeric fields
+                try:
+                    decoded[key_str] = float(val_str) if "." in val_str else int(val_str)
+                except (ValueError, TypeError):
+                    decoded[key_str] = val_str
+
+            decoded["symbol"] = symbol
+            return decoded
+
+        except Exception as exc:
+            logger.debug("rithmic-stream: get_l1_snapshot(%s) error: %s", symbol, exc)
+            return None
+
+    async def get_recent_ticks(self, symbol: str, n: int = 50) -> list[dict[str, Any]]:
+        """Read the *n* most recent ticks from Redis ``rithmic:ticks:{symbol}``.
+
+        Returns an empty list when the key is absent or Redis is unavailable.
+        Ticks are ordered newest-first (LPUSH inserts at head).
+        """
+        try:
+            from lib.core.cache import REDIS_AVAILABLE, _r
+
+            if not REDIS_AVAILABLE or _r is None:
+                return []
+
+            n = max(1, min(n, 300))
+            raw_items = _r.lrange(f"rithmic:ticks:{symbol}", 0, n - 1)
+            ticks: list[dict[str, Any]] = []
+            for item in raw_items:
+                with contextlib.suppress(Exception):
+                    ticks.append(json.loads(item.decode() if isinstance(item, bytes) else item))
+            return ticks
+
+        except Exception as exc:
+            logger.debug("rithmic-stream: get_recent_ticks(%s) error: %s", symbol, exc)
+            return []
+
+
+# ---------------------------------------------------------------------------
+# Stream manager singleton
+# ---------------------------------------------------------------------------
+
+_stream_manager: RithmicStreamManager | None = None
+
+
+def get_stream_manager() -> RithmicStreamManager:
+    """Return (or lazily create) the module-level RithmicStreamManager singleton."""
+    global _stream_manager
+    if _stream_manager is None:
+        _stream_manager = RithmicStreamManager()
+    return _stream_manager
 
 
 # ---------------------------------------------------------------------------
@@ -1165,6 +1692,57 @@ async def refresh_all():
     return JSONResponse({"ok": True, "message": "refresh queued"})
 
 
+@router.get("/api/rithmic/fills/{key}")
+async def get_account_fills(key: str):
+    """Retrieve today's order/fill history for a single Rithmic account.
+
+    Opens a short-lived session, calls ``show_order_history_summary()``,
+    caches the result in Redis (24 h TTL), and returns the fill list.
+
+    Each fill dict contains:
+        account_key, order_id, symbol, exchange, buy_sell, qty,
+        fill_price, fill_time, status, commission.
+    """
+    mgr = get_manager()
+    fills = await mgr.get_today_fills(key)
+    return JSONResponse(
+        {
+            "ok": True,
+            "account_key": key,
+            "fills": fills,
+            "count": len(fills),
+            "timestamp": datetime.now(tz=_EST).isoformat(),
+        }
+    )
+
+
+@router.get("/api/rithmic/fills")
+async def get_all_fills():
+    """Retrieve today's order/fill history for all enabled Rithmic accounts.
+
+    Calls ``get_today_fills`` concurrently for every enabled account and
+    returns a combined flat list along with a per-account breakdown.
+    """
+    mgr = get_manager()
+    fills = await mgr.get_all_today_fills()
+
+    # Build per-account breakdown for convenience
+    by_account: dict[str, list[dict]] = {}
+    for f in fills:
+        ak = f.get("account_key", "unknown")
+        by_account.setdefault(ak, []).append(f)
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "fills": fills,
+            "count": len(fills),
+            "by_account": {k: {"count": len(v), "fills": v} for k, v in by_account.items()},
+            "timestamp": datetime.now(tz=_EST).isoformat(),
+        }
+    )
+
+
 @router.post("/api/rithmic/eod-close")
 async def eod_close(req: _FastAPIRequest):
     """Cancel all working orders and flatten all positions across every enabled account.
@@ -1217,15 +1795,10 @@ def remove_account(key: str):
 
 
 @router.post("/api/rithmic/config/new-key")
-async def create_empty_account(request: Any):
+async def create_empty_account(request: Request):
     """Create a blank account placeholder so the UI can show an edit card."""
     try:
-        from fastapi import Request as FastAPIRequest
-
-        if isinstance(request, FastAPIRequest):
-            body = await request.json()
-        else:
-            body = {}
+        body = await request.json()
     except Exception:
         body = {}
 
@@ -1382,3 +1955,109 @@ async def save_account_config(key: str, req: _FastAPIRequest):
 
     logger.info("rithmic: saved config for account '%s'", key)
     return JSONResponse({"ok": True, "key": key})
+
+
+# ---------------------------------------------------------------------------
+# Streaming endpoints (RITHMIC-STREAM-A)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/rithmic/stream/status")
+def stream_status():
+    """Return the current state of the persistent stream manager.
+
+    Response fields:
+        live          — True when RITHMIC_LIVE_DATA=1 AND connected
+        connected     — raw _connected flag (ignores env var)
+        env_enabled   — True when RITHMIC_LIVE_DATA=1
+        subscribed_symbols — list of currently subscribed symbols
+    """
+    sm = get_stream_manager()
+    return JSONResponse(
+        {
+            "live": sm.is_live(),
+            "connected": sm._connected,
+            "env_enabled": os.getenv("RITHMIC_LIVE_DATA", "0") == "1",
+            "subscribed_symbols": sorted(sm._subscribed_symbols),
+            "timestamp": datetime.now(tz=_EST).isoformat(),
+        }
+    )
+
+
+@router.post("/api/rithmic/stream/subscribe")
+async def stream_subscribe(req: _FastAPIRequest):
+    """Subscribe the stream manager to a list of symbols.
+
+    Body JSON:
+        { "symbols": ["MES", "MNQ"] }
+
+    Returns 503 when the stream is not connected.
+    Symbols are passed directly to ``subscribe_symbols``; each one triggers
+    a ``subscribe_to_market_data`` call on the live TICKER_PLANT connection.
+    """
+    try:
+        body: dict[str, Any] = await req.json()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"invalid JSON: {exc}"}, status_code=400)
+
+    symbols: list[str] = body.get("symbols", [])
+    if not symbols or not isinstance(symbols, list):
+        return JSONResponse({"ok": False, "error": "symbols must be a non-empty list"}, status_code=400)
+
+    sm = get_stream_manager()
+
+    if not sm._connected:
+        return JSONResponse(
+            {"ok": False, "error": "stream not connected — start the stream first"},
+            status_code=503,
+        )
+
+    await sm.subscribe_symbols([str(s) for s in symbols])
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "requested": symbols,
+            "subscribed_symbols": sorted(sm._subscribed_symbols),
+        }
+    )
+
+
+@router.get("/api/rithmic/stream/l1/{symbol}")
+async def stream_l1(symbol: str):
+    """Return the latest L1 bid/ask/last snapshot for *symbol* from Redis.
+
+    The value is written by ``RithmicStreamManager.on_tick`` with a 2 s TTL.
+    Returns 404 when no recent tick has arrived (stream not live or no data).
+    """
+    sm = get_stream_manager()
+    snapshot = await sm.get_l1_snapshot(symbol.upper())
+    if snapshot is None:
+        return JSONResponse(
+            {"ok": False, "error": f"no L1 data for {symbol} — stream may not be live"},
+            status_code=404,
+        )
+    return JSONResponse({"ok": True, "symbol": symbol.upper(), "l1": snapshot})
+
+
+@router.get("/api/rithmic/stream/ticks/{symbol}")
+async def stream_ticks(symbol: str, n: int = 50):
+    """Return the *n* most recent ticks for *symbol* from Redis.
+
+    Query param:
+        n — number of ticks to return (1–300, default 50)
+
+    Ticks are ordered newest-first.  Returns an empty list when the stream
+    has not published any ticks for this symbol yet.
+    """
+    n = max(1, min(n, 300))
+    sm = get_stream_manager()
+    ticks = await sm.get_recent_ticks(symbol.upper(), n=n)
+    return JSONResponse(
+        {
+            "ok": True,
+            "symbol": symbol.upper(),
+            "count": len(ticks),
+            "ticks": ticks,
+        }
+    )

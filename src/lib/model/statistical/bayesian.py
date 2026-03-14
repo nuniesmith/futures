@@ -317,7 +317,7 @@ class BayesianLinearRegression:
                 return self.negative_log_posterior(params, x, y)
 
         # Minimize negative log-likelihood/posterior
-        result = minimize(
+        result = minimize(  # type: ignore
             objective_fn,
             initial_params,
             bounds=[(None, None), beta_bounds, (0.001, None)],  # σ must be positive
@@ -404,8 +404,8 @@ class BayesianLinearRegression:
             trace = pm.sample(samples, tune=tune, return_inferencedata=True)
 
             # Calculate LOO and WAIC
-            loo = az.loo(trace, model=model)
-            waic = az.waic(trace, model=model)
+            loo = az.loo(trace)
+            waic = az.waic(trace)
 
             # Store the model and trace
             self.model = model
@@ -592,6 +592,9 @@ class BayesianLinearRegression:
             return
 
         # Plot posterior predictive checks
+        if self.model is None:
+            logger.warning("No PyMC model available for posterior predictive sampling.")
+            return
         with self.model:
             pm.sample_posterior_predictive(self.trace, extend_inferencedata=True)
 

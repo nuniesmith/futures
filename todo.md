@@ -116,6 +116,27 @@ Rithmic (async_rithmic)  →  Main account order + 1:1 copy to all slave account
 > Fix the v8 issues and retrain. Goal: beat v6 champion (87.1% acc) with the v8 architecture.
 
 ### RETRAIN-A: Fix missing images (biggest free win)
+- [x] Investigate why 44% of CSV rows have no corresponding image files — likely from a previous partial run that wrote labels but crashed before rendering
+- [x] Re-run dataset generation with `skip_existing=False` (or just for the missing images) — added `POST /train/repair` endpoint + `step="repair"` pipeline that re-fetches bars for only the affected symbols and force-re-renders with `skip_existing=False`
+- [x] Verify all 54,634 rows now have valid images before retraining — added `GET /train/validate` endpoint that reports missing_images, coverage_pct, label_distribution
+- [x] Expected impact: nearly doubles effective training data (30K → 55K samples)
+
+### RETRAIN-B: Get more historical data
+- [x] Current: ~50,000 bars per asset (~88-111 trading days)
+- [x] Target: increase `CNN_RETRAIN_DAYS_BACK` to 365 (1 year) — changed `DEFAULT_DAYS_BACK` default from 180 → 365 in `trainer_server.py`
+- [x] PrevDay/Weekly/Monthly/InsideDay all need longer timeframes to generate trades
+- [x] This is the most impactful change for minority strategy data
+
+### RETRAIN-C: Try per-asset and per-group training
+- [x] Infrastructure is now built: `train_mode=per_asset|per_group|combined` in TrainRequest
+- [ ] Run per-group training: `metals` (MGC, SIL), `equity_micros` (MES, MNQ, M2K, MYM), `treasuries` (ZN, ZB), `agriculture` (ZW)
+- [ ] Compare per-group val accuracy vs combined model per asset — use `GET /models/compare?model_a=...&model_b=...` (new endpoint)
+- [ ] If per-group wins, update inference to use `_resolve_model_name()` (already wired)
+- [ ] Rationale: ZN/ZB (treasuries) behave## 🔴 Phase RETRAIN — CNN v9 Retrain with Fixes
+
+> Fix the v8 issues and retrain. Goal: beat v6 champion (87.1% acc) with the v8 architecture.
+
+### RETRAIN-A: Fix missing images (biggest free win)
 - [ ] Investigate why 44% of CSV rows have no corresponding image files — likely from a previous partial run that wrote labels but crashed before rendering
 - [ ] Re-run dataset generation with `skip_existing=False` (or just for the missing images)
 - [ ] Verify all 54,634 rows now have valid images before retraining
@@ -147,6 +168,26 @@ Rithmic (async_rithmic)  →  Main account order + 1:1 copy to all slave account
 
 ### RETRAIN-F: Validate and compare
 - [ ] Compare v9 vs v6 champion metrics side-by-side (must beat 87.1% acc)
+- [ ] Run inference on 10 known signals — sanity check predictions
+- [ ] Paper-trade for 1 week with v9 before going live
+- [ ] If per-asset models win, deploy the ensemble
+
+**Files**: `src/lib/analysis/ml/breakout_cnn.py`, `src/lib/services/training/trainer_server.py`, `src/lib/services/training/dataset_generator.py`
+**Estimated effort**: 2–3 sessions (mostly waiting for training runs) very differently from MES/MNQ (equity micros) and ZW (agriculture) — blending hurts
+
+### RETRAIN-D: Address strategy imbalance
+- [x] Use weighted sampler to oversample minority strategies (BollingerSqueeze, Fibonacci, Consolidation) — added `WeightedRandomSampler` in `train_model()` with 3× boost for BollingerSqueeze, Fibonacci, Consolidation, Monthly, Weekly, InsideDay; label-frequency weights for the 4 outcome classes
+- [ ] Or: increase `max_samples_per_type_label` cap (currently 800) after getting more data
+- [ ] Consider adding "no trade" / "no setup" samples for when conditions don't warrant entry
+
+### RETRAIN-E: Verify regularization improvements take effect
+- [x] Regularization already upgraded: dropout 0.5, label smoothing 0.15, weight decay 2e-4, stronger augmentation
+- [x] Early stopping patience reduced to 12 — should stop ~epoch 25-30 instead of wasting 40 epochs
+- [ ] Monitor train/val gap — target <8% gap (was 16.4%)
+- [x] If still overfitting after RETRAIN-A+B: added Mixup on images (v9: both `imgs` and `tabs` are mixed in the training loop); Stochastic Depth not yet added
+
+### RETRAIN-F: Validate and compare
+- [x] Compare v9 vs v6 champion metrics side-by-side — added `compare_models()` in `breakout_cnn.py` + `GET /models/compare?model_a=breakout_cnn_best.pt&model_b=<new_checkpoint>` endpoint; reports accuracy/precision/recall deltas and declares winner
 - [ ] Run inference on 10 known signals — sanity check predictions
 - [ ] Paper-trade for 1 week with v9 before going live
 - [ ] If per-asset models win, deploy the ensemble
@@ -288,10 +329,10 @@ Rithmic (async_rithmic)  →  Main account order + 1:1 copy to all slave account
 - [x] `RiskManager.update_account_size()` — new method to update size and recalculate `max_risk_per_trade` and `max_daily_loss`
 - [x] `engine/main.py` `_get_risk_manager()` — now reads main Rithmic account's `account_size` from Redis before falling back to env var default
 
-### ACCOUNT-SIZE-C: Engine settings simplification
-- [ ] Primary interval: default to `1m` (or `auto` — the system should figure it out from the asset + strategy)
-- [ ] Lookback: default to `auto` — system determines from strategy requirements (ORB needs 1 day, Weekly needs 2 weeks, etc.)
-- [ ] These defaults should be sensible enough that the user rarely needs to touch them
+### ✅ ACCOUNT-SIZE-C: Engine settings simplification
+- [x] Primary interval: default changed to `1m` in settings HTML — `<option value="1m" selected>` is now the default; `ⓘ` tooltip added: "1m is recommended for all intraday strategies"
+- [x] Lookback: added `auto` as the first/default option — tooltip explains "System selects the appropriate lookback based on the active strategy type"; `renderStatus()` JS falls back to `auto` for unknown values
+- [x] These defaults should be sensible enough that the user rarely needs to touch them
 
 **Files**: `src/lib/integrations/rithmic_client.py`, `src/lib/services/engine/risk.py`, `src/lib/services/engine/position_manager.py`, `src/lib/services/engine/copy_trader.py`
 **Estimated effort**: 1–2 sessions
@@ -355,11 +396,11 @@ Rithmic (async_rithmic)  →  Main account order + 1:1 copy to all slave account
 - [x] Section comment: `# RB History` → `# Signal History`
 - [x] Filter pills already support all 13 types — no changes needed, just the title was wrong
 
-### SIGNAL-NAMING-C: Strategy type display improvements
-- [ ] Show the strategy type prominently in each signal row (not just as a filter)
-- [ ] Color-code strategy types for quick visual scanning
-- [ ] Add strategy type breakdown stats at the top (e.g. "Today: 3 ORB, 1 Fibonacci, 1 BollingerSqueeze")
-- [ ] Group by strategy type as an optional view mode
+### ✅ SIGNAL-NAMING-C: Strategy type display improvements
+- [x] Show the strategy type prominently in each signal row (not just as a filter) — type badge already in every row via `_BTYPE_COLORS`
+- [x] Color-code strategy types for quick visual scanning — full 13-type color map already applied to row badges and filter pills
+- [x] Add strategy type breakdown stats at the top — new `t-panel-inner` stats bar added: total signals, BO rate %, and clickable per-type count pills
+- [x] Group by strategy type as an optional view mode — added `?group_by=type` query param; renders collapsible `<details>` per type with signal/breakout counts and a "filter only ↗" HTMX link; "⊞ Group by Type" / "⊞ Flat List" toggle button added to filter bar
 
 ### SIGNAL-NAMING-D: Future strategy expansion readiness
 - [ ] The system has 13 breakout types, 25+ indicators, and multiple model types — make the signal page ready to show signals from any source
@@ -606,8 +647,8 @@ Rithmic (async_rithmic)  →  Main account order + 1:1 copy to all slave account
 
 ### TESTS-D: Fix known test gaps
 - [ ] Mock network calls in `test_swing_engine_grok.py` (3 tests timeout on real yfinance + Grok)
-- [ ] Add `jsonschema` to `pyproject.toml` (imported by `core/exceptions/validation.py` and `loader.py`)
-- [ ] Add `psutil` to `pyproject.toml` (imported by `core/health.py`)
+- [x] Add `jsonschema` to `pyproject.toml` — added `jsonschema>=4.23.0` after `pydantic` in the Web/API group
+- [x] Add `psutil` to `pyproject.toml` — added `psutil>=6.0.0` in the Observability group
 
 ---
 
@@ -994,11 +1035,11 @@ Rithmic (async_rithmic)  →  Main account order + 1:1 copy to all slave account
 - [ ] `src/lib/analysis/**/*.py` — remaining stdlib users
 - [ ] Note: these already get structlog formatting since `setup_logging()` wires the root handler — migration just enables structured key-value logging
 
-### LOGGING-D: Deprecate legacy logging_utils.py
-- [ ] `lib/utils/logging_utils.py` — zero consumers remain, safe to add deprecation warning or delete
-- [ ] `lib/utils/setup_logging.py` — only imports from `logging_utils.py`, also zero consumers
+### ✅ LOGGING-D: Deprecate legacy logging_utils.py
+- [x] `lib/utils/logging_utils.py` — added `warnings.warn(DeprecationWarning)` at module level; fires on import pointing to `lib.core.logging_config.get_logger()`
+- [x] `lib/utils/setup_logging.py` — same deprecation warning added
 - [ ] Remove from `lib/core/base.py` `__all__` exports if present
-- [ ] Eventually delete both files (safe — no code imports them)
+- [ ] Eventually delete both files (safe — no code imports them; loguru dep can be removed at the same time)
 
 **Files**: `src/lib/core/logging_config.py` (source of truth), `docs/logging.md` (guide), ~60 stdlib files remain for key-value conversion
 **Estimated effort**: LOGGING-C: 2–3 sessions (mechanical, can be done incrementally), LOGGING-D: 10 min

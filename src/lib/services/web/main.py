@@ -693,6 +693,12 @@ async def proxy_connections(request: Request):
     return await _proxy_request(request, "/connections")
 
 
+@app.get("/signals", response_class=HTMLResponse)
+async def proxy_signals(request: Request):
+    """Proxy the Signal History page from the data service."""
+    return await _proxy_request(request, "/signals")
+
+
 # ---------------------------------------------------------------------------
 # Health API — clean paths (proxied to data service)
 # ---------------------------------------------------------------------------
@@ -1308,6 +1314,118 @@ async def proxy_pine_status_html(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Trade Executor — staged position builder with stop-hunt protection
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/trade/engage")
+async def proxy_trade_engage(request: Request):
+    """Proxy trade engagement (SCOUT entry)."""
+    return await _proxy_request(request, "/api/trade/engage")
+
+
+@app.get("/api/trade/active")
+async def proxy_trade_active(request: Request):
+    """Proxy active trades list."""
+    return await _proxy_request(request, "/api/trade/active")
+
+
+@app.get("/api/trade/active/{symbol}")
+async def proxy_trade_active_symbol(request: Request, symbol: str):
+    """Proxy active trade for a specific symbol."""
+    return await _proxy_request(request, f"/api/trade/active/{symbol}")
+
+
+@app.post("/api/trade/partial")
+async def proxy_trade_partial(request: Request):
+    """Proxy partial profit taking."""
+    return await _proxy_request(request, "/api/trade/partial")
+
+
+@app.post("/api/trade/close/{symbol}")
+async def proxy_trade_close(request: Request, symbol: str):
+    """Proxy trade close."""
+    return await _proxy_request(request, f"/api/trade/close/{symbol}")
+
+
+@app.post("/api/trade/set-stop")
+async def proxy_trade_set_stop(request: Request):
+    """Proxy manual stop set/move."""
+    return await _proxy_request(request, "/api/trade/set-stop")
+
+
+@app.get("/api/trade/status")
+async def proxy_trade_status(request: Request):
+    """Proxy trade executor status."""
+    return await _proxy_request(request, "/api/trade/status")
+
+
+@app.get("/api/trade/history")
+async def proxy_trade_history(request: Request):
+    """Proxy completed trade history."""
+    return await _proxy_request(request, "/api/trade/history")
+
+
+@app.post("/api/trade/tick")
+async def proxy_trade_tick(request: Request):
+    """Proxy tick processing for active trades."""
+    return await _proxy_request(request, "/api/trade/tick")
+
+
+@app.get("/api/trade/rithmic-ready")
+async def proxy_trade_rithmic_ready(request: Request):
+    """Proxy Rithmic readiness check."""
+    return await _proxy_request(request, "/api/trade/rithmic-ready")
+
+
+# ---------------------------------------------------------------------------
+# Session Reports — daily pre/post session reports for performance tracking
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/reports/pre-session")
+async def proxy_reports_pre_session_create(request: Request):
+    """Proxy pre-session report generation."""
+    return await _proxy_request(request, "/api/reports/pre-session")
+
+
+@app.get("/api/reports/pre-session")
+async def proxy_reports_pre_session_get(request: Request):
+    """Proxy pre-session report retrieval."""
+    return await _proxy_request(request, "/api/reports/pre-session")
+
+
+@app.post("/api/reports/post-session")
+async def proxy_reports_post_session_create(request: Request):
+    """Proxy post-session report generation."""
+    return await _proxy_request(request, "/api/reports/post-session")
+
+
+@app.get("/api/reports/post-session")
+async def proxy_reports_post_session_get(request: Request):
+    """Proxy post-session report retrieval."""
+    return await _proxy_request(request, "/api/reports/post-session")
+
+
+@app.get("/api/reports/history")
+async def proxy_reports_history(request: Request):
+    """Proxy report history."""
+    return await _proxy_request(request, "/api/reports/history")
+
+
+@app.post("/api/reports/pre-session/notes")
+async def proxy_reports_pre_session_notes(request: Request):
+    """Proxy pre-session notes update."""
+    return await _proxy_request(request, "/api/reports/pre-session/notes")
+
+
+@app.post("/api/reports/post-session/notes")
+async def proxy_reports_post_session_notes(request: Request):
+    """Proxy post-session notes update."""
+    return await _proxy_request(request, "/api/reports/post-session/notes")
+
+
+# ---------------------------------------------------------------------------
 # Charting proxy — forwards /charting-proxy/* and /charting/* to charting
 #   service (nginx + chart.js on port 8003)
 #
@@ -1361,7 +1479,14 @@ async def _proxy_charting_request(request: Request, upstream_path: str) -> Respo
             content=body,
         )
 
-        excluded_resp = {"transfer-encoding", "connection", "keep-alive", "server"}
+        excluded_resp = {
+            "transfer-encoding",
+            "content-encoding",
+            "content-length",
+            "connection",
+            "keep-alive",
+            "server",
+        }
         resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded_resp}
 
         return Response(
@@ -1399,15 +1524,19 @@ async def _proxy_charting_request(request: Request, upstream_path: str) -> Respo
         )
 
 
-@app.get("/charting-proxy/")
+@app.api_route("/charting-proxy/", methods=["GET", "HEAD", "OPTIONS"])
 async def proxy_charting_root(request: Request):
-    """Proxy charting root (index.html) from the charting service."""
+    """Proxy charting root (index.html) from the charting service.
+
+    HEAD and OPTIONS are included so the dashboard's fetch probe and CORS
+    preflight requests don't get a 405 Method Not Allowed.
+    """
     return await _proxy_charting_request(request, "/")
 
 
 @app.api_route(
     "/charting-proxy/{path:path}",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    methods=["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"],
 )
 async def proxy_charting_path(request: Request, path: str):
     """Proxy all /charting-proxy/* requests to the charting service.
@@ -1422,7 +1551,7 @@ async def proxy_charting_path(request: Request, path: str):
 
 @app.api_route(
     "/charting/{path:path}",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    methods=["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"],
 )
 async def proxy_charting_assets(request: Request, path: str):
     """Proxy /charting/* for direct access to charting static assets.

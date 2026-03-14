@@ -83,9 +83,7 @@ class LogisticRegressionModel(BaseModel):
                 logger.info("Training Logistic Regression model for classification...")
                 if LogisticRegression is None:
                     raise ImportError("scikit-learn is required for LogisticRegression")
-                self.model = LogisticRegression(
-                    solver="liblinear", random_state=42, multi_class="auto", max_iter=self.max_iter
-                )
+                self.model = LogisticRegression(solver="liblinear", random_state=42, max_iter=self.max_iter)
                 self.model.fit(X_train, y_train)
                 logger.info("Logistic Regression training completed.")
             elif self.task_type == "regression":
@@ -236,9 +234,7 @@ class ConcreteLogisticRegressionModel(LogisticRegressionModel):
                 logger.info("Training Logistic Regression model for classification...")
                 if LogisticRegression is None:
                     raise ImportError("scikit-learn is required for LogisticRegression")
-                self.model = LogisticRegression(
-                    solver="liblinear", random_state=42, multi_class="auto", max_iter=self.max_iter
-                )
+                self.model = LogisticRegression(solver="liblinear", random_state=42, max_iter=self.max_iter)
                 self.model.fit(X_train, y_train)
                 logger.info("Logistic Regression training completed.")
             elif self.task_type == "regression":

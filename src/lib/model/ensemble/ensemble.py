@@ -438,7 +438,9 @@ class EnsembleModel(BaseModel):
         for i, model in enumerate(self.models):
             if hasattr(model, "evaluate"):
                 try:
-                    model_metrics = model.evaluate(test_data, target_column=target_column, **kwargs)
+                    eval_kwargs = {"target_column": target_column, **kwargs}
+                    model_any: Any = model
+                    model_metrics = model_any.evaluate(test_data, **eval_kwargs)
                     self.model_performances[i] = model_metrics
                 except Exception as e:
                     logger.error(f"Error evaluating model {i}: {str(e)}")
