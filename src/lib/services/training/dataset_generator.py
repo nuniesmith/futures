@@ -2408,7 +2408,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
 
             from lib.analysis.cross_asset import CrossAssetFeatures as _CAF
 
-            _cross_feats = _cast(_CAF, _cross_feats)
+            _cross_feats = _cast("_CAF", _cross_feats)
             primary_peer_corr = _cross_feats.primary_peer_corr
             cross_class_corr = _cross_feats.cross_class_corr
             correlation_regime = _cross_feats.correlation_regime
@@ -2456,7 +2456,7 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
             from lib.analysis.asset_fingerprint import AssetFingerprint as _AFP
             from lib.analysis.asset_fingerprint import VolumeProfileShape as _VPS
 
-            _fp = _cast(_AFP, _fp)
+            _fp = _cast("_AFP", _fp)
             # [31] typical_daily_range_norm — clamp [0.5, 2.5] → [0, 1]
             typical_daily_range_norm = max(0.0, min(1.0, (_fp.typical_daily_range_atr - 0.5) / 2.0))
 
