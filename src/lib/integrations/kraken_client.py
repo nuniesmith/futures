@@ -774,6 +774,7 @@ class KrakenFeedManager:
         ohlc_interval: int = 1,  # minutes (1, 5, 15, etc.)
         subscribe_trades: bool = True,
         subscribe_ohlc: bool = True,
+        subscribe_spread: bool = True,
     ) -> None:
         """Initialize the feed manager.
 
@@ -783,6 +784,7 @@ class KrakenFeedManager:
             ohlc_interval: OHLC candle interval in minutes.
             subscribe_trades: Whether to subscribe to the trade channel.
             subscribe_ohlc: Whether to subscribe to the OHLC channel.
+            subscribe_spread: Whether to subscribe to the spread (L1) channel.
         """
         if pairs is None:
             pairs = [p["ws_pair"] for p in KRAKEN_PAIRS.values()]
@@ -791,6 +793,7 @@ class KrakenFeedManager:
         self._ohlc_interval = ohlc_interval
         self._subscribe_trades = subscribe_trades
         self._subscribe_ohlc = subscribe_ohlc
+        self._subscribe_spread = subscribe_spread
 
         self._ws: Any = None
         self._thread: threading.Thread | None = None
@@ -805,6 +808,12 @@ class KrakenFeedManager:
         # Pending subscribe/unsubscribe
         self._pending_subscribe: list[str] = []
         self._pending_unsubscribe: list[str] = []
+
+        # Tick aggregation state for building 1m bars from trades
+        self._tick_agg: dict[str, dict] = {}
+
+        # Latest L1 (spread) data per internal ticker
+        self._latest_l1: dict[str, dict[str, Any]] = {}
 
         # Callbacks
         self._on_bar_callbacks: list = []
@@ -1043,6 +1052,17 @@ class KrakenFeedManager:
             await ws.send(json.dumps(sub_msg))
             logger.info("Subscribed to Kraken trades: %d pairs", len(self._pairs))
 
+        if self._subscribe_spread and self._pairs:
+            sub_msg = {
+                "method": "subscribe",
+                "params": {
+                    "channel": "spread",
+                    "symbol": list(self._pairs),
+                },
+            }
+            await ws.send(json.dumps(sub_msg))
+            logger.info("Subscribed to Kraken spread: %d pairs", len(self._pairs))
+
     async def _flush_pending(self, ws) -> None:
         """Send any pending subscribe / unsubscribe requests."""
         with self._lock:
@@ -1071,6 +1091,15 @@ class KrakenFeedManager:
                     },
                 }
                 await ws.send(json.dumps(msg))
+            if self._subscribe_spread:
+                msg = {
+                    "method": "subscribe",
+                    "params": {
+                        "channel": "spread",
+                        "symbol": to_sub,
+                    },
+                }
+                await ws.send(json.dumps(msg))
             logger.info("Dynamically subscribed to %d new pairs", len(to_sub))
 
         if to_unsub:
@@ -1089,6 +1118,15 @@ class KrakenFeedManager:
                     "method": "unsubscribe",
                     "params": {
                         "channel": "trade",
+                        "symbol": to_unsub,
+                    },
+                }
+                await ws.send(json.dumps(msg))
+            if self._subscribe_spread:
+                msg = {
+                    "method": "unsubscribe",
+                    "params": {
+                        "channel": "spread",
                         "symbol": to_unsub,
                     },
                 }
@@ -1122,6 +1160,8 @@ class KrakenFeedManager:
             self._handle_ohlc(data)
         elif channel == "trade":
             self._handle_trade(data)
+        elif channel == "spread":
+            self._handle_spread(data)
 
     def _handle_ohlc(self, data: list[dict[str, Any]]) -> None:
         """Process OHLC candle data from WebSocket v2.
@@ -1197,6 +1237,163 @@ class KrakenFeedManager:
             for cb in self._on_trade_callbacks:
                 with contextlib.suppress(Exception):
                     cb(internal, trade_data)
+
+            # Publish raw tick to Redis sorted set
+            try:
+                from lib.core.cache import REDIS_AVAILABLE, _r
+
+                if REDIS_AVAILABLE and _r is not None:
+                    tick_key = f"kraken:ticks:{internal}"
+                    ts_str = trade_data.get("timestamp", "")
+                    try:
+                        tick_epoch = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+                    except Exception:
+                        tick_epoch = time.time()
+
+                    _r.zadd(tick_key, {json.dumps(trade_data): tick_epoch})
+
+                    # Trim entries older than 5 minutes
+                    cutoff = time.time() - 300
+                    _r.zremrangebyscore(tick_key, "-inf", cutoff)
+
+                    # Publish real-time event
+                    _r.publish(
+                        "futures:events",
+                        json.dumps(
+                            {
+                                "event": "kraken_tick",
+                                "ticker": internal,
+                                "price": trade_data["price"],
+                                "qty": trade_data["qty"],
+                                "side": trade_data["side"],
+                            }
+                        ),
+                    )
+            except Exception:
+                pass  # Non-fatal
+
+            # Aggregate ticks into 1m bars
+            self._aggregate_tick_bars(internal, trade_data)
+
+    def _aggregate_tick_bars(self, internal_ticker: str, trade_data: dict[str, Any]) -> None:
+        """Aggregate incoming ticks into 1-minute OHLCV bars."""
+        try:
+            ts_str = trade_data.get("timestamp", "")
+            try:
+                tick_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            except Exception:
+                tick_dt = datetime.now(UTC)
+
+            # Truncate to the current minute boundary
+            minute_start = tick_dt.replace(second=0, microsecond=0)
+
+            price = trade_data["price"]
+            qty = trade_data["qty"]
+
+            with self._lock:
+                agg = self._tick_agg.get(internal_ticker)
+
+                if agg is not None and agg["minute_start"] == minute_start:
+                    # Same minute window — update OHLCV
+                    agg["high"] = max(agg["high"], price)
+                    agg["low"] = min(agg["low"], price)
+                    agg["close"] = price
+                    agg["volume"] += qty
+                    agg["trade_count"] += 1
+                else:
+                    # New minute — emit the completed bar (if any), then start fresh
+                    completed_bar = agg  # may be None on first tick
+                    self._tick_agg[internal_ticker] = {
+                        "open": price,
+                        "high": price,
+                        "low": price,
+                        "close": price,
+                        "volume": qty,
+                        "trade_count": 1,
+                        "minute_start": minute_start,
+                    }
+
+            # Emit completed bar outside the lock to avoid holding it during I/O
+            if agg is not None and agg["minute_start"] != minute_start:
+                ws_symbol = INTERNAL_TO_WS.get(internal_ticker, "")
+                completed = {
+                    "open": agg["open"],
+                    "high": agg["high"],
+                    "low": agg["low"],
+                    "close": agg["close"],
+                    "volume": agg["volume"],
+                    "trade_count": agg["trade_count"],
+                    "interval_begin": agg["minute_start"].isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "symbol": ws_symbol,
+                    "internal_ticker": internal_ticker,
+                }
+
+                # Fire bar callbacks
+                for cb in self._on_bar_callbacks:
+                    with contextlib.suppress(Exception):
+                        cb(internal_ticker, completed)
+
+                # Push aggregated bar to Redis
+                try:
+                    from lib.core.cache import REDIS_AVAILABLE, _r
+
+                    if REDIS_AVAILABLE and _r is not None:
+                        agg_key = f"kraken:agg:{internal_ticker}"
+                        _r.setex(agg_key, 120, json.dumps(completed))
+                except Exception:
+                    pass  # Non-fatal
+        except Exception:
+            pass  # Non-fatal — tick aggregation failure doesn't break anything
+
+    def _handle_spread(self, data: list[dict[str, Any]]) -> None:
+        """Process spread (L1 best bid/ask) data from WebSocket v2.
+
+        v2 spread message data is a list of dicts, each containing:
+          symbol, bid, bid_qty, ask, ask_qty, timestamp
+        """
+        for item in data:
+            ws_symbol = item.get("symbol", "")
+
+            name = WS_PAIR_TO_NAME.get(ws_symbol)
+            if name is None:
+                continue
+            internal = KRAKEN_PAIRS[name]["internal_ticker"]
+
+            l1_data = {
+                "bid": float(item.get("bid", 0)),
+                "bid_qty": float(item.get("bid_qty", 0)),
+                "ask": float(item.get("ask", 0)),
+                "ask_qty": float(item.get("ask_qty", 0)),
+                "timestamp": item.get("timestamp", ""),
+                "symbol": ws_symbol,
+                "internal_ticker": internal,
+            }
+
+            with self._lock:
+                self._latest_l1[internal] = l1_data
+
+            # Publish L1 to Redis
+            try:
+                from lib.core.cache import REDIS_AVAILABLE, _r
+
+                if REDIS_AVAILABLE and _r is not None:
+                    l1_key = f"kraken:l1:{internal}"
+                    _r.setex(l1_key, 30, json.dumps(l1_data))
+
+                    _r.publish(
+                        "futures:events",
+                        json.dumps(
+                            {
+                                "event": "kraken_l1",
+                                "ticker": internal,
+                                "bid": l1_data["bid"],
+                                "ask": l1_data["ask"],
+                            }
+                        ),
+                    )
+            except Exception:
+                pass  # Non-fatal
 
     def _push_bar_to_cache(self, internal_ticker: str, bar: dict[str, Any]) -> None:
         """Push a live bar update into Redis for the engine / dashboard."""

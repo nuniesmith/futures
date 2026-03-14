@@ -4,13 +4,13 @@
 # Automated build, push, and deployment of Futures via Tailscale
 #
 # Pipeline: Lint → Test → Docker Build & Push (matrix)
-#           → Deploy Cloud (engine + web) → Deploy Trainer (home laptop)
+#           → Deploy ALL services to Oryx (GPU rig)
 #           → Health Checks
 #
-# Two deployment targets:
-#   Cloud Server  — Ubuntu cloud VPS: engine, web, postgres, redis, monitoring
-#   Trainer Rig   — Home laptop (CUDA GPU, 64 GB RAM): trainer service only
-#                   Also hosts the FKS project — ports don't conflict.
+# Single deployment target:
+#   Oryx Server   — Home GPU rig (RTX 3080 16GB, CUDA, 64 GB RAM):
+#                   ALL services — postgres, redis, data, engine, web,
+#                   charting, trainer, prometheus, grafana
 #
 # Single DockerHub repo (nuniesmith/futures) with tag-per-service:
 #   nuniesmith/futures:engine          — Engine + Data API (amd64 + arm64)
@@ -19,22 +19,17 @@
 #   nuniesmith/futures:engine-<sha>    — Pinned engine build
 #   nuniesmith/futures:web-<sha>       — Pinned web build
 #   nuniesmith/futures:trainer-<sha>   — Pinned trainer build
-#   nuniesmith/futures:latest          — Alias for :engine (default pull)
+#   nuniesmith/futures:latest          — Alias for :data (default pull)
 #
 # Required Secrets:
 #   - TAILSCALE_OAUTH_CLIENT_ID: Tailscale OAuth Client ID
 #   - TAILSCALE_OAUTH_SECRET: Tailscale OAuth Secret
 #
-#   Cloud Server:
-#   - PROD_TAILSCALE_IP: Cloud server Tailscale IP
-#   - PROD_SSH_KEY: SSH private key for cloud server
+#   Oryx Server (home GPU rig — all services):
+#   - PROD_TAILSCALE_IP: Oryx server Tailscale IP
+#   - PROD_SSH_KEY: SSH private key for oryx server
 #   - PROD_SSH_USER: SSH username (default: actions)
 #   - PROD_SSH_PORT: SSH port (default: 22)
-#
-#   Trainer Rig (home laptop):
-#   - TRAINER_TAILSCALE_IP: Trainer laptop Tailscale IP
-#   - TRAINER_SSH_KEY: SSH private key for trainer laptop
-#   (SSH user and port are the same as PROD_SSH_USER / PROD_SSH_PORT)
 #
 #   Docker:
 #   - DOCKER_USERNAME: Docker Hub username
@@ -43,12 +38,14 @@
 #   Notifications:
 #   - DISCORD_WEBHOOK_ACTIONS: Discord webhook for CI/CD notifications
 #
-#   API Keys (injected into prod .env on cloud server):
+#   API Keys (injected into prod .env on oryx server):
 #   - XAI_API_KEY: xAI (Grok) API key
 #   - MASSIVE_API_KEY: Massive API key
 #   - KRAKEN_API_KEY: Kraken API key
+#   - KRAKEN_API_SECRET: Kraken API secret
 #   - API_KEY: Shared secret for web ↔ engine auth (X-API-Key header)
 #   - TRAINER_API_KEY: Shared secret for engine ↔ trainer auth (Bearer token)
+#   
 # =============================================================================
 
 name: 🚀 CI/CD Pipeline
@@ -205,12 +202,16 @@ jobs:
     # Each matrix entry produces two tags:
     #   :engine           (rolling latest for that service)
     #   :engine-abc1234   (pinned to commit SHA)
-    # The engine build also tags :latest as the default pull target.
+    # The data build also tags :latest as the default pull target.
     #
     # Builds run in parallel via matrix strategy:
-    #   engine  — Combined FastAPI data service + engine worker (arm64 + amd64)
-    #   web     — HTMX dashboard reverse-proxy (arm64 + amd64)
-    #   trainer — GPU CNN training server (amd64 only — CUDA base image)
+    #   data       — FastAPI data service (arm64 + amd64)
+    #   engine     — Background computation worker (arm64 + amd64)
+    #   web        — HTMX dashboard reverse-proxy (arm64 + amd64)
+    #   trainer    — GPU CNN training server (amd64 only — CUDA base image)
+    #   charting   — TradingView charting server (arm64 + amd64)
+    #   prometheus — Metrics collection (arm64 + amd64)
+    #   grafana    — Dashboards (arm64 + amd64)
     # =========================================================================
     # =========================================================================
     # Stage 3a: Build and push the shared base image
@@ -397,25 +398,41 @@ jobs:
                   fields: '[{"name": "Dockerfile", "value": "`${{ matrix.dockerfile }}`", "inline": true}, {"name": "Workflow", "value": "[View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}]'
 
     # =========================================================================
-    # Stage 4a: Deploy to Cloud Server (engine + web via Tailscale)
+    # Stage 4: Deploy ALL services to Oryx (home GPU rig via Tailscale)
     # =========================================================================
     #
-    # Connects to the cloud Ubuntu server over Tailscale VPN, then uses the
-    # shared ssh-deploy action to pull the freshly-pushed :engine and :web
-    # images and restart services via docker compose.
+    # Connects to the Oryx server (RTX 3080 16GB, 64 GB RAM) over Tailscale
+    # VPN, then uses the shared ssh-deploy action to pull ALL freshly-pushed
+    # images and restart every service via docker compose.
     #
-    # The :trainer image is NOT deployed here — it goes to the home laptop.
+    # All services run on a single machine:
+    #   postgres, redis     — infrastructure
+    #   data, engine, web   — core application
+    #   charting            — TradingView charts
+    #   trainer             — GPU CNN training (NVIDIA / CUDA)
+    #   prometheus, grafana — monitoring
+    #
+    # The trainer service uses the docker compose `training` profile and
+    # requires nvidia-container-toolkit on the host. Since Oryx has an
+    # NVIDIA GPU, we start it with --profile training.
     #
     # Gates:
     #   - Only runs on push to main (same gate as docker stage)
     #   - Only runs after ALL docker matrix jobs succeed
     #   - Can be skipped manually via workflow_dispatch skip_deploy input
+    #
+    # Secrets — accepts both new ORYX_* names and legacy PROD_*/TRAINER_*
+    # names so existing repo secrets work without renaming:
+    #   PROD_TAILSCALE_IP  (fallback: TRAINER_TAILSCALE_IP → PROD_TAILSCALE_IP)
+    #   PROD_SSH_KEY       (fallback: TRAINER_SSH_KEY → PROD_SSH_KEY)
+    #   PROD_SSH_USER      (fallback: PROD_SSH_USER → 'actions')
+    #   PROD_SSH_PORT      (fallback: PROD_SSH_PORT → '22')
     # =========================================================================
     deploy:
-        name: "☁️ Deploy Cloud (data + engine + web)"
+        name: "🦌 Deploy ALL to Oryx"
         needs: [docker, docker-base]
         runs-on: ubuntu-latest
-        timeout-minutes: 15
+        timeout-minutes: 20
         if: |
             github.ref == 'refs/heads/main'
             && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
@@ -428,31 +445,61 @@ jobs:
               id: vars
               run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
+            - name: 🔑 Resolve Oryx connection secrets
+              id: oryx
+              run: |
+                  # Resolve IP — prefer PROD_TAILSCALE_IP, fall back to TRAINER or PROD
+                  IP="${ORYX_IP:-${TRAINER_IP:-${PROD_IP:-}}}"
+                  if [ -z "$IP" ]; then
+                    echo "❌ No Oryx IP found — set PROD_TAILSCALE_IP, TRAINER_TAILSCALE_IP, or PROD_TAILSCALE_IP"
+                    exit 1
+                  fi
+                  echo "ip=$IP" >> "$GITHUB_OUTPUT"
+
+                  # Resolve SSH port
+                  PORT="${ORYX_PORT:-${PROD_PORT:-22}}"
+                  echo "port=$PORT" >> "$GITHUB_OUTPUT"
+
+                  # Resolve SSH user
+                  USER="${ORYX_USER:-${PROD_USER:-actions}}"
+                  echo "user=$USER" >> "$GITHUB_OUTPUT"
+
+                  echo "✅ Oryx target: $USER@$IP:$PORT"
+              env:
+                  ORYX_IP: ${{ secrets.PROD_TAILSCALE_IP }}
+                  TRAINER_IP: ${{ secrets.TRAINER_TAILSCALE_IP }}
+                  PROD_IP: ${{ secrets.PROD_TAILSCALE_IP }}
+                  ORYX_PORT: ${{ secrets.PROD_SSH_PORT }}
+                  PROD_PORT: ${{ secrets.PROD_SSH_PORT }}
+                  ORYX_USER: ${{ secrets.PROD_SSH_USER }}
+                  PROD_USER: ${{ secrets.PROD_SSH_USER }}
+
             - name: 🔌 Connect to Tailscale
               id: tailscale
               uses: nuniesmith/actions/.github/actions/tailscale-connect@main
               with:
                   oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
                   oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
-                  target-ip: ${{ secrets.PROD_TAILSCALE_IP }}
-                  target-ssh-port: ${{ secrets.PROD_SSH_PORT || '22' }}
+                  target-ip: ${{ steps.oryx.outputs.ip }}
+                  target-ssh-port: ${{ steps.oryx.outputs.port }}
 
-            - name: 🚀 Deploy via SSH
+            - name: 🦌 Deploy to Oryx via SSH
               id: deploy
               if: steps.tailscale.outputs.connected == 'true'
               uses: nuniesmith/actions/.github/actions/ssh-deploy@main
               with:
-                  host: ${{ secrets.PROD_TAILSCALE_IP }}
-                  port: ${{ secrets.PROD_SSH_PORT || '22' }}
-                  username: ${{ secrets.PROD_SSH_USER || 'actions' }}
-                  ssh-key: ${{ secrets.PROD_SSH_KEY }}
+                  host: ${{ steps.oryx.outputs.ip }}
+                  port: ${{ steps.oryx.outputs.port }}
+                  username: ${{ steps.oryx.outputs.user }}
+                  ssh-key: ${{ secrets.PROD_SSH_KEY || secrets.TRAINER_SSH_KEY || secrets.PROD_SSH_KEY }}
                   project-path: ~/futures
                   git-pull: false
                   git-branch: main
                   docker-prune: false
                   pre-deploy-command: |
                       set -euo pipefail
-                      echo "📦 Preparing Futures deployment on cloud server..."
+                      echo "📦 Preparing Futures deployment on Oryx server..."
+                      echo "   Target: ALL services (infra + app + trainer + monitoring)"
 
                       PROJ_DIR="$HOME/futures"
 
@@ -494,7 +541,7 @@ jobs:
                       if [ ! -f ".env" ]; then
                         echo "📝 Creating default .env..."
                         cat > .env <<'ENVEOF'
-                      # Futures Environment Configuration
+                      # Futures Environment Configuration — Oryx Server
                       PYTHONUNBUFFERED=1
                       LOG_LEVEL=info
                       ENVEOF
@@ -518,7 +565,7 @@ jobs:
                       generate_env_secret "POSTGRES_PASSWORD"
                       generate_env_secret "REDIS_PASSWORD"
                       chmod 600 .env
-                      echo "✅ .env ready"
+                      echo "✅ Database secrets ready"
 
                       # Upsert API keys — always overwrite so rotated secrets stay current
                       echo "🔑 Injecting API keys into .env..."
@@ -530,13 +577,25 @@ jobs:
                           echo "${key}=${val}" >> .env
                         fi
                       }
+
+                      # External API keys
                       upsert_env "XAI_API_KEY"          "${{ secrets.XAI_API_KEY }}"
                       upsert_env "MASSIVE_API_KEY"       "${{ secrets.MASSIVE_API_KEY }}"
                       upsert_env "KRAKEN_API_KEY"        "${{ secrets.KRAKEN_API_KEY }}"
                       upsert_env "KRAKEN_API_SECRET"     "${{ secrets.KRAKEN_API_SECRET }}"
+
+                      # Inter-service auth keys
                       upsert_env "API_KEY"               "${{ secrets.API_KEY }}"
                       upsert_env "TRAINER_API_KEY"       "${{ secrets.TRAINER_API_KEY }}"
-                      upsert_env "TRAINER_SERVICE_URL"   "http://${{ secrets.TRAINER_TAILSCALE_IP }}:8200"
+
+                      # Trainer connects to the local data service (same host)
+                      # In docker-compose.yml the trainer uses http://data:8000 via
+                      # Docker networking, but we also set these for any scripts that
+                      # run outside Docker on the host.
+                      upsert_env "TRAINER_SERVICE_URL"   "http://localhost:8200"
+                      upsert_env "ENGINE_DATA_URL"       "http://data:8000"
+
+                      # Discord notifications
                       upsert_env "DISCORD_WEBHOOK_URL"   "${{ secrets.DISCORD_WEBHOOK_URL }}"
 
                       chmod 600 .env
@@ -544,9 +603,14 @@ jobs:
 
                       # Create required directories
                       echo "📁 Ensuring data directories exist..."
-                      mkdir -p data config
-                      chmod 755 data config
+                      mkdir -p data config models dataset scripts
+                      chmod 755 data config models dataset scripts
                       echo "✅ Directories ready"
+
+                      # Verify NVIDIA GPU is available (trainer needs it)
+                      echo ""
+                      echo "🎮 GPU check:"
+                      nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null || echo "⚠️ nvidia-smi not available (GPU may still work in container)"
 
                   deploy-command: |
                       set -euo pipefail
@@ -560,7 +624,8 @@ jobs:
 
                       # Alias — always use explicit -f and --project-directory so the
                       # correct file is used regardless of shell CWD or Docker context.
-                      DC="docker compose --project-directory $PROJ_DIR -f $PROJ_DIR/docker-compose.yml"
+                      # Include --profile training to bring up the trainer service.
+                      DC="docker compose --project-directory $PROJ_DIR -f $PROJ_DIR/docker-compose.yml --profile training"
 
                       # Validate the compose config before doing anything destructive
                       echo "🔍 Validating compose config..."
@@ -573,11 +638,13 @@ jobs:
                         rm -f "$PROJ_DIR/docker-compose.prod.yml"
                       fi
 
-                      # Stop existing services
+                      # Stop ALL existing services (including trainer)
                       echo "🐳 Stopping existing services..."
                       $DC down 2>/dev/null || true
+                      # Also stop any standalone trainer compose instances
+                      docker compose -f "$PROJ_DIR/docker-compose.trainer.yml" down 2>/dev/null || true
 
-                      # Log in to Docker Hub and pull latest per-service images
+                      # Log in to Docker Hub and pull ALL service images
                       echo "🐳 Pulling latest images from Docker Hub..."
                       echo "${{ secrets.DOCKER_TOKEN }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin 2>/dev/null || true
 
@@ -590,24 +657,38 @@ jobs:
                       echo "==> Pulling :web image..."
                       docker pull ${{ env.IMAGE_NAME }}:web
 
+                      echo "==> Pulling :trainer image..."
+                      docker pull ${{ env.IMAGE_NAME }}:trainer
+
                       echo "==> Pulling :charting image..."
                       docker pull ${{ env.IMAGE_NAME }}:charting
 
-                      # Start services (trainer goes to the home laptop — not deployed here)
+                      echo "==> Pulling :prometheus image..."
+                      docker pull ${{ env.IMAGE_NAME }}:prometheus
+
+                      echo "==> Pulling :grafana image..."
+                      docker pull ${{ env.IMAGE_NAME }}:grafana
+
+                      # Start ALL services including the GPU trainer.
+                      # --profile training activates the trainer service.
                       # postgres and redis must be listed explicitly — when service names are
                       # given, Compose does NOT auto-start depends_on targets that aren't running.
-                      echo "🚀 Starting postgres, redis, data, engine, web and charting services..."
-                      $DC up -d --no-build --remove-orphans postgres redis data engine web charting prometheus grafana
+                      echo "🚀 Starting ALL services on Oryx..."
+                      echo "   Infrastructure: postgres, redis"
+                      echo "   Application:    data, engine, web, charting"
+                      echo "   Training:       trainer (GPU / CUDA)"
+                      echo "   Monitoring:     prometheus, grafana"
+                      $DC up -d --no-build --remove-orphans postgres redis data engine web charting trainer prometheus grafana
 
                   post-deploy-command: |
                       set -euo pipefail
                       PROJ_DIR="$HOME/futures"
                       cd "$PROJ_DIR"
-                      DC="docker compose --project-directory $PROJ_DIR -f $PROJ_DIR/docker-compose.yml"
+                      DC="docker compose --project-directory $PROJ_DIR -f $PROJ_DIR/docker-compose.yml --profile training"
 
                       echo ""
-                      echo "📊 Container status:"
-                      $DC ps postgres redis data engine web charting prometheus grafana 2>/dev/null || \
+                      echo "📊 Container status (all services):"
+                      $DC ps 2>/dev/null || \
                         docker ps --filter "name=futures" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
                       echo ""
@@ -621,220 +702,6 @@ jobs:
                       docker image prune -f 2>/dev/null || true
 
                       echo ""
-                      echo "🎯 Architecture:"
-                      uname -m
-                      docker info --format '{{.Architecture}}' 2>/dev/null || true
-
-                      echo ""
-                      echo "✅ Cloud server deployment complete!"
-
-            - name: 🏥 Run Health Checks
-              id: health-checks
-              if: always() && steps.deploy.outcome == 'success'
-              uses: nuniesmith/actions/.github/actions/health-check@main
-              with:
-                  containers: futures
-                  ssh-host: ${{ secrets.PROD_TAILSCALE_IP }}
-                  ssh-port: ${{ secrets.PROD_SSH_PORT || '22' }}
-                  ssh-user: ${{ secrets.PROD_SSH_USER || 'actions' }}
-                  ssh-key: ${{ secrets.PROD_SSH_KEY }}
-                  initial-delay: 15
-                  retry-count: 3
-                  retry-delay: 10
-                  fail-on-unhealthy: false
-
-            - name: 📣 Notify deployment
-              if: always()
-              uses: nuniesmith/actions/.github/actions/discord-notify@main
-              continue-on-error: true
-              with:
-                  webhook-url: ${{ secrets.DISCORD_WEBHOOK_ACTIONS }}
-                  title: "${{ steps.deploy.outcome == 'success' && '☁️ Futures Deployed to Cloud' || '❌ Futures Cloud Deploy Failed' }}"
-                  description: "${{ steps.deploy.outcome == 'success' && 'Data + Engine + Web updated on cloud server' || 'Failed to deploy Futures to cloud server' }}"
-                  status: ${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}
-                  include-repo-info: "true"
-                  fields: |
-                      [
-                        {"name": "Platform", "value": "☁️ Cloud Ubuntu (amd64)", "inline": true},
-                        {"name": "Images", "value": "`${{ env.IMAGE_NAME }}:data`\n`${{ env.IMAGE_NAME }}:engine`\n`${{ env.IMAGE_NAME }}:web`", "inline": true},
-                        {"name": "Commit", "value": "`${{ steps.vars.outputs.sha_short }}`", "inline": true},
-                        {"name": "Network", "value": "🔒 Tailscale VPN", "inline": true},
-                        {"name": "Health", "value": "${{ steps.health-checks.outputs.healthy == 'true' && '✅ Healthy' || '⚠️ Check logs' }}", "inline": true}
-                      ]
-
-    # =========================================================================
-    # Stage 4b: Deploy Trainer to Home Laptop (GPU rig via Tailscale)
-    # =========================================================================
-    #
-    # Connects to the home laptop (CUDA GPU + 64 GB RAM) over Tailscale VPN,
-    # pulls the :trainer image and restarts it with the training profile.
-    #
-    # This machine also runs the FKS project — ports don't interfere:
-    #   Futures trainer: 8200
-    #
-    # SSH user and port are the same as the cloud server; only the IP and
-    # SSH key differ (TRAINER_TAILSCALE_IP, TRAINER_SSH_KEY).
-    #
-    # Gates: same as cloud deploy — runs in parallel after docker stage.
-    # =========================================================================
-    deploy-trainer:
-        name: "🏋️ Deploy Trainer (home GPU)"
-        needs: [docker, docker-base]
-        runs-on: ubuntu-latest
-        timeout-minutes: 15
-        if: |
-            github.ref == 'refs/heads/main'
-            && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-            && inputs.skip_deploy != true
-        steps:
-            - name: 📥 Checkout code
-              uses: actions/checkout@v4
-
-            - name: 🔢 Compute short SHA
-              id: vars
-              run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
-
-            - name: 🔌 Connect to Tailscale
-              id: tailscale
-              uses: nuniesmith/actions/.github/actions/tailscale-connect@main
-              with:
-                  oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-                  oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
-                  target-ip: ${{ secrets.TRAINER_TAILSCALE_IP }}
-                  target-ssh-port: ${{ secrets.PROD_SSH_PORT || '22' }}
-
-            - name: 🏋️ Deploy Trainer via SSH
-              id: deploy-trainer
-              if: steps.tailscale.outputs.connected == 'true'
-              uses: nuniesmith/actions/.github/actions/ssh-deploy@main
-              with:
-                  host: ${{ secrets.TRAINER_TAILSCALE_IP }}
-                  port: ${{ secrets.PROD_SSH_PORT || '22' }}
-                  username: ${{ secrets.PROD_SSH_USER || 'actions' }}
-                  ssh-key: ${{ secrets.TRAINER_SSH_KEY }}
-                  project-path: ~/futures
-                  git-pull: false
-                  git-branch: main
-                  docker-prune: false
-                  pre-deploy-command: |
-                      echo "📦 Preparing Trainer deployment on home GPU rig..."
-
-                      # Handle git repository setup
-                      if [ ! -d "$HOME/futures/.git" ]; then
-                        if [ -d "$HOME/futures" ]; then
-                          echo "📁 Directory exists but is not a git repo — initializing..."
-                          cd ~/futures
-                          git init
-                          git remote add origin https://github.com/${{ github.repository }}.git
-                          git fetch origin
-                          git checkout -f main
-                          git branch --set-upstream-to=origin/main main
-                        else
-                          echo "📥 First deployment — cloning repository..."
-                          git clone https://github.com/${{ github.repository }}.git ~/futures
-                          cd ~/futures
-                          git checkout main
-                        fi
-                      else
-                        cd ~/futures
-                        echo "📥 Pulling latest changes..."
-                        git fetch origin
-                        git checkout main
-                        git pull origin main
-                      fi
-
-                      # Ensure scripts are executable
-                      find . -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
-
-                      # Create .env file if it doesn't exist
-                      if [ ! -f ".env" ]; then
-                        echo "📝 Creating default .env..."
-                        cat > .env <<'ENVEOF'
-                      # Futures Trainer Environment Configuration
-                      PYTHONUNBUFFERED=1
-                      LOG_LEVEL=info
-                      ENVEOF
-                        chmod 600 .env
-                        echo "✅ Created .env file"
-                      fi
-
-                      # Upsert env vars needed by trainer
-                      # The trainer fetches ALL market data from the engine over
-                      # Tailscale — no direct MASSIVE/KRAKEN API keys needed.
-                      echo "🔑 Injecting environment variables into .env..."
-                      upsert_env() {
-                        local key="$1" val="$2"
-                        if grep -q "^${key}=" .env 2>/dev/null; then
-                          sed -i "s|^${key}=.*|${key}=${val}|" .env
-                        else
-                          echo "${key}=${val}" >> .env
-                        fi
-                      }
-                      upsert_env "ENGINE_DATA_URL"     "http://${{ secrets.PROD_TAILSCALE_IP }}:8050"
-                      upsert_env "API_KEY"             "${{ secrets.API_KEY }}"
-                      upsert_env "TRAINER_API_KEY"     "${{ secrets.API_KEY }}"
-
-                      # Clean up legacy keys the trainer no longer needs
-                      sed -i '/^MASSIVE_API_KEY=/d'   .env 2>/dev/null || true
-                      sed -i '/^KRAKEN_API_KEY=/d'    .env 2>/dev/null || true
-                      sed -i '/^KRAKEN_API_SECRET=/d' .env 2>/dev/null || true
-                      sed -i '/^POSTGRES_PASSWORD=/d' .env 2>/dev/null || true
-                      sed -i '/^REDIS_PASSWORD=/d'    .env 2>/dev/null || true
-
-                      chmod 600 .env
-                      echo "✅ Environment variables injected (ENGINE_DATA_URL + API_KEY)"
-
-                      # Create required directories
-                      echo "📁 Ensuring data directories exist..."
-                      mkdir -p data models dataset config scripts
-                      chmod 755 data models dataset config scripts
-                      echo "✅ Directories ready"
-
-                      # Verify NVIDIA GPU is available
-                      echo ""
-                      echo "🎮 GPU check:"
-                      nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null || echo "⚠️ nvidia-smi not available (GPU may still work in container)"
-
-                  deploy-command: |
-                      cd ~/futures
-
-                      # Stop existing trainer service (leave other FKS services untouched)
-                      echo "🐳 Stopping existing trainer service..."
-                      docker compose -f docker-compose.trainer.yml stop trainer 2>/dev/null || true
-                      docker compose -f docker-compose.trainer.yml rm -f trainer 2>/dev/null || true
-                      # Also clean up any old profile-based containers
-                      docker compose --profile training stop trainer 2>/dev/null || true
-                      docker compose --profile training rm -f trainer 2>/dev/null || true
-
-                      # Log in to Docker Hub and pull latest trainer image
-                      echo "🐳 Pulling latest trainer image from Docker Hub..."
-                      echo "${{ secrets.DOCKER_TOKEN }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin 2>/dev/null || true
-
-                      echo "==> Pulling :trainer image..."
-                      docker pull ${{ env.IMAGE_NAME }}:trainer
-
-                      # Start trainer with standalone compose file (no postgres/redis deps)
-                      echo "🏋️ Starting trainer service..."
-                      docker compose -f docker-compose.trainer.yml up -d --no-build trainer
-
-                  post-deploy-command: |
-                      cd ~/futures
-
-                      echo ""
-                      echo "📊 Trainer container status:"
-                      docker compose -f docker-compose.trainer.yml ps trainer 2>/dev/null || \
-                        docker ps --filter "name=trainer" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-
-                      echo ""
-                      echo "📊 Storage usage:"
-                      df -h / | grep -v Filesystem
-                      docker system df 2>/dev/null || true
-
-                      echo ""
-                      echo "🧹 Pruning dangling Docker images..."
-                      docker image prune -f 2>/dev/null || true
-
-                      echo ""
                       echo "🎮 GPU status:"
                       nvidia-smi 2>/dev/null || echo "nvidia-smi not available on host"
 
@@ -843,41 +710,55 @@ jobs:
                       uname -m
                       docker info --format '{{.Architecture}}' 2>/dev/null || true
 
+                      # Quick smoke test — verify key services respond
                       echo ""
-                      echo "✅ Trainer deployment complete!"
+                      echo "🏥 Quick health probes..."
+                      for svc_port in "data:8050" "engine:8100" "web:8080" "trainer:8200"; do
+                        svc="${svc_port%%:*}"
+                        port="${svc_port##*:}"
+                        if curl -sf --max-time 5 "http://localhost:${port}/health" > /dev/null 2>&1; then
+                          echo "  ✅ ${svc} (port ${port}) — healthy"
+                        else
+                          echo "  ⏳ ${svc} (port ${port}) — still starting (may need more time)"
+                        fi
+                      done
 
-            - name: 🏥 Run Trainer Health Check
+                      echo ""
+                      echo "✅ Oryx deployment complete! All services deployed."
+
+            - name: 🏥 Run Health Checks
               id: health-checks
-              if: always() && steps.deploy-trainer.outcome == 'success'
+              if: always() && steps.deploy.outcome == 'success'
               uses: nuniesmith/actions/.github/actions/health-check@main
               with:
-                  containers: trainer
-                  ssh-host: ${{ secrets.TRAINER_TAILSCALE_IP }}
-                  ssh-port: ${{ secrets.PROD_SSH_PORT || '22' }}
-                  ssh-user: ${{ secrets.PROD_SSH_USER || 'actions' }}
-                  ssh-key: ${{ secrets.TRAINER_SSH_KEY }}
+                  containers: futures
+                  ssh-host: ${{ steps.oryx.outputs.ip }}
+                  ssh-port: ${{ steps.oryx.outputs.port }}
+                  ssh-user: ${{ steps.oryx.outputs.user }}
+                  ssh-key: ${{ secrets.PROD_SSH_KEY || secrets.TRAINER_SSH_KEY || secrets.PROD_SSH_KEY }}
                   initial-delay: 30
-                  retry-count: 3
+                  retry-count: 4
                   retry-delay: 15
                   fail-on-unhealthy: false
 
-            - name: 📣 Notify trainer deployment
+            - name: 📣 Notify deployment
               if: always()
               uses: nuniesmith/actions/.github/actions/discord-notify@main
               continue-on-error: true
               with:
                   webhook-url: ${{ secrets.DISCORD_WEBHOOK_ACTIONS }}
-                  title: "${{ steps.deploy-trainer.outcome == 'success' && '🏋️ Trainer Deployed to GPU Rig' || '❌ Trainer Deploy Failed' }}"
-                  description: "${{ steps.deploy-trainer.outcome == 'success' && 'Trainer service updated on home GPU laptop' || 'Failed to deploy Trainer to home GPU laptop' }}"
-                  status: ${{ steps.deploy-trainer.outcome == 'success' && 'success' || 'failure' }}
+                  title: "${{ steps.deploy.outcome == 'success' && '🦌 Futures Deployed to Oryx' || '❌ Futures Oryx Deploy Failed' }}"
+                  description: "${{ steps.deploy.outcome == 'success' && 'All services updated on Oryx server (data + engine + web + trainer + monitoring)' || 'Failed to deploy Futures to Oryx server' }}"
+                  status: ${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}
                   include-repo-info: "true"
                   fields: |
                       [
-                        {"name": "Platform", "value": "🏋️ Home GPU Rig (amd64 / CUDA)", "inline": true},
-                        {"name": "Image", "value": "`${{ env.IMAGE_NAME }}:trainer`", "inline": true},
+                        {"name": "Platform", "value": "🦌 Oryx GPU Rig (amd64 / CUDA)", "inline": true},
+                        {"name": "Services", "value": "`data` · `engine` · `web`\n`trainer` · `charting`\n`prometheus` · `grafana`", "inline": true},
                         {"name": "Commit", "value": "`${{ steps.vars.outputs.sha_short }}`", "inline": true},
                         {"name": "Network", "value": "🔒 Tailscale VPN", "inline": true},
-                        {"name": "Health", "value": "${{ steps.health-checks.outputs.healthy == 'true' && '✅ Healthy' || '⚠️ Check logs' }}", "inline": true}
+                        {"name": "Health", "value": "${{ steps.health-checks.outputs.healthy == 'true' && '✅ Healthy' || '⚠️ Check logs' }}", "inline": true},
+                        {"name": "GPU", "value": "🎮 RTX 3080 16GB", "inline": true}
                       ]
 
     # =========================================================================
@@ -887,7 +768,7 @@ jobs:
         name: "📊 Pipeline Summary"
         runs-on: ubuntu-latest
         timeout-minutes: 5
-        needs: [lint, test, docker-base, docker, deploy, deploy-trainer]
+        needs: [lint, test, docker-base, docker, deploy]
         if: always()
         steps:
             - name: 📊 Generate summary
@@ -902,27 +783,25 @@ jobs:
                   echo "| 🧪 Test | \`${{ needs.test.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "| 🐳 Build :base (shared deps) | \`${{ needs.docker-base.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "| 🐳 Docker Build & Push | \`${{ needs.docker.result }}\` |" >> $GITHUB_STEP_SUMMARY
-                  echo "| ☁️ Deploy Cloud (data + engine + web) | \`${{ needs.deploy.result }}\` |" >> $GITHUB_STEP_SUMMARY
-                  echo "| 🏋️ Deploy Trainer (home GPU) | \`${{ needs.deploy-trainer.result }}\` |" >> $GITHUB_STEP_SUMMARY
+                  echo "| 🦌 Deploy ALL to Oryx | \`${{ needs.deploy.result }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
 
                   if [ "${{ needs.lint.result }}" = "success" ] && \
                      [ "${{ needs.test.result }}" = "success" ] && \
                      [ "${{ needs.docker.result }}" = "success" ]; then
-                    CLOUD="${{ needs.deploy.result }}"
-                    TRAINER="${{ needs.deploy-trainer.result }}"
-                    if [ "$CLOUD" = "success" ] && [ "$TRAINER" = "success" ]; then
-                      echo "### ✅ All stages completed — cloud + trainer updated!" >> $GITHUB_STEP_SUMMARY
-                    elif [ "$CLOUD" = "success" ] && [ "$TRAINER" = "failure" ]; then
-                      echo "### ⚠️ Cloud deployed but trainer deploy failed — check TRAINER_TAILSCALE_IP / TRAINER_SSH_KEY" >> $GITHUB_STEP_SUMMARY
-                    elif [ "$CLOUD" = "failure" ] && [ "$TRAINER" = "success" ]; then
-                      echo "### ⚠️ Trainer deployed but cloud deploy failed — check PROD_TAILSCALE_IP / PROD_SSH_KEY" >> $GITHUB_STEP_SUMMARY
-                    elif [ "$CLOUD" = "failure" ] && [ "$TRAINER" = "failure" ]; then
-                      echo "### ❌ Both deploys failed — check Tailscale / SSH secrets" >> $GITHUB_STEP_SUMMARY
-                    elif [ "$CLOUD" = "skipped" ] && [ "$TRAINER" = "skipped" ]; then
-                      echo "### ✅ Build + test passed (deploys skipped)" >> $GITHUB_STEP_SUMMARY
+                    DEPLOY="${{ needs.deploy.result }}"
+                    if [ "$DEPLOY" = "success" ]; then
+                      echo "### ✅ All stages completed — Oryx fully updated!" >> $GITHUB_STEP_SUMMARY
+                      echo "" >> $GITHUB_STEP_SUMMARY
+                      echo "All services deployed: data, engine, web, trainer, charting, prometheus, grafana" >> $GITHUB_STEP_SUMMARY
+                    elif [ "$DEPLOY" = "failure" ]; then
+                      echo "### ❌ Deploy to Oryx failed — check Tailscale / SSH secrets" >> $GITHUB_STEP_SUMMARY
+                      echo "" >> $GITHUB_STEP_SUMMARY
+                      echo "Verify PROD_TAILSCALE_IP (or TRAINER_TAILSCALE_IP) and PROD_SSH_KEY (or TRAINER_SSH_KEY) are set." >> $GITHUB_STEP_SUMMARY
+                    elif [ "$DEPLOY" = "skipped" ]; then
+                      echo "### ✅ Build + test passed (deploy skipped)" >> $GITHUB_STEP_SUMMARY
                     else
-                      echo "### ✅ Build passed — Cloud: ${CLOUD}, Trainer: ${TRAINER}" >> $GITHUB_STEP_SUMMARY
+                      echo "### ✅ Build passed — Deploy: ${DEPLOY}" >> $GITHUB_STEP_SUMMARY
                     fi
                   elif [ "${{ needs.lint.result }}" = "failure" ]; then
                     echo "### ❌ Pipeline failed at lint stage" >> $GITHUB_STEP_SUMMARY
@@ -946,12 +825,15 @@ jobs:
                   echo "" >> $GITHUB_STEP_SUMMARY
                   echo "| Service | Tag | Pinned Tag | Platforms | Deploy Target |" >> $GITHUB_STEP_SUMMARY
                   echo "|---------|-----|------------|-----------|---------------|" >> $GITHUB_STEP_SUMMARY
-                  echo "| Data | \`${{ env.IMAGE_NAME }}:data\` | \`:data-${SHA_SHORT}\` | amd64, arm64 | ☁️ Cloud |" >> $GITHUB_STEP_SUMMARY
-                  echo "| Engine | \`${{ env.IMAGE_NAME }}:engine\` | \`:engine-${SHA_SHORT}\` | amd64, arm64 | ☁️ Cloud |" >> $GITHUB_STEP_SUMMARY
-                  echo "| Web | \`${{ env.IMAGE_NAME }}:web\` | \`:web-${SHA_SHORT}\` | amd64, arm64 | ☁️ Cloud |" >> $GITHUB_STEP_SUMMARY
-                  echo "| Trainer | \`${{ env.IMAGE_NAME }}:trainer\` | \`:trainer-${SHA_SHORT}\` | amd64 | 🏋️ Home GPU |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Data | \`${{ env.IMAGE_NAME }}:data\` | \`:data-${SHA_SHORT}\` | amd64, arm64 | 🦌 Oryx |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Engine | \`${{ env.IMAGE_NAME }}:engine\` | \`:engine-${SHA_SHORT}\` | amd64, arm64 | 🦌 Oryx |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Web | \`${{ env.IMAGE_NAME }}:web\` | \`:web-${SHA_SHORT}\` | amd64, arm64 | 🦌 Oryx |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Trainer | \`${{ env.IMAGE_NAME }}:trainer\` | \`:trainer-${SHA_SHORT}\` | amd64 | 🦌 Oryx (GPU) |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Charting | \`${{ env.IMAGE_NAME }}:charting\` | \`:charting-${SHA_SHORT}\` | amd64, arm64 | 🦌 Oryx |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Prometheus | \`${{ env.IMAGE_NAME }}:prometheus\` | \`:prometheus-${SHA_SHORT}\` | amd64, arm64 | 🦌 Oryx |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Grafana | \`${{ env.IMAGE_NAME }}:grafana\` | \`:grafana-${SHA_SHORT}\` | amd64, arm64 | 🦌 Oryx |" >> $GITHUB_STEP_SUMMARY
                   echo "| Base (shared deps) | \`${{ env.IMAGE_NAME }}:base\` | \`:base-${SHA_SHORT}\` | amd64, arm64 | — (build only) |" >> $GITHUB_STEP_SUMMARY
-                  echo "| Default (:latest) | \`${{ env.IMAGE_NAME }}:latest\` | — | amd64, arm64 | ☁️ Cloud |" >> $GITHUB_STEP_SUMMARY
+                  echo "| Default (:latest) | \`${{ env.IMAGE_NAME }}:latest\` | — | amd64, arm64 | 🦌 Oryx |" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
                   echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
                   echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -959,15 +841,15 @@ jobs:
                   echo "| 📦 Repo | \`${{ env.IMAGE_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "| 🌿 Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
                   echo "| 🔗 Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+                  echo "| 🦌 Target | Oryx (RTX 3080 16GB, 64 GB RAM) |" >> $GITHUB_STEP_SUMMARY
 
             - name: ❌ Fail on critical errors
-              if: needs.lint.result == 'failure' || needs.test.result == 'failure' || needs.docker-base.result == 'failure' || needs.docker.result == 'failure' || needs.deploy.result == 'failure' || needs.deploy-trainer.result == 'failure'
+              if: needs.lint.result == 'failure' || needs.test.result == 'failure' || needs.docker-base.result == 'failure' || needs.docker.result == 'failure' || needs.deploy.result == 'failure'
               run: |
                   echo "❌ Pipeline had failures"
                   echo "  Lint:        ${{ needs.lint.result }}"
                   echo "  Test:        ${{ needs.test.result }}"
                   echo "  Base image:  ${{ needs.docker-base.result }}"
                   echo "  Docker:      ${{ needs.docker.result }}"
-                  echo "  Cloud:       ${{ needs.deploy.result }}"
-                  echo "  Trainer:     ${{ needs.deploy-trainer.result }}"
+                  echo "  Deploy:      ${{ needs.deploy.result }}"
                   exit 1

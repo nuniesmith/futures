@@ -177,6 +177,15 @@ from lib.services.data.api.trades import (  # noqa: E402
 from lib.services.data.api.trainer import (  # noqa: E402
     router as trainer_router,
 )
+from lib.services.data.api.simulation_api import (  # noqa: E402
+    router as sim_router,
+    sse_router as sim_sse_router,
+)
+from lib.services.data.sync import (  # noqa: E402
+    DataSyncService,
+    get_sync_service,
+    sync_router,
+)
 
 # ---------------------------------------------------------------------------
 # Engine mode — always "remote" when running as standalone data service.
@@ -424,6 +433,37 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Startup cache warm failed (non-fatal): %s", exc)
 
+    # 7. Start the background DataSyncService — maintains rolling 1-year
+    #    window of 1-min bars in Postgres with incremental 5-min refreshes.
+    _sync_service: DataSyncService | None = None
+    try:
+        _sync_service = get_sync_service()
+        _sync_task = asyncio.create_task(_sync_service.run())
+        _sync_service._task = _sync_task
+        logger.info("DataSyncService background task started")
+    except Exception as exc:
+        logger.warning("DataSyncService startup failed (non-fatal): %s", exc)
+
+    # 8. Start SimulationEngine for paper-trading with live Kraken tick data
+    _sim_engine = None
+    try:
+        sim_enabled = os.getenv("SIM_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+        if sim_enabled:
+            from lib.services.engine.simulation import create_sim_engine
+
+            _sim_engine = create_sim_engine()
+            _sim_engine.start()
+            app.state.sim_engine = _sim_engine
+            logger.info(
+                "SimulationEngine started (balance=$%s, source=%s)",
+                f"{_sim_engine._account_balance:,.2f}",
+                os.getenv("SIM_DATA_SOURCE", "kraken"),
+            )
+        else:
+            logger.info("SimulationEngine disabled (SIM_ENABLED=0)")
+    except Exception as exc:
+        logger.warning("SimulationEngine startup failed (non-fatal): %s", exc)
+
     logger.info("=" * 60)
     logger.info("  Data Service ready — accepting requests")
     logger.info("=" * 60)
@@ -434,6 +474,22 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("  Data Service shutting down")
     logger.info("=" * 60)
+
+    # Stop SimulationEngine
+    if _sim_engine is not None:
+        try:
+            _sim_engine.stop()
+            logger.info("SimulationEngine stopped cleanly")
+        except Exception as exc:
+            logger.warning("SimulationEngine stop error (non-fatal): %s", exc)
+
+    # Stop DataSyncService
+    if _sync_service is not None:
+        try:
+            await _sync_service.stop()
+            logger.info("DataSyncService stopped cleanly")
+        except Exception as exc:
+            logger.warning("DataSyncService stop error (non-fatal): %s", exc)
 
     # Stop Kraken WebSocket feed
     if _kraken_feed is not None:
@@ -684,6 +740,19 @@ app.include_router(swing_actions_router, tags=["Swing Actions"])
 # NOTE: reddit_router is mounted WITHOUT a prefix — routes are defined with full paths.
 app.include_router(reddit_router, tags=["Reddit Sentiment"])
 
+# Data Sync: /api/data/sync/status, /api/data/sync/trigger, /api/data/bars
+# Rolling 1-year data window maintenance with background sync.
+# NOTE: sync_router is mounted WITHOUT a prefix — routes are defined with full paths.
+app.include_router(sync_router, tags=["Data Sync"])
+
+# Simulation: /api/sim/status, /api/sim/order, /api/sim/close/{symbol},
+#             /api/sim/close-all, /api/sim/reset, /api/sim/trades, /api/sim/pnl,
+#             /sse/sim — paper trading with live Kraken tick data.
+# Gated by SIM_ENABLED=1 env var at the engine level; routes always registered
+# but return 503 when the engine is not running.
+app.include_router(sim_router, tags=["Simulation"])
+app.include_router(sim_sse_router, tags=["Simulation SSE"])
+
 # News Sentiment: /api/news/sentiment, /api/news/sentiment/{symbol},
 #                 /api/news/headlines, /api/news/spike,
 #                 /htmx/news/panel, /htmx/news/asset/{symbol}
@@ -757,10 +826,25 @@ from lib.services.data.api.dom import sse_router as dom_sse_router  # noqa: E402
 app.include_router(dom_router, tags=["DOM"])
 app.include_router(dom_sse_router, tags=["DOM SSE"])
 
-# Static Pages: /chat, /dom, /journal — serve standalone HTML from static/
+# Data Source Router: /api/sources/symbols, /api/sources/status
+# NOTE: source_api_router is mounted WITHOUT a prefix — routes are defined with /api/sources/ paths.
+from lib.services.data.source_router import source_api_router  # noqa: E402
+
+app.include_router(source_api_router, tags=["Data Sources"])
+
+# Static Pages: /chat, /dom, /journal, /pretrade — serve standalone HTML from static/
 from lib.services.data.api.static_pages import router as static_pages_router  # noqa: E402
 
 app.include_router(static_pages_router, tags=["Static Pages"])
+
+# Pre-Trade Analysis: /api/pretrade/assets, /api/pretrade/analyze,
+#                     /api/pretrade/analysis/{symbol}, /api/pretrade/select,
+#                     /api/pretrade/selected, /api/pretrade/watchlist
+# KRAKEN-SIM-C: Asset selection & opportunity scoring for pre-session workflow.
+# NOTE: pretrade_router is mounted WITHOUT a prefix — routes are defined with /api/pretrade/ paths.
+from lib.services.data.api.pretrade import router as pretrade_router  # noqa: E402
+
+app.include_router(pretrade_router, tags=["Pre-Trade Analysis"])
 
 
 # ---------------------------------------------------------------------------

@@ -503,7 +503,7 @@ hr.sep{border:none;border-top:1px solid var(--border-s);margin:12px 0}
           <div class="card-title">Service URLs</div>
           <div class="field">
             <label class="lbl">Data Service URL</label>
-            <input type="text" id="svc-data-url" placeholder="http://100.122.184.58:8000"/>
+            <input type="text" id="svc-data-url" placeholder="http://100.113.72.63:8000"/>
             <div class="field-hint">Engine + data API (Pi)</div>
           </div>
           <div class="field">
@@ -1728,7 +1728,7 @@ async def get_service_config():
     overrides = _load_persisted_settings()
     svc = overrides.get("services", {})
     return {
-        "data_service_url": svc.get("data_service_url", os.getenv("DATA_SERVICE_URL", "http://100.122.184.58:8000")),
+        "data_service_url": svc.get("data_service_url", os.getenv("DATA_SERVICE_URL", "http://100.113.72.63:8000")),
         "trainer_service_url": svc.get(
             "trainer_service_url", os.getenv("TRAINER_SERVICE_URL", "http://100.122.184.58:8200")
         ),
@@ -1774,7 +1774,7 @@ async def probe_services():
 
     # Displayed URL for the engine — whatever the operator configured, for
     # reference only (we don't HTTP-probe it since we *are* it).
-    data_url = svc.get("data_service_url", os.getenv("DATA_SERVICE_URL", "http://100.122.184.58:8000"))
+    data_url = svc.get("data_service_url", os.getenv("DATA_SERVICE_URL", "http://100.113.72.63:8000"))
 
     services = []
 
@@ -2043,3 +2043,114 @@ async def get_api_key_status():
         {"name": "REDIS_URL", "configured": bool(os.getenv("REDIS_URL", ""))},
     ]
     return {"keys": keys}
+
+
+# ---------------------------------------------------------------------------
+# Data source switching endpoints (KRAKEN-SIM-D)
+# ---------------------------------------------------------------------------
+
+_DATA_SOURCE_KEY = "settings:data_source"
+_VALID_DATA_SOURCES = ("kraken", "rithmic", "both")
+
+
+@router.get("/api/settings/data-source")
+async def get_data_source():
+    """Return the current data source configuration.
+
+    Reads the active source from Redis, checks Kraken and Rithmic
+    connectivity, and reports which sources are available.
+    """
+    # --- Read active source from Redis ---
+    active_source = "kraken"
+    try:
+        from lib.core.cache import REDIS_AVAILABLE, _r
+
+        if REDIS_AVAILABLE and _r is not None:
+            raw = _r.get(_DATA_SOURCE_KEY)
+            if raw is not None:
+                val = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+                if val in _VALID_DATA_SOURCES:
+                    active_source = val
+    except Exception:
+        pass
+
+    # --- Check Kraken status ---
+    kraken_status = "disconnected"
+    try:
+        from lib.integrations.kraken_client import get_kraken_feed
+
+        feed = get_kraken_feed()
+        if feed is not None:
+            if getattr(feed, "is_connected", False):
+                kraken_status = "connected"
+            elif getattr(feed, "is_running", False):
+                kraken_status = "connecting"
+    except Exception:
+        pass
+
+    # --- Check Rithmic status ---
+    rithmic_status = "not_configured"
+    try:
+        from lib.integrations.rithmic_client import get_manager
+
+        mgr = get_manager()
+        all_status = mgr.get_all_status()
+        if not all_status:
+            rithmic_status = "not_configured"
+        else:
+            rithmic_status = "disconnected"
+            for _key, st in all_status.items():
+                if isinstance(st, dict) and st.get("connected"):
+                    rithmic_status = "connected"
+                    break
+    except Exception:
+        pass
+
+    sim_enabled = os.getenv("SIM_ENABLED", "0") == "1"
+
+    return {
+        "active_source": active_source,
+        "kraken_status": kraken_status,
+        "rithmic_status": rithmic_status,
+        "available_sources": list(_VALID_DATA_SOURCES),
+        "sim_enabled": sim_enabled,
+        "sim_data_source": active_source if active_source != "both" else "kraken",
+    }
+
+
+@router.post("/api/settings/data-source")
+async def set_data_source(body: dict):
+    """Switch the active data source.
+
+    Request body: ``{"source": "kraken"}`` or ``{"source": "rithmic"}``
+    or ``{"source": "both"}``.
+
+    Stores the value in Redis and publishes a ``data_source_changed``
+    event on the ``futures:events`` channel.
+    """
+    source = body.get("source", "").lower().strip()
+    if source not in _VALID_DATA_SOURCES:
+        return {
+            "status": "error",
+            "message": f"Invalid source '{source}'. Must be one of: {', '.join(_VALID_DATA_SOURCES)}",
+        }
+
+    try:
+        from lib.core.cache import REDIS_AVAILABLE, _r
+
+        if REDIS_AVAILABLE and _r is not None:
+            _r.set(_DATA_SOURCE_KEY, source)
+            # Publish event so other components can react
+            _r.publish(
+                "futures:events",
+                json.dumps({"event": "data_source_changed", "source": source}),
+            )
+            logger.info("Data source switched to: %s", source)
+        else:
+            logger.warning("Redis unavailable — data source change not persisted")
+            return {"status": "error", "message": "Redis unavailable"}
+    except Exception as exc:
+        logger.error("Failed to set data source: %s", exc)
+        return {"status": "error", "message": f"Failed to set data source: {exc}"}
+
+    return {"status": "ok", "message": f"Data source set to '{source}'", "active_source": source}

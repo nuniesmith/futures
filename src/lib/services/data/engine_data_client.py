@@ -684,6 +684,107 @@ class EngineDataClient:
     # Health
     # ------------------------------------------------------------------
 
+    def get_stored_bars(
+        self,
+        symbol: str,
+        interval: str = "1m",
+        days_back: int = 365,
+    ) -> pd.DataFrame | None:
+        """Fetch OHLCV bars from the Postgres-backed store via ``/api/data/bars``.
+
+        This is a convenience method that hits the data service's
+        ``GET /api/data/bars`` endpoint directly.  Unlike :meth:`get_bars`
+        (which routes through Redis → Postgres → external API), this path
+        reads *only* from Postgres — no external API calls are made.
+
+        This makes it ideal for **offline training**: once the
+        :class:`DataSyncService` has populated the rolling 365-day window
+        in Postgres, the trainer can generate datasets without any API keys.
+
+        Parameters
+        ----------
+        symbol:
+            Ticker symbol, e.g. ``"MGC=F"`` or ``"KRAKEN:XBTUSD"``.
+        interval:
+            Bar interval (default ``"1m"``).
+        days_back:
+            Number of calendar days to look back (default 365).
+
+        Returns
+        -------
+        pd.DataFrame | None
+            OHLCV DataFrame with a UTC DatetimeIndex and columns
+            ``["Open", "High", "Low", "Close", "Volume"]``, or ``None``
+            if the endpoint is unreachable or returned no data.
+        """
+        payload = self._get(
+            "/api/data/bars",
+            params={
+                "symbol": symbol,
+                "interval": interval,
+                "days": days_back,
+            },
+        )
+
+        if not payload:
+            return None
+
+        # Check for server-side errors embedded in the response
+        if payload.get("error"):
+            logger.debug(
+                "get_stored_bars: server error for %s: %s",
+                symbol,
+                payload["error"],
+            )
+            return None
+
+        bars = payload.get("bars", [])
+        if not bars:
+            logger.debug("get_stored_bars: 0 bars for %s/%s (%d days)", symbol, interval, days_back)
+            return None
+
+        try:
+            df = pd.DataFrame(bars)
+
+            # Parse the ISO timestamp index
+            df.index = pd.to_datetime(df["t"], utc=True)
+            df.index.name = None
+
+            # Rename compact keys to standard OHLCV column names
+            df = df.rename(
+                columns={
+                    "o": "Open",
+                    "h": "High",
+                    "l": "Low",
+                    "c": "Close",
+                    "v": "Volume",
+                }
+            )
+
+            # Drop the raw timestamp column (now in the index)
+            df = df.drop(columns=["t"], errors="ignore")
+
+            # Keep only OHLCV columns and ensure numeric types
+            for col in ("Open", "High", "Low", "Close", "Volume"):
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+
+            # Sort by time just in case
+            df = df.sort_index()
+
+            logger.debug(
+                "get_stored_bars: %d bars for %s/%s (%d days back)",
+                len(df),
+                symbol,
+                interval,
+                days_back,
+            )
+            return df if not df.empty else None
+
+        except Exception as exc:
+            logger.debug("get_stored_bars: DataFrame construction failed for %s: %s", symbol, exc)
+            return None
+
     def is_available(self, timeout: int = 3) -> bool:
         """Return True if the engine health endpoint responds within ``timeout`` s."""
         try:

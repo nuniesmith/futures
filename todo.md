@@ -26,7 +26,7 @@ Rithmic (async_rithmic)  →  Main account order + 1:1 copy to all slave account
 - **Rithmic** (async_rithmic) — primary for CME futures when creds active: live tick data, time bars, order book, market depth, historical data, PnL
 - **MassiveAPI** (massive_client) — current primary for CME futures: REST + WebSocket live data (futures beta)
 - **Yahoo Finance** (yfinance) — last-resort fallback only (delayed data)
-- **Kraken** (kraken_client) — crypto spot only (personal account management + training data)
+- **Kraken** (kraken_client) — crypto spot + futures (personal accounts, fully app-managed) + live tick data for simulation
 
 **Two-stage scaling plan:**
 - Stage 1 — TPT: 5 × $150K accounts = $750K buying power
@@ -94,6 +94,10 @@ Rithmic (async_rithmic)  →  Main account order + 1:1 copy to all slave account
 | DOM (Depth of Market) | 🟡 API scaffolded + HTML created — needs Rithmic live data for real feed |
 | Chat page | 🟡 HTML created at `/chat` — needs backend wiring verification |
 | Journal page | 🟡 Standalone HTML at `/journal` — needs Rithmic fill sync for auto-population |
+| Kraken integration | ✅ REST + WebSocket client, crypto ORB sessions, portfolio queries + tick-level trade streaming |
+| Simulation environment | ✅ **BUILT 2026-03-15** — SimulationEngine + API routes + DOM live data (gated by `SIM_ENABLED=1`) |
+| 1-year rolling data | ✅ **BUILT 2026-03-15** — DataSyncService background task, 365-day backfill, 5-min incremental, retention cleanup |
+| WebUI API key management | ❌ Not started — API keys still in .env, should move to settings page |
 
 ---
 
@@ -515,6 +519,207 @@ Rithmic (async_rithmic)  →  Main account order + 1:1 copy to all slave account
 **Files**: `src/lib/integrations/rithmic_client.py`, `src/lib/services/data/resolver.py`, `src/lib/services/engine/main.py`, `src/lib/services/engine/live_risk.py`, `docker-compose.yml`
 
 **Estimated effort**: ~6–8 agent sessions
+
+---
+
+## 🟡 Phase KRAKEN-SIM — Kraken Live Tick Simulation Environment
+
+> Use Kraken WebSocket live tick data to simulate the full trading pipeline without Rithmic creds.
+> All the same tools work (DOM, charts, account tracking) but signals go to Redis as mock trades.
+> Tests with BTC/USD, ETH/USD, SOL/USD — same pipeline as futures, different data source.
+>
+> **Key insight**: Rithmic gives tick-level data for futures, Kraken gives tick-level data for crypto
+> (free, no creds needed for public data). We can test everything with crypto before going live on futures.
+>
+> **Built 2026-03-15:** SimulationEngine + API routes + DOM live data integration.
+> Existing KrakenFeedManager already streams trades via `_handle_trade()` callback.
+
+### KRAKEN-SIM-A: Tick-Level WebSocket Streaming
+- [x] Upgrade `kraken_client.py` WebSocket to stream raw tick/trade data (not just OHLC bars) — **already done**: `_handle_trade()` processes `{price, qty, side, ord_type, timestamp}` per trade
+- [x] Subscribe to `trade` channel for BTC/USD, ETH/USD, SOL/USD — **already done**: `KrakenFeedManager` subscribes to `trade` channel for all configured pairs
+- [ ] Publish ticks to Redis: `kraken:ticks:{pair}` (rolling window, ~5min of ticks) — SimulationEngine receives ticks via `on_tick()` callback, raw tick publishing TBD
+- [ ] Build 1m bars from tick aggregation (in addition to Kraken's native OHLC stream)
+- [ ] Publish L1 best bid/ask from `spread` channel to Redis: `kraken:l1:{pair}`
+
+### ✅ KRAKEN-SIM-B: Simulation Environment (Mock Trading) (DONE 2026-03-15)
+- [x] Create `SimulationEngine` class — receives signals, executes mock fills against live tick data — `src/lib/services/engine/simulation.py` (1,273 lines)
+- [x] Mock order fills: limit orders fill when price crosses, market orders fill at current tick — `submit_market_order()`, `submit_limit_order()`, `_check_pending_orders()`
+- [x] Track simulated positions, P&L, entry/exit times in Redis (`sim:positions`, `sim:orders`, `sim:pnl`, `sim:trades`) — `_publish_state()` after every state change
+- [x] Record all sim trades to Postgres `sim_trades` table for analysis — `_record_trade()` with dual SQLite/Postgres DDL
+- [x] Support both Kraken (crypto) and Rithmic (futures) data sources — switch via `SIM_DATA_SOURCE` env var
+- [x] Send mock signals to Redis instead of real order flow — same keys, prefixed with `sim:` — all Redis keys use `sim:` prefix
+- [x] API routes: `src/lib/services/data/api/simulation_api.py` (370 lines) — `/api/sim/status`, `/api/sim/order`, `/api/sim/close/{symbol}`, `/api/sim/close-all`, `/api/sim/reset`, `/api/sim/trades`, `/api/sim/pnl`, `/sse/sim`
+- [x] DOM live data: `dom.py` updated — `_build_live_snapshot()` reads `kraken:live:{ticker}` from Redis, falls back to mock; sim position markers shown on DOM ladder
+- [x] Wired into data service lifespan: `SIM_ENABLED=1` env var gates startup, engine stored in `app.state.sim_engine`
+
+### KRAKEN-SIM-C: Pre-Trade Analysis Workflow
+- [ ] Pre-trade analysis page: select assets based on daily opportunities (crypto and/or futures)
+- [ ] Run CNN + Ruby signals + indicators + news on selected assets
+- [ ] Pick assets → send to account monitor/manager for breakout watching
+- [ ] Account monitor watches for setups on selected assets, sends mock signals to Redis
+- [ ] Track time, prices, P&L, all trade info — same format as live trading
+
+### KRAKEN-SIM-D: Data Source Switching
+- [ ] Settings page toggle: "Data Source" dropdown — Rithmic (futures) / Kraken (crypto) / Both
+- [x] When Kraken selected: DOM shows crypto order book — `_build_live_snapshot()` reads Kraken live data from Redis, `_CRYPTO_DOM_SYMBOLS` mapping added
+- [ ] When Rithmic selected: DOM shows futures depth, charts show futures, signals for futures
+- [ ] When Both: parallel tracking of futures + crypto assets, unified dashboard view
+- [ ] Trading tools work identically regardless of data source — only the connection layer changes
+
+**Files**: `src/lib/integrations/kraken_client.py`, `src/lib/services/engine/simulation.py` (**new**, 1,273 lines), `src/lib/services/data/api/simulation_api.py` (**new**, 370 lines), `src/lib/services/data/api/dom.py` (updated)
+**Estimated effort**: ~~4–5 sessions~~ B done, A partially done, C+D remain (~2–3 sessions)
+
+---
+
+## 🟡 Phase DATA-ROLLING — 1-Year Rolling Data Window in Postgres
+
+> Build and maintain a rolling window of ~1 year of 1-minute data for all enabled assets.
+> Data service keeps this in sync. Engine and trainer pull from Postgres (or Redis cache).
+>
+> **Assets**: 9 futures (MGC SIL MES MNQ M2K MYM ZN ZB ZW) + 3 crypto (BTC/USD ETH/USD SOL/USD)
+>
+> **Built 2026-03-15:** `DataSyncService` created with background sync, retention, Redis cache.
+> Uses existing `historical_bars` table + `backfill_symbol()` from backfill.py — no new table needed.
+
+### ✅ DATA-ROLLING-A: Postgres 1m Bar Storage (DONE 2026-03-15 — uses existing `historical_bars`)
+- [x] Create `bars_1m` table — **uses existing `historical_bars`** table from `backfill.py` (already has symbol, timestamp, OHLCV, interval, unique constraint)
+- [x] Unique constraint on (symbol, timestamp) — already exists: `UNIQUE (symbol, timestamp, interval)` + `ON CONFLICT DO NOTHING`
+- [ ] Partition by month for query performance — deferred (not needed until > 50M rows)
+- [x] Retention policy: auto-delete bars older than 13 months — `_enforce_retention(days=395)` in `sync.py`, runs after each sync cycle
+
+### ✅ DATA-ROLLING-B: Data Sync Service (DONE 2026-03-15)
+- [x] Background task in data service: sync 1m bars for all enabled assets — `DataSyncService.run()` as `asyncio.Task` in data service lifespan
+- [x] Futures: pull from Massive API (current) → Rithmic historical (when creds arrive) — delegates to existing `backfill_symbol()` which routes Massive → yfinance
+- [x] Crypto: pull from Kraken REST OHLC API for BTC/USD, ETH/USD, SOL/USD — delegates to existing `_fetch_chunk_kraken()` in backfill.py
+- [x] Backfill: on first run, fetch 365 days of history per asset — `_sync_symbol()` checks bar count, does full 365-day backfill if < 200K bars
+- [x] Incremental: every 5 minutes, fetch latest bars and upsert — `SYNC_INTERVAL_SECONDS=300` env var, configurable
+- [x] Track sync status per asset in Redis: `data:sync:{symbol}` — JSON dict with `last_synced`, `bar_count`, `status`, `error`, `duration_seconds`
+- [x] Manual trigger: `POST /api/data/sync/trigger` wakes the sync service from its sleep interval
+- [x] Wired into data service lifespan: starts as step 7 after cache warm, stops on shutdown
+
+### ✅ DATA-ROLLING-C: Redis Cache Layer (DONE 2026-03-15)
+- [x] Cache recent bars (last 24h) in Redis for fast access: `bars:1m:{symbol}` sorted set — `_warm_redis_cache()` in sync.py
+- [ ] Engine/trainer request flow: Redis cache → Postgres → API fallback — partial (bars.py already has this for `get_bars`, trainer needs explicit wiring)
+- [x] Data service populates Redis cache from Postgres on startup — existing `startup_warm_caches()` + sync service warms after each symbol sync
+- [x] TTL management: Redis bars expire after 25h, refreshed on each sync cycle
+
+### 🟡 DATA-ROLLING-D: Trainer Data Pipeline
+- [ ] Trainer can request data from data service instead of fetching directly
+- [x] `GET /api/data/bars?symbol=MES&interval=1m&days=365` — serves from Postgres via existing `get_stored_bars()` — route added in `sync_router`
+- [ ] Dataset generation uses Postgres bars — no more direct API calls from trainer
+- [ ] Enables offline training: once data is in Postgres, no external API needed
+
+**Files**: `src/lib/services/data/sync.py` (**new**, 783 lines), `src/lib/services/data/main.py` (updated — lifespan + router), `src/lib/services/data/api/bars.py` (existing — unchanged, sync service delegates to `backfill_symbol()`)
+**New API routes**: `GET /api/data/sync/status`, `POST /api/data/sync/trigger`, `GET /api/data/bars`
+**Estimated effort**: ~~3–4 sessions~~ A/B/C done, D partially done (~1 session remaining)
+
+---
+
+## 🟡 Phase WEBUI-KEYS — API Key Management in WebUI Settings
+
+> Move API keys from `.env` file to the WebUI settings page. Keys stored encrypted in Redis
+> (same pattern as Rithmic credential storage). `.env` values used as fallback/initial seed.
+
+### WEBUI-KEYS-A: Settings UI for API Keys
+- [ ] Add "API Keys" section to settings page with masked input fields
+- [ ] Keys to manage: Massive API, Finnhub, Alpha Vantage, Kraken (key + secret), xAI/Grok, Reddit (client ID + secret)
+- [ ] Show connection status indicator per key (green dot = valid, red = invalid/missing)
+- [ ] "Test Connection" button per service — verify key works
+- [ ] Save encrypted to Redis using same Fernet encryption as Rithmic creds
+
+### WEBUI-KEYS-B: Key Resolution Chain
+- [ ] Priority: Redis (WebUI-set) → `.env` file → empty (disabled)
+- [ ] On startup, if Redis has no keys, seed from `.env` values
+- [ ] All services (`massive_client`, `news_client`, `kraken_client`, `grok_helper`, `reddit_watcher`) read from resolver
+- [ ] Create `src/lib/core/api_keys.py` — centralized key resolver with caching
+
+### WEBUI-KEYS-C: Security
+- [ ] Keys never sent in plaintext over API responses — always masked (show last 4 chars only)
+- [ ] Keys encrypted at rest in Redis with app SECRET_KEY derived Fernet key
+- [ ] Audit log: log when keys are added/changed/removed (no plaintext in logs)
+
+**Files**: `src/lib/services/data/api/settings.py`, new `src/lib/core/api_keys.py`
+**Estimated effort**: 2–3 sessions
+
+---
+
+## 🟡 Phase KRAKEN-ACCOUNTS — Full Kraken Account Management
+
+> Kraken accounts are 100% managed by this app. No compliance restrictions like prop firms.
+> Build up spot accounts then futures. Use USDT/USDC as backbone currency.
+>
+> **Target**: Grow Kraken spot to 5K CAD, Kraken futures to 5K CAD.
+> **Pairs**: BTC/USD, ETH/USD, SOL/USD (expandable later)
+
+### KRAKEN-ACCOUNTS-A: Spot Account Management
+- [ ] Dashboard card: Kraken spot balances (BTC, ETH, SOL, USDT, USDC, CAD)
+- [ ] Auto-rebalancing: maintain target ratios across spot holdings
+- [ ] DCA (Dollar Cost Average) scheduler: periodic buys on configurable schedule
+- [ ] Trade execution: market and limit orders via Kraken REST API
+- [ ] P&L tracking: cost basis, unrealized gains, realized gains per asset
+
+### KRAKEN-ACCOUNTS-B: Kraken Futures Account
+- [ ] Dashboard card: Kraken futures positions, margin, P&L
+- [ ] Same signal pipeline as Rithmic futures but routed to Kraken futures API
+- [ ] Position sizing based on account balance (same risk rules as prop accounts)
+- [ ] No compliance restrictions — fully automated execution allowed
+
+### KRAKEN-ACCOUNTS-C: USDT/USDC Backbone
+- [ ] Track stablecoin balances as "cash" equivalent
+- [ ] Auto-convert profits to USDT/USDC for stability
+- [ ] Fund futures margin from stablecoin balance
+- [ ] Cross-exchange stablecoin tracking (Kraken + crypto.com + Netcoins)
+
+**Files**: `src/lib/integrations/kraken_client.py`, `src/lib/services/data/api/kraken.py`
+**Estimated effort**: 4–5 sessions
+
+---
+
+## 🟢 Phase MULTI-EXCHANGE — Multi-Exchange & Wallet Portfolio Management
+
+> After Kraken is stable, add support for additional exchanges and hardware wallets.
+> Track total net worth across all accounts and platforms.
+>
+> **Exchanges**: Kraken (primary), crypto.com (Visa card + CRO staking), Netcoins (Mastercard)
+> **Wallets**: BTC hardware wallet (Coldcard) for long-term holdings
+> **Target per platform**: ~5K CAD spot + 5K CAD futures where available
+
+### MULTI-EXCHANGE-A: crypto.com Integration
+- [ ] REST API client for crypto.com exchange
+- [ ] Track spot balances, CRO staking balance, Visa card cashback
+- [ ] 5K CAD spot target with CRO for Visa card tier benefits
+- [ ] 5K CAD futures account management
+- [ ] Dashboard card: crypto.com balances + Visa card status
+
+### MULTI-EXCHANGE-B: Netcoins Integration
+- [ ] REST API client for Netcoins exchange
+- [ ] Track spot balances, Mastercard integration
+- [ ] 5K CAD account target
+- [ ] Dashboard card: Netcoins balances
+
+### MULTI-EXCHANGE-C: BTC Hardware Wallet Tracking
+- [ ] Public key / xpub tracking for Coldcard wallet
+- [ ] Blockchain API balance lookup (no private keys in app — read-only)
+- [ ] Dashboard card: long-term BTC holdings with current CAD value
+- [ ] Historical balance chart (BTC amount is static, value fluctuates)
+
+### MULTI-EXCHANGE-D: Unified Net Worth Dashboard
+- [ ] Aggregate all accounts: Rithmic (prop firms), Kraken, crypto.com, Netcoins, hardware wallets
+- [ ] Total net worth in CAD with breakdown by platform and asset
+- [ ] Daily/weekly/monthly P&L across all accounts
+- [ ] Deposits and withdrawals tracking across all platforms
+- [ ] Expense tracking: Visa/Mastercard crypto payments, gift card purchases
+
+### MULTI-EXCHANGE-E: Tax Reporting (Canada)
+- [ ] Export capital gains report for Canadian tax filing
+- [ ] Track adjusted cost base (ACB) per asset across all exchanges
+- [ ] Capital gains taxed at 50% inclusion rate (up to $250K, then 66.7%)
+- [ ] Generate CSV/PDF export for accountant
+- [ ] Track deposits vs withdrawals vs trading gains separately
+- [ ] Note: at scale (>$250K gains), consider incorporating as a trading company
+
+**Files**: new `src/lib/integrations/crypto_com_client.py`, new `src/lib/integrations/netcoins_client.py`, new `src/lib/services/data/api/portfolio.py`
+**Estimated effort**: 8–10 sessions (future phase — after Kraken is stable)
 
 ---
 
@@ -1071,6 +1276,9 @@ Rithmic (async_rithmic)  →  Main account order + 1:1 copy to all slave account
 4. **Phase v9** — cross-attention fusion, Ruby/Reddit/News CNN features (only if >2% accuracy lift)
 5. **Phase COMPLIANCE-AUDIT** — one-page compliance log PDF exporter for prop-firm audits
 6. **BTC cold storage tracking** — public key balance display on dashboard
+7. **Phase KRAKEN-ACCOUNTS** — Full Kraken spot + futures management (5K CAD each target)
+8. **Phase MULTI-EXCHANGE** — crypto.com, Netcoins, BTC hardware wallet, unified net worth
+9. **Phase TAX** — Canadian capital gains tracking + export (included in MULTI-EXCHANGE-E)
 
 Full specs for all of the above: [`docs/backlog.md`](docs/backlog.md)
 
@@ -1144,21 +1352,26 @@ Full specs for all of the above: [`docs/backlog.md`](docs/backlog.md)
 |----------|-------|---------------|------------|--------|
 | 🔴 1 | **RETRAIN v9** | 1–2 | — | **NEXT: Run `scripts/run_full_retrain.py` on oryx** — dataset fixed, CUDA verified, scripts ready |
 | 🔴 2 | RETRAIN per-group | 1 | RETRAIN combined | Run `scripts/run_per_group_training.py` — compare groups vs combined |
-| 🔴 3 | JOURNAL-SYNC | 3–4 | Rithmic creds | Auto-sync trades from Rithmic fills |
-| 🟡 4 | RITHMIC-STREAM (A–F) | 6–8 | Rithmic creds | Persistent streaming integration |
-| 🟡 5 | DOM live data | 2–3 | RITHMIC-STREAM-B | Replace mock data in `dom.py` with real L2 |
-| 🟡 6 | POSINT wiring | 2–3 | RITHMIC-STREAM | Wire real analysis modules into position_intelligence.py |
-| 🟡 7 | RA-CHAT verify | 0.5 | — | Test chat.html end-to-end with RA/Grok backend |
-| 🟡 8 | PINE-WEBUI | 1 | — | Quick verify + polish |
-| 🟡 9 | UI-SPLIT | 2–3 | — | Non-blocking, improves DX |
-| 🟡 10 | TESTS remaining | 1–2 | — | WebUI endpoints, pipeline edge cases |
-| 🟡 11 | SIGNALS | 1 | — | Config + gating changes |
-| 🟡 12 | Pipeline wiring | 2–3 | — | Non-blocking enhancements |
-| 🟢 13 | LOGGING-C+D | 2–3 | LOGGING-B ✅ | stdlib→key-value (low priority) |
-| 🟢 14 | MODEL-INT / PINE-INT | 3–4 | — | Library polish, not urgent |
-| 🟢 15 | CLEANUP-REMAINING | 2 | — | Dedup + file splits |
-| 🟢 16 | PROFIT tracking | 1–2 | Funded accounts | After first profits |
-| 🟢 17 | Kraken spot ratios | 2–3 | Funded + Kraken deposit | Manage spot portfolio with ratio strategy |
+| 🟡 3 | **KRAKEN-SIM** (C–D remain) | 2–3 | — | ✅ SimulationEngine + API + DOM live data built — pre-trade analysis + settings toggle remain |
+| 🟡 4 | **DATA-ROLLING** (D remains) | 1 | — | ✅ Sync service + retention + Redis cache built — trainer pipeline wiring remains |
+| 🔴 5 | JOURNAL-SYNC | 3–4 | Rithmic creds | Auto-sync trades from Rithmic fills |
+| 🟡 6 | RITHMIC-STREAM (A–F) | 6–8 | Rithmic creds | Persistent streaming integration |
+| 🟡 7 | DOM live data | 2–3 | RITHMIC-STREAM-B | Replace mock data in `dom.py` with real L2 |
+| 🟡 8 | POSINT wiring | 2–3 | RITHMIC-STREAM | Wire real analysis modules into position_intelligence.py |
+| 🟡 9 | RA-CHAT verify | 0.5 | — | Test chat.html end-to-end with RA/Grok backend |
+| 🟡 10 | PINE-WEBUI | 1 | — | Quick verify + polish |
+| 🟡 11 | UI-SPLIT | 2–3 | — | Non-blocking, improves DX |
+| 🟡 12 | TESTS remaining | 1–2 | — | WebUI endpoints, pipeline edge cases |
+| 🟡 13 | SIGNALS | 1 | — | Config + gating changes |
+| 🟡 14 | Pipeline wiring | 2–3 | — | Non-blocking enhancements |
+| 🟡 15 | **WEBUI-KEYS** | 2–3 | — | Move API keys from .env to WebUI settings page |
+| 🟡 16 | **KRAKEN-ACCOUNTS** | 4–5 | KRAKEN-SIM | Full Kraken spot + futures account management |
+| 🟢 17 | LOGGING-C+D | 2–3 | LOGGING-B ✅ | stdlib→key-value (low priority) |
+| 🟢 18 | MODEL-INT / PINE-INT | 3–4 | — | Library polish, not urgent |
+| 🟢 19 | CLEANUP-REMAINING | 2 | — | Dedup + file splits |
+| 🟢 20 | PROFIT tracking | 1–2 | Funded accounts | After first profits |
+| 🟢 21 | Kraken spot ratios | 2–3 | Funded + Kraken deposit | Manage spot portfolio with ratio strategy |
+| 🟢 22 | **MULTI-EXCHANGE** | 8–10 | KRAKEN-ACCOUNTS | crypto.com, Netcoins, BTC wallet, tax reporting |
 
 ## 📋 New Files Created (2026-03-14 Oryx Session)
 
@@ -1179,6 +1392,14 @@ Full specs for all of the above: [`docs/backlog.md`](docs/backlog.md)
 | `src/tests/test_dataset_validation.py` | 303 | 13 tests for validate_dataset() |
 | `src/tests/test_trainer_endpoints.py` | 503 | 31 tests for trainer server HTTP endpoints |
 | `src/tests/test_rithmic_account.py` | 537 | 49 tests for Rithmic account config + encryption |
+
+## 📋 New Files Created (2026-03-15 Session)
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/lib/services/engine/simulation.py` | 1273 | SimulationEngine — paper trading with live tick data (KRAKEN-SIM-B) |
+| `src/lib/services/data/api/simulation_api.py` | 370 | Simulation API routes: /api/sim/*, /sse/sim (KRAKEN-SIM-B) |
+| `src/lib/services/data/sync.py` | 783 | DataSyncService — rolling 1-year data window, background sync, retention (DATA-ROLLING-A/B/C) |
 
 ---
 

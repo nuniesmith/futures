@@ -120,3 +120,25 @@ async def journal_page() -> HTMLResponse:
 
     logger.warning("journal.html not found in any candidate path")
     return HTMLResponse(content=_not_found_html("Journal", "journal.html", "📓"), status_code=200)
+
+
+# ---------------------------------------------------------------------------
+# GET /pretrade — Pre-Trade Analysis
+# ---------------------------------------------------------------------------
+
+
+@router.get("/pretrade", response_class=HTMLResponse)
+async def pretrade_page() -> HTMLResponse:
+    """Serve the Pre-Trade Analysis page.
+
+    Connects to ``GET /api/pretrade/assets``, ``POST /api/pretrade/analyze``,
+    ``POST /api/pretrade/select``, and ``GET /api/pretrade/watchlist`` for
+    asset selection, opportunity scoring, and live monitoring.
+    """
+    path = _resolve_static("pretrade.html")
+    if path:
+        logger.info("Serving pretrade.html from %s", path)
+        return HTMLResponse(content=path.read_text(), headers={"Cache-Control": "no-cache"})
+
+    logger.warning("pretrade.html not found in any candidate path")
+    return HTMLResponse(content=_not_found_html("Pre-Trade Analysis", "pretrade.html", "🔍"), status_code=200)

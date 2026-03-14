@@ -1015,6 +1015,18 @@ def load_bars(
         # get_bars() returned None — check whether the engine is actually up.
         # is_available() does a fast /health probe (3 s timeout).
         if hasattr(client, "is_available") and client.is_available():
+            # Engine is up but get_bars() returned nothing.  Before giving
+            # up, try the Postgres-backed store directly via /api/data/bars.
+            # This covers the case where the full hierarchy (Redis → PG → API)
+            # returned nothing but the sync service has bars in Postgres.
+            try:
+                df = client.get_stored_bars(symbol, interval="1m", days_back=days)
+                if df is not None and not df.empty:
+                    logger.debug("load_bars: %d bars for %s via stored bars (Postgres)", len(df), symbol)
+                    return df
+            except Exception as exc:
+                logger.debug("get_stored_bars failed for %s: %s", symbol, exc)
+
             # Engine is up but has no data for this symbol.  Skip local
             # fallbacks — they would only log noise on the trainer machine.
             logger.debug(

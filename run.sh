@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# Futures Trading Co-Pilot — Run Script
+# Ruby Futures — Run Script
 # =============================================================================
 #
 # Usage:
@@ -113,7 +113,7 @@ ensure_env() {
 
         cat > "$ENV_FILE" <<EOF
 # =============================================================================
-# Futures Trading Co-Pilot — Environment
+# Ruby Futures — Environment
 # Generated on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # =============================================================================
 
@@ -128,35 +128,64 @@ REDIS_PASSWORD=${redis_pass}
 # ---- App Secret Key (sessions, CSRF, etc.) ----
 SECRET_KEY=${secret_key}
 
-# ---- Grafana (monitoring profile) ----
+# ---- Grafana ----
 GRAFANA_ADMIN_USER=admin
 GRAFANA_ADMIN_PASSWORD=admin
 
 # ---- API Keys (you must fill these in) ----
 
 # Massive.com API key for real-time futures data (CME/CBOT/NYMEX/COMEX)
-# Sign up at https://massive.com/dashboard → API Keys
-# Without this key the app falls back to yfinance (delayed data)
-MASSIVE_API_KEY=your_massive_api_key_here
+MASSIVE_API_KEY=
+FINNHUB_API_KEY=
+ALPHA_VANTAGE_API_KEY=
+
+KRAKEN_API_KEY=
+KRAKEN_API_SECRET=
 
 # xAI Grok API key for the AI Analyst tab
-# Get yours at https://console.x.ai
-XAI_API_KEY=your_xai_api_key_here
+XAI_API_KEY=
+
+# URL of the copier process (set empty to disable copier integration)
+COPIER_URL=http://localhost:5682
+
+# ---- ORB / CNN Gate settings ----
+ORB_FILTER_GATE=majority
+ORB_CNN_GATE=0
+
+REDDIT_CLIENT_ID=your_client_id_here
+REDDIT_CLIENT_SECRET=your_client_secret_here
+REDDIT_POLL_INTERVAL=120   # optional, default 120s
 EOF
 
         ok ".env generated with secure random secrets for Postgres, Redis, etc."
         warn "You still need to set your API keys:"
-        warn "  • MASSIVE_API_KEY  — https://massive.com/dashboard"
-        warn "  • XAI_API_KEY      — https://console.x.ai"
+        warn "  • MASSIVE_API_KEY       — https://massive.com/dashboard"
+        warn "  • FINNHUB_API_KEY       — https://finnhub.io"
+        warn "  • ALPHA_VANTAGE_API_KEY — https://www.alphavantage.co"
+        warn "  • KRAKEN_API_KEY        — https://www.kraken.com"
+        warn "  • XAI_API_KEY           — https://console.x.ai"
+        warn "  • REDDIT_CLIENT_ID      — https://www.reddit.com/prefs/apps"
         echo ""
     fi
 
     # Always warn about placeholder API keys
-    if grep -q "your_massive_api_key_here" "$ENV_FILE" 2>/dev/null; then
-        warn "MASSIVE_API_KEY is still a placeholder — real-time data disabled (yfinance fallback)"
+    if grep -q "^MASSIVE_API_KEY=$" "$ENV_FILE" 2>/dev/null; then
+        warn "MASSIVE_API_KEY is empty — real-time data disabled (yfinance fallback)"
     fi
-    if grep -q "your_xai_api_key_here" "$ENV_FILE" 2>/dev/null; then
-        warn "XAI_API_KEY is still a placeholder — Grok AI Analyst tab will not work"
+    if grep -q "^FINNHUB_API_KEY=$" "$ENV_FILE" 2>/dev/null; then
+        warn "FINNHUB_API_KEY is empty — Finnhub data source will not work"
+    fi
+    if grep -q "^ALPHA_VANTAGE_API_KEY=$" "$ENV_FILE" 2>/dev/null; then
+        warn "ALPHA_VANTAGE_API_KEY is empty — Alpha Vantage data source will not work"
+    fi
+    if grep -q "^KRAKEN_API_KEY=$" "$ENV_FILE" 2>/dev/null; then
+        warn "KRAKEN_API_KEY is empty — Kraken integration will not work"
+    fi
+    if grep -q "^XAI_API_KEY=$" "$ENV_FILE" 2>/dev/null; then
+        warn "XAI_API_KEY is empty — Grok AI Analyst tab will not work"
+    fi
+    if grep -q "your_client_id_here" "$ENV_FILE" 2>/dev/null; then
+        warn "REDDIT_CLIENT_ID is still a placeholder — Reddit sentiment will not work"
     fi
 }
 
@@ -166,12 +195,11 @@ EOF
 # ---------------------------------------------------------------------------
 
 ensure_models() {
-    local onnx_file="models/breakout_cnn_best.onnx"
     local meta_file="models/breakout_cnn_best_meta.json"
     local contract_file="models/feature_contract.json"
 
     local missing=0
-    for f in "$onnx_file" "$meta_file" "$contract_file"; do
+    for f in "$meta_file" "$contract_file"; do
         if [ ! -f "$f" ]; then
             err "Expected model file not found: $f"
             missing=1
@@ -183,7 +211,7 @@ ensure_models() {
         exit 1
     fi
 
-    ok "CNN model files present ($(du -h "$onnx_file" | awk '{print $1}') ONNX)"
+    ok "CNN model files present ($(du -h "$meta_file" | awk '{print $1}') JSON)"
 }
 
 

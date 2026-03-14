@@ -1,17 +1,19 @@
 """
-DOM (Depth of Market) API Routes — Placeholder
-================================================
+DOM (Depth of Market) API Routes
+=================================
 Provides REST and SSE endpoints for real-time depth-of-market data,
 powering the DOM ladder widget on the dashboard.
 
 Endpoints:
-    GET /api/dom/snapshot?symbol=MES  — Current DOM state (mock data)
+    GET /api/dom/snapshot?symbol=MES  — Current DOM state (live or mock)
     GET /api/dom/config               — DOM display configuration
-    GET /sse/dom?symbol=MES           — SSE stream of DOM updates (mock)
+    GET /sse/dom?symbol=MES           — SSE stream of DOM updates
 
 The snapshot and SSE endpoints return Level-2 order-book data structured
-as bid/ask price ladders with size at each level.  When wired to the
-live Rithmic Position Engine, these will reflect real-time market depth.
+as bid/ask price ladders with size at each level.  When live Kraken data
+is available via Redis, the DOM uses real prices from the WebSocket feed.
+For futures symbols (or when no live data is cached), it falls back to
+mock data.
 
 Usage:
     from lib.services.data.api.dom import router, sse_router
@@ -34,6 +36,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 from lib.core.logging_config import get_logger
+from lib.services.data.source_router import get_active_source, should_use_source
 
 logger = get_logger(__name__)
 
@@ -80,9 +83,87 @@ _MOCK_BASE_PRICES: dict[str, float] = {
 _SSE_UPDATE_INTERVAL_S = 1.0
 _SSE_HEARTBEAT_INTERVAL_S = 15.0
 
+# ---------------------------------------------------------------------------
+# Crypto DOM symbol mapping
+# ---------------------------------------------------------------------------
+# Maps shorthand crypto symbols and full internal tickers to the canonical
+# Kraken internal ticker format used in Redis cache keys and sim positions.
+
+_CRYPTO_DOM_SYMBOLS: dict[str, str] = {
+    "BTC": "KRAKEN:XBTUSD",
+    "ETH": "KRAKEN:ETHUSD",
+    "SOL": "KRAKEN:SOLUSD",
+    "KRAKEN:XBTUSD": "KRAKEN:XBTUSD",
+    "KRAKEN:ETHUSD": "KRAKEN:ETHUSD",
+    "KRAKEN:SOLUSD": "KRAKEN:SOLUSD",
+}
+
+# Tick sizes for crypto symbols (keyed by internal ticker)
+_CRYPTO_TICK_SIZES: dict[str, float] = {
+    "KRAKEN:XBTUSD": 0.1,
+    "KRAKEN:ETHUSD": 0.01,
+    "KRAKEN:SOLUSD": 0.001,
+}
+
 
 # ---------------------------------------------------------------------------
-# Mock data generators
+# Redis helpers
+# ---------------------------------------------------------------------------
+
+
+def _redis_client():
+    """Return ``(client, available)`` — ``(None, False)`` if unavailable."""
+    try:
+        from lib.core.cache import REDIS_AVAILABLE, _r
+
+        return _r, REDIS_AVAILABLE
+    except ImportError:
+        return None, False
+
+
+def _get_live_bar(internal_ticker: str) -> dict[str, Any] | None:
+    """Fetch the latest cached bar from Redis for *internal_ticker*.
+
+    The KrakenFeedManager publishes bars to ``kraken:live:{internal_ticker}``
+    with a 120-second TTL.  Returns the parsed dict or ``None``.
+    """
+    r, available = _redis_client()
+    if not available or r is None:
+        return None
+    try:
+        cache_key = f"kraken:live:{internal_ticker}"
+        raw = r.get(cache_key)
+        if raw is None:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _get_sim_positions() -> list[dict[str, Any]]:
+    """Fetch open simulation positions from Redis.
+
+    Returns a list of position dicts (may be empty).
+    """
+    r, available = _redis_client()
+    if not available or r is None:
+        return []
+    try:
+        raw = r.get("sim:positions")
+        if raw is None:
+            return []
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Snapshot builders
 # ---------------------------------------------------------------------------
 
 
@@ -95,7 +176,6 @@ def _build_mock_snapshot(
     Returns a dict with ``bids``, ``asks``, ``last``, ``spread``, and
     metadata fields ready for JSON serialisation.
     """
-    # TODO: Wire to live Rithmic Position Engine data
     tick = _TICK_SIZES.get(symbol, 0.25)
     base = _MOCK_BASE_PRICES.get(symbol, 5000.00)
 
@@ -110,7 +190,7 @@ def _build_mock_snapshot(
             {
                 "price": round(best_bid - i * tick, 4),
                 "size": max(5, 60 - i * 4),
-                "cumulative_size": 0,  # filled by the UI or a post-processing step
+                "cumulative_size": 0,
             }
         )
         asks.append(
@@ -149,14 +229,182 @@ def _build_mock_snapshot(
     }
 
 
+def _build_live_snapshot(
+    symbol: str,
+    internal_ticker: str,
+    levels: int = _DEFAULT_LEVELS,
+) -> dict[str, Any] | None:
+    """Build a DOM snapshot from live Kraken data cached in Redis.
+
+    Reads the latest bar from ``kraken:live:{internal_ticker}`` and
+    constructs a synthetic order book around the close price.  Also
+    checks ``sim:positions`` to annotate price levels where the user
+    has an open simulation position.
+
+    Returns ``None`` if no live data is available (caller should fall
+    back to mock).
+
+    Args:
+        symbol: The original symbol the client requested.
+        internal_ticker: The canonical Kraken internal ticker
+            (e.g. ``"KRAKEN:XBTUSD"``).
+        levels: Number of price levels per side.
+    """
+    bar = _get_live_bar(internal_ticker)
+    if bar is None:
+        return None
+
+    close_price = float(bar.get("close", 0))
+    if close_price <= 0:
+        return None
+
+    tick = _CRYPTO_TICK_SIZES.get(internal_ticker, 0.01)
+
+    # Use the close price as the mid-point for the synthetic book
+    best_bid = round(close_price - tick, 10)
+    best_ask = round(close_price, 10)
+
+    # Fetch sim positions to annotate levels
+    sim_positions = _get_sim_positions()
+    position_prices: dict[float, dict[str, Any]] = {}
+    for pos in sim_positions:
+        if pos.get("symbol") == internal_ticker:
+            entry_price = float(pos.get("entry_price", 0))
+            if entry_price > 0:
+                position_prices[round(entry_price, 10)] = {
+                    "side": pos.get("side", ""),
+                    "qty": pos.get("qty", 0),
+                    "unrealized_pnl": pos.get("unrealized_pnl", 0),
+                }
+            sl = pos.get("stop_loss")
+            if sl is not None and float(sl) > 0:
+                position_prices[round(float(sl), 10)] = {"marker": "stop_loss"}
+            tp = pos.get("take_profit")
+            if tp is not None and float(tp) > 0:
+                position_prices[round(float(tp), 10)] = {"marker": "take_profit"}
+
+    # Synthetic sizes using bar volume as a rough guide
+    bar_volume = float(bar.get("volume", 100))
+    base_size = max(5, int(bar_volume / max(levels * 2, 1)))
+
+    bids: list[dict[str, Any]] = []
+    asks: list[dict[str, Any]] = []
+
+    for i in range(levels):
+        bid_price = round(best_bid - i * tick, 10)
+        ask_price = round(best_ask + i * tick, 10)
+
+        # Size tapers away from the spread
+        bid_size = max(1, base_size - i * max(1, base_size // (levels + 1)))
+        ask_size = max(1, base_size - i * max(1, base_size // (levels + 1)))
+
+        bid_entry: dict[str, Any] = {
+            "price": bid_price,
+            "size": bid_size,
+            "cumulative_size": 0,
+        }
+        ask_entry: dict[str, Any] = {
+            "price": ask_price,
+            "size": ask_size,
+            "cumulative_size": 0,
+        }
+
+        # Annotate position markers
+        if bid_price in position_prices:
+            bid_entry["position"] = position_prices[bid_price]
+        if ask_price in position_prices:
+            ask_entry["position"] = position_prices[ask_price]
+
+        bids.append(bid_entry)
+        asks.append(ask_entry)
+
+    # Cumulative sizes
+    running = 0
+    for lvl in bids:
+        running += lvl["size"]
+        lvl["cumulative_size"] = running
+    running = 0
+    for lvl in asks:
+        running += lvl["size"]
+        lvl["cumulative_size"] = running
+
+    bid_total = sum(b["size"] for b in bids)
+    ask_total = sum(a["size"] for a in asks)
+
+    return {
+        "symbol": symbol,
+        "internal_ticker": internal_ticker,
+        "bids": bids,
+        "asks": asks,
+        "last": close_price,
+        "spread": round(best_ask - best_bid, 10),
+        "bid_total": bid_total,
+        "ask_total": ask_total,
+        "imbalance_ratio": round(bid_total / max(ask_total, 1), 3),
+        "levels": levels,
+        "bar": {
+            "open": bar.get("open"),
+            "high": bar.get("high"),
+            "low": bar.get("low"),
+            "close": bar.get("close"),
+            "volume": bar.get("volume"),
+            "vwap": bar.get("vwap"),
+        },
+        "timestamp": time.time(),
+        "source": "kraken_live",
+    }
+
+
+def _build_snapshot(
+    symbol: str,
+    levels: int = _DEFAULT_LEVELS,
+) -> dict[str, Any]:
+    """Build a DOM snapshot, preferring live data from the active source.
+
+    Uses the source router to decide which data source should serve data
+    for *symbol*.  If the router says ``"mock"``, skips live lookups
+    entirely.  When the active source is ``"both"``, tries live data
+    for the appropriate source and falls back to mock.
+
+    Args:
+        symbol: The requested symbol (e.g. ``"BTC"``, ``"KRAKEN:XBTUSD"``,
+            ``"MES"``).
+        levels: Number of price levels per side.
+    """
+    source = should_use_source(symbol)
+
+    # Source router says mock — go straight to mock data
+    if source == "mock":
+        logger.debug("source router says mock for symbol", symbol=symbol, active_source=get_active_source())
+        return _build_mock_snapshot(symbol, levels=levels)
+
+    # Try live Kraken data for crypto symbols
+    internal_ticker = _CRYPTO_DOM_SYMBOLS.get(symbol)
+
+    if internal_ticker is not None and source in ("kraken", "rithmic"):
+        live = _build_live_snapshot(symbol, internal_ticker, levels=levels)
+        if live is not None:
+            return live
+        # No live data cached — fall back to mock, but log it
+        logger.debug("no live data for crypto symbol, falling back to mock", symbol=symbol)
+
+    return _build_mock_snapshot(symbol, levels=levels)
+
+
 def _build_mock_config() -> dict[str, Any]:
     """Return DOM display configuration for the dashboard widget."""
-    # TODO: Wire to user preferences / persisted settings
+    # Merge futures and crypto symbols for the available_symbols list
+    all_symbols = sorted(set(_TICK_SIZES.keys()) | set(_CRYPTO_DOM_SYMBOLS.keys()))
+    all_tick_sizes = dict(_TICK_SIZES)
+    for shorthand, internal in _CRYPTO_DOM_SYMBOLS.items():
+        all_tick_sizes[shorthand] = _CRYPTO_TICK_SIZES.get(internal, 0.01)
+
     return {
         "default_symbol": _DEFAULT_SYMBOL,
         "default_levels": _DEFAULT_LEVELS,
-        "available_symbols": sorted(_TICK_SIZES.keys()),
-        "tick_sizes": _TICK_SIZES,
+        "available_symbols": all_symbols,
+        "tick_sizes": all_tick_sizes,
+        "crypto_symbols": _CRYPTO_DOM_SYMBOLS,
         "color_scheme": {
             "bid_fill": "#0d6efd33",
             "ask_fill": "#dc354533",
@@ -185,11 +433,11 @@ async def dom_snapshot(
     """Return a point-in-time DOM snapshot for *symbol*.
 
     Returns Level-2 bid/ask ladders with size, cumulative size,
-    spread, and imbalance ratio.
+    spread, and imbalance ratio.  Uses live Kraken data for crypto
+    symbols when available; falls back to mock data otherwise.
     """
-    # TODO: Wire to RithmicPositionEngine.get_l2() for live data
     logger.debug("dom_snapshot", symbol=symbol, levels=levels)
-    return _build_mock_snapshot(symbol, levels=levels)
+    return _build_snapshot(symbol, levels=levels)
 
 
 @router.get("/config")
@@ -199,7 +447,6 @@ async def dom_config() -> dict[str, Any]:
     Includes colour scheme, available symbols, tick sizes, and
     default rendering options.
     """
-    # TODO: Wire to user preferences / persisted settings
     logger.debug("dom_config")
     return _build_mock_config()
 
@@ -216,13 +463,17 @@ async def _dom_event_generator(
 ) -> AsyncGenerator[str]:
     """Yield SSE-formatted DOM updates at a regular interval.
 
-    Each event is a JSON-encoded DOM snapshot.  A heartbeat comment
-    (``:``) is sent periodically to keep the connection alive even if
-    no data changes.
+    For crypto symbols, reads live bar data from Redis
+    (``kraken:live:{internal_ticker}``) and builds snapshots from real
+    prices.  For futures symbols (or when no live data is available),
+    falls back to mock snapshots.
+
+    A heartbeat comment (``:``) is sent periodically to keep the
+    connection alive even if no data changes.
     """
-    # TODO: Wire to live Rithmic stream — replace mock polling with
-    #       real-time L2 push from RithmicPositionEngine
-    logger.info("dom SSE stream started", symbol=symbol, levels=levels)
+    internal_ticker = _CRYPTO_DOM_SYMBOLS.get(symbol)
+    source_label = "live" if internal_ticker else "mock"
+    logger.info("dom SSE stream started", symbol=symbol, levels=levels, source=source_label)
     last_heartbeat = time.monotonic()
 
     try:
@@ -232,11 +483,10 @@ async def _dom_event_generator(
                 logger.info("dom SSE client disconnected", symbol=symbol)
                 break
 
-            # Build a mock snapshot (in production, this would come from
-            # a Redis pub/sub channel or a direct stream callback)
-            snapshot = _build_mock_snapshot(symbol, levels=levels)
-            payload = json.dumps(snapshot, default=str)
+            # Try live Kraken data for crypto, fall back to mock
+            snapshot = _build_snapshot(symbol, levels=levels)
 
+            payload = json.dumps(snapshot, default=str)
             yield f"event: dom-update\ndata: {payload}\n\n"
 
             # Heartbeat (SSE comment) to keep proxies / load-balancers happy
@@ -266,10 +516,14 @@ async def sse_dom(
     Connect via ``EventSource("/sse/dom?symbol=MES")`` in the browser.
     Events are named ``dom-update`` and contain a JSON DOM snapshot.
 
+    For crypto symbols (``BTC``, ``ETH``, ``SOL``, or full
+    ``KRAKEN:*`` tickers), the stream uses live prices from the Kraken
+    WebSocket feed cached in Redis.  For futures symbols the stream
+    uses mock data until Rithmic credentials are wired in.
+
     The stream sends an update roughly every second (configurable via
     ``dom_config.update_interval_ms``).
     """
-    # TODO: Wire to live Rithmic stream when creds available
     logger.info("sse_dom connection opened", symbol=symbol, levels=levels)
 
     return StreamingResponse(
