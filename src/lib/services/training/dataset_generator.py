@@ -2404,12 +2404,14 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
             # Use neutral defaults — do NOT retry the expensive computation.
             _cross_feats = None
         if _cross_feats is not None and _cross_feats is not _PRECOMPUTE_FAILED:
+            from typing import cast as _cast
+
             from lib.analysis.cross_asset import CrossAssetFeatures as _CAF
 
-            if isinstance(_cross_feats, _CAF):
-                primary_peer_corr = _cross_feats.primary_peer_corr
-                cross_class_corr = _cross_feats.cross_class_corr
-                correlation_regime = _cross_feats.correlation_regime
+            _cross_feats = _cast(_CAF, _cross_feats)
+            primary_peer_corr = _cross_feats.primary_peer_corr
+            cross_class_corr = _cross_feats.cross_class_corr
+            correlation_regime = _cross_feats.correlation_regime
     except Exception:
         pass
 
@@ -2449,39 +2451,41 @@ def _build_row(result: ORBSimResult, image_path: str) -> dict[str, Any]:
             # Use neutral defaults — do NOT retry the expensive computation.
             _fp = None
         if _fp is not None and _fp is not _PRECOMPUTE_FAILED:
+            from typing import cast as _cast
+
             from lib.analysis.asset_fingerprint import AssetFingerprint as _AFP
             from lib.analysis.asset_fingerprint import VolumeProfileShape as _VPS
 
-            if isinstance(_fp, _AFP):
-                # [31] typical_daily_range_norm — clamp [0.5, 2.5] → [0, 1]
-                typical_daily_range_norm = max(0.0, min(1.0, (_fp.typical_daily_range_atr - 0.5) / 2.0))
+            _fp = _cast(_AFP, _fp)
+            # [31] typical_daily_range_norm — clamp [0.5, 2.5] → [0, 1]
+            typical_daily_range_norm = max(0.0, min(1.0, (_fp.typical_daily_range_atr - 0.5) / 2.0))
 
-                # [32] session_concentration — dominant session fraction
-                session_concentration_val = max(
-                    _fp.session_concentration.overnight_pct,
-                    _fp.session_concentration.london_pct,
-                    _fp.session_concentration.us_pct,
-                    _fp.session_concentration.settle_pct,
-                )
+            # [32] session_concentration — dominant session fraction
+            session_concentration_val = max(
+                _fp.session_concentration.overnight_pct,
+                _fp.session_concentration.london_pct,
+                _fp.session_concentration.us_pct,
+                _fp.session_concentration.settle_pct,
+            )
 
-                # [33] breakout_follow_through — trailing win rate
-                breakout_follow_through_val = _fp.breakout_follow_through.follow_through_rate
+            # [33] breakout_follow_through — trailing win rate
+            breakout_follow_through_val = _fp.breakout_follow_through.follow_through_rate
 
-                # [34] hurst_exponent — mean-reversion tendency
-                hurst_exponent_val = max(0.0, min(1.0, _fp.mean_reversion_tendency))
+            # [34] hurst_exponent — mean-reversion tendency
+            hurst_exponent_val = max(0.0, min(1.0, _fp.mean_reversion_tendency))
 
-                # [35] overnight_gap_tendency — gap frequency as proxy
-                overnight_gap_tendency = max(0.0, min(1.0, _fp.overnight_gap.avg_gap_atr_ratio))
+            # [35] overnight_gap_tendency — gap frequency as proxy
+            overnight_gap_tendency = max(0.0, min(1.0, _fp.overnight_gap.avg_gap_atr_ratio))
 
-                # [36] volume_profile_shape — regularity score
-                _shape_scores = {
-                    _VPS.U_SHAPED: 0.9,
-                    _VPS.L_SHAPED: 0.7,
-                    _VPS.FRONT_LOADED: 0.6,
-                    _VPS.FLAT: 0.4,
-                    _VPS.UNKNOWN: 0.5,
-                }
-                volume_profile_shape_val = _shape_scores.get(_fp.volume_profile_shape, 0.5)
+            # [36] volume_profile_shape — regularity score
+            _shape_scores = {
+                _VPS.U_SHAPED: 0.9,
+                _VPS.L_SHAPED: 0.7,
+                _VPS.FRONT_LOADED: 0.6,
+                _VPS.FLAT: 0.4,
+                _VPS.UNKNOWN: 0.5,
+            }
+            volume_profile_shape_val = _shape_scores.get(_fp.volume_profile_shape, 0.5)
     except Exception:
         pass
 
