@@ -3,9 +3,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    # Explicit ARM64 for Raspberry Pi 4 running Ubuntu.
-    # On x86 machines just remove or comment this line.
-    # platform: linux/arm64
+    # Raspberry Pi 4 is ARM64. Uncomment the line below when building
+    # ON the Pi itself, or when cross-building from an x86 host.
+    # If building on the Pi directly this line is optional but harmless.
+    platform: linux/arm64
     container_name: sol-scalper
     restart: unless-stopped
     env_file:

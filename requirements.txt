@@ -1,0 +1,11 @@
+# Sol Scalper — Python dependencies
+# Using requirements.txt instead of Poetry for simpler ARM64 Pi builds.
+# Pin majors to avoid surprise upgrades; allow patch updates.
+
+ccxt>=4.5.45
+aiohttp>=3.13.3
+optuna>=4.8.0
+pandas>=3.0.1
+python-dotenv>=1.2.2
+pyyaml>=6.0.2
+structlog>=25.5.0
