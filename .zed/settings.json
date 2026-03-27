@@ -1,0 +1,20 @@
+{
+  "languages": {
+    "Python": {
+      "language_servers": ["ruff"],
+      "formatter": "ruff",
+      "linter": "ruff",
+      "diagnostics": {
+        "enabled": true,
+      },
+    },
+  },
+  "lsp": {
+    "pyright": {
+      "enabled": false,
+    },
+  },
+  "python": {
+    "venvPath": ".venv",
+  },
+}

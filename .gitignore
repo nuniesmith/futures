@@ -1,1 +1,34 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
 .env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Poetry
+.cache/
+poetry.lock  # (optional - commit it if you want)
+
+# IDE / Editor
+.vscode/
+.zed/cache/
+.idea/
+
+# Logs & data
+*.log
+logs/
+data/
+
+# OS
+.DS_Store
+Thumbs.db

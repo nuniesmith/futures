@@ -1,0 +1,17 @@
+services:
+  sol-scalper:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    # Explicit ARM64 for Raspberry Pi 4 running Ubuntu.
+    # On x86 machines just remove or comment this line.
+    # platform: linux/arm64
+    container_name: sol-scalper
+    restart: unless-stopped
+    env_file:
+      - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m" # cap log size — important on Pi SD card
+        max-file: "3"
