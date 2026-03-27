@@ -334,7 +334,7 @@ def kmeans_volatility_clusters(
         result["adaptive_atr"] = round(current_atr, 6)
         return result
 
-    centroids, labels = _kmeans_1d(
+    centroids, _labels = _kmeans_1d(
         training_data,
         highvol=highvol,
         midvol=midvol,

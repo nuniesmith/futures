@@ -1,20 +1,23 @@
 {
   "languages": {
     "Python": {
-      "language_servers": ["ruff"],
-      "formatter": "ruff",
-      "linter": "ruff",
-      "diagnostics": {
-        "enabled": true,
-      },
+      "language_servers": ["ruff", "!pyright"],
+      "formatter": "language_server",
+      "format_on_save": "on",
+      "tab_size": 4,
     },
   },
   "lsp": {
-    "pyright": {
-      "enabled": false,
+    "ruff": {
+      "initialization_options": {
+        "settings": {
+          "lineLength": 100,
+          "lint": {
+            "select": ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"],
+            "ignore": ["E501"],
+          },
+        },
+      },
     },
-  },
-  "python": {
-    "venvPath": ".venv",
   },
 }

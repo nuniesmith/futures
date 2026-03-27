@@ -44,7 +44,6 @@ class Indicator(Component, ABC):
         Returns:
             DataFrame with indicator values.
         """
-        pass
 
     def __call__(self, data: pd.DataFrame) -> pd.DataFrame:
         """

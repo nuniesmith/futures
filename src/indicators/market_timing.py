@@ -20,7 +20,6 @@ from src.logging_config import get_logger
 # Import shared utilities
 def apply_datetime_patch():
     """No-op shim replacing utils.datetime_utils.apply_datetime_patch."""
-    pass
 
 
 def safe_convert_timezone(dt, tz):

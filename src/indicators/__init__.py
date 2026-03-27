@@ -52,41 +52,33 @@ Package structure:
 """
 
 __all__ = [
-    # Manager (used by presets.py internally via `from src.indicators import IndicatorManager`)
-    "IndicatorManager",
-    # Trend (registry-based)
-    "EMA",
-    "SMA",
-    "WMA",
-    "VWAP",
-    "MACD",
-    "ADLineIndicator",
-    # Trend (standalone)
-    "EMAIndicator",
-    # Volatility
     "ATR",
-    "BollingerBands",
-    # Momentum
+    "EMA",
+    "MACD",
     "RSI",
-    "Stochastic",
-    # Volume
-    "VolumeZoneOscillator",
-    "VWAPIndicator",
-    # Other
+    "SMA",
+    "VWAP",
+    "WMA",
+    "ADLineIndicator",
+    "BollingerBands",
     "ChaikinMoneyFlow",
     "ChoppinessIndex",
     "CorrelationMatrixIndicator",
+    "EMAIndicator",
     "ElderRayIndexIndicator",
+    "IndicatorManager",
     "KeltnerChannelsIndicator",
     "LinearRegressionIndicator",
     "MarketCycleIndicator",
     "ParabolicSARIndicator",
     "SchaffTrendCycle",
+    "Stochastic",
+    "VWAPIndicator",
+    "VolumeZoneOscillator",
     "WilliamsRIndicator",
-    # Catalog lists (used by manager.py internally via `from src.indicators import technical_indicators`)
-    "technical_indicators",
-    "indicator_categories",
     "default_manager",
+    "indicator_categories",
+    "technical_indicators",
 ]
 
 from .manager import IndicatorManager

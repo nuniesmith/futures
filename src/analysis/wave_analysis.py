@@ -480,8 +480,8 @@ def _detect_market_phase(
     # Recent highest high and lowest low (10-bar lookback)
     recent_high = np.max(high[-10:])
     recent_low = np.min(low[-10:])
-    _wider_high = np.max(high[-20:]) if len(high) >= 20 else recent_high  # noqa: F841
-    _wider_low = np.min(low[-20:]) if len(low) >= 20 else recent_low  # noqa: F841
+    _wider_high = np.max(high[-20:]) if len(high) >= 20 else recent_high
+    _wider_low = np.min(low[-20:]) if len(low) >= 20 else recent_low
 
     current_close = close[-1]
     current_ao = ao[-1] if len(ao) > 0 else 0.0

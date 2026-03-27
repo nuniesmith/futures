@@ -1,0 +1,123 @@
+# =============================================================================
+# Sol Scalper — Project Configuration
+# =============================================================================
+# KuCoin SOLUSDTM Perpetual Futures Scalper
+# Repository: nuniesmith/sol
+# =============================================================================
+
+[project]
+name = "sol"
+version = "0.1.0"
+description = "KuCoin SOL/USDT perpetual futures scalper with Ruby wave analysis"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+
+# =============================================================================
+# Ruff — Linting & Formatting
+# =============================================================================
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort (import sorting)
+    "UP",   # pyupgrade (modern Python syntax)
+    "B",    # flake8-bugbear (common bugs)
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+    "N",    # pep8-naming
+    "C4",   # flake8-comprehensions
+    "PIE",  # flake8-pie (misc lints)
+    "PT",   # flake8-pytest-style
+    "TCH",  # flake8-type-checking (move imports behind TYPE_CHECKING)
+    "PERF", # perflint (performance anti-patterns)
+]
+ignore = [
+    "E501",   # line too long — handled by formatter
+    "B008",   # function call in default argument — common in FastAPI/dataclasses
+    "B905",   # zip-without-explicit-strict — not needed for internal iteration
+    "SIM103", # needless-bool — sometimes explicit is clearer
+    "SIM108", # ternary operator — sometimes if/else is clearer
+    "SIM114", # if-with-same-arms — intentional for readability
+    "UP007",  # use X | Y for union types — not always readable
+    "RUF002", # ambiguous unicode in docstring — emoji are intentional (📡💓🟢 etc.)
+    "RUF003", # ambiguous unicode in comment — emoji are intentional
+    "RUF006", # asyncio dangling task — tasks are held by the event loop intentionally
+    "RUF012", # mutable class variables — dataclass fields use field()
+    "N802",   # function name lowercase — ccxt methods use camelCase
+    "N803",   # argument name lowercase — matching external APIs
+    "N806",   # variable name lowercase — matching external conventions
+    "PT011",  # pytest.raises too broad — acceptable for simple checks
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/tests/*" = [
+    "S101",   # assert allowed in tests
+    "PT004",  # fixture doesn't return anything — fine for setup fixtures
+    "B011",   # assert False — acceptable in tests
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = true
+
+# =============================================================================
+# Mypy — Type Checking
+# =============================================================================
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = false
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+check_untyped_defs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+ignore_missing_imports = true
+no_implicit_optional = true
+strict_equality = true
+show_error_codes = true
+show_column_numbers = true
+
+# Don't enforce strict typing on tests
+[[tool.mypy.overrides]]
+module = "src.tests.*"
+disallow_untyped_defs = false
+check_untyped_defs = false
+
+# Third-party libraries without stubs
+[[tool.mypy.overrides]]
+module = [
+    "ccxt.*",
+    "optuna.*",
+    "aiohttp.*",
+]
+ignore_missing_imports = true
+
+# =============================================================================
+# Pytest
+# =============================================================================
+
+[tool.pytest.ini_options]
+testpaths = ["src/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short -q"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]

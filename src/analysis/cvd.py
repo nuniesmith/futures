@@ -85,7 +85,7 @@ def build_tick_df_from_rithmic(raw_ticks: list[dict[str, Any]]) -> pd.DataFrame:
             "timestamp": "2025-06-01 09:31:00.123",
             "price": 2345.6,
             "volume": 3,
-            "aggressor": "BUY",   # or "SELL"
+            "aggressor": "BUY",  # or "SELL"
         }
 
     This helper standardises the column names and ``side`` encoding so that
@@ -106,9 +106,7 @@ def build_tick_df_from_rithmic(raw_ticks: list[dict[str, Any]]) -> pd.DataFrame:
     try:
         df = pd.DataFrame(raw_ticks)
     except Exception as exc:
-        logger.warning(
-            "build_tick_df_from_rithmic: failed to create DataFrame — %s", exc
-        )
+        logger.warning("build_tick_df_from_rithmic: failed to create DataFrame — %s", exc)
         return pd.DataFrame(columns=["timestamp", "price", "size", "side"])  # type: ignore[call-overload]
 
     # Normalise column names to lower-case
@@ -185,9 +183,7 @@ def _compute_cvd_from_ticks(
     tick_df["timestamp"] = pd.to_datetime(tick_df["timestamp"], errors="coerce")
     tick_df = tick_df.dropna(subset=["timestamp"])
     tick_df["size"] = (
-        pd.Series(pd.to_numeric(tick_df["size"], errors="coerce"), dtype=float)
-        .fillna(0.0)
-        .values
+        pd.Series(pd.to_numeric(tick_df["size"], errors="coerce"), dtype=float).fillna(0.0).values
     )
 
     # Signed size: +size for buys, -size for sells
@@ -213,9 +209,7 @@ def _compute_cvd_from_ticks(
 
     for i, bar_start in enumerate(bar_times):
         bar_end = bar_start + bar_duration
-        mask = (ts_arr >= np.datetime64(bar_start, "ns")) & (
-            ts_arr < np.datetime64(bar_end, "ns")
-        )
+        mask = (ts_arr >= np.datetime64(bar_start, "ns")) & (ts_arr < np.datetime64(bar_end, "ns"))
         bar_deltas[i] = float(signed[mask].sum())
 
     delta_series = pd.Series(bar_deltas, index=bar_df.index)
@@ -363,9 +357,7 @@ def compute_cvd(
             .fillna(0.0)
             .values
         )
-        tick_df_norm["timestamp"] = pd.to_datetime(
-            tick_df_norm["timestamp"], errors="coerce"
-        )
+        tick_df_norm["timestamp"] = pd.to_datetime(tick_df_norm["timestamp"], errors="coerce")
         tick_df_norm = tick_df_norm.dropna(subset=["timestamp"])
         is_buy = tick_df_norm["side"].astype(str).str.lower().isin(["buy", "b"])
 
@@ -377,9 +369,7 @@ def compute_cvd(
         if len(bar_times) >= 2:
             gaps = bar_times[1:] - bar_times[:-1]
             bar_duration = pd.Timedelta(gaps.value_counts().idxmax())
-            ts_arr = np.asarray(
-                tick_df_norm["timestamp"].values, dtype="datetime64[ns]"
-            )
+            ts_arr = np.asarray(tick_df_norm["timestamp"].values, dtype="datetime64[ns]")
             sizes = np.asarray(tick_df_norm["size"].values, dtype=float)
             is_buy_arr = np.asarray(is_buy.values, dtype=bool)
 
@@ -502,9 +492,7 @@ def detect_cvd_divergences(
     if "cvd" not in df.columns or len(df) < lookback + swing_period * 2:
         return []
 
-    cvd_source = (
-        str(df["cvd_source"].iloc[-1]) if "cvd_source" in df.columns else "unknown"
-    )
+    cvd_source = str(df["cvd_source"].iloc[-1]) if "cvd_source" in df.columns else "unknown"
 
     # Only look at the recent portion
     recent = df.iloc[-lookback - swing_period * 2 :]
@@ -512,7 +500,7 @@ def detect_cvd_divergences(
     cvd = recent["cvd"].astype(float)
 
     price_highs, price_lows = _find_swing_points(close, swing_period)
-    cvd_highs, cvd_lows = _find_swing_points(cvd, swing_period)
+    _cvd_highs, _cvd_lows = _find_swing_points(cvd, swing_period)
 
     divergences: list[dict[str, Any]] = []
 
@@ -712,17 +700,9 @@ def cvd_summary(df: pd.DataFrame) -> dict[str, Any]:
         }
 
     cvd_val = float(df["cvd"].iloc[-1]) if not np.isnan(df["cvd"].iloc[-1]) else 0.0
-    delta_val = (
-        float(df["delta"].iloc[-1]) if not np.isnan(df["delta"].iloc[-1]) else 0.0
-    )
-    slope_val = (
-        float(df["cvd_slope"].iloc[-1])
-        if not np.isnan(df["cvd_slope"].iloc[-1])
-        else 0.0
-    )
-    cvd_source = (
-        str(df["cvd_source"].iloc[-1]) if "cvd_source" in df.columns else "unknown"
-    )
+    delta_val = float(df["delta"].iloc[-1]) if not np.isnan(df["delta"].iloc[-1]) else 0.0
+    slope_val = float(df["cvd_slope"].iloc[-1]) if not np.isnan(df["cvd_slope"].iloc[-1]) else 0.0
+    cvd_source = str(df["cvd_source"].iloc[-1]) if "cvd_source" in df.columns else "unknown"
 
     if slope_val > 0.5:
         bias, emoji = "bullish", "🟢"
@@ -732,9 +712,7 @@ def cvd_summary(df: pd.DataFrame) -> dict[str, Any]:
         bias, emoji = "neutral", "🟡"
 
     absorption_signals = detect_absorption_candles(df)
-    latest_absorption = (
-        int(absorption_signals.iloc[-1]) if len(absorption_signals) > 0 else 0
-    )
+    latest_absorption = int(absorption_signals.iloc[-1]) if len(absorption_signals) > 0 else 0
 
     divergences = detect_cvd_divergences(df, lookback=30)
 
@@ -815,9 +793,7 @@ def divergences_to_dataframe(divergences: list[dict[str, Any]]) -> pd.DataFrame:
     """
     if not divergences:
         return pd.DataFrame(
-            columns=pd.Index(
-                ["Type", "Datetime", "Price Move", "CVD Move", "Strength", "Source"]
-            )
+            columns=pd.Index(["Type", "Datetime", "Price Move", "CVD Move", "Strength", "Source"])
         )
 
     rows = []

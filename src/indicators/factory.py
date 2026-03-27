@@ -120,7 +120,7 @@ class IndicatorFactory:
                     continue
                 else:
                     raise ValueError(
-                        f"Error in configuration at index {i}: {str(e)}"
+                        f"Error in configuration at index {i}: {e!s}"
                     ) from e
 
         return indicators
@@ -150,4 +150,4 @@ class IndicatorFactory:
             IndicatorFactory._logger.error(
                 "custom_indicator_creation_failed", error=str(e)
             )
-            raise ValueError(f"Failed to create custom indicator: {str(e)}") from e
+            raise ValueError(f"Failed to create custom indicator: {e!s}") from e

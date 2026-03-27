@@ -148,6 +148,7 @@ COOLDOWN_AFTER_LOSS = CFG["risk"]["cooldown_after_loss_sec"]
 DAILY_TRADE_LIMIT = CFG["risk"]["daily_trade_limit"]
 VOL_ENTRY_MIN = CFG["volatility"]["entry_filter"]["min_percentile"]
 VOL_ENTRY_MAX = CFG["volatility"]["entry_filter"]["max_percentile"]
+MIN_ORDER_USDT = float(CFG["capital"].get("min_order_usdt", 0.50))
 
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL", "")
 API_KEY = os.getenv("KUCOIN_API_KEY")
@@ -691,10 +692,20 @@ def optimize_params() -> dict | None:
 # ORDER HELPERS
 # ================================================================
 def calc_size(price: float) -> float:
-    """Contracts to risk exactly 1% of capital at current price + leverage."""
+    """Contracts to risk exactly 1% of capital at current price + leverage.
+
+    Enforces a minimum notional value of MIN_ORDER_USDT (default $0.50)
+    so that orders are large enough to actually fill on KuCoin.
+    """
     sl_dist = best_params["sl_pct"]
     raw = (CAPITAL * RISK_PER_ADD * LEVERAGE) / (sl_dist * price)
-    return max(round(raw, 1), 0.1)
+    size = max(round(raw, 1), 0.1)
+    # Ensure the order meets the minimum dollar threshold
+    notional = size * price / LEVERAGE
+    if notional < MIN_ORDER_USDT:
+        size = round((MIN_ORDER_USDT * LEVERAGE) / price, 1)
+        size = max(size, 0.1)
+    return size
 
 
 async def place_order(

@@ -1,15 +1,13 @@
 """
-Shared pytest fixtures for the futures test suite.
+Shared pytest fixtures for the scalper test suite.
 
 Provides synthetic OHLCV DataFrames that mirror real market data shapes
 so every test module can exercise indicators, strategies, and detectors
 without hitting the network.
 """
 
-import atexit
-import logging
 import os
-import threading
+import tempfile as _tempfile
 
 import numpy as np
 import pandas as pd
@@ -26,82 +24,9 @@ os.environ.setdefault("DISABLE_REDIS", "1")
 # DB_PATH defaults to "futures_journal.db" in CWD — redirect to temp.
 # DATA_DIR defaults to "." which creates model_registry/ in CWD.
 # ---------------------------------------------------------------------------
-import tempfile as _tempfile
-
 _TEST_DATA_DIR = _tempfile.mkdtemp(prefix="fks_test_")
 os.environ.setdefault("DB_PATH", os.path.join(_TEST_DATA_DIR, "futures_journal.db"))
 os.environ.setdefault("DATA_DIR", _TEST_DATA_DIR)
-
-# ---------------------------------------------------------------------------
-# Prevent prometheus_client's C-extension (_mmap_dict) from crashing the
-# interpreter during atexit/GC teardown.
-#
-# Root cause: prometheus_client >= 0.20 registers an atexit handler that
-# tries to flush metrics to PROMETHEUS_MULTIPROC_DIR.  When that directory
-# doesn't exist (test environment) the C extension aborts the process with
-# "terminate called without an active exception" + core dump — even though
-# all tests passed.  Setting this env var disables the _created timestamp
-# series and the multiprocess flush path that triggers the crash.
-# ---------------------------------------------------------------------------
-os.environ.setdefault("PROMETHEUS_DISABLE_CREATED_SERIES", "true")
-
-
-# ---------------------------------------------------------------------------
-# Silence logging errors from daemon threads during interpreter shutdown.
-#
-# Root cause: DashboardEngine._loop() runs in a daemon thread.  When pytest
-# finishes, Python tears down logging stream handlers *before* daemon threads
-# are killed.  Any log call in those threads hits a closed file and raises
-# "ValueError: I/O operation on closed file", which propagates through
-# logging.Handler.handleError() → the C runtime abort handler →
-# "terminate called without an active exception" + core dump.
-#
-# Setting logging.raiseExceptions = False tells the logging machinery to
-# silently discard errors that occur inside handlers, preventing the crash.
-# We register it as an atexit handler so it fires as early as possible in
-# the teardown sequence — before stream handlers are closed.
-# ---------------------------------------------------------------------------
-def _silence_logging_on_shutdown() -> None:
-    logging.raiseExceptions = False
-
-
-atexit.register(_silence_logging_on_shutdown)
-
-
-# ---------------------------------------------------------------------------
-# Stop the DashboardEngine singleton before the interpreter exits.
-#
-# Root cause: DashboardEngine._loop() runs hmmlearn's HMM fitting inside a
-# daemon thread.  hmmlearn uses Cython/C extensions that call std::terminate()
-# if the thread is interrupted mid-computation during GC teardown — even with
-# daemon=True.  The fix is to signal the engine to stop and join its thread
-# with a short timeout *before* Python starts tearing down C extensions.
-#
-# We register this in two places:
-#   1. atexit — fires early in the Python shutdown sequence.
-#   2. A session-scoped autouse fixture — fires at pytest teardown time,
-#      which is even earlier than atexit for the test process.
-# ---------------------------------------------------------------------------
-def _stop_engine_singleton() -> None:
-    """Synchronously stop the DashboardEngine singleton if it was started."""
-    try:
-        from lib.trading.engine import _engine_instance  # noqa: PLC0415
-
-        if _engine_instance is not None and _engine_instance._running:
-            _engine_instance._running = False
-            t = _engine_instance._thread
-            if t is not None and t.is_alive():
-                t.join(timeout=3)
-    except Exception:
-        pass
-
-
-atexit.register(_stop_engine_singleton)
-
-# ---------------------------------------------------------------------------
-# Make sure the `src/` package is importable from tests regardless of how
-# pytest is invoked (repo root, tests/ dir, or via CI).
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +34,9 @@ atexit.register(_stop_engine_singleton)
 # ---------------------------------------------------------------------------
 
 
-def _make_timestamps(n: int, freq: str = "5min", start: str = "2025-01-06 03:00") -> pd.DatetimeIndex:
+def _make_timestamps(
+    n: int, freq: str = "5min", start: str = "2025-01-06 03:00"
+) -> pd.DatetimeIndex:
     """Generate a tz-aware (US/Eastern) DatetimeIndex for *n* bars."""
     return pd.date_range(start=start, periods=n, freq=freq, tz="America/New_York")
 
@@ -250,75 +177,55 @@ def _gappy_ohlcv(
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _suppress_daemon_thread_logging_errors():
-    """Session-scoped fixture that ensures logging errors from daemon threads
-    (e.g. DashboardEngine._loop, regime HMM fitting) don't abort the process
-    during interpreter teardown.
-
-    The ``atexit`` registration above handles the common case, but this
-    fixture also covers pytest's own teardown hooks which run before atexit.
-    """
-    yield
-    # 1. Stop the engine background thread cleanly so hmmlearn's C extensions
-    #    are not mid-computation when the interpreter tears down.
-    _stop_engine_singleton()
-
-    # 2. Also join any other lingering daemon threads with a short grace period
-    #    so they can finish their current C-level work before GC runs.
-    main_thread = threading.main_thread()
-    for t in threading.enumerate():
-        if t is not main_thread and t.daemon and t.is_alive():
-            t.join(timeout=2)
-
-    # 3. Disable logging exception propagation so any remaining threads that
-    #    try to log against a closed stream fail silently instead of crashing.
-    logging.raiseExceptions = False
-
-
-@pytest.fixture()
+@pytest.fixture
 def ohlcv_df() -> pd.DataFrame:
     """Generic 500-bar random-walk OHLCV DataFrame."""
     return _random_walk_ohlcv(n=500, seed=42)
 
 
-@pytest.fixture()
+@pytest.fixture
 def short_ohlcv_df() -> pd.DataFrame:
     """Short 50-bar DataFrame (edge-case / minimum-data tests)."""
     return _random_walk_ohlcv(n=50, seed=99, start_price=50.0)
 
 
-@pytest.fixture()
+@pytest.fixture
 def trending_df() -> pd.DataFrame:
     """300-bar trending DataFrame (positive drift)."""
     return _trending_ohlcv(n=300, seed=123)
 
 
-@pytest.fixture()
+@pytest.fixture
 def gappy_df() -> pd.DataFrame:
     """300-bar DataFrame with intentional price gaps for ICT tests."""
     return _gappy_ohlcv(n=300, seed=77)
 
 
-@pytest.fixture()
+@pytest.fixture
 def empty_df() -> pd.DataFrame:
     """Empty OHLCV DataFrame for guard-clause tests."""
     return pd.DataFrame(columns=pd.Index(["Open", "High", "Low", "Close", "Volume"]))
 
 
-@pytest.fixture()
+@pytest.fixture
 def tiny_df() -> pd.DataFrame:
     """5-bar DataFrame (below most minimum-bar thresholds)."""
     return _random_walk_ohlcv(n=5, seed=11, start_price=20.0)
 
 
-@pytest.fixture()
+@pytest.fixture
 def gold_like_df() -> pd.DataFrame:
     """500-bar DataFrame at Gold-like price levels (~2700)."""
     return _random_walk_ohlcv(n=500, seed=55, start_price=2700.0, volatility=0.003)
 
 
-@pytest.fixture()
+@pytest.fixture
 def es_like_df() -> pd.DataFrame:
     """500-bar DataFrame at ES-like price levels (~5500)."""
     return _random_walk_ohlcv(n=500, seed=66, start_price=5500.0, volatility=0.002)
+
+
+@pytest.fixture
+def sol_like_df() -> pd.DataFrame:
+    """500-bar DataFrame at SOL-like price levels (~150)."""
+    return _random_walk_ohlcv(n=500, seed=88, start_price=150.0, volatility=0.008)

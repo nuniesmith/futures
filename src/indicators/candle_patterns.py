@@ -104,12 +104,8 @@ def identify_manipulation_candles(
         # Enhanced pattern detection for crypto markets if requested
         if enhanced_detection:
             # Add wick strength analysis
-            result["upper_wick"] = result["high"] - np.maximum(
-                result["open"], result["close"]
-            )
-            result["lower_wick"] = (
-                np.minimum(result["open"], result["close"]) - result["low"]
-            )
+            result["upper_wick"] = result["high"] - np.maximum(result["open"], result["close"])
+            result["lower_wick"] = np.minimum(result["open"], result["close"]) - result["low"]
             result["body_size"] = abs(result["close"] - result["open"])
 
             # Calculate wick-to-body ratios (avoid division by zero)
@@ -144,41 +140,25 @@ def identify_manipulation_candles(
 
             # Identify high volatility candles (useful for crypto markets)
             # Calculate candle height as percentage of price
-            result["candle_height_pct"] = (result["high"] - result["low"]) / result[
-                "low"
-            ]
+            result["candle_height_pct"] = (result["high"] - result["low"]) / result["low"]
 
             # Mark high volatility candles (above 1.5x the median volatility)
             median_height = result["candle_height_pct"].median()
-            result["high_volatility"] = result["candle_height_pct"] > (
-                median_height * 1.5
-            )
+            result["high_volatility"] = result["candle_height_pct"] > (median_height * 1.5)
 
             # Mark engulfing patterns - these often lead to manipulation candles
             result["bullish_engulfing"] = (
                 (result["open"] < result["close"])  # Current candle is bullish
-                & (
-                    result["open"].shift(1) > result["close"].shift(1)
-                )  # Previous candle is bearish
-                & (
-                    result["open"] <= result["close"].shift(1)
-                )  # Current open below previous close
-                & (
-                    result["close"] >= result["open"].shift(1)
-                )  # Current close above previous open
+                & (result["open"].shift(1) > result["close"].shift(1))  # Previous candle is bearish
+                & (result["open"] <= result["close"].shift(1))  # Current open below previous close
+                & (result["close"] >= result["open"].shift(1))  # Current close above previous open
             )
 
             result["bearish_engulfing"] = (
                 (result["open"] > result["close"])  # Current candle is bearish
-                & (
-                    result["open"].shift(1) < result["close"].shift(1)
-                )  # Previous candle is bullish
-                & (
-                    result["open"] >= result["close"].shift(1)
-                )  # Current open above previous close
-                & (
-                    result["close"] <= result["open"].shift(1)
-                )  # Current close below previous open
+                & (result["open"].shift(1) < result["close"].shift(1))  # Previous candle is bullish
+                & (result["open"] >= result["close"].shift(1))  # Current open above previous close
+                & (result["close"] <= result["open"].shift(1))  # Current close below previous open
             )
 
         return result
@@ -252,9 +232,7 @@ def get_valid_signals(
         result["signal_strength"] = 0.0
 
         # Pro-trend signals - vectorized conditions
-        bullish_signals = (
-            result["bullish_mc"] & (result["trend"] == "up") & ~result["is_bulltrap"]
-        )
+        bullish_signals = result["bullish_mc"] & (result["trend"] == "up") & ~result["is_bulltrap"]
         bearish_signals = (
             result["bearish_mc"] & (result["trend"] == "down") & ~result["is_beartrap"]
         )
@@ -268,9 +246,7 @@ def get_valid_signals(
             result.loc[trap_signals, "valid_signal"] = True
 
         # Apply timeframe-specific rules
-        if timeframe != "H4" and (
-            timeframe.startswith("D") or timeframe.startswith("W")
-        ):
+        if timeframe != "H4" and (timeframe.startswith(("D", "W"))):
             if timeframe == "D1" or timeframe == "Daily":
                 # For daily timeframe, only keep very strong signals
                 strong_signals = bullish_signals | bearish_signals
@@ -294,9 +270,7 @@ def get_valid_signals(
                     ].quantile(0.85)
                     if "bullish_engulfing" in result.columns:
                         very_strong = (
-                            very_strong
-                            | result["bullish_engulfing"]
-                            | result["bearish_engulfing"]
+                            very_strong | result["bullish_engulfing"] | result["bearish_engulfing"]
                         )
                     result.loc[
                         very_strong & (bullish_signals | bearish_signals),
@@ -345,9 +319,7 @@ def get_valid_signals(
 
             # Filter signals by minimum strength if specified
             if min_strength > 0:
-                weak_signals = (result["signal_strength"] < min_strength) & result[
-                    "valid_signal"
-                ]
+                weak_signals = (result["signal_strength"] < min_strength) & result["valid_signal"]
                 result.loc[weak_signals, "valid_signal"] = False
                 logger.info(
                     "removed_weak_signals",
@@ -444,9 +416,7 @@ def generate_entry_signals(
             result.loc[bullish_entries, "signal_type"] = "buy"
 
             # Entry price: the high of the manipulation candle
-            result.loc[bullish_entries, "entry_price"] = result.loc[
-                bullish_entries, "high"
-            ]
+            result.loc[bullish_entries, "entry_price"] = result.loc[bullish_entries, "high"]
 
             # Stop loss calculation (with safety against invalid values)
             if dynamic_targets:
@@ -468,8 +438,7 @@ def generate_entry_signals(
                 # Adjust stop loss if needed
                 if too_far_sl.any():
                     result.loc[bullish_entries & too_far_sl, "stop_loss"] = (
-                        result.loc[bullish_entries & too_far_sl, "entry_price"]
-                        - max_distance
+                        result.loc[bullish_entries & too_far_sl, "entry_price"] - max_distance
                     )
             else:
                 # Standard fixed ATR-based stop loss
@@ -497,8 +466,7 @@ def generate_entry_signals(
                 if dynamic_targets and "candle_height_pct" in result.columns:
                     # For highly volatile markets, slightly reduce targets for more realistic results
                     volatile_idx = bullish_entries & (
-                        result["candle_height_pct"]
-                        > result["candle_height_pct"].median() * 2
+                        result["candle_height_pct"] > result["candle_height_pct"].median() * 2
                     )
                     if volatile_idx.any():
                         # Adjust targets by up to 15% for highly volatile candles
@@ -523,9 +491,7 @@ def generate_entry_signals(
             result.loc[bearish_entries, "signal_type"] = "sell"
 
             # Entry price: the low of the manipulation candle
-            result.loc[bearish_entries, "entry_price"] = result.loc[
-                bearish_entries, "low"
-            ]
+            result.loc[bearish_entries, "entry_price"] = result.loc[bearish_entries, "low"]
 
             # Stop loss calculation
             if dynamic_targets:
@@ -547,8 +513,7 @@ def generate_entry_signals(
                 # Adjust stop loss if needed
                 if too_far_sl.any():
                     result.loc[bearish_entries & too_far_sl, "stop_loss"] = (
-                        result.loc[bearish_entries & too_far_sl, "entry_price"]
-                        + max_distance
+                        result.loc[bearish_entries & too_far_sl, "entry_price"] + max_distance
                     )
             else:
                 # Standard fixed ATR-based stop loss
@@ -576,8 +541,7 @@ def generate_entry_signals(
                 if dynamic_targets and "candle_height_pct" in result.columns:
                     # For highly volatile markets, slightly reduce targets for more realistic results
                     volatile_idx = bearish_entries & (
-                        result["candle_height_pct"]
-                        > result["candle_height_pct"].median() * 2
+                        result["candle_height_pct"] > result["candle_height_pct"].median() * 2
                     )
                     if volatile_idx.any():
                         # Adjust targets by up to 15% for highly volatile candles
@@ -609,9 +573,7 @@ def generate_entry_signals(
         return df
 
 
-def identify_advanced_patterns(
-    df: pd.DataFrame, lookback_period: int = 5
-) -> pd.DataFrame:
+def identify_advanced_patterns(df: pd.DataFrame, lookback_period: int = 5) -> pd.DataFrame:
     """
     Identifies additional advanced chart patterns useful for crypto markets.
 
@@ -648,12 +610,8 @@ def identify_advanced_patterns(
 
         # Calculate body size and wicks
         result["body_size"] = abs(result["close"] - result["open"])
-        result["upper_wick"] = result["high"] - np.maximum(
-            result["open"], result["close"]
-        )
-        result["lower_wick"] = (
-            np.minimum(result["open"], result["close"]) - result["low"]
-        )
+        result["upper_wick"] = result["high"] - np.maximum(result["open"], result["close"])
+        result["lower_wick"] = np.minimum(result["open"], result["close"]) - result["low"]
 
         # Identify doji patterns (small body, long wicks)
         avg_body = result["body_size"].rolling(window=lookback_period).mean()
@@ -671,9 +629,7 @@ def identify_advanced_patterns(
 
         # Identify tweezer tops (bearish reversal)
         result["tweezer_top"] = (
-            (
-                abs(result["high"] - result["high"].shift(1)) < avg_body * 0.2
-            )  # Similar highs
+            (abs(result["high"] - result["high"].shift(1)) < avg_body * 0.2)  # Similar highs
             & (result["close"].shift(1) > result["open"].shift(1))  # Previous bullish
             & (result["close"] < result["open"])  # Current bearish
             & (result["upper_wick"] > result["body_size"])  # Significant upper wick
@@ -681,9 +637,7 @@ def identify_advanced_patterns(
 
         # Identify tweezer bottoms (bullish reversal)
         result["tweezer_bottom"] = (
-            (
-                abs(result["low"] - result["low"].shift(1)) < avg_body * 0.2
-            )  # Similar lows
+            (abs(result["low"] - result["low"].shift(1)) < avg_body * 0.2)  # Similar lows
             & (result["close"].shift(1) < result["open"].shift(1))  # Previous bearish
             & (result["close"] > result["open"])  # Current bullish
             & (result["lower_wick"] > result["body_size"])  # Significant lower wick
@@ -716,9 +670,7 @@ def identify_advanced_patterns(
             # Bullish exhaustion (high volume down candle followed by reversal)
             result["bullish_exhaustion"] = (
                 high_volume.shift(1)  # High volume on previous candle
-                & (
-                    result["close"].shift(1) < result["open"].shift(1)
-                )  # Previous bearish
+                & (result["close"].shift(1) < result["open"].shift(1))  # Previous bearish
                 & (result["close"] > result["open"])  # Current bullish
                 & (result["close"] > result["close"].shift(1))  # Price reversal
             )
@@ -726,9 +678,7 @@ def identify_advanced_patterns(
             # Bearish exhaustion (high volume up candle followed by reversal)
             result["bearish_exhaustion"] = (
                 high_volume.shift(1)  # High volume on previous candle
-                & (
-                    result["close"].shift(1) > result["open"].shift(1)
-                )  # Previous bullish
+                & (result["close"].shift(1) > result["open"].shift(1))  # Previous bullish
                 & (result["close"] < result["open"])  # Current bearish
                 & (result["close"] < result["close"].shift(1))  # Price reversal
             )
@@ -794,20 +744,18 @@ def get_pattern_strength(
 
         # Check each pattern
         for pattern, weight in pattern_weights.items():
-            if pattern in row and row[pattern]:
+            if row.get(pattern):
                 strength += weight
                 patterns.append(pattern)
 
         # Additional context factors
         if "trend" in row and (
-            row["trend"] == "up"
-            and any(p.startswith("bullish") for p in patterns)
-            or row["trend"] == "down"
-            and any(p.startswith("bearish") for p in patterns)
+            (row["trend"] == "up" and any(p.startswith("bullish") for p in patterns))
+            or (row["trend"] == "down" and any(p.startswith("bearish") for p in patterns))
         ):
             strength += 0.2  # Bonus for trend-aligned patterns
 
-        if "high_volatility" in row and row["high_volatility"]:
+        if row.get("high_volatility"):
             strength += 0.15  # Bonus for high volatility context
 
         # Normalize to 0-1 range (cap at 1.0)
@@ -861,9 +809,7 @@ def filter_signals_for_crypto(
 
         if "signal_strength" in result.columns:
             # Filter by minimum strength
-            weak_signals = (result["signal_strength"] < min_strength) & result[
-                "entry_signal"
-            ]
+            weak_signals = (result["signal_strength"] < min_strength) & result["entry_signal"]
             result.loc[weak_signals, "entry_signal"] = False
             logger.info(
                 "removed_weak_signals",
@@ -878,9 +824,7 @@ def filter_signals_for_crypto(
 
             # Check if the signal is in any area of interest
             aoi_columns = [
-                col
-                for col in result.columns
-                if "in_" in col or "at_" in col or "is_" in col
+                col for col in result.columns if "in_" in col or "at_" in col or "is_" in col
             ]
 
             if aoi_columns:
@@ -890,9 +834,7 @@ def filter_signals_for_crypto(
 
             # Remove signals not near key levels or areas of interest
             result.loc[non_key_signals, "entry_signal"] = False
-            logger.info(
-                "removed_non_key_level_signals", count=int(non_key_signals.sum())
-            )
+            logger.info("removed_non_key_level_signals", count=int(non_key_signals.sum()))
 
         # Add volatility-based filtering for crypto
         if "candle_height_pct" in result.columns:
@@ -901,9 +843,7 @@ def filter_signals_for_crypto(
                 result["candle_height_pct"] < result["candle_height_pct"].median() * 0.5
             ) & result["entry_signal"]
             result.loc[low_vol_signals, "entry_signal"] = False
-            logger.info(
-                "removed_low_volatility_signals", count=int(low_vol_signals.sum())
-            )
+            logger.info("removed_low_volatility_signals", count=int(low_vol_signals.sum()))
 
         # Log signals removed
         final_count = result["entry_signal"].sum()
@@ -912,9 +852,7 @@ def filter_signals_for_crypto(
             "crypto_filtering_complete",
             removed_count=removed_count,
             initial_count=initial_count,
-            removed_pct=round(removed_count / initial_count * 100, 1)
-            if initial_count
-            else 0,
+            removed_pct=round(removed_count / initial_count * 100, 1) if initial_count else 0,
         )
 
         return result

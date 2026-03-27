@@ -25,7 +25,7 @@ class PatternDetector:
         Returns:
             DataFrame with detected patterns
         """
-        # This would call process_data from src.lib.core.processor
+        # This would call process_data from src.core.processor
         # with the appropriate parameters
         return process_data(
             df, enhanced_detection=self.enhanced_detection, asset_type=self.asset_type
@@ -34,14 +34,11 @@ class PatternDetector:
     def identify_manipulation_candles(self, df):
         """Identify manipulation candles"""
         # Implementation details
-        pass
 
     def identify_fair_value_gaps(self, df, gap_threshold):
         """Identify fair value gaps"""
         # Implementation details
-        pass
 
     def identify_supply_demand_zones(self, df, zone_strength):
         """Identify supply and demand zones"""
         # Implementation details
-        pass

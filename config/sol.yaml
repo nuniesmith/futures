@@ -16,8 +16,8 @@ exchange:
   id: kucoinfutures
   symbol: SOLUSDTM
   leverage: 20
-  margin_mode: isolated          # isolated | cross
-  position_mode: one_way         # one_way only — reduceOnly requires it
+  margin_mode: isolated # isolated | cross
+  position_mode: one_way # one_way only — reduceOnly requires it
   credentials:
     api_key: ${KUCOIN_API_KEY}
     api_secret: ${KUCOIN_API_SECRET}
@@ -25,17 +25,18 @@ exchange:
 
 # ─── Capital & Risk ──────────────────────────────────────────────
 capital:
-  balance_usdt: 30.0             # starting test balance
-  risk_per_add_pct: 0.01         # 1% of capital risked per stack add
-  max_stack: 3                   # max 3 adds → 3% total capital at risk
+  balance_usdt: 30.0 # starting test balance
+  risk_per_add_pct: 0.01 # 1% of capital risked per stack add
+  max_stack: 3 # max 3 adds → 3% total capital at risk
+  min_order_usdt: 0.50 # minimum $0.50 per order to ensure fills
 
 # Risk management (ported from Ruby RiskManager test suite)
 risk:
-  max_daily_loss_pct: 0.05       # halt trading after 5% daily drawdown
-  max_consecutive_losses: 4      # pause after 4 losses in a row
-  max_open_trades: 1             # one position at a time (stack counted as 1)
-  cooldown_after_loss_sec: 30    # wait 30s after a stop-loss before re-entry
-  daily_trade_limit: 50          # cap total round-trips per day
+  max_daily_loss_pct: 0.05 # halt trading after 5% daily drawdown
+  max_consecutive_losses: 4 # pause after 4 losses in a row
+  max_open_trades: 1 # one position at a time (stack counted as 1)
+  cooldown_after_loss_sec: 30 # wait 30s after a stop-loss before re-entry
+  daily_trade_limit: 50 # cap total round-trips per day
 
 # ─── Strategy Defaults ───────────────────────────────────────────
 # These are the initial/fallback values.  Optuna will refine
@@ -47,26 +48,26 @@ strategy:
   slow_ema: 21
 
   # Take profit — baseline before adaptive scaling
-  tp_pct_base: 0.004             # 0.40%  (scales with vol + regime)
+  tp_pct_base: 0.004 # 0.40%  (scales with vol + regime)
 
   # Stop loss
-  sl_pct: 0.0035                 # 0.35%
+  sl_pct: 0.0035 # 0.35%
 
   # Order book imbalance threshold for entry confirmation
   imbalance_thresh: 1.42
 
   # DCA / stack-add pullback required before averaging in
-  add_threshold_base: 0.002      # 0.20%  (scales with vol_pct)
+  add_threshold_base: 0.002 # 0.20%  (scales with vol_pct)
 
 # ─── Ruby Wave Analysis ─────────────────────────────────────────
 # Ported from Ruby Pine Script v6.3 §4.
 # Controls stacking gates and directional bias.
 wave:
-  ema_period: 20                 # dynamic EMA for wave crossover detection
-  rma_alpha: 0.1                 # 1/10 — smoothing for speed accumulation
-  lookback_waves: 200            # max recent waves to track
-  quality_min: 50.0              # 0–100 quality score gate for first entry
-  wave_pct_gate: 0.40            # wave_ratio percentile gate for adds
+  ema_period: 20 # dynamic EMA for wave crossover detection
+  rma_alpha: 0.1 # 1/10 — smoothing for speed accumulation
+  lookback_waves: 200 # max recent waves to track
+  quality_min: 50.0 # 0–100 quality score gate for first entry
+  wave_pct_gate: 0.40 # wave_ratio percentile gate for adds
 
 # ─── Awesome Oscillator ─────────────────────────────────────────
 # Ruby §2: AO = SMA(hl2, fast) − SMA(hl2, slow)
@@ -81,22 +82,22 @@ awesome_oscillator:
 regime:
   sma_period: 200
   slope_lookback: 20
-  slope_trending_threshold: 1.0  # |slope| > 1.0 → TRENDING_UP/DOWN
-  vol_volatile_threshold: 1.5    # vol_ratio > 1.5 → VOLATILE
-  vol_ranging_threshold: 0.8     # vol_ratio < 0.8 → RANGING
+  slope_trending_threshold: 1.0 # |slope| > 1.0 → TRENDING_UP/DOWN
+  vol_volatile_threshold: 1.5 # vol_ratio > 1.5 → VOLATILE
+  vol_ranging_threshold: 0.8 # vol_ratio < 0.8 → RANGING
 
 # ─── Volatility Clustering ──────────────────────────────────────
 # Ported from Ruby K-Means adaptive volatility (volatility.py).
 # Position sizing multipliers per cluster.
 volatility:
   atr_period: 14
-  percentile_lookback: 200       # bars for vol percentile calculation
+  percentile_lookback: 200 # bars for vol percentile calculation
 
   # Adaptive TP multipliers by regime (Ruby §7)
   tp_multipliers:
     trending:
       base: 1.4
-      vol_scale: 0.6             # tp = base + vol_pct * vol_scale
+      vol_scale: 0.6 # tp = base + vol_pct * vol_scale
     volatile:
       base: 1.2
       vol_scale: 0.5
@@ -109,31 +110,31 @@ volatility:
 
   # Position sizing by vol cluster (from Ruby K-Means)
   position_multipliers:
-    low: 1.2                     # low vol → slightly larger size
+    low: 1.2 # low vol → slightly larger size
     medium: 1.0
-    high: 0.6                    # high vol → conservative size
+    high: 0.6 # high vol → conservative size
 
   # Vol percentile filter — skip entries outside this window
   # (ported from Ruby should_filter_entry)
   entry_filter:
-    min_percentile: 0.10         # skip dead markets
-    max_percentile: 0.95         # skip extreme vol / news events
+    min_percentile: 0.10 # skip dead markets
+    max_percentile: 0.95 # skip extreme vol / news events
 
 # ─── Signal Quality ─────────────────────────────────────────────
 # Ruby §9 multi-factor quality score (0–100).
 # Each factor contributes points; entry blocked below quality_min.
 quality:
   weights:
-    ao_confirms_ema: 20          # AO direction matches EMA bias
-    close_vs_fast_ema: 15        # price on correct side of fast EMA
-    book_imbalance: 20           # orderbook confirms direction
-    volume_above_avg: 25         # volume > vol-adjusted 20-bar mean
-    regime_alignment: 20         # regime aligns with trade direction
+    ao_confirms_ema: 20 # AO direction matches EMA bias
+    close_vs_fast_ema: 15 # price on correct side of fast EMA
+    book_imbalance: 20 # orderbook confirms direction
+    volume_above_avg: 25 # volume > vol-adjusted 20-bar mean
+    regime_alignment: 20 # regime aligns with trade direction
 
   # Volume average multiplier thresholds
-  vol_mult_high: 1.8             # used when vol_pct >= 0.6
-  vol_mult_mid: 1.2              # used when vol_pct >= 0.4
-  vol_mult_low: 0.8              # used when vol_pct < 0.4
+  vol_mult_high: 1.8 # used when vol_pct >= 0.6
+  vol_mult_mid: 1.2 # used when vol_pct >= 0.4
+  vol_mult_low: 0.8 # used when vol_pct < 0.4
 
   # Partial credit for neutral/ranging regimes
   neutral_regime_credit: 10
@@ -141,17 +142,17 @@ quality:
 # ─── Candle Patterns (from Ruby signal_quality.py) ───────────────
 # These can gate or boost quality score in future iterations.
 candle_patterns:
-  enabled: false                 # set true to add candle pattern factor
-  body_ratio_threshold: 0.3      # body < 30% of range → wick pattern
-  wick_multiplier: 2.0           # lower_wick > 2× body → hammer
+  enabled: false # set true to add candle pattern factor
+  body_ratio_threshold: 0.3 # body < 30% of range → wick pattern
+  wick_multiplier: 2.0 # lower_wick > 2× body → hammer
   engulfing_enabled: true
-  pin_bar_wick_pct: 0.6          # wick > 60% of range → pin bar
+  pin_bar_wick_pct: 0.6 # wick > 60% of range → pin bar
 
 # ─── Optuna Auto-Optimization ───────────────────────────────────
 optuna:
-  interval_sec: 1200             # re-optimize every 20 minutes
-  n_trials: 70                   # trials per optimization round
-  timeout_sec: 14                # max seconds per round
+  interval_sec: 1200 # re-optimize every 20 minutes
+  n_trials: 70 # trials per optimization round
+  timeout_sec: 14 # max seconds per round
   direction: maximize
 
   # Parameter search ranges
@@ -181,20 +182,20 @@ optuna:
 
 # ─── Candle Builder ──────────────────────────────────────────────
 candles:
-  interval: 5s                   # OHLCV resample interval from tick stream
-  min_ticks: 60                  # minimum ticks before building candles
-  tick_buffer: 15000             # max ticks held in memory (deque maxlen)
+  interval: 5s # OHLCV resample interval from tick stream
+  min_ticks: 60 # minimum ticks before building candles
+  tick_buffer: 15000 # max ticks held in memory (deque maxlen)
 
 # ─── Data Streams ────────────────────────────────────────────────
 streams:
-  orderbook_depth: 20            # levels fetched from WS
-  orderbook_display: 10          # top-N levels used for imbalance calc
-  reconnect_delay_sec: 2         # wait before WS reconnect on error
+  orderbook_depth: 20 # levels fetched from WS
+  orderbook_display: 10 # top-N levels used for imbalance calc
+  reconnect_delay_sec: 2 # wait before WS reconnect on error
 
 # ─── Heartbeat & Monitoring ─────────────────────────────────────
 monitoring:
-  heartbeat_interval_sec: 300    # console status print every 5 min
-  loop_sleep_sec: 2              # main loop sleep between iterations
+  heartbeat_interval_sec: 300 # console status print every 5 min
+  loop_sleep_sec: 2 # main loop sleep between iterations
 
 # ─── Discord Alerts ─────────────────────────────────────────────
 discord:
@@ -220,18 +221,18 @@ discord:
     optuna_update: true
     ws_error: true
     startup: true
-    daily_summary: true          # end-of-day P&L summary
-    risk_limit_hit: true         # daily loss / consecutive loss alerts
+    daily_summary: true # end-of-day P&L summary
+    risk_limit_hit: true # daily loss / consecutive loss alerts
 
 # ─── Logging ─────────────────────────────────────────────────────
 logging:
-  level: INFO                    # DEBUG | INFO | WARNING | ERROR
+  level: INFO # DEBUG | INFO | WARNING | ERROR
   format: "%(asctime)s [%(levelname)s] %(message)s"
-  file: null                     # set to "logs/sol.log" to write to file
+  file: null # set to "logs/sol.log" to write to file
 
 # ─── Deployment ──────────────────────────────────────────────────
 deploy:
-  platform: linux/arm64          # Raspberry Pi 4
+  platform: linux/arm64 # Raspberry Pi 4
   restart_policy: unless-stopped
-  log_max_size: 10m              # cap Docker log size for SD card
+  log_max_size: 10m # cap Docker log size for SD card
   log_max_files: 3
