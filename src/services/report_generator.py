@@ -37,7 +37,7 @@ from src.logging_config import get_logger
 logger = get_logger(__name__)
 
 _ET = ZoneInfo("America/New_York")
-GROK_MODEL = "grok-4-1"
+GROK_MODEL = "grok-4.20-0309-reasoning"
 XAI_API_URL = "https://api.x.ai/v1"
 
 ASSETS = ["BTC", "ETH", "SOL", "DOGE", "SUI", "PEPE", "AVAX", "WIF", "FARTCOIN", "KCS"]
@@ -56,7 +56,7 @@ _SYSTEM_BASE = (
 
 
 class ReportGenerator:
-    """Generate AI-powered trading reports using Grok 4.1."""
+    """Generate AI-powered trading reports using Grok."""
 
     def __init__(
         self,

@@ -669,6 +669,45 @@ class AssetWorker:
             else:
                 lots = max(round(min_lots / lot_step) * lot_step, lot_step)
 
+        # ── Margin cap ────────────────────────────────────────────
+        # Ensure this order's required margin fits within the asset's
+        # capital slice.  Divide by max_stack so all potential stack
+        # adds can co-exist without exhausting the account balance.
+        max_stack = max(cfg.capital.max_stack, 1)
+        max_margin_per_add = capital / max_stack
+        max_notional_for_margin = max_margin_per_add * leverage
+        margin_cap_lots = max_notional_for_margin / (contract_size * price)
+
+        if lot_step >= 1.0:
+            margin_cap_lots = int(margin_cap_lots)  # floor to integer
+        else:
+            margin_cap_lots = int(margin_cap_lots / lot_step) * lot_step
+
+        if margin_cap_lots >= 1 and lots > margin_cap_lots:
+            logger.info(
+                "%s _calc_size: margin-capped %s → %s lots (slice=$%.2f, max_margin_per_add=$%.2f)",
+                self.tag,
+                lots,
+                margin_cap_lots,
+                capital,
+                max_margin_per_add,
+            )
+            lots = margin_cap_lots
+        elif margin_cap_lots < 1:
+            # Even 1 lot exceeds the per-add margin budget.
+            # Allow 1 lot minimum but warn — stacking will be limited.
+            if lots > 1:
+                lots = 1
+            logger.info(
+                "%s _calc_size: 1 lot exceeds margin cap "
+                "(slice=$%.2f, max_margin=$%.2f, lot_margin=$%.2f); "
+                "using min lot — stacking may be limited",
+                self.tag,
+                capital,
+                max_margin_per_add,
+                contract_size * price / leverage,
+            )
+
         # Clamp to exchange max lot limit
         lots = min(lots, max_lots)
 
@@ -1582,7 +1621,7 @@ async def main() -> None:
         if real_balance is not None:
             config.capital.balance_usdt = real_balance
             logger.info(
-                "Live balance from KuCoin: $%.2f USDT",
+                "Live balance from KuCoin: $%.2f USDT (config was $%.2f)",
                 real_balance,
                 config_capital,
             )
@@ -1608,7 +1647,7 @@ async def main() -> None:
         )
     logger.info("  Capital: $%.2f", config.capital.balance_usdt)
     if config.is_live and config.capital.balance_usdt != config_capital:
-        logger.info("  (synced from exchange)", config_capital)
+        logger.info("  (synced from exchange — config default was $%.2f)", config_capital)
     logger.info("=" * 60)
 
     # ── Shutdown coordination ─────────────────────────────────────

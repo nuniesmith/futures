@@ -57,7 +57,7 @@ logger = get_logger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 GROK_API_URL = "https://api.x.ai/v1/chat/completions"
-GROK_MODEL = "grok-4-1-fast-reasoning"
+GROK_MODEL = "grok-4.20-0309-reasoning"
 DEFAULT_MAX_TOKENS_BRIEFING = 3000
 DEFAULT_MAX_TOKENS_LIVE = 800
 DEFAULT_MAX_TOKENS_LIVE_COMPACT = 350
@@ -115,7 +115,9 @@ def _make_grok_client(api_key: str):
 
 def _ra_available() -> bool:
     """True when RA_BASE_URL and RA_API_KEY are both set in the environment."""
-    return bool(os.environ.get("RA_BASE_URL", "").strip() and os.environ.get("RA_API_KEY", "").strip())
+    return bool(
+        os.environ.get("RA_BASE_URL", "").strip() and os.environ.get("RA_API_KEY", "").strip()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +171,9 @@ def _call_llm(
                 logger.warning("_call_llm: RA unexpected error (%s) — falling back to Grok", exc)
 
     # --- Fallback: direct Grok ---
-    return _call_grok(prompt, api_key, max_tokens=max_tokens, temperature=temperature, system_prompt=system_prompt)
+    return _call_grok(
+        prompt, api_key, max_tokens=max_tokens, temperature=temperature, system_prompt=system_prompt
+    )
 
 
 def _stream_llm(
@@ -617,7 +621,9 @@ def format_market_context(
     if scorer_results:
         scorer_parts = []
         for r in scorer_results:
-            scorer_parts.append(f"  {r['asset']}: score={r['composite_score']:.0f}/100, signal={r['signal']}")
+            scorer_parts.append(
+                f"  {r['asset']}: score={r['composite_score']:.0f}/100, signal={r['signal']}"
+            )
         scorer_text = "\n".join(scorer_parts)
 
     # Session status
@@ -642,10 +648,15 @@ def format_market_context(
             avg = p.get("avgPrice", 0)
             upnl = p.get("unrealizedPnL", 0)
             pnl_emoji = "🟢" if upnl >= 0 else "🔴"
-            pos_parts.append(f"  {symbol}: {side} x{qty} @ {avg:.2f} — {pnl_emoji} unrealized USD {upnl:+,.2f}")
+            pos_parts.append(
+                f"  {symbol}: {side} x{qty} @ {avg:.2f} — {pnl_emoji} unrealized USD {upnl:+,.2f}"
+            )
         total_pnl = live_positions.get("total_unrealized_pnl", 0)
         acct_name = live_positions.get("account", "")
-        positions_text = f"Account: {acct_name} | Total unrealized: USD {total_pnl:+,.2f}\n" + "\n".join(pos_parts)
+        positions_text = (
+            f"Account: {acct_name} | Total unrealized: USD {total_pnl:+,.2f}\n"
+            + "\n".join(pos_parts)
+        )
 
     # Ruby Wave Analysis text
     fks_wave_text = "Not available"
@@ -1182,13 +1193,16 @@ def run_daily_plan_grok_analysis(
                 f"WH={kl_d.get('weekly_high', 0):.2f}"
             )
         bias_lines.append(
-            f"  {name}: {direction} ({confidence:.0%}) — {reasoning}" + (f" | {key_lvl}" if key_lvl else "")
+            f"  {name}: {direction} ({confidence:.0%}) — {reasoning}"
+            + (f" | {key_lvl}" if key_lvl else "")
         )
 
     bias_block = "\n".join(bias_lines) if bias_lines else "No bias data available"
 
     # Swing / scalp context
-    swing_names_str = ", ".join(swing_candidate_names) if swing_candidate_names else "None selected yet"
+    swing_names_str = (
+        ", ".join(swing_candidate_names) if swing_candidate_names else "None selected yet"
+    )
     scalp_names_str = ", ".join(scalp_focus_names) if scalp_focus_names else "None selected yet"
 
     prompt = (
@@ -1426,7 +1440,9 @@ def format_grok_daily_plan_for_display(grok_data: dict) -> str:
         lines.append("🎯 Top Assets:")
         for i, a in enumerate(top_assets, 1):
             agree = "✅" if a.get("bias_agreement") else "⚠️"
-            lines.append(f"   {i}. {a.get('name', '?')} {agree} — {a.get('reason', '')} [{a.get('key_level', '')}]")
+            lines.append(
+                f"   {i}. {a.get('name', '?')} {agree} — {a.get('reason', '')} [{a.get('key_level', '')}]"
+            )
 
     # Economic events
     events = grok_data.get("economic_events", [])
