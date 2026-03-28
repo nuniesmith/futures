@@ -471,6 +471,10 @@ class AssetWorker:
         # Keys: contract_size, max_lots, lot_step, precision_amount
         self.contract_spec = contract_spec or {}
 
+        # Order failure tracking — backoff after repeated errors
+        self._consecutive_order_failures: int = 0
+        self._order_backoff_until: float = 0.0  # timestamp
+
         # ── Per-worker state ──────────────────────────────────────
         self.trades: deque = deque(maxlen=config.candles.tick_buffer)
         self.orderbook: dict = {"bids": [], "asks": []}
@@ -693,6 +697,27 @@ class AssetWorker:
         self, side: str, size: float, price: float, reduce_only: bool = False
     ) -> bool:
         """Place order — real in live mode, simulated in sim mode."""
+        # Check order backoff (skip if we're in a failure cooldown)
+        if self._order_backoff_until > 0:
+            now = time.time()
+            if now < self._order_backoff_until:
+                remaining = self._order_backoff_until - now
+                logger.debug(
+                    "%s Order skipped — backoff %.0fs remaining (%d consecutive failures)",
+                    self.tag,
+                    remaining,
+                    self._consecutive_order_failures,
+                )
+                return False
+            # Backoff expired — reset and allow retry
+            logger.info(
+                "%s Order backoff expired — retrying (was %d consecutive failures)",
+                self.tag,
+                self._consecutive_order_failures,
+            )
+            self._consecutive_order_failures = 0
+            self._order_backoff_until = 0.0
+
         if self.config.is_sim:
             # Simulate fill at last price + slippage
             slippage = self.config.simulation.slippage_pct
@@ -724,9 +749,42 @@ class AssetWorker:
                     amount=size,
                     params=params,
                 )
+                self._consecutive_order_failures = 0
                 return True
             except Exception as exc:
-                logger.error("%s Order error: %s", self.tag, exc)
+                self._consecutive_order_failures += 1
+                failures = self._consecutive_order_failures
+
+                # Exponential backoff: 10s, 20s, 40s, 60s, 120s, max 300s
+                backoff = min(10 * (2 ** (failures - 1)), 300)
+                self._order_backoff_until = time.time() + backoff
+
+                logger.error(
+                    "%s Order error (attempt %d, backoff %ds): %s | "
+                    "side=%s size=%s price=%.6f contract_size=%s",
+                    self.tag,
+                    failures,
+                    backoff,
+                    exc,
+                    side,
+                    size,
+                    price,
+                    self.contract_spec.get("contract_size", "?"),
+                )
+
+                # After 5 consecutive failures, pause the worker via risk gate
+                if failures >= 5:
+                    self.risk_state["paused"] = True
+                    self.risk_state["pause_reason"] = (
+                        f"Order failures: {failures} consecutive errors — last: {exc}"
+                    )
+                    logger.warning(
+                        "%s PAUSED after %d consecutive order failures. "
+                        "Check contract spec and sizing. Will retry in %ds.",
+                        self.tag,
+                        failures,
+                        backoff,
+                    )
                 return False
 
     async def _close_position(
@@ -1466,6 +1524,15 @@ async def main() -> None:
         logger.warning("Could not load markets: %s (will use defaults)", exc)
 
     # Build per-asset contract specs from exchange market data
+    # ccxt keys markets by unified symbol (e.g. "BTC/USDT:USDT"),
+    # but our config uses the exchange-native ID (e.g. "XBTUSDTM").
+    # Build an id→market index so we can look up by native ID.
+    markets_by_id: dict = {}
+    for _mkt_key, _mkt_val in getattr(exchange, "markets", {}).items():
+        eid = _mkt_val.get("id")
+        if eid:
+            markets_by_id[eid] = _mkt_val
+
     contract_specs: dict[str, dict] = {}
     for name, asset in config.enabled_assets.items():
         spec: dict = {
@@ -1474,8 +1541,8 @@ async def main() -> None:
             "max_lots": 1_000_000,
             "precision_amount": 0,
         }
-        if asset.symbol in exchange.markets:
-            mkt = exchange.markets[asset.symbol]
+        if asset.symbol in markets_by_id:
+            mkt = markets_by_id[asset.symbol]
             # contractSize: base-currency units per 1 contract
             cs = mkt.get("contractSize")
             if cs is not None and float(cs) > 0:
@@ -1515,7 +1582,7 @@ async def main() -> None:
         if real_balance is not None:
             config.capital.balance_usdt = real_balance
             logger.info(
-                "Live balance from KuCoin: $%.2f USDT (config was $%.2f)",
+                "Live balance from KuCoin: $%.2f USDT",
                 real_balance,
                 config_capital,
             )
@@ -1541,7 +1608,7 @@ async def main() -> None:
         )
     logger.info("  Capital: $%.2f", config.capital.balance_usdt)
     if config.is_live and config.capital.balance_usdt != config_capital:
-        logger.info("  (synced from exchange — config default was $%.2f)", config_capital)
+        logger.info("  (synced from exchange)", config_capital)
     logger.info("=" * 60)
 
     # ── Shutdown coordination ─────────────────────────────────────
