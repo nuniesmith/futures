@@ -1,0 +1,147 @@
+{# ─────────────────────────────────────────────────────────────────────────────
+   partials/workers.html
+   ─────────────────────────────────────────────────────────────────────────────
+   Standalone HTMX fragment — does NOT extend base.html.
+
+   Rendered inline on first page load (via {% include %} in dashboard.html) and
+   then replaced every 5 s by HTMX via outerHTML swap.
+
+   Context variables:
+     heartbeats : dict[str, {last_seen: float, asset: str, status: dict}]
+
+   All CSS classes (.worker-grid, .worker-card, .metric-row, …) are defined in
+   dashboard.html's {% block styles %} and survive every HTMX swap because the
+   stylesheet stays in the document <head>.
+───────────────────────────────────────────────────────────────────────────── #}
+
+<div id="worker-grid"
+     class="worker-grid"
+     hx-get="/partials/workers"
+     hx-trigger="every 5s"
+     hx-swap="outerHTML">
+
+  {# ── Populated state ─────────────────────────────────────────────────────── #}
+  {% if heartbeats %}
+
+    {% for asset_key, data in heartbeats.items() %}
+
+      {# ── Destructure heartbeat entry ──────────────────────────────────────── #}
+      {% set last_seen   = data.last_seen  or 0 %}
+      {% set status      = data.status     or {} %}
+      {% set alive       = heartbeat_alive(last_seen) %}
+
+      {# ── Derived metric values with safe fallbacks ────────────────────────── #}
+      {% set quality     = (status.quality     or 0) | int %}
+      {% set stack_dir   = status.stack_dir    or "—" %}
+      {% set stack_count = status.stack_count  or 0 %}
+      {% set daily_pnl   = status.daily_pnl    or 0.0 %}
+      {% set daily_trades = status.daily_trades or 0 %}
+      {% set candles     = status.candles       or 0 %}
+      {% set regime      = (status.regime or "") | lower %}
+
+      {# ── Quality bar colour tier ──────────────────────────────────────────── #}
+      {% if quality < 35 %}
+        {% set q_class = "quality-fill--low" %}
+      {% elif quality < 65 %}
+        {% set q_class = "quality-fill--mid" %}
+      {% else %}
+        {% set q_class = "quality-fill--high" %}
+      {% endif %}
+
+      {# ── Regime badge modifier ────────────────────────────────────────────── #}
+      {% if regime in ("trend", "choppy", "ranging") %}
+        {% set regime_mod = "regime-badge--" ~ regime %}
+      {% else %}
+        {% set regime_mod = "regime-badge--unknown" %}
+      {% endif %}
+
+      {# ════════════════════════════════════════════════════════════════════════
+         WORKER CARD
+      ════════════════════════════════════════════════════════════════════════ #}
+      <div class="worker-card {% if alive %}worker-card--alive{% else %}worker-card--dead{% endif %}">
+
+        {# ── Card header: dot · asset key · regime badge ──────────────────── #}
+        <div class="card-header">
+          <div class="card-header__left">
+            <span class="status-dot {% if alive %}status-dot--alive{% else %}status-dot--dead{% endif %}"
+                  title="{% if alive %}Online{% else %}Offline — last seen {{ age(last_seen) }}{% endif %}">
+            </span>
+            <span class="asset-name">{{ asset_key }}</span>
+          </div>
+
+          <span class="regime-badge {{ regime_mod }}">
+            {{- regime if regime else "—" -}}
+          </span>
+        </div>{# /card-header #}
+
+        {# ── Quality ──────────────────────────────────────────────────────── #}
+        <div class="quality-row">
+          <span class="metric-label">Quality</span>
+          <div class="quality-right">
+            <div class="quality-track"
+                 title="{{ quality }}/100">
+              <div class="quality-fill {{ q_class }}"
+                   style="width: {{ quality }}%">
+              </div>
+            </div>
+            <span class="metric-value metric-value--mono">
+              {{- quality -}}<span class="metric-value--dim">/100</span>
+            </span>
+          </div>
+        </div>
+
+        {# ── Stack ────────────────────────────────────────────────────────── #}
+        <div class="metric-row">
+          <span class="metric-label">Stack</span>
+          <span class="metric-value metric-value--mono">
+            {{- stack_dir -}}&thinsp;<span class="metric-value--dim">×</span>{{- stack_count -}}
+          </span>
+        </div>
+
+        {# ── Daily PnL ────────────────────────────────────────────────────── #}
+        <div class="metric-row">
+          <span class="metric-label">Daily&nbsp;PnL</span>
+          <span class="metric-value metric-value--mono {{ pnl_class(daily_pnl) }}">
+            {{- fmt_pnl(daily_pnl) -}}
+          </span>
+        </div>
+
+        {# ── Trades ───────────────────────────────────────────────────────── #}
+        <div class="metric-row">
+          <span class="metric-label">Trades</span>
+          <span class="metric-value metric-value--mono">{{ daily_trades }}</span>
+        </div>
+
+        {# ── Candles ──────────────────────────────────────────────────────── #}
+        <div class="metric-row">
+          <span class="metric-label">Candles</span>
+          <span class="metric-value metric-value--mono">{{ candles }}</span>
+        </div>
+
+        {# ── Card footer: last seen timestamp ─────────────────────────────── #}
+        <div class="card-footer">
+          <span class="metric-label">Last&nbsp;seen</span>
+          <span class="metric-value metric-value--dim metric-value--mono">
+            {{- age(last_seen) -}}
+          </span>
+        </div>
+
+      </div>{# /worker-card #}
+
+    {% endfor %}
+
+  {# ── Empty state ─────────────────────────────────────────────────────────── #}
+  {% else %}
+
+    <div class="empty-state">
+      <div class="empty-state__icon">⚡</div>
+      <div class="empty-state__title">No active workers</div>
+      <div class="empty-state__note">
+        Start the trading bot — worker cards will appear here
+        automatically once heartbeats are received from running instances.
+      </div>
+    </div>
+
+  {% endif %}
+
+</div>{# /worker-grid #}

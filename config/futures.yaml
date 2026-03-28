@@ -1,0 +1,425 @@
+# ================================================================
+# Futures Trader — Master Configuration
+# ================================================================
+# KuCoin USDTM Perpetual Futures — Multi-Asset Scalper
+# Repository: nuniesmith/futures
+#
+# Environment variables can be referenced with ${ VAR:-default } syntax.
+# They will be expanded at load time from .env or the shell.
+#
+# This file is the single source of truth for all tunables.
+# Per-asset overrides are in the `assets:` section below.
+# ================================================================
+
+# ─── Mode ─────────────────────────────────────────────────────────
+# sim  = simulation — connects live WS feeds, tracks paper trades in
+#        Redis, calculates P&L, but NEVER sends orders to the exchange.
+#        Use this to validate the system end-to-end before going live.
+# live = real trading — places actual orders via the KuCoin API.
+mode: ${TRADING_MODE:-sim} # sim | live
+
+# ─── Timezone ─────────────────────────────────────────────────────
+# Used for daily P&L resets, log timestamps, and Discord summaries.
+timezone: America/New_York # EDT (UTC-4) / EST (UTC-5)
+
+# ─── Exchange ─────────────────────────────────────────────────────
+exchange:
+  id: kucoinfutures
+  margin_mode: isolated # isolated | cross — isolated is required for multi-asset
+  position_mode: one_way # one_way only — reduceOnly requires it
+  credentials:
+    api_key: ${KUCOIN_API_KEY}
+    api_secret: ${KUCOIN_API_SECRET}
+    passphrase: ${KUCOIN_PASSPHRASE}
+
+# ─── Assets ──────────────────────────────────────────────────────
+# 10 USDTM perpetual contracts on KuCoin Futures.
+#
+# leverage:     what we actually use (conservative)
+# max_leverage: exchange maximum for reference
+# margin_pct:   fraction of total capital allocated to this asset
+# enabled:      set false to skip without removing the block
+#
+# Worst-case open margin:
+#   10 assets × 3 orders × $0.50 min = $15.00
+#   Remaining capital is buffer for P&L and margin fluctuations.
+# ────────────────────────────────────────────────────────────────
+assets:
+  btc:
+    symbol: XBTUSDTM
+    base: BTC
+    leverage: 20
+    max_leverage: 125
+    margin_pct: 0.15 # 15% — anchor asset, deepest books
+    min_order_usdt: 1.00
+    enabled: true
+
+  eth:
+    symbol: ETHUSDTM
+    base: ETH
+    leverage: 20
+    max_leverage: 100
+    margin_pct: 0.12 # 12% — second-most liquid
+    min_order_usdt: 1.00
+    enabled: true
+
+  sol:
+    symbol: SOLUSDTM
+    base: SOL
+    leverage: 20
+    max_leverage: 75
+    margin_pct: 0.10 # 10% — high vol, great for scalping
+    min_order_usdt: 0.50
+    enabled: true
+
+  doge:
+    symbol: DOGEUSDTM
+    base: DOGE
+    leverage: 20
+    max_leverage: 75
+    margin_pct: 0.10 # 10% — very liquid meme coin
+    min_order_usdt: 0.50
+    enabled: true
+
+  sui:
+    symbol: SUIUSDTM
+    base: SUI
+    leverage: 20
+    max_leverage: 75
+    margin_pct: 0.10 # 10% — newer L1, good momentum
+    min_order_usdt: 0.50
+    enabled: true
+
+  pepe:
+    symbol: PEPEUSDTM
+    base: PEPE
+    leverage: 20
+    max_leverage: 75
+    margin_pct: 0.08 # 8% — meme coin, decent volume
+    min_order_usdt: 0.50
+    enabled: true
+
+  avax:
+    symbol: AVAXUSDTM
+    base: AVAX
+    leverage: 20
+    max_leverage: 75
+    margin_pct: 0.08 # 8% — solid L1
+    min_order_usdt: 0.50
+    enabled: true
+
+  wif:
+    symbol: WIFUSDTM
+    base: WIF
+    leverage: 20
+    max_leverage: 75
+    margin_pct: 0.08 # 8% — SOL meme coin
+    min_order_usdt: 0.50
+    enabled: true
+
+  fartcoin:
+    symbol: FARTCOINUSDTM
+    base: FARTCOIN
+    leverage: 20
+    max_leverage: 50
+    margin_pct: 0.07 # 7% — smallest allocation, thinnest books
+    min_order_usdt: 0.50
+    enabled: true
+    # Override: wider SL for extreme-vol meme coin
+    sl_pct: 0.005
+
+  kcs:
+    symbol: KCSUSDTM
+    base: KCS
+    leverage: 4 # max is only 8x — use half
+    max_leverage: 8
+    margin_pct: 0.12 # 12% — needs more margin at low leverage
+    min_order_usdt: 0.50
+    enabled: true
+
+# ─── Capital & Risk ──────────────────────────────────────────────
+capital:
+  balance_usdt: ${CAPITAL:-30.0} # starting balance
+  risk_per_add_pct: 0.01 # 1% of capital risked per stack add
+  max_stack: 3 # max 3 adds → 3% total capital at risk
+  min_order_usdt: 0.50 # global minimum $0.50 per order
+
+# Risk management (ported from Ruby RiskManager)
+risk:
+  max_daily_loss_pct: 0.05 # halt all trading after 5% daily drawdown
+  max_asset_daily_loss_pct: 0.02 # halt single asset after 2% daily loss
+  max_consecutive_losses: 4 # pause asset after 4 losses in a row
+  max_open_trades: 3 # max 3 stacked orders per asset per direction
+  cooldown_after_loss_sec: 30 # wait 30s after a stop-loss before re-entry
+  daily_trade_limit: 200 # cap total round-trips per day (all assets)
+  asset_trade_limit: 50 # cap round-trips per asset per day
+  # Portfolio-level circuit breaker
+  portfolio_max_unrealized_loss_pct: 0.03 # close worst position if total unrealized > -3%
+
+# ─── Strategy Defaults ───────────────────────────────────────────
+# These are the initial/fallback values.  Optuna will refine
+# fast, slow, imbalance_thresh, sl_pct, quality_min, and
+# wave_pct_gate live every `optuna.interval_sec` seconds per asset.
+# Per-asset overrides in the `assets:` section take priority.
+strategy:
+  # EMA crossover
+  fast_ema: 8
+  slow_ema: 21
+
+  # Take profit — baseline before adaptive scaling
+  tp_pct_base: 0.004 # 0.40%  (scales with vol + regime)
+  tp_pct_floor: 0.002 # 0.20% — TP can never go below this (must exceed fees)
+
+  # Stop loss
+  sl_pct: 0.0035 # 0.35%
+
+  # Order book imbalance threshold for entry confirmation
+  imbalance_thresh: 1.42
+
+  # DCA / stack-add pullback required before averaging in
+  add_threshold_base: 0.002 # 0.20%  (scales with vol_pct)
+
+  # ── Fee-aware trade management ──────────────────────────────
+  # Minimum raw price move before allowing signal-reversal close.
+  # Must exceed round-trip fees (2 × taker 0.06% + slippage 0.01%)
+  # to avoid guaranteed-loss churn.  TP/SL exits are unaffected.
+  min_profit_close_pct: 0.0015 # 0.15% raw ≈ 3.0% at 20x leverage
+
+  # Minimum seconds a position must be held before a signal-
+  # reversal close is allowed.  Prevents EMA oscillation churn
+  # in flat/neutral markets.  TP/SL exits still fire immediately.
+  min_hold_sec: 120 # 2 minutes minimum hold
+
+# ─── Wave Analysis ───────────────────────────────────────────────
+# Ported from Ruby Pine Script v6.3 §4.
+# Controls stacking gates and directional bias.
+wave:
+  ema_period: 20 # dynamic EMA for wave crossover detection
+  rma_alpha: 0.1 # 1/10 — smoothing for speed accumulation
+  lookback_waves: 200 # max recent waves to track
+  quality_min: 50.0 # 0–100 quality score gate for first entry
+  wave_pct_gate: 0.40 # wave_ratio percentile gate for adds
+
+# ─── Awesome Oscillator ─────────────────────────────────────────
+# AO = SMA(hl2, fast) − SMA(hl2, slow)
+awesome_oscillator:
+  fast: 5
+  slow: 34
+
+# ─── Market Regime Detection ────────────────────────────────────
+# SMA-200 slope + vol ratio → TRENDING / VOLATILE / RANGING / NEUTRAL
+regime:
+  sma_period: 200
+  slope_lookback: 20
+  slope_trending_threshold: 1.0 # |slope| > 1.0 → TRENDING_UP/DOWN
+  vol_volatile_threshold: 1.5 # vol_ratio > 1.5 → VOLATILE
+  vol_ranging_threshold: 0.8 # vol_ratio < 0.8 → RANGING
+
+# ─── Volatility Clustering ──────────────────────────────────────
+# Adaptive TP + position sizing by volatility regime.
+volatility:
+  atr_period: 14
+  percentile_lookback: 200 # bars for vol percentile calculation
+
+  # Adaptive TP multipliers by regime
+  tp_multipliers:
+    trending:
+      base: 1.4
+      vol_scale: 0.6 # tp = base + vol_pct * vol_scale
+    volatile:
+      base: 1.2
+      vol_scale: 0.5
+    ranging:
+      base: 0.7
+      vol_scale: 0.3
+    neutral:
+      base: 1.0
+      vol_scale: 0.3
+
+  # Position sizing by vol cluster
+  position_multipliers:
+    low: 1.2 # low vol → slightly larger size
+    medium: 1.0
+    high: 0.6 # high vol → conservative size
+
+  # Vol percentile filter — skip entries outside this window
+  entry_filter:
+    min_percentile: 0.10 # skip dead markets
+    max_percentile: 0.95 # skip extreme vol / news events
+
+# ─── Signal Quality ─────────────────────────────────────────────
+# Multi-factor quality score (0–100).
+# Entry blocked below quality_min.
+quality:
+  weights:
+    ao_confirms_ema: 20 # AO direction matches EMA bias
+    close_vs_fast_ema: 15 # price on correct side of fast EMA
+    book_imbalance: 20 # orderbook confirms direction
+    volume_above_avg: 25 # volume > vol-adjusted 20-bar mean
+    regime_alignment: 20 # regime aligns with trade direction
+
+  vol_mult_high: 1.8 # used when vol_pct >= 0.6
+  vol_mult_mid: 1.2 # used when vol_pct >= 0.4
+  vol_mult_low: 0.8 # used when vol_pct < 0.4
+
+  neutral_regime_credit: 10 # partial credit for neutral/ranging
+
+# ─── Candle Patterns ────────────────────────────────────────────
+candle_patterns:
+  enabled: false # set true to add candle pattern factor
+  body_ratio_threshold: 0.3
+  wick_multiplier: 2.0
+  engulfing_enabled: true
+  pin_bar_wick_pct: 0.6
+
+# ─── Optuna Auto-Optimization ───────────────────────────────────
+# Runs per-asset in the background.  Log output is summary-only:
+#   🔄 [SOL] Optuna complete (70 trials, 12.3s) → fast=7 slow=24 sl=0.003
+optuna:
+  n_trials: 70 # trials per optimization round
+  timeout_sec: 14 # max seconds per round
+  direction: maximize
+
+  # Per-asset intervals (volatile assets re-optimize faster)
+  intervals:
+    default_sec: 1200 # 20 min default
+    fast_sec: 600 # 10 min for volatile meme coins
+    slow_sec: 1800 # 30 min for BTC/ETH
+
+  # Which assets use which interval
+  fast_assets: [fartcoin, wif, pepe, doge]
+  slow_assets: [btc, eth]
+  # Everything else uses default_sec
+
+  # Parameter search ranges
+  search_space:
+    fast:
+      min: 5
+      max: 15
+    slow:
+      min: 18
+      max: 35
+    imbalance_thresh:
+      min: 1.10
+      max: 1.80
+      step: 0.05
+    sl_pct:
+      min: 0.002
+      max: 0.006
+      step: 0.0005
+    quality_min:
+      min: 30.0
+      max: 70.0
+      step: 5.0
+    wave_pct_gate:
+      min: 0.25
+      max: 0.65
+      step: 0.05
+
+  # Fee model for objective function (KuCoin Futures)
+  fees:
+    maker_pct: 0.0002 # 0.02%
+    taker_pct: 0.0006 # 0.06% (we use market orders)
+    slippage_pct: 0.0001 # 0.01% estimated slippage
+
+# ─── Candle Builder ──────────────────────────────────────────────
+candles:
+  interval: 5s # OHLCV resample interval from tick stream
+  min_ticks: 60 # minimum ticks before building candles
+  tick_buffer: 15000 # max ticks held in memory (deque maxlen)
+
+# ─── Data Streams ────────────────────────────────────────────────
+streams:
+  orderbook_depth: 20 # levels fetched from WS
+  orderbook_display: 10 # top-N levels used for imbalance calc
+  reconnect_delay_sec: 2 # initial delay before WS reconnect
+  reconnect_max_delay_sec: 30 # max backoff delay
+  reconnect_backoff_factor: 2.0 # exponential backoff multiplier
+
+# ─── Redis ───────────────────────────────────────────────────────
+# Used for PnL tracking, order history, candle caching, worker state.
+# Falls back to in-memory dicts if Redis is unavailable (dev/testing).
+redis:
+  url: ${REDIS_URL:-redis://futures-redis:6379/0}
+  password: ${REDIS_PASSWORD:-}
+  key_prefix: "futures:"
+
+  # Data retention TTLs (seconds, 0 = no expiry)
+  ttl:
+    ticks: 86400 # 24 hours
+    candles_5s: 604800 # 1 week
+    candles_1m: 2592000 # 1 month
+    candles_5m: 7776000 # 3 months
+    pnl: 0 # keep forever
+    orders: 0 # keep forever
+    worker_state: 0 # keep forever
+    heartbeat: 120 # 2 min TTL — stale = worker dead
+
+  max_order_history: 1000 # per-asset LTRIM limit
+
+# ─── Simulation ──────────────────────────────────────────────────
+# When mode=sim, the bot connects to live WebSocket feeds and tracks
+# paper trades in Redis, but never sends orders to the exchange.
+# This lets you validate strategy, watch live fills, and build up
+# historical data before risking real capital.
+simulation:
+  # Track simulated fills assuming market order fill at last price
+  fill_model: last_price # last_price | mid_price | worst_side
+  # Simulated slippage added to fills
+  slippage_pct: 0.0002 # 0.02% — conservative estimate
+  # Log simulated trades to Discord?
+  discord_alerts: true
+  # Prefix sim trades in Discord/logs so they're clearly not real
+  log_prefix: "[SIM]"
+
+# ─── Heartbeat & Monitoring ─────────────────────────────────────
+monitoring:
+  heartbeat_interval_sec: 300 # console status print every 5 min
+  loop_sleep_sec: 2 # main loop sleep between iterations
+  # Supervisor health check — restart worker if no heartbeat for this long
+  worker_timeout_sec: 120 # 2 min without heartbeat → restart
+  # Aggregate portfolio summary interval
+  summary_interval_sec: 900 # log cross-asset summary every 15 min
+
+# ─── Discord Alerts ─────────────────────────────────────────────
+discord:
+  webhook_url: ${DISCORD_WEBHOOK_URL:-}
+  enabled: true
+  timeout_sec: 5
+  rate_limit_per_min: 25 # stay under Discord's 30/min limit
+
+  # Embed colors (hex)
+  colors:
+    green: 0x00C853
+    red: 0xD50000
+    yellow: 0xFFD600
+    blue: 0x2196F3
+    grey: 0x9E9E9E
+    purple: 0x9C27B0
+
+  # Which events trigger Discord notifications
+  alerts:
+    trade_entry: true
+    trade_close: true
+    stop_loss: true
+    signal_reversal: true
+    optuna_update: true
+    ws_error: true
+    startup: true
+    daily_summary: true # end-of-day P&L summary (midnight ET)
+    risk_limit_hit: true # daily loss / consecutive loss alerts
+    worker_restart: true # supervisor restarted a crashed worker
+    sim_trade: true # simulated trade alerts (when mode=sim)
+
+# ─── Logging ─────────────────────────────────────────────────────
+logging:
+  level: ${LOG_LEVEL:-INFO} # DEBUG | INFO | WARNING | ERROR
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+  file: null # set to "logs/futures.log" to write to file
+
+# ─── Deployment ──────────────────────────────────────────────────
+deploy:
+  platform: linux/arm64 # Raspberry Pi 4
+  restart_policy: unless-stopped
+  log_max_size: 10m # cap Docker log size for SD card
+  log_max_files: 3

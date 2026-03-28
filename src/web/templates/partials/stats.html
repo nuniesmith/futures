@@ -1,0 +1,90 @@
+{# ─────────────────────────────────────────────────────────────────────────────
+   partials/stats.html
+   ─────────────────────────────────────────────────────────────────────────────
+   Standalone HTMX fragment — does NOT extend base.html.
+
+   Rendered inline on first page load (via {% include %} in dashboard.html) and
+   then replaced every 5 s by HTMX via outerHTML swap.
+
+   Context variables (always present):
+     daily_pnl : float  — today's aggregate PnL across all assets
+     stats     : dict   — {total_pnl, total_trades, win_rate,
+                            best_asset, worst_asset,
+                            daily_breakdown, per_asset}
+
+   Context variables (present only when included from dashboard.html):
+     heartbeats : dict[str, …]  — NOT passed to the /partials/stats route;
+                                   guarded below with `is defined`.
+
+   All CSS classes (.stats-bar, .stat-pill, .pos/.neg/.zero, …) are defined
+   in dashboard.html's {% block styles %} and survive every HTMX swap because
+   the stylesheet stays in the document <head>.
+───────────────────────────────────────────────────────────────────────────── #}
+
+{# ── Safe fallbacks so the partial never raises on missing keys ───────────── #}
+{% set _pnl        = daily_pnl          if daily_pnl          is defined else 0.0 %}
+{% set _stats      = stats              if stats               is defined else {} %}
+{% set _win_rate   = _stats.win_rate    if _stats.win_rate     is not none else none %}
+{% set _trades     = _stats.total_trades if _stats.total_trades is not none else 0 %}
+{% set _best       = _stats.best_asset  or "—" %}
+{% set _worst      = _stats.worst_asset or "—" %}
+
+<div id="stats-bar"
+     class="stats-bar"
+     hx-get="/partials/stats"
+     hx-trigger="every 5s"
+     hx-swap="outerHTML">
+
+  {# ── TODAY PnL ─────────────────────────────────────────────────────────── #}
+  <div class="stat-pill stat-pill--pnl">
+    <span class="stat-label">Today&nbsp;PnL</span>
+    <span class="stat-value stat-value--lg {{ pnl_class(_pnl) }}">
+      {{- fmt_pnl(_pnl) -}}
+    </span>
+  </div>
+
+  {# ── WIN RATE ──────────────────────────────────────────────────────────── #}
+  <div class="stat-pill">
+    <span class="stat-label">Win&nbsp;Rate</span>
+    <span class="stat-value">
+      {%- if _win_rate is not none -%}
+        {{- fmt_pct(_win_rate) -}}
+      {%- else -%}
+        <span class="metric-value--dim">—</span>
+      {%- endif -%}
+    </span>
+  </div>
+
+  {# ── TRADES ────────────────────────────────────────────────────────────── #}
+  <div class="stat-pill">
+    <span class="stat-label">Trades</span>
+    <span class="stat-value">{{ _trades }}</span>
+  </div>
+
+  {# ── WORKERS (only when heartbeats is in scope, i.e. initial page render) #}
+  {% if heartbeats is defined %}
+  <div class="stat-pill">
+    <span class="stat-label">Workers</span>
+    <span class="stat-value stat-accent">{{ heartbeats | length }}</span>
+  </div>
+  {% endif %}
+
+  {# ── BEST asset ────────────────────────────────────────────────────────── #}
+  <div class="stat-pill">
+    <span class="stat-label">Best</span>
+    <span class="stat-value stat-value--sm
+                 {%- if _best != '—' %} pos{% endif %}">
+      {{- _best -}}
+    </span>
+  </div>
+
+  {# ── WORST asset ───────────────────────────────────────────────────────── #}
+  <div class="stat-pill">
+    <span class="stat-label">Worst</span>
+    <span class="stat-value stat-value--sm
+                 {%- if _worst != '—' %} neg{% endif %}">
+      {{- _worst -}}
+    </span>
+  </div>
+
+</div>{# /stats-bar #}

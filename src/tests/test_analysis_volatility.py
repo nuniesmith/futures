@@ -7,7 +7,7 @@ Covers: kmeans_volatility_clusters, volatility_summary_text, should_filter_entry
 import numpy as np
 import pandas as pd
 
-from src.analysis.volatility import (
+from analysis.volatility import (
     kmeans_volatility_clusters,
     should_filter_entry,
     volatility_summary_text,

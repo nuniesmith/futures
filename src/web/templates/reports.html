@@ -1,0 +1,269 @@
+{# ─────────────────────────────────────────────────────────────────────────────
+reports.html — AI Reports Viewer
+─────────────────────────────────────────────────────────────────────────────
+Extends base.html. Context variables: report : str | None — report text fetched
+from Redis (may be None) period : str — "day" | "week" | "month" HTMX behaviour:
+• Period tabs — full-page swap via hx-get + hx-select="body" • Report content —
+fetched via hx-trigger="load" from /partials/report
+───────────────────────────────────────────────────────────────────────────────
+#} {% extends "base.html" %} {% set active_page = "reports" %} {% block head %}
+<style>
+    /* ── Period tab bar (reuses app.css .period-tabs / .period-tab) ──────────── */
+    .reports-date-wrap {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-left: 16px;
+        padding-left: 16px;
+        border-left: 1px solid var(--border);
+    }
+
+    .reports-date-select {
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 12px;
+        padding: 4px 8px;
+        cursor: pointer;
+        outline: none;
+        transition: border-color 0.15s;
+    }
+
+    .reports-date-select:focus {
+        border-color: var(--accent);
+    }
+    .reports-date-select option {
+        background: var(--card);
+    }
+
+    .report-card__date-badge {
+        display: inline-block;
+        margin-left: 8px;
+        font-size: 11px;
+        font-weight: 400;
+        color: var(--dim);
+        letter-spacing: 0.3px;
+    }
+
+    .reports-tabs-wrap {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+
+    .reports-tabs-label {
+        font-size: 9.5px;
+        font-weight: 600;
+        letter-spacing: 0.85px;
+        text-transform: uppercase;
+        color: var(--dim);
+        white-space: nowrap;
+    }
+
+    /* ── Report card ───────────────────────────────────────────────────────────── */
+    .report-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+    }
+
+    .report-card__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.18);
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .report-card__title {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.7px;
+        text-transform: uppercase;
+        color: var(--dim);
+    }
+
+    .report-card__period-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        color: var(--accent);
+        background: var(--accent-bg);
+        border: 1px solid var(--accent-bd);
+    }
+
+    .report-card__body {
+        padding: 20px;
+        min-height: 200px;
+    }
+
+    /* ── Loading state shown while HTMX fetches report content ────────────────── */
+    .report-loading {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--dim);
+        font-size: 12px;
+        padding: 20px 0;
+    }
+
+    /* ── Report body (pre-formatted text from Grok AI) ────────────────────────── */
+    /* .report-body styles are defined in app.css                                  */
+
+    /* ── Empty state inside report card ──────────────────────────────────────── */
+    .report-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 24px 0;
+    }
+
+    .report-empty__icon {
+        font-size: 28px;
+        opacity: 0.4;
+        line-height: 1;
+    }
+
+    .report-empty__title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text);
+    }
+
+    .report-empty__note {
+        font-size: 11.5px;
+        color: var(--dim);
+        line-height: 1.6;
+    }
+
+    /* ── HTMX request indicator fade ─────────────────────────────────────────── */
+    #report-content.htmx-request {
+        opacity: 0.5;
+        transition: opacity 0.2s ease;
+    }
+</style>
+{% endblock %} {% block content %} {# ── Page header
+──────────────────────────────────────────────────────────── #}
+<header class="page-header">
+    <div class="page-header__left">
+        <h1 class="page-header__title">AI Reports</h1>
+        <p class="page-header__sub">
+            Grok AI market analysis — generated automatically each period
+        </p>
+    </div>
+</header>
+
+<div class="content-area">
+    {# ── Period tab switcher
+    ─────────────────────────────────────────────────── #} {# Tabs use hx-get +
+    hx-select="body" + hx-push-url for full-page swap. #} {# Plain href=
+    provides non-JS fallback. #}
+    <div class="reports-tabs-wrap">
+        <span class="reports-tabs-label">Period</span>
+        <div class="period-tabs" role="tablist" aria-label="Report period">
+            {%- for _period, _label in [("day", "Day"), ("week", "Week"),
+            ("month", "Month")] %}
+            <a
+                href="/reports?period={{ _period }}"
+                class="period-tab {% if period == _period %}active{% endif %}"
+                role="tab"
+                aria-selected="{{ 'true' if period == _period else 'false' }}"
+                hx-get="/reports?period={{ _period }}"
+                hx-target="body"
+                hx-select="body"
+                hx-swap="outerHTML"
+                hx-push-url="true"
+            >
+                {{ _label }}
+            </a>
+            {%- endfor %}
+        </div>
+
+        {# ── Historical date picker — only shown when past dates exist
+        ─────────── #} {%- if available_dates | length > 1 %}
+        <div class="reports-date-wrap">
+            <span class="reports-tabs-label">Date</span>
+            <select
+                class="reports-date-select"
+                hx-get="/reports"
+                hx-target="body"
+                hx-select="body"
+                hx-swap="outerHTML"
+                hx-push-url="true"
+                hx-include="[name='period-hidden']"
+                name="date"
+                aria-label="Browse historical reports"
+            >
+                {%- for _date in available_dates %}
+                <option value="{{ _date }}"{% if _date == selected_date %} selected{% endif %}>{{ _date }}{% if loop.first %} (latest){% endif %}</option>
+                {%- endfor %}
+            </select>
+            {# Hidden field so hx-include can pick up the current period #}
+            <input type="hidden" name="period" value="{{ period }}" />
+        </div>
+        {%- endif %}
+    </div>
+
+    {# ── Report content card
+    ─────────────────────────────────────────────────── #}
+    <div class="report-card">
+        <div class="report-card__header">
+            <span class="report-card__title">
+                {%- if period == "day" %}Daily Report {%- elif period == "week"
+                %}Weekly Report {%- else %}Monthly Report {%- endif %} {%- if
+                selected_date %}<span class="report-card__date-badge"
+                    >{{ selected_date }}</span
+                >{%- endif %}
+            </span>
+            <span class="report-card__period-badge">{{ period | title }}</span>
+        </div>
+
+        <div class="report-card__body">
+            {# ── Report content div #} {# hx-trigger="load" fires immediately
+            after the page loads and fetches #} {# the freshest report text from
+            Redis, replacing the inline content. #} {# The inline content
+            (server-rendered) is shown for zero-latency load. #}
+            <div
+                id="report-content"
+                hx-get="/partials/report?period={{ period }}"
+                hx-trigger="load"
+                hx-swap="innerHTML"
+            >
+                {# Inline server-rendered content (replaced by HTMX on load) #}
+                {%- if report %}
+                <pre class="report-body">{{ report }}</pre>
+                {%- else %}
+                <div class="report-empty">
+                    <span class="report-empty__icon" aria-hidden="true">◎</span>
+                    <span class="report-empty__title"
+                        >No {{ period }} report available yet</span
+                    >
+                    <span class="report-empty__note">
+                        Reports are generated automatically at the end of each
+                        {{ period }}.<br />
+                        Check back later or wait for the AI analyst to complete
+                        its run.
+                    </span>
+                </div>
+                {%- endif %}
+            </div>
+            {# /report-content #}
+        </div>
+        {# /report-card__body #}
+    </div>
+    {# /report-card #}
+</div>
+{# /content-area #} {% endblock %}

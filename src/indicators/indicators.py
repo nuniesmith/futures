@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from src.logging_config import get_logger
+from logging_config import get_logger
 
 logger = get_logger(__name__)
 

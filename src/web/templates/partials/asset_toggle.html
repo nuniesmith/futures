@@ -1,0 +1,26 @@
+{#
+  partials/asset_toggle.html
+  ===========================
+  HTMX fragment returned by POST /assets/{key}/toggle.
+
+  Context:
+    key     : str   — asset registry key (e.g. "btc")
+    spec    : ContractSpec — the asset spec from ASSET_REGISTRY
+    enabled : bool  — True = currently enabled, False = disabled
+#}
+<button
+  class="toggle-btn {% if enabled %}toggle-btn--on{% else %}toggle-btn--off{% endif %}"
+  hx-post="/assets/{{ key }}/toggle"
+  hx-swap="outerHTML"
+  hx-indicator="#toggle-spinner-{{ key }}"
+  title="{{ 'Disable ' if enabled else 'Enable ' }}{{ spec.base }}"
+  aria-label="{{ 'Disable' if enabled else 'Enable' }} {{ spec.base }}"
+  aria-pressed="{{ 'true' if enabled else 'false' }}"
+>
+  {% if enabled %}
+    <span class="toggle-btn__dot"></span> ON
+  {% else %}
+    <span class="toggle-btn__dot"></span> OFF
+  {% endif %}
+</button>
+<span id="toggle-spinner-{{ key }}" class="htmx-indicator toggle-spinner" aria-hidden="true">⋯</span>

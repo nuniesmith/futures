@@ -1,11 +1,11 @@
 # Audited: unused re-exports removed 2026-03-26
 # Grep across src/ruby/ --include="*.py" found 0 hits for
-# `from src.indicators import <symbol>` for the removed symbols.
+# `from indicators import <symbol>` for the removed symbols.
 #
 # Symbols kept fall into two categories:
 #   1. Referenced in this file's own module-level code (technical_indicators
 #      list, indicator_categories dict, default_manager = IndicatorManager()).
-#   2. Used internally within the package via `from src.indicators import X`:
+#   2. Used internally within the package via `from indicators import X`:
 #        - IndicatorManager  → src/indicators/presets.py
 #        - technical_indicators → src/indicators/manager.py
 #
@@ -21,12 +21,12 @@
 #   filter_signals_for_crypto, identify_crypto_manipulation_candles.
 #
 # Consumers should import directly from the relevant sub-module, e.g.:
-#   from src.indicators.registry import register_indicator
-#   from src.indicators.factory import IndicatorFactory
-#   from src.indicators.base import Indicator
-#   from src.indicators.patterns import PatternDetector
-#   from src.indicators.areas_of_interest import identify_fair_value_gaps
-#   from src.indicators.presets import SCALP_PRESET, build_manager
+#   from indicators.registry import register_indicator
+#   from indicators.factory import IndicatorFactory
+#   from indicators.base import Indicator
+#   from indicators.patterns import PatternDetector
+#   from indicators.areas_of_interest import identify_fair_value_gaps
+#   from indicators.presets import SCALP_PRESET, build_manager
 """
 Technical indicators package for market analysis.
 

@@ -52,8 +52,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from src.indicators.helpers import awesome_oscillator, rsi_scalar
-from src.logging_config import get_logger
+from indicators.helpers import awesome_oscillator, rsi_scalar
+from logging_config import get_logger
 
 logger = get_logger("signal_quality")
 

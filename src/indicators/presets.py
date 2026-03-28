@@ -2,8 +2,8 @@
 Pre-configured indicator groups for common trading use cases.
 
 Usage:
-    from src.indicators.presets import SCALP_PRESET, SWING_PRESET, REGIME_PRESET
-    from src.indicators import IndicatorManager
+    from indicators.presets import SCALP_PRESET, SWING_PRESET, REGIME_PRESET
+    from indicators import IndicatorManager
 
     mgr = IndicatorManager()
     for ind in SCALP_PRESET:
@@ -34,13 +34,13 @@ from typing import Any
 
 import pandas as pd
 
-from src.indicators.base import Indicator
-from src.indicators.momentum.rsi import RSI
-from src.indicators.other.choppiness_index import ChoppinessIndex
-from src.indicators.trend.macd import MACD
-from src.indicators.trend.moving_average import EMA, VWAP
-from src.indicators.trend.volatility.atr import ATR
-from src.indicators.trend.volatility.bollinger import BollingerBands
+from indicators.base import Indicator
+from indicators.momentum.rsi import RSI
+from indicators.other.choppiness_index import ChoppinessIndex
+from indicators.trend.macd import MACD
+from indicators.trend.moving_average import EMA, VWAP
+from indicators.trend.volatility.atr import ATR
+from indicators.trend.volatility.bollinger import BollingerBands
 
 # ---------------------------------------------------------------------------
 # ChoppinessIndex compatibility adapter
@@ -178,7 +178,7 @@ def build_manager(preset: list[tuple[type[Indicator], dict[str, Any]]]):
         mgr = build_manager(SCALP_PRESET)
         results = mgr.calculate_all(df)
     """
-    from src.indicators.manager import IndicatorManager
+    from indicators.manager import IndicatorManager
 
     mgr = IndicatorManager()
     for ind_cls, params in preset:

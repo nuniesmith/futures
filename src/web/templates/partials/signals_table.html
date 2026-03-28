@@ -1,0 +1,168 @@
+{# ─────────────────────────────────────────────────────────────────────────────
+   partials/signals_table.html — Signals Table Fragment
+   ─────────────────────────────────────────────────────────────────────────────
+   Standalone HTMX fragment — does NOT extend base.html.
+
+   Rendered inline on first page load via {% include %} in signals.html, then
+   replaced every 10 s by HTMX via outerHTML swap. The div carries its own
+   hx-* attributes so polling continues after each swap.
+
+   Context variables:
+     signals        : list[dict]   — signal dicts (see signals.html for keys)
+     selected_asset : str          — active filter (or "" when not passed)
+                                     Use `selected_asset | default("")` so this
+                                     partial works both when included (vars in
+                                     scope) and when fetched standalone via
+                                     /partials/signals.
+
+   All CSS classes (.side-badge, .qual-high, .regime-pill, …) are defined in
+   signals.html's {% block head %} and survive every swap because the <head>
+   is never replaced.
+
+   NOTE: The /partials/signals route currently does not pass selected_asset to
+   this template, so after a poll swap the hx-get URL loses the filter.
+   To preserve the filter after polls, update the route to also pass
+   `selected_asset` (or the `asset` query param) to the template context.
+─────────────────────────────────────────────────────────────────────────────── #}
+
+{# ── Resolve selected_asset safely (may not be in scope when fetched alone) ─ #}
+{%- set _sel = selected_asset if selected_asset is defined else "" -%}
+
+{# ── Build hx-get URL including active filter if present ─────────────────── #}
+{%- set _poll_url = "/partials/signals" ~ ("?asset=" ~ _sel if _sel else "") -%}
+
+<div id="signals-table"
+     hx-get="{{ _poll_url }}"
+     hx-trigger="every 10s"
+     hx-swap="outerHTML">
+
+  {%- if signals %}
+
+  {# ════════════════════════════════════════════════════════════════════════════
+     Populated state
+  ════════════════════════════════════════════════════════════════════════════ #}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Asset</th>
+          <th>Side</th>
+          <th style="text-align:right">Price</th>
+          <th style="text-align:right">Size</th>
+          <th style="text-align:right">Quality</th>
+          <th>Regime</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        {%- for sig in signals %}
+
+        {# ── Resolve field values with safe defaults ──────────────────────── #}
+        {%- set _side    = sig.side      | default("") | upper -%}
+        {%- set _price   = sig.price     | default(0) | float -%}
+        {%- set _size    = sig.size      | default(0) | float -%}
+        {%- set _quality = sig.quality   | default(0) | float -%}
+        {%- set _regime  = sig.regime    | default("") | lower -%}
+        {%- set _reason  = sig.reason    | default("") -%}
+        {%- set _asset   = sig._asset    | default("—") -%}
+        {%- set _ts      = sig.timestamp | default(0) | float -%}
+
+        {# ── Side badge CSS modifier ─────────────────────────────────────── #}
+        {%- if _side == "LONG" -%}
+          {%- set _side_cls = "side-badge--long" -%}
+        {%- elif _side == "SHORT" -%}
+          {%- set _side_cls = "side-badge--short" -%}
+        {%- else -%}
+          {%- set _side_cls = "side-badge--close" -%}
+        {%- endif -%}
+
+        {# ── Quality colour tier ─────────────────────────────────────────── #}
+        {%- if _quality > 70 -%}
+          {%- set _qual_cls = "qual-high" -%}
+        {%- elif _quality >= 50 -%}
+          {%- set _qual_cls = "qual-mid" -%}
+        {%- else -%}
+          {%- set _qual_cls = "qual-low" -%}
+        {%- endif -%}
+
+        {# ── Regime pill modifier ────────────────────────────────────────── #}
+        {%- if _regime == "trend" -%}
+          {%- set _regime_cls = "regime-pill--trend" -%}
+        {%- elif _regime == "choppy" -%}
+          {%- set _regime_cls = "regime-pill--choppy" -%}
+        {%- elif _regime == "ranging" -%}
+          {%- set _regime_cls = "regime-pill--ranging" -%}
+        {%- else -%}
+          {%- set _regime_cls = "" -%}
+        {%- endif -%}
+
+        <tr>
+          {# Time — relative age of the signal #}
+          <td class="mono dim" title="{{ _ts }}">
+            {{ age(_ts) if _ts else "—" }}
+          </td>
+
+          {# Asset key #}
+          <td class="mono text-accent">{{ _asset }}</td>
+
+          {# Side — coloured badge #}
+          <td>
+            <span class="side-badge {{ _side_cls }}">{{ _side if _side else "—" }}</span>
+          </td>
+
+          {# Price #}
+          <td class="mono" style="text-align:right">
+            {{ "%.4f" | format(_price) if _price else "—" }}
+          </td>
+
+          {# Size #}
+          <td class="mono" style="text-align:right">
+            {{ "%.4f" | format(_size) if _size else "—" }}
+          </td>
+
+          {# Quality — colour-coded number #}
+          <td class="mono {{ _qual_cls }}" style="text-align:right">
+            {{ "%.1f" | format(_quality) }}
+          </td>
+
+          {# Regime #}
+          <td>
+            {%- if _regime %}
+            <span class="regime-pill {{ _regime_cls }}">{{ _regime }}</span>
+            {%- else %}
+            <span class="dim">—</span>
+            {%- endif %}
+          </td>
+
+          {# Reason — truncated with title tooltip for long strings #}
+          <td class="dim" style="max-width:240px; white-space:normal; line-height:1.45; font-size:11.5px;"
+              title="{{ _reason }}">
+            {{ _reason | truncate(80, True, "…") if _reason else "—" }}
+          </td>
+        </tr>
+        {%- endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {%- else %}
+
+  {# ════════════════════════════════════════════════════════════════════════════
+     Empty state
+  ════════════════════════════════════════════════════════════════════════════ #}
+  <div class="empty-state">
+    <span class="empty-state__icon" aria-hidden="true">▲</span>
+    <span>No signals yet.</span>
+    <span class="text-dim" style="font-size:11px; margin-top:4px;">
+      {%- if _sel %}
+        No signals found for <strong>{{ _sel }}</strong>. Try a different asset or clear the filter.
+      {%- else %}
+        Signals will appear here once the trading bot starts generating them.
+      {%- endif %}
+    </span>
+  </div>
+
+  {%- endif %}
+
+</div>{# /signals-table #}

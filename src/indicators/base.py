@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from src.indicators._shims import Component, validate_dataframe
+from indicators._shims import Component, validate_dataframe
 
 
 class Indicator(Component, ABC):

@@ -1,0 +1,23 @@
+# =============================================================================
+# Futures Trader — Python Dependencies
+# =============================================================================
+# Extracted from pyproject.toml [project.dependencies] + openai for LLM features.
+# Install: pip install --no-cache-dir -r requirements.txt
+# =============================================================================
+
+# ─── Core trading ─────────────────────────────────────────────────
+ccxt>=4.4
+optuna>=4.1
+pandas>=2.2
+aiohttp>=3.9
+python-dotenv>=1.0
+pyyaml>=6.0.2
+redis>=5.0
+openai>=1.30
+
+# ─── Web dashboard (Phase 12) ─────────────────────────────────────
+fastapi>=0.115
+uvicorn[standard]>=0.30
+jinja2>=3.1
+python-multipart>=0.0.9
+bcrypt>=4.1

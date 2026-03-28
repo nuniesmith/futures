@@ -1,18 +1,186 @@
+# =============================================================================
+# Futures Trader — Docker Compose
+# =============================================================================
+# Multi-asset KuCoin perpetual futures trader + Redis + HTMX dashboard
+# Repository: nuniesmith/futures
+#
+# Usage:
+#   docker compose up -d              Start all services (native platform)
+#   docker compose up -d --build      Rebuild and start
+#   docker compose logs -f futures    Follow bot logs
+#   docker compose logs -f web        Follow dashboard logs
+#   docker compose down               Stop everything
+#
+# Network:
+#   All services share the bridge network "futures_net".
+#   Inside the network, services reach each other by service name:
+#     redis   — Redis on port 6379
+#     futures — Trading bot (no exposed port)
+#     web     — HTMX dashboard on port 8080
+#
+#   Outside the network (host / local dev):
+#     Redis is exposed on 127.0.0.1:6379  (use REDIS_URL=redis://localhost:6379/0)
+#     Web   is exposed on 0.0.0.0:8080   (accessible via Tailscale + localhost)
+#
+# Platform:
+#   By default every service builds for the native host architecture.
+#   On the Pi (arm64) that means arm64; on desktop (x86_64) that means x86_64.
+#
+#   To cross-build arm64 images on a desktop for the Pi, use the "pi" profile:
+#     docker compose --profile pi build
+#     docker compose --profile pi push
+#
+# Dashboard:
+#   Local     : http://localhost:8080
+#   Tailscale : https://desktop.tailfef10.ts.net  (after ./run.sh tailscale-serve)
+#   Direct IP : http://100.109.182.42:8080
+# =============================================================================
+
+networks:
+  futures_net:
+    driver: bridge
+    name: futures_net
+
 services:
-  sol-scalper:
+  # ─── Redis — State, PnL, Order History, Candle Cache ──────────────
+  redis:
     build:
       context: .
-      dockerfile: docker/Dockerfile
-    # Raspberry Pi 4 is ARM64. Uncomment the line below when building
-    # ON the Pi itself, or when cross-building from an x86 host.
-    # If building on the Pi directly this line is optional but harmless.
-    platform: linux/arm64
-    container_name: sol-scalper
+      dockerfile: docker/redis/Dockerfile
+    image: nuniesmith/futures:redis
+    container_name: futures-redis
+    networks:
+      - futures_net
+    user: "999:1000"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=America/New_York
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
+    ports:
+      # Loopback-only on the host — local dev tools (redis-cli, ./run.sh sim)
+      # reach Redis here.  Containers use the futures_net network instead.
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - futures_redis_data:/data
+    tmpfs:
+      - /tmp
+      - /var/run
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      # ── Persistence snapshots ──
+      - --save
+      - "900 1"
+      - --save
+      - "300 10"
+      - --save
+      - "60 10000"
+      # ── Memory limits (Pi 4 friendly — ignored on desktop) ──
+      - --maxmemory
+      - "512mb"
+      - --maxmemory-policy
+      - allkeys-lru
+      # ── Auth ──
+      - --requirepass
+      - "${REDIS_PASSWORD:?REDIS_PASSWORD required}"
     restart: unless-stopped
-    env_file:
-      - .env
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "-a",
+          "${REDIS_PASSWORD}",
+          "--no-auth-warning",
+          "ping",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+        reservations:
+          cpus: "0.25"
+          memory: 128m
     logging:
       driver: "json-file"
       options:
-        max-size: "10m" # cap log size — important on Pi SD card
+        max-size: "10m"
         max-file: "3"
+
+  # ─── Trading Bot ──────────────────────────────────────────────────
+  futures:
+    build:
+      context: .
+      dockerfile: docker/futures/Dockerfile
+    container_name: futures-trader
+    networks:
+      - futures_net
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=America/New_York
+      # Override .env so the bot always uses the Docker service name "redis".
+      # The futures_net network makes "redis" resolvable here regardless of
+      # what REDIS_URL is set to in .env (which is for local / ./run.sh sim).
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Web Dashboard — HTMX monitoring UI ───────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: docker/web/Dockerfile
+    container_name: futures-web
+    networks:
+      - futures_net
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=America/New_York
+      # Same override — use Docker service name inside the network.
+      - REDIS_URL=redis://redis:6379/0
+      - WEB_HOST=0.0.0.0
+      - WEB_PORT=8080
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      # Bind on all interfaces so the dashboard is reachable via:
+      #   localhost:8080       — local browser
+      #   100.109.182.42:8080  — Tailscale direct
+      # tailscale serve proxies :443 → :8080 for HTTPS access.
+      - "8080:8080"
+    volumes:
+      - ./config:/app/config:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ─── Named Volumes ────────────────────────────────────────────────────
+volumes:
+  futures_redis_data:
+    driver: local

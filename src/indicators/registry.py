@@ -4,9 +4,9 @@ Registry for technical indicators.
 
 from typing import Any
 
-from src.indicators._shims import Registry
-from src.indicators.base import Indicator
-from src.logging_config import get_logger
+from indicators._shims import Registry
+from indicators.base import Indicator
+from logging_config import get_logger
 
 logger = get_logger(__name__)
 

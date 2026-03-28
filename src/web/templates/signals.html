@@ -1,0 +1,195 @@
+{# ─────────────────────────────────────────────────────────────────────────────
+   signals.html — Signals Feed
+   ─────────────────────────────────────────────────────────────────────────────
+   Extends base.html.
+
+   Context variables:
+     signals        : list[dict]   — see signal dict keys below
+     selected_asset : str          — currently filtered asset (or "")
+     known_assets   : list[str]    — all known assets for the filter dropdown
+     limit          : int          — max rows requested
+
+   Signal dict keys:
+     side       : "LONG" | "SHORT" | "CLOSE"
+     price      : float
+     size       : float
+     reason     : str
+     timestamp  : float  (Unix epoch)
+     quality    : float  (0–100)
+     regime     : str
+     _asset     : str    (asset key injected server-side)
+
+   HTMX behaviour:
+     • Filter select   — hx-get="/signals" with ?asset= param, replaces page
+     • Table container — polls /partials/signals every 10 s (outerHTML swap)
+─────────────────────────────────────────────────────────────────────────────── #}
+{% extends "base.html" %}
+{% set active_page = "signals" %}
+
+
+{% block head %}
+<style>
+  /* ── Quality colour helpers ────────────────────────────────────────────────── */
+  .qual-high { color: var(--green); }
+  .qual-mid  { color: var(--yellow); }
+  .qual-low  { color: var(--dim); }
+
+  /* ── Side badge ────────────────────────────────────────────────────────────── */
+  .side-badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .7px;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .side-badge--long  { color: var(--green);  background: var(--green-bg);  border: 1px solid var(--green-bd);  }
+  .side-badge--short { color: var(--red);    background: var(--red-bg);    border: 1px solid var(--red-bd);    }
+  .side-badge--close { color: var(--dim);    background: rgba(107,115,148,.08); border: 1px solid rgba(107,115,148,.22); }
+
+  /* ── Filter bar ────────────────────────────────────────────────────────────── */
+  .filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    flex-wrap: wrap;
+  }
+
+  .filter-bar__label {
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: .8px;
+    text-transform: uppercase;
+    color: var(--dim);
+    white-space: nowrap;
+  }
+
+  .filter-bar select {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    padding: 5px 10px;
+    outline: none;
+    cursor: pointer;
+    transition: border-color .14s;
+    min-width: 200px;
+  }
+  .filter-bar select:focus { border-color: var(--accent); }
+  .filter-bar select option { background: var(--card); }
+
+  /* Active filter indicator */
+  .filter-active-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-bg);
+    border: 1px solid var(--accent-bd);
+    letter-spacing: .3px;
+  }
+
+  .filter-clear {
+    font-size: 11px;
+    color: var(--dim);
+    cursor: pointer;
+    text-decoration: none;
+    opacity: .7;
+    transition: opacity .14s;
+  }
+  .filter-clear:hover { opacity: 1; color: var(--red); text-decoration: none; }
+
+  /* ── Regime pill ───────────────────────────────────────────────────────────── */
+  .regime-pill {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: .4px;
+    text-transform: uppercase;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    color: var(--dim);
+    white-space: nowrap;
+  }
+  .regime-pill--trend   { color: var(--accent); background: var(--accent-bg); border-color: var(--accent-bd); }
+  .regime-pill--choppy  { color: var(--yellow); background: var(--yellow-bg); border-color: var(--yellow-bd); }
+  .regime-pill--ranging { color: var(--green);  background: var(--green-bg);  border-color: var(--green-bd);  }
+
+  /* ── HTMX loading fade on the table ───────────────────────────────────────── */
+  #signals-table.htmx-request { opacity: .55; transition: opacity .2s ease; }
+</style>
+{% endblock %}
+
+
+{% block content %}
+
+{# ── Page header ──────────────────────────────────────────────────────────── #}
+<header class="page-header">
+  <div class="page-header__left">
+    <h1 class="page-header__title">Signals Feed</h1>
+    <p class="page-header__sub">
+      Live trading signals from all active workers
+      {%- if selected_asset %} — filtered to <strong class="text-accent">{{ selected_asset }}</strong>{% endif %}
+    </p>
+  </div>
+  <div class="page-header__actions">
+    <span class="htmx-indicator" aria-live="polite">
+      <span class="spinner spinner--sm"></span>
+      Updating…
+    </span>
+  </div>
+</header>
+
+<div class="content-area">
+
+  {# ── Filter bar ─────────────────────────────────────────────────────────── #}
+  {# HTMX-powered: changing the select triggers GET /signals?asset=...        #}
+  {# hx-select="body" + hx-target="body" + hx-swap="outerHTML" extracts the  #}
+  {# full-page <body> from the response and replaces the current body.        #}
+  <div class="filter-bar">
+    <span class="filter-bar__label">Asset</span>
+
+    <select name="asset"
+            aria-label="Filter signals by asset"
+            hx-get="/signals"
+            hx-trigger="change"
+            hx-target="body"
+            hx-select="body"
+            hx-swap="outerHTML"
+            hx-push-url="true">
+      <option value="" {% if not selected_asset %}selected{% endif %}>All Assets</option>
+      {%- for a in known_assets %}
+      <option value="{{ a }}" {% if a == selected_asset %}selected{% endif %}>{{ a }}</option>
+      {%- endfor %}
+    </select>
+
+    {%- if selected_asset %}
+    <span class="filter-active-badge">
+      {{ selected_asset }}
+    </span>
+    <a href="/signals" class="filter-clear" title="Clear filter">&#x2715; clear</a>
+    {%- endif %}
+
+    <span class="text-dim" style="font-size:10.5px; margin-left:auto;">
+      {{ signals | length }} signal{{ "s" if signals | length != 1 else "" }}
+    </span>
+  </div>
+
+  {# ── Signals table — inline initial render; HTMX polls every 10 s ────────── #}
+  {# The partial owns the div#signals-table element including hx- attributes.  #}
+  {# Using {% include %} so the initial render is server-side (no flash).      #}
+  {% include "partials/signals_table.html" %}
+
+</div>{# /content-area #}
+{% endblock %}

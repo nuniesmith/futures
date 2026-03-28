@@ -1,0 +1,292 @@
+{# ─────────────────────────────────────────────────────────────────────────────
+   partials/pnl_summary.html — PnL Summary Fragment
+   ─────────────────────────────────────────────────────────────────────────────
+   Standalone HTMX fragment — does NOT extend base.html.
+
+   Rendered inline on first page load via {% include %} in pnl.html, then
+   refreshed every 30 s via HTMX outerHTML swap. The div carries its own
+   hx-* attributes so polling continues after each swap.
+
+   Context variables (always present via both full-page and partial routes):
+     stats : dict — {
+       total_pnl      : float
+       total_trades   : int
+       win_rate       : float | None   (0–1 decimal; fmt_pct multiplies × 100)
+       best_asset     : str | None
+       worst_asset    : str | None
+       daily_breakdown: list[{date: str, pnl: float, trades: int, win_rate: float}]
+       per_asset      : dict[str, {pnl: float, trades: int, win_rate: float}]
+     }
+     history : list  — raw PnL history entries (reserved for future charts)
+     days    : int   — period selector value (1 | 7 | 30)
+
+   Optional (in scope when included from pnl.html, absent on partial fetches):
+     daily_pnl : float — today's aggregate PnL (from a separate Redis key)
+
+   Jinja2 globals: pnl_class(val)  fmt_pnl(val)  fmt_pct(val)  age(ts)
+
+   All CSS classes are defined in pnl.html's {% block head %} and survive every
+   outerHTML swap because the <head> is never replaced by HTMX.
+─────────────────────────────────────────────────────────────────────────────── #}
+
+{# ── Safe variable resolution ─────────────────────────────────────────────── #}
+{%- set _stats     = stats      if stats      is defined else {} -%}
+{%- set _days      = days       if days       is defined else 7 -%}
+{%- set _breakdown = _stats.daily_breakdown if _stats.daily_breakdown is defined else [] -%}
+{%- set _per_asset = _stats.per_asset       if _stats.per_asset       is defined else {} -%}
+
+{%- set _total_pnl    = _stats.total_pnl    | default(0) | float -%}
+{%- set _win_rate     = _stats.win_rate     | default(none) -%}
+{%- set _total_trades = _stats.total_trades | default(0) | int -%}
+{%- set _best         = _stats.best_asset   | default("—") or "—" -%}
+{%- set _worst        = _stats.worst_asset  | default("—") or "—" -%}
+
+<div id="pnl-summary"
+     hx-get="/partials/pnl?days={{ _days }}"
+     hx-trigger="every 30s"
+     hx-swap="outerHTML">
+
+  {# ════════════════════════════════════════════════════════════════════════════
+     SUMMARY CARDS ROW
+     Reuses the .stats-bar / .stat-pill design from the dashboard stats bar.
+  ════════════════════════════════════════════════════════════════════════════ #}
+  <div class="stats-bar" style="margin-bottom: 1.5rem;">
+
+    {# Total PnL for the selected period #}
+    <div class="stat-pill stat-pill--pnl">
+      <span class="stat-label">Total PnL&nbsp;({{ _days }}d)</span>
+      <span class="stat-value stat-value--lg {{ pnl_class(_total_pnl) }}">
+        {{- fmt_pnl(_total_pnl) -}}
+      </span>
+    </div>
+
+    {# Win Rate #}
+    <div class="stat-pill">
+      <span class="stat-label">Win Rate</span>
+      <span class="stat-value">
+        {%- if _win_rate is not none -%}
+          {{- fmt_pct(_win_rate) -}}
+        {%- else -%}
+          <span class="text-dim">—</span>
+        {%- endif -%}
+      </span>
+    </div>
+
+    {# Total Trades #}
+    <div class="stat-pill">
+      <span class="stat-label">Total Trades</span>
+      <span class="stat-value">{{ _total_trades }}</span>
+    </div>
+
+    {# Best Asset #}
+    <div class="stat-pill">
+      <span class="stat-label">Best Asset</span>
+      <span class="stat-value stat-value--sm {% if _best != '—' %}pos{% endif %}">
+        {{- _best -}}
+      </span>
+    </div>
+
+    {# Worst Asset #}
+    <div class="stat-pill">
+      <span class="stat-label">Worst Asset</span>
+      <span class="stat-value stat-value--sm {% if _worst != '—' %}neg{% endif %}">
+        {{- _worst -}}
+      </span>
+    </div>
+
+  </div>{# /stats-bar #}
+
+
+  {# ════════════════════════════════════════════════════════════════════════════
+     SVG BAR CHART — Daily Breakdown
+     Vertical column chart: green bars above baseline for positive PnL,
+     red bars below for negative.  Uses Jinja2 namespace for loop-scoped math.
+  ════════════════════════════════════════════════════════════════════════════ #}
+  {%- if _breakdown %}
+
+  {# Find maximum absolute PnL to normalise bar heights #}
+  {%- set _cns = namespace(max_abs=0.0001) -%}
+  {%- for _day in _breakdown -%}
+    {%- set _v = _day.pnl | float | abs -%}
+    {%- if _v > _cns.max_abs -%}{%- set _cns.max_abs = _v -%}{%- endif -%}
+  {%- endfor -%}
+
+  {%- set _n      = _breakdown | length -%}
+  {%- set _col_w  = 26 -%}
+  {%- set _bar_w  = 18 -%}
+  {%- set _bar_x0 = 4 -%}
+  {%- set _mid_y  = 44 -%}
+  {%- set _max_h  = 36 -%}
+  {%- set _total_w = _n * _col_w -%}
+
+  <div class="pnl-chart-section">
+    <h3 class="section-title" style="margin-bottom:10px;">Daily PnL Chart</h3>
+
+    <div class="pnl-chart-wrap">
+      <svg class="pnl-svg-chart"
+           viewBox="0 0 {{ _total_w }} 90"
+           preserveAspectRatio="none"
+           role="img"
+           aria-label="Daily PnL bar chart over {{ _n }} days">
+        <title>Daily PnL — last {{ _n }} days</title>
+
+        {# Subtle horizontal grid lines at 50% and 100% of max value #}
+        <line x1="0" y1="{{ _mid_y - (_max_h * 0.5) | int }}"
+              x2="{{ _total_w }}" y2="{{ _mid_y - (_max_h * 0.5) | int }}"
+              stroke="#1e1e2e" stroke-width="1" stroke-dasharray="3,4"/>
+        <line x1="0" y1="{{ _mid_y + (_max_h * 0.5) | int }}"
+              x2="{{ _total_w }}" y2="{{ _mid_y + (_max_h * 0.5) | int }}"
+              stroke="#1e1e2e" stroke-width="1" stroke-dasharray="3,4"/>
+
+        {# Baseline — zero PnL line #}
+        <line x1="0" y1="{{ _mid_y }}"
+              x2="{{ _total_w }}" y2="{{ _mid_y }}"
+              stroke="#2a2a3e" stroke-width="1.5"/>
+
+        {%- for _day in _breakdown -%}
+          {%- set _x = loop.index0 * _col_w + _bar_x0 -%}
+          {%- set _pnl_val = _day.pnl | float -%}
+          {%- set _bar_h = ((_pnl_val | abs) / _cns.max_abs * _max_h) | round | int -%}
+
+          {%- if _pnl_val >= 0 %}
+          {# Positive bar — grows upward from baseline #}
+          <rect x="{{ _x }}" y="{{ _mid_y - _bar_h }}"
+                width="{{ _bar_w }}" height="{{ [_bar_h, 1] | max }}"
+                fill="#00e676" rx="2" opacity=".82"/>
+          {%- else %}
+          {# Negative bar — grows downward from baseline #}
+          <rect x="{{ _x }}" y="{{ _mid_y }}"
+                width="{{ _bar_w }}" height="{{ [_bar_h, 1] | max }}"
+                fill="#ff4560" rx="2" opacity=".82"/>
+          {%- endif -%}
+        {%- endfor %}
+      </svg>
+
+      {# X-axis date labels — show first, middle, last #}
+      {%- if _n > 0 %}
+      <div class="pnl-chart-labels">
+        <span class="pnl-chart-label">{{ _breakdown[0].date }}</span>
+        {%- if _n > 2 %}
+        <span class="pnl-chart-label" style="margin-left:auto; margin-right:auto;">
+          {{ _breakdown[(_n // 2) | int].date }}
+        </span>
+        {%- endif %}
+        {%- if _n > 1 %}
+        <span class="pnl-chart-label" style="margin-left:auto;">
+          {{ _breakdown[-1].date }}
+        </span>
+        {%- endif %}
+      </div>
+      {%- endif %}
+    </div>
+  </div>
+
+  {%- endif %}{# /_breakdown #}
+
+
+  {# ════════════════════════════════════════════════════════════════════════════
+     DAILY BREAKDOWN TABLE
+  ════════════════════════════════════════════════════════════════════════════ #}
+  {%- if _breakdown %}
+  <div class="pnl-section">
+    <h3 class="section-title">Daily Breakdown</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th style="text-align:right">PnL</th>
+            <th style="text-align:right">Trades</th>
+            <th style="text-align:right">Win Rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {%- for _day in _breakdown %}
+          {%- set _dpnl = _day.pnl | float %}
+          <tr class="{{ pnl_class(_dpnl) if _dpnl != 0 else '' }}">
+            <td class="mono dim">{{ _day.date }}</td>
+            <td class="mono {{ pnl_class(_dpnl) }}" style="text-align:right">
+              {{ fmt_pnl(_dpnl) }}
+            </td>
+            <td class="mono" style="text-align:right">{{ _day.trades | default(0) }}</td>
+            <td class="mono" style="text-align:right">
+              {%- if _day.win_rate is not none and _day.win_rate is defined %}
+                {{- fmt_pct(_day.win_rate) -}}
+              {%- else %}
+                <span class="dim">—</span>
+              {%- endif %}
+            </td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {%- endif %}
+
+
+  {# ════════════════════════════════════════════════════════════════════════════
+     PER-ASSET BREAKDOWN TABLE — sorted by PnL descending
+  ════════════════════════════════════════════════════════════════════════════ #}
+  {%- if _per_asset %}
+
+  {# Build sortable list: append dicts to a Python list, then sort by .pnl #}
+  {%- set _pa_rows = [] -%}
+  {%- for _asset_key, _adata in _per_asset.items() -%}
+    {%- set _ = _pa_rows.append({
+          'asset':    _asset_key,
+          'pnl':      _adata.pnl      | default(0) | float,
+          'trades':   _adata.trades   | default(0) | int,
+          'win_rate': _adata.win_rate | default(none)
+        }) -%}
+  {%- endfor -%}
+  {%- set _pa_sorted = _pa_rows | sort(attribute='pnl', reverse=True) -%}
+
+  <div class="pnl-section">
+    <h3 class="section-title">Per-Asset Breakdown</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Asset</th>
+            <th style="text-align:right">PnL</th>
+            <th style="text-align:right">Trades</th>
+            <th style="text-align:right">Win Rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {%- for _row in _pa_sorted %}
+          {%- set _rpnl = _row.pnl %}
+          <tr class="{{ pnl_class(_rpnl) if _rpnl != 0 else '' }}">
+            <td class="mono text-accent">{{ _row.asset }}</td>
+            <td class="mono {{ pnl_class(_rpnl) }}" style="text-align:right">
+              {{ fmt_pnl(_rpnl) }}
+            </td>
+            <td class="mono" style="text-align:right">{{ _row.trades }}</td>
+            <td class="mono" style="text-align:right">
+              {%- if _row.win_rate is not none %}
+                {{- fmt_pct(_row.win_rate) -}}
+              {%- else %}
+                <span class="dim">—</span>
+              {%- endif %}
+            </td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {# Empty state when no stats at all #}
+  {%- if not _breakdown and not _per_asset %}
+  <div class="empty-state">
+    <span class="empty-state__icon" aria-hidden="true">$</span>
+    <span>No PnL data for this period.</span>
+    <span class="text-dim" style="font-size:11px; margin-top:4px;">
+      PnL records appear here once the bot completes at least one trade.
+    </span>
+  </div>
+  {%- endif %}
+
+</div>{# /pnl-summary #}

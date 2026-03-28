@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="htmx-config" content='{"defaultSettleDelay":0}' />
+        <title>{{ title | default('Dashboard') }} — FKS Futures</title>
+
+        <!-- Favicon: inline SVG emoji -->
+        <link
+            rel="icon"
+            href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💎</text></svg>"
+        />
+
+        <!-- Google Fonts -->
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Syne:wght@700;800&display=swap"
+            rel="stylesheet"
+        />
+
+        <!-- Design system -->
+        <link rel="stylesheet" href="/static/app.css" />
+
+        {% block head %}{% endblock %}
+    </head>
+
+    <body>
+        <!-- =====================================================
+       Sidebar Navigation
+       ===================================================== -->
+        <nav class="nav" aria-label="Main navigation">
+            <!-- Brand -->
+            <div class="nav__brand">
+                <span class="nav__brand-icon" aria-hidden="true">💎</span>
+                <span class="nav__brand-name">FKS TRADING</span>
+                <span class="nav__brand-sub">FUTURES BOT</span>
+            </div>
+
+            <!-- Primary links -->
+            <ul class="nav__links" role="list">
+                <li>
+                    <a
+                        href="/"
+                        class="nav__link{% if active_page == 'dashboard' %} active{% endif %}"
+                        aria-current="{% if active_page == 'dashboard' %}page{% else %}false{% endif %}"
+                    >
+                        <span class="nav__dot" aria-hidden="true"></span>
+                        Dashboard
+                    </a>
+                </li>
+
+                <li>
+                    <a
+                        href="/assets"
+                        class="nav__link{% if active_page == 'assets' %} active{% endif %}"
+                        aria-current="{% if active_page == 'assets' %}page{% else %}false{% endif %}"
+                    >
+                        <span class="nav__dot" aria-hidden="true"></span>
+                        Assets
+                    </a>
+                </li>
+
+                <li>
+                    <a
+                        href="/signals"
+                        class="nav__link{% if active_page == 'signals' %} active{% endif %}"
+                        aria-current="{% if active_page == 'signals' %}page{% else %}false{% endif %}"
+                    >
+                        <span class="nav__dot" aria-hidden="true"></span>
+                        Signals
+                    </a>
+                </li>
+
+                <li>
+                    <a
+                        href="/reports"
+                        class="nav__link{% if active_page == 'reports' %} active{% endif %}"
+                        aria-current="{% if active_page == 'reports' %}page{% else %}false{% endif %}"
+                    >
+                        <span class="nav__dot" aria-hidden="true"></span>
+                        Reports
+                    </a>
+                </li>
+
+                <li>
+                    <a
+                        href="/pnl"
+                        class="nav__link{% if active_page == 'pnl' %} active{% endif %}"
+                        aria-current="{% if active_page == 'pnl' %}page{% else %}false{% endif %}"
+                    >
+                        <span class="nav__dot" aria-hidden="true"></span>
+                        PnL
+                    </a>
+                </li>
+            </ul>
+
+            <!-- Footer: Redis status + logout -->
+            <div class="nav__footer">
+                <!-- Redis connectivity indicator (server-rendered) -->
+                <div class="nav__status" title="Redis connection status">
+                    {% if redis_connected %}
+                    <span
+                        class="nav__status-dot nav__status-dot--live"
+                        aria-hidden="true"
+                    ></span>
+                    <span class="nav__status-label--live">LIVE</span>
+                    {% else %}
+                    <span
+                        class="nav__status-dot nav__status-dot--offline"
+                        aria-hidden="true"
+                    ></span>
+                    <span class="nav__status-label--offline">OFFLINE</span>
+                    {% endif %}
+                </div>
+
+                <!-- Logout -->
+                <a href="/logout" class="nav__logout">
+                    <span class="nav__logout-icon" aria-hidden="true">→</span>
+                    <span>Logout</span>
+                </a>
+            </div>
+        </nav>
+
+        <!-- =====================================================
+       Main Content
+       ===================================================== -->
+        <main class="main-content" id="main-content">
+            {% block content %}{% endblock %}
+        </main>
+
+        <!-- =====================================================
+       Toast notification container (populated by JS)
+       ===================================================== -->
+        <div
+            id="toast-container"
+            aria-live="assertive"
+            aria-atomic="false"
+        ></div>
+
+        <!-- =====================================================
+       HTMX
+       ===================================================== -->
+        <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js"></script>
+
+        <!-- =====================================================
+       Core application script
+       ===================================================== -->
+        <script>
+            (function () {
+                "use strict";
+
+                /* --------------------------------------------------
+         Toast system
+         -------------------------------------------------- */
+                var _container = document.getElementById("toast-container");
+                var _TOAST_TTL = 5000; // ms before auto-dismiss
+
+                /**
+                 * Show a toast notification.
+                 *
+                 * @param {string} message
+                 * @param {'error'|'success'|'warn'|'info'} [type='error']
+                 * @param {number} [ttl] - ms before auto-dismiss; 0 = sticky
+                 */
+                function showToast(message, type, ttl) {
+                    type = type || "error";
+                    ttl = ttl === undefined ? _TOAST_TTL : ttl;
+
+                    var el = document.createElement("div");
+                    el.className = "toast toast--" + type;
+                    el.textContent = message;
+                    el.setAttribute("role", "alert");
+                    _container.appendChild(el);
+
+                    function dismiss() {
+                        el.style.transition = "opacity .28s ease";
+                        el.style.opacity = "0";
+                        setTimeout(function () {
+                            if (el.parentNode) {
+                                el.parentNode.removeChild(el);
+                            }
+                        }, 300);
+                    }
+
+                    // Auto-dismiss after ttl
+                    if (ttl > 0) {
+                        setTimeout(dismiss, ttl);
+                    }
+
+                    // Click-to-dismiss immediately
+                    el.addEventListener("click", dismiss);
+
+                    return el;
+                }
+
+                // Expose globally so partials and inline scripts can call fksToast(...)
+                window.fksToast = showToast;
+
+                /* --------------------------------------------------
+         HTMX — HTTP error responses (4xx / 5xx)
+         -------------------------------------------------- */
+                document.body.addEventListener(
+                    "htmx:responseError",
+                    function (evt) {
+                        var xhr = evt.detail.xhr;
+                        var status = xhr ? xhr.status : 0;
+                        var msg;
+
+                        if (status === 401) {
+                            showToast(
+                                "Session expired — redirecting to login…",
+                                "warn",
+                                2500,
+                            );
+                            setTimeout(function () {
+                                window.location.href =
+                                    "/login?next=" +
+                                    encodeURIComponent(
+                                        window.location.pathname,
+                                    );
+                            }, 1700);
+                            return;
+                        }
+
+                        switch (status) {
+                            case 403:
+                                msg = "Access denied (403).";
+                                break;
+                            case 404:
+                                msg = "Resource not found (404).";
+                                break;
+                            case 422:
+                                msg = "Invalid request data (422).";
+                                break;
+                            case 429:
+                                msg = "Too many requests — slow down.";
+                                break;
+                            default:
+                                msg =
+                                    status >= 500
+                                        ? "Server error (" +
+                                          status +
+                                          "). Please try again."
+                                        : "Request failed (HTTP " +
+                                          status +
+                                          ").";
+                        }
+
+                        showToast(msg, "error");
+                    },
+                );
+
+                /* --------------------------------------------------
+         HTMX — Network / connectivity failure
+         -------------------------------------------------- */
+                document.body.addEventListener("htmx:sendError", function () {
+                    showToast(
+                        "Network error — check your connection.",
+                        "error",
+                    );
+                });
+
+                /* --------------------------------------------------
+         HTMX — HX-Redirect header (auth middleware 401)
+         -------------------------------------------------- */
+                document.body.addEventListener(
+                    "htmx:beforeSwap",
+                    function (evt) {
+                        var header =
+                            evt.detail.xhr &&
+                            evt.detail.xhr.getResponseHeader("HX-Redirect");
+                        if (header) {
+                            evt.detail.shouldSwap = false;
+                            window.location.href = header;
+                        }
+                    },
+                );
+
+                /* --------------------------------------------------
+         HTMX — Server-sent toasts via X-FKS-Toast header
+         Format: "<type>::<message>"
+         e.g.   "success::Order filled at 42,000"
+         -------------------------------------------------- */
+                document.body.addEventListener(
+                    "htmx:afterRequest",
+                    function (evt) {
+                        var xhr = evt.detail.xhr;
+                        if (!xhr) {
+                            return;
+                        }
+                        var header = xhr.getResponseHeader("X-FKS-Toast");
+                        if (!header) {
+                            return;
+                        }
+
+                        var sep = header.indexOf("::");
+                        var type = sep !== -1 ? header.slice(0, sep) : "info";
+                        var msg = sep !== -1 ? header.slice(sep + 2) : header;
+                        showToast(msg, type);
+                    },
+                );
+
+                /* --------------------------------------------------
+         Period-tab click delegation
+         Works with any .period-tabs container; marks the
+         clicked .period-tab as active.  Pair with an
+         hx-get on the button and hx-target on the container
+         to load new data automatically.
+         -------------------------------------------------- */
+                document.body.addEventListener("click", function (evt) {
+                    var btn = evt.target.closest(".period-tab");
+                    if (!btn) {
+                        return;
+                    }
+
+                    var tabs = btn.closest(".period-tabs");
+                    if (!tabs) {
+                        return;
+                    }
+
+                    tabs.querySelectorAll(".period-tab").forEach(function (t) {
+                        t.classList.toggle("active", t === btn);
+                    });
+                });
+            })();
+        </script>
+
+        {% block scripts %}{% endblock %}
+    </body>
+</html>

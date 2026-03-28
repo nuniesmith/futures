@@ -7,7 +7,7 @@ Covers: calculate_wave_analysis, wave_summary_text.
 import numpy as np
 import pandas as pd
 
-from src.analysis.wave_analysis import calculate_wave_analysis, wave_summary_text
+from analysis.wave_analysis import calculate_wave_analysis, wave_summary_text
 
 # ---------------------------------------------------------------------------
 # Local synthetic data helpers (self-contained — no conftest dependency)

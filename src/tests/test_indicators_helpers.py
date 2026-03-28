@@ -8,7 +8,7 @@ Covers: ema, sma, rsi, rsi_scalar, atr, atr_scalar, macd, bollinger, vwap,
 import numpy as np
 import pandas as pd
 
-from src.indicators.helpers import (
+from indicators.helpers import (
     atr,
     atr_scalar,
     awesome_oscillator,

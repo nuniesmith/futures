@@ -1,0 +1,540 @@
+{# ─────────────────────────────────────────────────────────────────────────────
+assets.html — Asset Registry
+─────────────────────────────────────────────────────────────────────────────
+Extends base.html. Context variables: assets_by_category : dict[str, list[{key:
+str, spec: AssetSpec}]] categories : list[str] AssetSpec attributes used:
+.symbol KuCoin perpetual symbol (e.g. "XBTUSDTM") .base Underlying ticker (e.g.
+"BTC") .max_leverage Max allowed leverage (int) .category Category string (str)
+.description Human-readable blurb (str) .tick_size Minimum price increment
+(float) .multiplier Contract multiplier (float) Jinja2 globals available (from
+app.py): pnl_class(val) fmt_pnl(val) age(ts) heartbeat_alive(ts) fmt_pct(val)
+───────────────────────────────────────────────────────────────────────────────
+#} {% extends "base.html" %} {% set active_page = "assets" %} {#
+══════════════════════════════════════════════════════════════════════════════
+Page-scoped styles All CSS classes used in this template live here so they
+survive every HTMX outerHTML swap — the
+<head>
+    is never replaced by HTMX.
+    ══════════════════════════════════════════════════════════════════════════════
+    #} {% block head %}
+    <style>
+        /* Animate anchor jumps */
+        html {
+            scroll-behavior: smooth;
+        }
+
+        /* ── Sticky jump-to-category bar ──────────────────────────────────────────── */
+        .cat-tabs-bar {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            padding: 10px 32px;
+            background: rgba(10, 10, 15, 0.96);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-shrink: 0;
+        }
+
+        .cat-tabs-bar__label {
+            font-size: 9.5px;
+            font-weight: 600;
+            letter-spacing: 0.9px;
+            text-transform: uppercase;
+            color: var(--dim);
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        /* ── Tab pill row ──────────────────────────────────────────────────────────── */
+        .cat-tabs {
+            display: flex;
+            gap: 3px;
+            background: rgba(0, 0, 0, 0.32);
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            padding: 3px;
+            flex-wrap: wrap;
+        }
+
+        .cat-tab {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 5px;
+            border: 1px solid transparent;
+            color: var(--dim);
+            font-family: var(--mono);
+            font-size: 10.5px;
+            font-weight: 600;
+            letter-spacing: 0.55px;
+            text-transform: uppercase;
+            text-decoration: none;
+            transition:
+                color 0.14s,
+                background 0.14s,
+                border-color 0.14s;
+            white-space: nowrap;
+            cursor: pointer;
+            line-height: 1.5;
+        }
+
+        .cat-tab:hover {
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.04);
+            text-decoration: none;
+        }
+        .cat-tab.is-active {
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.06);
+            text-decoration: none;
+        }
+
+        /* Per-category accent on hover/active */
+        .cat-tab[data-cat="crypto"]:hover,
+        .cat-tab[data-cat="crypto"].is-active {
+            color: #00d4ff;
+            background: rgba(0, 212, 255, 0.08);
+            border-color: rgba(0, 212, 255, 0.28);
+        }
+        .cat-tab[data-cat="meme"]:hover,
+        .cat-tab[data-cat="meme"].is-active {
+            color: #ff6b6b;
+            background: rgba(255, 107, 107, 0.08);
+            border-color: rgba(255, 107, 107, 0.28);
+        }
+        .cat-tab[data-cat="metals"]:hover,
+        .cat-tab[data-cat="metals"].is-active {
+            color: #ffd740;
+            background: rgba(255, 215, 64, 0.08);
+            border-color: rgba(255, 215, 64, 0.28);
+        }
+        .cat-tab[data-cat="commodities"]:hover,
+        .cat-tab[data-cat="commodities"].is-active {
+            color: #8bc34a;
+            background: rgba(139, 195, 74, 0.08);
+            border-color: rgba(139, 195, 74, 0.28);
+        }
+        .cat-tab[data-cat="stocks"]:hover,
+        .cat-tab[data-cat="stocks"].is-active {
+            color: #ab47bc;
+            background: rgba(171, 71, 188, 0.08);
+            border-color: rgba(171, 71, 188, 0.28);
+        }
+
+        /* Indicator dot */
+        .cat-tab__dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            opacity: 0.6;
+        }
+        .cat-tab[data-cat="crypto"] .cat-tab__dot {
+            background: #00d4ff;
+        }
+        .cat-tab[data-cat="meme"] .cat-tab__dot {
+            background: #ff6b6b;
+        }
+        .cat-tab[data-cat="metals"] .cat-tab__dot {
+            background: #ffd740;
+        }
+        .cat-tab[data-cat="commodities"] .cat-tab__dot {
+            background: #8bc34a;
+        }
+        .cat-tab[data-cat="stocks"] .cat-tab__dot {
+            background: #ab47bc;
+        }
+
+        .cat-tab__count {
+            font-size: 9px;
+            font-weight: 400;
+            opacity: 0.5;
+        }
+
+        /* ── Category section ──────────────────────────────────────────────────────── */
+        /* scroll-margin-top = sticky bar height + breathing room */
+        .cat-section {
+            scroll-margin-top: 66px;
+        }
+        .cat-section + .cat-section {
+            margin-top: 2.5rem;
+        }
+
+        /* ── Section heading ───────────────────────────────────────────────────────── */
+        .cat-section__header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        .cat-section__title {
+            font-family: var(--head);
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: 0.1px;
+            text-transform: capitalize;
+        }
+
+        .cat-section__count {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 9px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 9.5px;
+            font-weight: 600;
+            letter-spacing: 0.35px;
+            color: var(--dim);
+            white-space: nowrap;
+        }
+
+        /* ── Per-category badge colours ────────────────────────────────────────────── */
+        .cat-badge-crypto {
+            color: #00d4ff;
+            background: rgba(0, 212, 255, 0.09);
+            border-color: rgba(0, 212, 255, 0.3);
+        }
+        .cat-badge-meme {
+            color: #ff6b6b;
+            background: rgba(255, 107, 107, 0.09);
+            border-color: rgba(255, 107, 107, 0.3);
+        }
+        .cat-badge-metals {
+            color: #ffd740;
+            background: rgba(255, 215, 64, 0.09);
+            border-color: rgba(255, 215, 64, 0.3);
+        }
+        .cat-badge-commodities {
+            color: #8bc34a;
+            background: rgba(139, 195, 74, 0.09);
+            border-color: rgba(139, 195, 74, 0.3);
+        }
+        .cat-badge-stocks {
+            color: #ab47bc;
+            background: rgba(171, 71, 188, 0.09);
+            border-color: rgba(171, 71, 188, 0.3);
+        }
+
+        /* ── Toggle column ────────────────────────────────────────────────────────── */
+        .c-toggle-hd {
+            text-align: center;
+            white-space: nowrap;
+        }
+        .c-toggle {
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .toggle-spinner {
+            display: none;
+            font-size: 12px;
+            color: var(--dim);
+            margin-left: 4px;
+            vertical-align: middle;
+        }
+        .htmx-request .toggle-spinner {
+            display: inline;
+        }
+
+        /* Dim disabled rows */
+        tr.row-disabled td:not(.c-toggle) {
+            opacity: 0.45;
+        }
+
+        /* ── Contracts table ─────────────────────────────────────────────────────── */
+        .assets-tbl {
+            table-layout: auto;
+            width: 100%;
+        }
+
+        .assets-tbl td.c-sym {
+            color: var(--accent);
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+        }
+        .assets-tbl td.c-base {
+            color: var(--text);
+            white-space: nowrap;
+        }
+        .assets-tbl td.c-ksym {
+            color: var(--dim);
+            white-space: nowrap;
+            font-size: 11.5px;
+        }
+        .assets-tbl td.c-lev {
+            text-align: right;
+            white-space: nowrap;
+        }
+        .assets-tbl td.c-tick {
+            text-align: right;
+            white-space: nowrap;
+            font-size: 11px;
+        }
+        .assets-tbl td.c-mult {
+            text-align: right;
+            white-space: nowrap;
+            font-size: 11px;
+        }
+        .assets-tbl td.c-desc {
+            color: var(--dim);
+            max-width: 300px;
+            white-space: normal;
+            line-height: 1.5;
+            font-size: 11.5px;
+        }
+        .assets-tbl th.r {
+            text-align: right;
+        }
+
+        /* Symbol accent on row hover — varies by category */
+        .assets-tbl.t-crypto tbody tr:hover td.c-sym {
+            color: #00d4ff;
+        }
+        .assets-tbl.t-meme tbody tr:hover td.c-sym {
+            color: #ff6b6b;
+        }
+        .assets-tbl.t-metals tbody tr:hover td.c-sym {
+            color: #ffd740;
+        }
+        .assets-tbl.t-commodities tbody tr:hover td.c-sym {
+            color: #8bc34a;
+        }
+        .assets-tbl.t-stocks tbody tr:hover td.c-sym {
+            color: #ab47bc;
+        }
+
+        /* Leverage badge pill */
+        .lev-pill {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            background: rgba(0, 212, 255, 0.06);
+            color: var(--accent);
+            border: 1px solid rgba(0, 212, 255, 0.2);
+        }
+    </style>
+    {% endblock %} {#
+    ══════════════════════════════════════════════════════════════════════════════
+    Main content
+    ══════════════════════════════════════════════════════════════════════════════
+    #} {% block content %} {# ── Pre-compute total contract count
+    ─────────────────────────────────────── #} {%- set _ns = namespace(total=0)
+    -%} {%- for _cat in categories -%} {%- set _ns.total = _ns.total +
+    (assets_by_category.get(_cat, []) | length) -%} {%- endfor -%} {# ── Page
+    header ──────────────────────────────────────────────────────────── #}
+    <header class="page-header">
+        <div class="page-header__left">
+            <h1 class="page-header__title">Asset Registry</h1>
+            <p class="page-header__sub">
+                All tradeable perpetual futures contracts, grouped by category
+            </p>
+        </div>
+        <div class="page-header__actions">
+            <span class="badge crypto">{{ _ns.total }} contracts</span>
+        </div>
+    </header>
+
+    {# ── Sticky jump-to-category navigation
+    ───────────────────────────────────── #}
+    <nav class="cat-tabs-bar" aria-label="Jump to category section">
+        <span class="cat-tabs-bar__label">Jump&nbsp;to</span>
+        <div class="cat-tabs">
+            {%- for cat in categories %}
+            <a
+                href="#cat-{{ cat }}"
+                class="cat-tab"
+                data-cat="{{ cat }}"
+                aria-label="{{ cat | title }} — {{ assets_by_category.get(cat, []) | length }} contracts"
+            >
+                <span class="cat-tab__dot" aria-hidden="true"></span>
+                {{ cat | title }}
+                <span class="cat-tab__count"
+                    >({{ assets_by_category.get(cat, []) | length }})</span
+                >
+            </a>
+            {%- endfor %}
+        </div>
+    </nav>
+
+    {# ── Per-category sections
+    ─────────────────────────────────────────────────── #}
+    <div class="content-area">
+        {%- for cat in categories %} {%- set _items =
+        assets_by_category.get(cat, []) %} {#
+        ════════════════════════════════════════════════════════════════════════════
+        CATEGORY SECTION — anchor id="cat-{category}" matches tab
+        href="#cat-{cat}"
+        ════════════════════════════════════════════════════════════════════════════
+        #}
+        <section
+            id="cat-{{ cat }}"
+            class="cat-section"
+            aria-labelledby="hd-{{ cat }}"
+        >
+            {# ── Section heading
+            ──────────────────────────────────────────────────── #}
+            <div class="cat-section__header">
+                <span class="badge cat-badge-{{ cat }}">{{ cat }}</span>
+                <h2 class="cat-section__title" id="hd-{{ cat }}">
+                    {{ cat | title }}
+                </h2>
+                <span class="cat-section__count">
+                    {{ _items | length }}&nbsp;{{ "contract" if _items | length
+                    == 1 else "contracts" }}
+                </span>
+            </div>
+
+            {# ── Contracts table
+            ───────────────────────────────────────────────────── #} {%- if
+            _items %}
+            <div class="table-wrap">
+                <table class="assets-tbl t-{{ cat }}">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Base</th>
+                            <th>KuCoin Symbol</th>
+                            <th class="r">Max&nbsp;Lev</th>
+                            <th class="r">Tick&nbsp;Size</th>
+                            <th class="r">Multiplier</th>
+                            <th>Description</th>
+                            <th class="c-toggle-hd">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {%- for item in _items %} {%- set _enabled = item.key
+                        not in disabled_assets %}
+                        <tr
+                            class="{% if not _enabled %}row-disabled{% endif %}"
+                        >
+                            <td class="c-sym mono">{{ item.key }}</td>
+                            <td class="c-base mono">{{ item.spec.base }}</td>
+                            <td class="c-ksym mono">{{ item.spec.symbol }}</td>
+                            <td class="c-lev">
+                                <span class="lev-pill"
+                                    >{{ item.spec.max_leverage }}&times;</span
+                                >
+                            </td>
+                            <td class="c-tick mono">
+                                {{ item.spec.tick_size }}
+                            </td>
+                            <td class="c-mult mono">
+                                {{ item.spec.multiplier }}
+                            </td>
+                            <td class="c-desc">
+                                {{ item.spec.description or "—" }}
+                            </td>
+                            <td class="c-toggle">
+                                <button
+                                    class="toggle-btn {% if _enabled %}toggle-btn--on{% else %}toggle-btn--off{% endif %}"
+                                    hx-post="/assets/{{ item.key }}/toggle"
+                                    hx-swap="outerHTML"
+                                    hx-indicator="#toggle-spinner-{{ item.key }}"
+                                    title="{{ 'Disable ' if _enabled else 'Enable ' }}{{ item.spec.base }}"
+                                    aria-label="{{ 'Disable' if _enabled else 'Enable' }} {{ item.spec.base }}"
+                                    aria-pressed="{{ 'true' if _enabled else 'false' }}"
+                                >
+                                    <span class="toggle-btn__dot"></span>
+                                    {{ "ON" if _enabled else "OFF" }}
+                                </button>
+                                <span
+                                    id="toggle-spinner-{{ item.key }}"
+                                    class="htmx-indicator toggle-spinner"
+                                    aria-hidden="true"
+                                    >⋯</span
+                                >
+                            </td>
+                        </tr>
+                        {%- endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {%- else %}
+            <div class="empty-state">
+                <span class="empty-state__icon" aria-hidden="true">◈</span>
+                <span>No contracts registered in this category.</span>
+            </div>
+            {%- endif %}
+        </section>
+        {%- endfor %}
+    </div>
+    {# /content-area #} {% endblock %} {#
+    ══════════════════════════════════════════════════════════════════════════════
+    Page scripts IntersectionObserver keeps the sticky tab bar in sync as the
+    user scrolls.
+    ══════════════════════════════════════════════════════════════════════════════
+    #} {% block scripts %}
+    <script>
+        (function () {
+            "use strict";
+
+            var tabs = document.querySelectorAll(".cat-tab");
+            if (!tabs.length) {
+                return;
+            }
+
+            /* Build section-id => tab element lookup map */
+            var tabMap = {};
+            tabs.forEach(function (tab) {
+                var href = tab.getAttribute("href") || "";
+                if (href.charAt(0) === "#") {
+                    tabMap[href.slice(1)] = tab;
+                }
+            });
+
+            function setActive(id) {
+                tabs.forEach(function (t) {
+                    t.classList.remove("is-active");
+                });
+                if (tabMap[id]) {
+                    tabMap[id].classList.add("is-active");
+                }
+            }
+
+            if ("IntersectionObserver" in window) {
+                /* -66px top margin hides the sticky bar from the observer root;
+         -38% bottom means a section must fill >62% of viewport to fire. */
+                var io = new IntersectionObserver(
+                    function (entries) {
+                        entries.forEach(function (e) {
+                            if (e.isIntersecting) {
+                                setActive(e.target.id);
+                            }
+                        });
+                    },
+                    { rootMargin: "-66px 0px -38% 0px", threshold: 0 },
+                );
+
+                document
+                    .querySelectorAll(".cat-section")
+                    .forEach(function (sec) {
+                        io.observe(sec);
+                    });
+            } else {
+                /* Fallback: mark tab active on anchor click */
+                tabs.forEach(function (tab) {
+                    tab.addEventListener("click", function () {
+                        tabs.forEach(function (t) {
+                            t.classList.remove("is-active");
+                        });
+                        tab.classList.add("is-active");
+                    });
+                });
+            }
+        })();
+    </script>
+    {% endblock %}
+</head>

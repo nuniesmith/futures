@@ -1,0 +1,42 @@
+{# ─────────────────────────────────────────────────────────────────────────────
+   partials/report_content.html — Report Content Fragment
+   ─────────────────────────────────────────────────────────────────────────────
+   Standalone HTMX fragment — does NOT extend base.html.
+
+   Rendered via hx-trigger="load" inside the #report-content div on reports.html.
+   HTMX swaps the innerHTML of #report-content with this response.
+
+   Context variables:
+     report : str | None  — report text from Redis (None if not yet generated)
+     period : str         — "day" | "week" | "month"
+
+   CSS classes used here (.report-body, .empty-state, …) are defined in
+   app.css and in reports.html's {% block head %} — both survive HTMX swaps.
+─────────────────────────────────────────────────────────────────────────────── #}
+
+{%- if report %}
+
+{# ════════════════════════════════════════════════════════════════════════════
+   Report present — render pre-formatted AI text
+   .report-body styles: dark background, monospace, pre-wrap, line-height 1.75
+════════════════════════════════════════════════════════════════════════════ #}
+<pre class="report-body">{{ report }}</pre>
+
+{%- else %}
+
+{# ════════════════════════════════════════════════════════════════════════════
+   Empty state — no report available for this period
+════════════════════════════════════════════════════════════════════════════ #}
+<div class="report-empty">
+  <span class="report-empty__icon" aria-hidden="true">◎</span>
+  <span class="report-empty__title">
+    No {{ period | default("") }} report available yet
+  </span>
+  <span class="report-empty__note">
+    Reports are generated automatically at the end of each
+    {{ period | default("period") }}.<br>
+    Check back later or wait for the AI analyst to complete its run.
+  </span>
+</div>
+
+{%- endif %}

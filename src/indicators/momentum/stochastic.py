@@ -7,8 +7,8 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
-from src.indicators.base import Indicator
-from src.indicators.registry import register_indicator
+from indicators.base import Indicator
+from indicators.registry import register_indicator
 
 
 @register_indicator

@@ -7,7 +7,7 @@ Covers: compute_signal_quality, is_premium_setup, signal_quality_summary.
 import numpy as np
 import pandas as pd
 
-from src.analysis.signal_quality import (
+from analysis.signal_quality import (
     compute_signal_quality,
     is_premium_setup,
     signal_quality_summary,

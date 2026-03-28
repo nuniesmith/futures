@@ -4,9 +4,9 @@ Factory for creating technical indicators.
 
 from typing import Any
 
-from src.indicators.base import Indicator
-from src.indicators.registry import indicator_registry
-from src.logging_config import get_logger
+from indicators.base import Indicator
+from indicators.registry import indicator_registry
+from logging_config import get_logger
 
 logger = get_logger(__name__)
 

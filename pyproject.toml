@@ -1,23 +1,66 @@
 # =============================================================================
-# Sol Scalper — Project Configuration
+# Futures Trader — Project Configuration
 # =============================================================================
-# KuCoin SOLUSDTM Perpetual Futures Scalper
-# Repository: nuniesmith/sol
+# KuCoin USDTM Perpetual Futures — Multi-Asset Scalper
+# Repository: nuniesmith/futures
 # =============================================================================
 
 [project]
-name = "sol"
-version = "0.1.0"
-description = "KuCoin SOL/USDT perpetual futures scalper with Ruby wave analysis"
-requires-python = ">=3.13"
+name = "futures-trader"
+version = "0.2.0"
+description = "Multi-asset KuCoin perpetual futures scalper with Optuna auto-optimization and Ruby wave analysis"
+requires-python = ">=3.12"
 license = { text = "MIT" }
+readme = "README.md"
+authors = [{ name = "nuniesmith" }]
+keywords = ["crypto", "trading", "scalping", "kucoin", "futures", "optuna"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+
+dependencies = [
+    "ccxt>=4.4",
+    "optuna>=4.1",
+    "pandas>=2.2",
+    "aiohttp>=3.9",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0.2",
+    "redis>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "fakeredis>=2.26",
+]
+
+[project.urls]
+Repository = "https://github.com/nuniesmith/futures"
+"Bug Tracker" = "https://github.com/nuniesmith/futures/issues"
+
+[project.scripts]
+futures = "src.main:main"
+
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 # =============================================================================
 # Ruff — Linting & Formatting
 # =============================================================================
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py312"
 line-length = 100
 src = ["src"]
 
@@ -40,7 +83,7 @@ select = [
 ]
 ignore = [
     "E501",   # line too long — handled by formatter
-    "B008",   # function call in default argument — common in FastAPI/dataclasses
+    "B008",   # function call in default argument — common in dataclasses
     "B905",   # zip-without-explicit-strict — not needed for internal iteration
     "SIM103", # needless-bool — sometimes explicit is clearer
     "SIM108", # ternary operator — sometimes if/else is clearer
@@ -104,6 +147,8 @@ module = [
     "ccxt.*",
     "optuna.*",
     "aiohttp.*",
+    "redis.*",
+    "fakeredis.*",
 ]
 ignore_missing_imports = true
 
@@ -117,6 +162,7 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short -q"
+asyncio_mode = "auto"
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",

@@ -1,12 +1,16 @@
-# Virtual environments
+# =============================================================================
+# Futures Trader — .gitignore
+# =============================================================================
+
+# ─── Virtual Environments ────────────────────────────────────────
 .venv/
 venv/
 env/
 
-# Environment variables
+# ─── Environment Variables (secrets — NEVER commit) ─────────────
 .env
 
-# Python
+# ─── Python ──────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
@@ -14,21 +18,40 @@ __pycache__/
 .Python
 pip-log.txt
 pip-delete-this-directory.txt
+*.egg-info/
+dist/
+build/
 
-# Poetry
+# ─── Tool Caches ────────────────────────────────────────────────
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 .cache/
-poetry.lock  # (optional - commit it if you want)
 
-# IDE / Editor
+# ─── IDE / Editor ───────────────────────────────────────────────
 .vscode/
-.zed/cache/
+.zed/
 .idea/
+*.swp
+*.swo
+*~
 
-# Logs & data
+# ─── Logs & Data ────────────────────────────────────────────────
 *.log
 logs/
 data/
 
-# OS
+# ─── Docker ─────────────────────────────────────────────────────
+.dockerignore
+
+# ─── OS ─────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+# ─── Ruby Reference Code ────────────────────────────────────────
+# Kept locally for reference but not shipped in the repo.
+# Delete ruby/ once all code has been ported.
+ruby/
+
+# ─── Poetry (if used) ──────────────────────────────────────────
+poetry.lock

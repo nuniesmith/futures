@@ -5,7 +5,7 @@ These thin wrappers provide a one-liner API for the most common indicator
 computations, suitable for use in analysis modules.
 
 Usage:
-    from src.indicators.helpers import ema, sma, rsi, atr, macd, bollinger, vwap
+    from indicators.helpers import ema, sma, rsi, atr, macd, bollinger, vwap
 
 All functions accept pandas Series / DataFrames and return Series or dicts of Series.
 For lower-level numpy-array helpers, see src.core.utils.

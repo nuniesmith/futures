@@ -9,9 +9,9 @@ from typing import Any
 
 import pandas as pd
 
-from src.indicators.base import Indicator
-from src.indicators.factory import IndicatorFactory
-from src.logging_config import get_logger
+from indicators.base import Indicator
+from indicators.factory import IndicatorFactory
+from logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -540,7 +540,7 @@ class IndicatorManager:
         Returns:
             List of added indicator IDs.
         """
-        from src.indicators import technical_indicators
+        from indicators import technical_indicators
 
         added_indicators = []
         for ind_cls in technical_indicators:

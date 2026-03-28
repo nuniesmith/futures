@@ -1,0 +1,166 @@
+{# ─────────────────────────────────────────────────────────────────────────────
+   pnl.html — PnL Tracker
+   ─────────────────────────────────────────────────────────────────────────────
+   Extends base.html.
+
+   Context variables:
+     stats     : dict   — see pnl_summary.html for full key list
+     history   : list   — raw PnL history entries
+     daily_pnl : float  — today's aggregate PnL (separate Redis key)
+     days      : int    — period selector value (1 | 7 | 30)
+
+   HTMX behaviour:
+     • Period links    — full-page swap via hx-get + hx-select="body"
+     • pnl-summary div — polls /partials/pnl every 30 s (outerHTML swap)
+                         provided by pnl_summary.html partial (included below)
+─────────────────────────────────────────────────────────────────────────────── #}
+{% extends "base.html" %}
+{% set active_page = "pnl" %}
+
+
+{% block head %}
+<style>
+  /* ── PnL-page-specific colour helpers ────────────────────────────────────── */
+  .pos  { color: var(--green) !important; }
+  .neg  { color: var(--red)   !important; }
+  .zero { color: var(--dim)   !important; }
+
+  /* ── Period selector bar ───────────────────────────────────────────────────── */
+  .pnl-period-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .pnl-period-bar__label {
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: .85px;
+    text-transform: uppercase;
+    color: var(--dim);
+    white-space: nowrap;
+  }
+
+  /* ── SVG bar chart container ───────────────────────────────────────────────── */
+  .pnl-chart-section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 18px 20px 14px;
+  }
+
+  .pnl-chart-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .pnl-svg-chart {
+    width: 100%;
+    height: 90px;
+    display: block;
+    border-radius: 4px;
+    background: rgba(0,0,0,.15);
+  }
+
+  .pnl-chart-labels {
+    display: flex;
+    align-items: center;
+    font-size: 9.5px;
+    color: var(--dim);
+    letter-spacing: .2px;
+    padding: 0 2px;
+  }
+
+  .pnl-chart-label { white-space: nowrap; }
+
+  /* ── Section spacing ───────────────────────────────────────────────────────── */
+  .pnl-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* ── Stats bar tweaks for pnl page ────────────────────────────────────────── */
+  /* Reuses .stats-bar and .stat-pill from app.css — no overrides needed */
+
+  /* ── Daily PnL header badge ────────────────────────────────────────────────── */
+  .daily-pnl-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .3px;
+    border: 1px solid;
+  }
+
+  .daily-pnl-badge.pos { color: var(--green); background: var(--green-bg); border-color: var(--green-bd); }
+  .daily-pnl-badge.neg { color: var(--red);   background: var(--red-bg);   border-color: var(--red-bd);   }
+  .daily-pnl-badge.zero { color: var(--dim);  background: rgba(107,115,148,.07); border-color: rgba(107,115,148,.2); }
+
+  /* ── HTMX request fade on pnl-summary ─────────────────────────────────────── */
+  #pnl-summary.htmx-request { opacity: .55; transition: opacity .2s ease; }
+</style>
+{% endblock %}
+
+
+{% block content %}
+
+{# ── Resolve safe values ──────────────────────────────────────────────────── #}
+{%- set _dpnl = daily_pnl | default(0) | float -%}
+
+{# ── Page header ──────────────────────────────────────────────────────────── #}
+<header class="page-header">
+  <div class="page-header__left">
+    <h1 class="page-header__title">PnL Tracker</h1>
+    <p class="page-header__sub">Profit & loss breakdown by period and asset</p>
+  </div>
+  <div class="page-header__actions">
+    {# Today's aggregate PnL badge (uses daily_pnl from route context) #}
+    <span class="daily-pnl-badge {{ pnl_class(_dpnl) }}"
+          title="Today's aggregate PnL across all assets">
+      <span style="font-size:9px; font-weight:600; letter-spacing:.7px; opacity:.75;">TODAY</span>
+      {{ fmt_pnl(_dpnl) }}
+    </span>
+
+    <span class="htmx-indicator" aria-live="polite">
+      <span class="spinner spinner--sm"></span>
+      Updating…
+    </span>
+  </div>
+</header>
+
+<div class="content-area">
+
+  {# ── Period selector ─────────────────────────────────────────────────────── #}
+  {# Links use hx-get + hx-select="body" for a full-page HTMX swap.           #}
+  {# Plain href= provides a non-JS fallback.                                   #}
+  <div class="pnl-period-bar">
+    <span class="pnl-period-bar__label">Period</span>
+    <div class="period-tabs" role="group" aria-label="PnL period selector">
+
+      {%- for _d, _label in [(1, "1d"), (7, "7d"), (30, "30d")] %}
+      <a href="/pnl?days={{ _d }}"
+         class="period-tab {% if days == _d %}active{% endif %}"
+         hx-get="/pnl?days={{ _d }}"
+         hx-target="body"
+         hx-select="body"
+         hx-swap="outerHTML"
+         hx-push-url="true">
+        {{ _label }}
+      </a>
+      {%- endfor %}
+
+    </div>
+  </div>
+
+  {# ── PnL Summary — summary cards + chart + breakdown tables ─────────────── #}
+  {# Rendered inline on first load via {% include %}, then polled every 30 s. #}
+  {% include "partials/pnl_summary.html" %}
+
+</div>{# /content-area #}
+{% endblock %}

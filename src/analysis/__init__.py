@@ -9,16 +9,16 @@ Submodules:
 
 Consumers should import directly from the relevant sub-module:
 
-    from src.analysis.cvd import compute_cvd, detect_cvd_divergences
-    from src.analysis.signal_quality import compute_signal_quality
-    from src.analysis.volatility import kmeans_volatility_clusters
-    from src.analysis.wave_analysis import calculate_wave_analysis
+    from analysis.cvd import compute_cvd, detect_cvd_divergences
+    from analysis.signal_quality import compute_signal_quality
+    from analysis.volatility import kmeans_volatility_clusters
+    from analysis.wave_analysis import calculate_wave_analysis
 """
 
-from src.analysis.cvd import compute_cvd, detect_cvd_divergences
-from src.analysis.signal_quality import compute_signal_quality
-from src.analysis.volatility import kmeans_volatility_clusters, volatility_summary_text
-from src.analysis.wave_analysis import calculate_wave_analysis, wave_summary_text
+from analysis.cvd import compute_cvd, detect_cvd_divergences
+from analysis.signal_quality import compute_signal_quality
+from analysis.volatility import kmeans_volatility_clusters, volatility_summary_text
+from analysis.wave_analysis import calculate_wave_analysis, wave_summary_text
 
 __all__ = [
     "calculate_wave_analysis",
